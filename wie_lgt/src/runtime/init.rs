@@ -38,9 +38,7 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category): 
         let a1 = core.read_param(1)?;
         let a2 = core.read_param(2)?;
         let a3 = core.read_param(3)?;
-        tracing::warn!(
-            "lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})"
-        );
+        tracing::warn!("lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
         0u32.write(core, lr)?;
         return Ok(());
     }

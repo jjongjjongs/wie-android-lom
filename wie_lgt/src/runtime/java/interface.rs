@@ -20,7 +20,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         _ => {
             tracing::warn!("Unimplemented LGT Java import {function_index:#x}; installing diagnostic zero-return stub");
             core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + function_index)?
-        },
+        }
     })
 }
 
