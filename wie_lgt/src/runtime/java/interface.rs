@@ -84,6 +84,37 @@ pub async fn java_load_classes(
         }
     }
 
+    let mut class_count_bytes = [0u8; 4];
+    _core.read_bytes(classes, &mut class_count_bytes)?;
+    let class_count = u32::from_le_bytes(class_count_bytes).min(64);
+
+    tracing::warn!("java_load_classes class_count={class_count}");
+
+    for index in 0..class_count {
+        let entry_address = classes.wrapping_add(4 + index * 4);
+        let mut pointer_bytes = [0u8; 4];
+
+        if let Err(error) = _core.read_bytes(entry_address, &mut pointer_bytes) {
+            tracing::warn!("java_load_classes class[{index}] pointer read failed @{entry_address:#x}: {error}");
+            continue;
+        }
+
+        let pointer = u32::from_le_bytes(pointer_bytes);
+        let mut bytes = [0u8; 64];
+
+        match _core.read_bytes(pointer, &mut bytes) {
+            Ok(read) => {
+                tracing::warn!(
+                    "java_load_classes class[{index}] ptr={pointer:#x}, read={read:#x}: {:02x?}",
+                    &bytes[..read]
+                );
+            }
+            Err(error) => {
+                tracing::warn!("java_load_classes class[{index}] ptr={pointer:#x}: read failed: {error}");
+            }
+        }
+    }
+
     Ok(())
 }
 
