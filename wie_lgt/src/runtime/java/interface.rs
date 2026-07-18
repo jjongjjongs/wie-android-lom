@@ -1,5 +1,5 @@
 use wie_core_arm::ArmCore;
-use wie_util::Result;
+use wie_util::{ByteRead, Result};
 
 use crate::runtime::{SVC_CATEGORY_INIT, svc_ids::InitSvcId};
 
@@ -24,7 +24,22 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
 
 pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
     tracing::warn!("java_unk0({a0:#x}, {a1:#x}, {a2:#x})");
+    for (name, address) in [("a0", a0), ("a1", a1), ("a2", a2), ("a3", a3)] {
+        if address == 0 {
+            tracing::warn!("java_unk11 {name}: null");
+            continue;
+        }
 
+        let mut bytes = [0u8; 64];
+        match core.read_bytes(address, &mut bytes) {
+            Ok(read) => {
+                tracing::warn!("java_unk11 {name} memory @{address:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
+            }
+            Err(error) => {
+                tracing::warn!("java_unk11 {name} memory @{address:#x}: read failed: {error}");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -65,9 +80,24 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_unk11(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<()> {
+pub async fn java_unk11(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<()> {
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+    for (name, address) in [("a0", a0), ("a1", a1), ("a2", a2), ("a3", a3)] {
+        if address == 0 {
+            tracing::warn!("java_unk11 {name}: null");
+            continue;
+        }
 
+        let mut bytes = [0u8; 64];
+        match core.read_bytes(address, &mut bytes) {
+            Ok(read) => {
+                tracing::warn!("java_unk11 {name} memory @{address:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
+            }
+            Err(error) => {
+                tracing::warn!("java_unk11 {name} memory @{address:#x}: read failed: {error}");
+            }
+        }
+    }
     // invoke static? used to be called with org/kwis/msp/lcdui/Main
 
     // Diagnostic mode: keep the ARM application alive so the next missing
