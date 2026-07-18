@@ -59,6 +59,30 @@ pub async fn java_load_classes(
     tracing::debug!(
         "java_load_classes({classes:#x}, {fields:#x}, {static_fields:#x}, {virtual_methods:#x}, {a4:#x}, {static_methods:#x}, {field_offsets:#x}, {static_field_offsets:#x}, {virtual_method_offsets:#x}, {a9:#x}, {static_method_offsets:#x})"
     );
+    for (name, address) in [
+        ("classes", classes),
+        ("fields", fields),
+        ("static_fields", static_fields),
+        ("virtual_methods", virtual_methods),
+        ("a4", a4),
+        ("static_methods", static_methods),
+        ("field_offsets", field_offsets),
+        ("static_field_offsets", static_field_offsets),
+        ("virtual_method_offsets", virtual_method_offsets),
+        ("a9", a9),
+        ("static_method_offsets", static_method_offsets),
+    ] {
+        let mut bytes = [0u8; 64];
+
+        match _core.read_bytes(address, &mut bytes) {
+            Ok(read) => {
+                tracing::warn!("java_load_classes {name} @{address:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
+            }
+            Err(error) => {
+                tracing::warn!("java_load_classes {name} @{address:#x}: read failed: {error}");
+            }
+        }
+    }
 
     Ok(())
 }
