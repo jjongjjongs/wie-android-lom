@@ -21,11 +21,15 @@ use super::{
     wipi_c::register_wipic_svc_handler,
 };
 
-fn register_init_svc_handler(core: &mut ArmCore) -> Result<()> {
-    core.register_svc_handler(SVC_CATEGORY_INIT, handle_init_svc, &(SVC_CATEGORY_WIPIC, SVC_CATEGORY_STDLIB))
+fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
+    core.register_svc_handler(
+        SVC_CATEGORY_INIT,
+        handle_init_svc,
+        &(SVC_CATEGORY_WIPIC, SVC_CATEGORY_STDLIB, jvm.clone()),
+    )
 }
 
-async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category): &mut (u32, u32), id: SvcId) -> Result<()> {
+async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, jvm): &mut (u32, u32, Jvm), id: SvcId) -> Result<()> {
     let (_, lr) = core.read_pc_lr()?;
 
     // Diagnostic fallback for Java-interface indices that do not yet have a
@@ -58,15 +62,14 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category): 
         InitSvcId::JavaInterfaceUnk5 => EmulatedFunction::call(&java_unk5, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaLoadClasses => EmulatedFunction::call(&java_load_classes, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk9 => EmulatedFunction::call(&java_unk9, core, &mut ()).await?.write(core, lr),
-        InitSvcId::JavaUnk11 => EmulatedFunction::call(&java_unk11, core, &mut ()).await?.write(core, lr),
+        InitSvcId::JavaUnk11 => EmulatedFunction::call(&java_unk11, core, jvm).await?.write(core, lr),
     }
 }
-
 pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8]) -> Result<()> {
     let entrypoint = load_executable(core, data)?;
     register_wipic_svc_handler(core, system, jvm)?;
     register_stdlib_svc_handler(core, system)?;
-    register_init_svc_handler(core)?;
+    register_init_svc_handler(core, jvm)?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
     let ptr_init_param_2 = Allocator::alloc(core, size_of::<InitParam2>() as u32)?;
