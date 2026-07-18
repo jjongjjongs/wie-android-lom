@@ -1,7 +1,7 @@
 use alloc::format;
 
 use wie_core_arm::ArmCore;
-use wie_util::{Result, WieError};
+use wie_util::Result;
 
 use crate::runtime::{SVC_CATEGORY_INIT, svc_ids::InitSvcId};
 
