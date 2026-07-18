@@ -1,3 +1,5 @@
+use alloc::string::String;
+
 use wie_core_arm::ArmCore;
 use wie_util::{ByteRead, Result};
 
@@ -66,19 +68,46 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
 
 pub async fn java_unk11(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<()> {
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-    for (name, address) in [("a0", a0), ("a1", a1), ("a2", a2), ("a3", a3)] {
-        if address == 0 {
-            tracing::warn!("java_unk11 {name}: null");
+    tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
+
+    let mut class_bytes = [0u8; 128];
+    match core.read_bytes(a0, &mut class_bytes) {
+        Ok(read) => {
+            let end = class_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
+
+            tracing::warn!("java_unk11 class: {}", String::from_utf8_lossy(&class_bytes[..end]));
+        }
+        Err(error) => {
+            tracing::warn!("java_unk11 class read failed: {error}");
+        }
+    }
+
+    let argc = a2.min(16);
+
+    for index in 0..argc {
+        let pointer_address = a3.wrapping_add(index * 4);
+        let mut pointer_bytes = [0u8; 4];
+
+        if let Err(error) = core.read_bytes(pointer_address, &mut pointer_bytes) {
+            tracing::warn!("java_unk11 argv[{index}] pointer read failed @{pointer_address:#x}: {error}");
             continue;
         }
 
-        let mut bytes = [0u8; 64];
-        match core.read_bytes(address, &mut bytes) {
+        let pointer = u32::from_le_bytes(pointer_bytes);
+
+        let mut argument_bytes = [0u8; 128];
+        match core.read_bytes(pointer, &mut argument_bytes) {
             Ok(read) => {
-                tracing::warn!("java_unk11 {name} memory @{address:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
+                let end = argument_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
+
+                tracing::warn!(
+                    "java_unk11 argv[{index}] ptr={pointer:#x}: {} | raw={:02x?}",
+                    String::from_utf8_lossy(&argument_bytes[..end]),
+                    &argument_bytes[..end]
+                );
             }
             Err(error) => {
-                tracing::warn!("java_unk11 {name} memory @{address:#x}: read failed: {error}");
+                tracing::warn!("java_unk11 argv[{index}] ptr={pointer:#x}: read failed: {error}");
             }
         }
     }
