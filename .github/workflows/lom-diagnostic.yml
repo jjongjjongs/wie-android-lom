@@ -1,62 +1,48 @@
 name: LOM WIE diagnostic
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   diagnose:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Linux build/runtime dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config xvfb \
-            libasound2-dev libudev-dev libxkbcommon-dev \
-            libwayland-dev libx11-dev libxi-dev libgl1-mesa-dev \
-            libjack-jackd2-dev
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install X11 runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libxkbcommon-x11-0 libx11-xcb1 libxcb-xkb1
 
       - name: Build wie_cli
         run: cargo build --release -p wie_cli
 
-      - name: Run Legend of Master for 45 seconds
-        shell: bash
+      - name: Run Legend of Master diagnostic
         run: |
           set +e
-          mkdir -p diagnostic
-          export RUST_LOG=trace
-          timeout 45s xvfb-run -a -s '-screen 0 1024x768x24' \
-            ./target/release/wie_cli test_games/legend_of_master.zip \
-            > diagnostic/stdout.log 2> diagnostic/stderr.log
-          rc=$?
-          echo "$rc" > diagnostic/exit_code.txt
-          cp test_games/legend_of_master.zip diagnostic/
-          echo "wie_cli exit code: $rc"
-          tail -n 250 diagnostic/stderr.log || true
-          exit 0
+          timeout 45s xvfb-run -a ./target/release/wie_cli test_games/legend_of_master.zip > stdout.log 2>&1
+          echo $? > exit_code.txt
 
-      - name: Upload diagnostic logs
+      - name: Upload diagnostic
         uses: actions/upload-artifact@v4
         with:
           name: lom-wie-diagnostic
-          path: diagnostic/
-          if-no-files-found: error
+          path: |
+            stdout.log
+            exit_code.txt
+            test_games/legend_of_master.zip
 
-      - name: Upload Linux diagnostic executable
+      - name: Upload wie_cli
         uses: actions/upload-artifact@v4
         with:
           name: wie-cli-linux
           path: target/release/wie_cli
-          if-no-files-found: error
+
