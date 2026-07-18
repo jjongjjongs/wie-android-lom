@@ -139,7 +139,7 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<()> {
+pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
     tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
 
@@ -189,7 +189,7 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
 
     // Diagnostic mode: keep the ARM application alive so the next missing
     // interface call can be observed. A real JVM bridge will replace this.
-    Ok(())
+    Ok(0)
 }
 
 pub async fn java_unk12(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
