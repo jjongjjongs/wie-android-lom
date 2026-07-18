@@ -28,7 +28,7 @@ jobs:
       - name: Run Legend of Master diagnostic
         run: |
           set +e
-          timeout 45s xvfb-run -a ./target/release/wie_cli test_games/legend_of_master.zip > stdout.log 2>&1
+          RUST_LOG=trace RUST_BACKTRACE=1 timeout 45s xvfb-run -a ./target/release/wie_cli test_games/legend_of_master.zip > stdout.log 2>&1
           echo $? > exit_code.txt
 
       - name: Upload diagnostic
