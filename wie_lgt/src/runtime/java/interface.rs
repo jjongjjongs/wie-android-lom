@@ -23,6 +23,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
 }
 
 pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
+    tracing::warn!("java_unk0({a0:#x}, {a1:#x}, {a2:#x})");
     Ok(())
 }
 
