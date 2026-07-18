@@ -91,26 +91,41 @@ pub async fn java_load_classes(
     tracing::warn!("java_load_classes class_count={class_count}");
 
     for index in 0..class_count {
-        let entry_address = classes.wrapping_add(4 + index * 4);
-        let mut pointer_bytes = [0u8; 4];
+        // classes + 4 뒤부터 클래스당 6개의 u32, 즉 24바이트
+        let entry_address = classes.wrapping_add(4 + index * 24);
 
-        if let Err(error) = _core.read_bytes(entry_address, &mut pointer_bytes) {
-            tracing::warn!("java_load_classes class[{index}] pointer read failed @{entry_address:#x}: {error}");
+        let mut entry_bytes = [0u8; 24];
+
+        if let Err(error) = _core.read_bytes(entry_address, &mut entry_bytes) {
+            tracing::warn!(
+                "java_load_classes class[{index}] entry read failed \
+             @{entry_address:#x}: {error}"
+            );
             continue;
         }
 
-        let pointer = u32::from_le_bytes(pointer_bytes);
-        let mut bytes = [0u8; 64];
+        let name_pointer = u32::from_le_bytes([entry_bytes[0], entry_bytes[1], entry_bytes[2], entry_bytes[3]]);
 
-        match _core.read_bytes(pointer, &mut bytes) {
+        let mut name_bytes = [0u8; 128];
+
+        match _core.read_bytes(name_pointer, &mut name_bytes) {
             Ok(read) => {
+                let end = name_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
+
                 tracing::warn!(
-                    "java_load_classes class[{index}] ptr={pointer:#x}, read={read:#x}: {:02x?}",
-                    &bytes[..read]
+                    "java_load_classes class[{index}] entry={entry_address:#x}, \
+                 name_ptr={name_pointer:#x}, name={}, raw={:02x?}",
+                    String::from_utf8_lossy(&name_bytes[..end]),
+                    entry_bytes
                 );
             }
             Err(error) => {
-                tracing::warn!("java_load_classes class[{index}] ptr={pointer:#x}: read failed: {error}");
+                tracing::warn!(
+                    "java_load_classes class[{index}] entry={entry_address:#x}, \
+                 name_ptr={name_pointer:#x}: name read failed: {error}, \
+                 raw={:02x?}",
+                    entry_bytes
+                );
             }
         }
     }
