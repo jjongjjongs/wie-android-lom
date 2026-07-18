@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "wie_backend",
+    "wie_cli",
+    "wie_util",
+    "wie_core_arm",
+    "wie_jvm_support",
+    "wie_wipi_java",
+    "wie_wipi_c",
+    "wie_j2me",
+    "wie_ktf",
+    "wie_ktf_dump",
+    "wie_lgt",
+    "wie_skt",
+]
+
+default-members = ["wie_cli"]
+
+[profile.dev.package.wie_core_arm]
+opt-level = 1
+
+[profile.dev.package.arm32_cpu]
+opt-level = 1
+
+[profile.release]
+lto = true
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = { version = "^1.0" }
+async-recursion = { version = "^1.1", default-features = false }
+async-trait = { version = "^0.1", default-features = false }
+bitflags = { version = "^2.13", default-features = false }
+bytemuck = { version = "^1.25", default-features = false, features = ["derive"] }
+clap = { version = "^4.6", features = ["derive"] }
+dyn-clone = { version = "^1.0", default-features = false }
+futures = { version = "^0.3", default-features = false, features = ["alloc"] }
+md5 = { version = "^0.8", default-features = false }
+spin = { version = "^0.12", features = ["spin_mutex", "rwlock"], default-features = false }
+tracing = { version = "^0.1", default-features = false, features = ["attributes"] }
+
+java_class_proto = { git = "https://github.com/dlunch/RustJava.git" }
+java_constants = { git = "https://github.com/dlunch/RustJava.git" }
+java_runtime = { git = "https://github.com/dlunch/RustJava.git" }
+jvm = { git = "https://github.com/dlunch/RustJava.git" }
+jvm_rust = { git = "https://github.com/dlunch/RustJava.git" }
+wipi_types = { git = "https://github.com/dlunch/wipi.git" }
+
+wie_backend = { path = "wie_backend" }
+wie_midp = { path = "wie_midp" }
+wie_util = { path = "wie_util" }
+wie_core_arm = { path = "wie_core_arm" }
+wie_jvm_support = { path = "wie_jvm_support" }
+wie_skvm = { path = "wie_skvm" }
+wie_wipi_c = { path = "wie_wipi_c" }
+wie_wipi_java = { path = "wie_wipi_java" }
+
+# dev-dependencies
+futures-test = { version = "^0.3" }
+
+test_utils = { path = "test_utils" }

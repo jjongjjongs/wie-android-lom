@@ -1,0 +1,33 @@
+[package]
+name = "wie_lgt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+bytemuck = { workspace = true }
+futures = { workspace = true }
+spin = { workspace = true }
+tracing = { workspace = true }
+
+chrono = { version = "^0.4", default-features = false, features = ["alloc"] }
+elf = { version = "^0.8" }
+
+java_class_proto = { workspace = true }
+java_constants = { workspace = true }
+java_runtime = { workspace = true }
+jvm = { workspace = true }
+jvm_rust = { workspace = true }
+wipi_types = { workspace = true, features = ["lgt"] }
+
+wie_backend = { workspace = true }
+wie_core_arm = { workspace = true }
+wie_jvm_support = { workspace = true }
+wie_midp = { workspace = true }
+wie_util = { workspace = true }
+wie_wipi_c = { workspace = true }
+wie_wipi_java = { workspace = true }
+
+[dev-dependencies]
+test_utils = { workspace = true }

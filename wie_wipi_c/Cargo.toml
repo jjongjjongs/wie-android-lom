@@ -1,0 +1,22 @@
+[package]
+name = "wie_wipi_c"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+encoding_rs = { version = "^0.8", default-features = false, features = ["alloc"] }
+
+async-trait = { workspace = true }
+bytemuck = { workspace = true }
+tracing = { workspace = true }
+
+wipi_types = { workspace = true }
+
+wie_util = { workspace = true }
+wie_backend = { workspace = true }
+
+[dev-dependencies]
+futures-test = { workspace = true }
+
+test_utils = { workspace = true }

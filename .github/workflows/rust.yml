@@ -1,0 +1,65 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+
+name: Rust CI
+
+jobs:
+  rust_ci:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        rust: [stable, beta]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: "recursive"
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo
+
+      - name: Cache cargo build
+        uses: actions/cache@v6
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.rust }}-build-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.rust }}-build-target-
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Install required packages
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt update;sudo apt install libasound2-dev
+
+      - name: Install required packages
+        if: matrix.os == 'windows-latest'
+        run: choco install ninja
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all -- -D warnings
+      - run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+
+      - if: matrix.os == 'windows-latest'
+        run: |
+          $env:RUST_MIN_STACK=4194304
+          cargo test --all
+
+      - if: matrix.os != 'windows-latest'
+        run: |
+          export RUST_MIN_STACK=4194304
+          cargo test --all
