@@ -1,5 +1,3 @@
-use alloc::format;
-
 use wie_core_arm::ArmCore;
 use wie_util::Result;
 

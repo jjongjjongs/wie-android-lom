@@ -1,3 +1,4 @@
+use alloc::format;
 use core::mem::size_of;
 
 use elf::{ElfBytes, endian::AnyEndian};
