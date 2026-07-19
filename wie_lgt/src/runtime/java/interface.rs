@@ -189,8 +189,29 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
 
     // Diagnostic mode: keep the ARM application alive so the next missing
     // interface call can be observed. A real JVM bridge will replace this.
+for address in [0x01500954u32, 0x01500958u32] {
+    let mut value_bytes = [0u8; 4];
+
+    match core.read_bytes(address, &mut value_bytes) {
+        Ok(_) => {
+            let value = u32::from_le_bytes(value_bytes);
+            tracing::warn!(
+                "java_unk11 global slot @{address:#x} = {value:#x}, thumb={}",
+                value & 1
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                "java_unk11 global slot @{address:#x} read failed: {error}"
+            );
+        }
+    }
+    }
+
+
     Ok(0)
 }
+
 
 pub async fn java_unk12(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     tracing::warn!("java_unk12({a0:#x})");
