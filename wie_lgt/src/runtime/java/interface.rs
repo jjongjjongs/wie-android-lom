@@ -212,6 +212,18 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
                 }
 
                 tracing::warn!("java_unk11 global slot @{address:#x} = {value:#x}, thumb={}", value & 1);
+                for target in [0x71000001u32, 0x71000000u32, 0x71000011u32, 0x71000010u32] {
+                    let mut bytes = [0u8; 16];
+
+                    match core.read_bytes(target, &mut bytes) {
+                        Ok(_) => {
+                            tracing::warn!("java_unk11 candidate @{target:#x}: {bytes:02x?}");
+                        }
+                        Err(error) => {
+                            tracing::warn!("java_unk11 candidate @{target:#x} read failed: {error}");
+                        }
+                    }
+                }
             }
             Err(error) => {
                 tracing::warn!("java_unk11 global slot @{address:#x} read failed: {error}");
