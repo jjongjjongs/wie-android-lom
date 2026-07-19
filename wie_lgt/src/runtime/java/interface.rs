@@ -195,6 +195,22 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
         match core.read_bytes(address, &mut value_bytes) {
             Ok(_) => {
                 let value = u32::from_le_bytes(value_bytes);
+                let mut object_bytes = [0u8; 32];
+
+                match core.read_bytes(value, &mut object_bytes) {
+                    Ok(_) => {
+                        let words: Vec<u32> = object_bytes
+                            .chunks_exact(4)
+                            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                            .collect();
+
+                        tracing::warn!("java_unk11 slot target @{value:#x}: {words:#x?}");
+                    }
+                    Err(error) => {
+                        tracing::warn!("java_unk11 slot target @{value:#x} read failed: {error}");
+                    }
+                }
+
                 tracing::warn!("java_unk11 global slot @{address:#x} = {value:#x}, thumb={}", value & 1);
             }
             Err(error) => {
