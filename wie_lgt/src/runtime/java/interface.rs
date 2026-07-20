@@ -1,9 +1,8 @@
 use alloc::{string::String, vec::Vec};
 
-use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::Jvm;
 
 use wie_core_arm::ArmCore;
-use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result};
 
 use crate::runtime::{SVC_CATEGORY_INIT, svc_ids::InitSvcId};
@@ -139,7 +138,7 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
     tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
 
