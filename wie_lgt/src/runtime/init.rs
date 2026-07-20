@@ -1,4 +1,5 @@
 use alloc::format;
+use alloc::string::String;
 use core::mem::size_of;
 
 use elf::{ElfBytes, endian::AnyEndian};
@@ -8,7 +9,7 @@ use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
-use wie_util::{Result, WieError, read_generic, write_generic};
+use wie_util::{ByteWrite, Result, WieError, read_generic, write_generic};
 
 use super::{
     SVC_CATEGORY_INIT, SVC_CATEGORY_STDLIB, SVC_CATEGORY_WIPIC,
@@ -204,10 +205,21 @@ async fn java_unk3(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -
     Ok(())
 }
 
-async fn java_unk7(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<u32> {
+async fn java_unk7(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<u32> {
     tracing::warn!("java_unk7({a0:#x}, {a1:#x}, {a2:#x})");
 
-    // get jar path?
+    // The observed ABI looks like:
+    //   a0: flags/unused
+    //   a1: destination capacity
+    //   a2: destination character buffer
+    let jar_path = b"0002A4B1.jar\0";
+    let write_len = jar_path.len().min(a1 as usize);
 
-    Ok(0 as _)
+    if a2 != 0 && write_len != 0 {
+        core.write_bytes(a2, &jar_path[..write_len])?;
+    }
+
+    tracing::warn!("java_unk7 wrote {:?} to {a2:#x}", String::from_utf8_lossy(&jar_path[..write_len]));
+
+    Ok(0)
 }
