@@ -1,9 +1,8 @@
 use alloc::{string::String, vec::Vec};
 
-use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::Jvm;
 
 use wie_core_arm::ArmCore;
-use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result};
 
 use crate::runtime::{SVC_CATEGORY_INIT, svc_ids::InitSvcId};
@@ -139,7 +138,7 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
     tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
 
@@ -156,7 +155,6 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
     }
 
     let argc = a2.min(16);
-    let mut rust_args = Vec::with_capacity(argc as usize);
 
     for index in 0..argc {
         let pointer_address = a3.wrapping_add(index * 4);
@@ -179,44 +177,12 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
                     String::from_utf8_lossy(&argument_bytes[..end]),
                     &argument_bytes[..end]
                 );
-                rust_args.push(String::from_utf8_lossy(&argument_bytes[..end]).into_owned());
             }
             Err(error) => {
                 tracing::warn!("java_unk11 argv[{index}] ptr={pointer:#x}: read failed: {error}");
             }
         }
     }
-
-    let mut java_args = Vec::with_capacity(rust_args.len());
-
-    for argument in &rust_args {
-        let java_string = match JavaLangString::from_rust_string(jvm, argument).await {
-            Ok(value) => value,
-            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
-        };
-        java_args.push(java_string);
-    }
-
-    let mut args_array = match jvm.instantiate_array("[Ljava/lang/String;", java_args.len()).await {
-        Ok(value) => value,
-        Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
-    };
-
-    if let Err(error) = jvm.store_array(&mut args_array, 0, java_args).await {
-        return Err(JvmSupport::to_wie_err(jvm, error).await);
-    }
-
-    tracing::warn!("java_unk11 invoking org/kwis/msp/lcdui/Main.main with {rust_args:?}");
-
-    let result: JvmResult<()> = jvm
-        .invoke_static("org/kwis/msp/lcdui/Main", "main", "([Ljava/lang/String;)V", (args_array,))
-        .await;
-
-    if let Err(error) = result {
-        return Err(JvmSupport::to_wie_err(jvm, error).await);
-    }
-
-    tracing::warn!("java_unk11 Main.main returned successfully");
 
     // invoke static? used to be called with org/kwis/msp/lcdui/Main
 
