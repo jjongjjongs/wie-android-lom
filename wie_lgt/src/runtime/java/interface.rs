@@ -1,8 +1,8 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 
-use jvm::Jvm;
-
+use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use wie_core_arm::ArmCore;
+use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result};
 
 use crate::runtime::{SVC_CATEGORY_INIT, svc_ids::InitSvcId};
@@ -233,6 +233,39 @@ pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2
                 tracing::warn!("java_unk11 global slot @{address:#x} read failed: {error}");
             }
         }
+    }
+    let mut args_array = match _jvm.instantiate_array("Ljava/lang/String;", argc as usize).await {
+        Ok(array) => array,
+        Err(error) => return Err(JvmSupport::to_wie_err(_jvm, error).await),
+    };
+
+    for index in 0..argc {
+        let pointer_address = a3.wrapping_add(index * 4);
+        let mut pointer_bytes = [0u8; 4];
+        core.read_bytes(pointer_address, &mut pointer_bytes)?;
+
+        let pointer = u32::from_le_bytes(pointer_bytes);
+        let mut argument_bytes = [0u8; 128];
+        let read = core.read_bytes(pointer, &mut argument_bytes)?;
+        let end = argument_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
+
+        let argument = String::from_utf8_lossy(&argument_bytes[..end]);
+        let java_argument = match JavaLangString::from_rust_string(_jvm, argument.as_ref()).await {
+            Ok(argument) => argument,
+            Err(error) => return Err(JvmSupport::to_wie_err(_jvm, error).await),
+        };
+
+        if let Err(error) = _jvm.store_array(&mut args_array, index as usize, vec![java_argument]).await {
+            return Err(JvmSupport::to_wie_err(_jvm, error).await);
+        }
+    }
+
+    let result: JvmResult<()> = _jvm
+        .invoke_static("org/kwis/msp/lcdui/Main", "main", "([Ljava/lang/String;)V", (args_array,))
+        .await;
+
+    if let Err(error) = result {
+        return Err(JvmSupport::to_wie_err(_jvm, error).await);
     }
 
     Ok(0)
