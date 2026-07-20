@@ -142,6 +142,11 @@ pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
     tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
 
+    let mut argv_raw = [0u8; 64];
+    if core.read_bytes(a3, &mut argv_raw).is_ok() {
+        tracing::warn!("java_unk11 argv raw @{a3:#x}: {argv_raw:02x?}");
+    }
+
     let mut class_bytes = [0u8; 128];
     match core.read_bytes(a0, &mut class_bytes) {
         Ok(read) => {
