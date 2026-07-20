@@ -46,6 +46,32 @@ pub async fn java_unk5(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Resu
             }
         }
     }
+    let mut count_bytes = [0u8; 4];
+    core.read_bytes(a0, &mut count_bytes)?;
+    let class_count = u32::from_le_bytes(count_bytes).min(64);
+
+    tracing::warn!("java_unk5 class_count={class_count}");
+
+    for index in 0..class_count {
+        let pointer_address = a0.wrapping_add(8 + index * 4);
+        let mut pointer_bytes = [0u8; 4];
+        core.read_bytes(pointer_address, &mut pointer_bytes)?;
+
+        let class_pointer = u32::from_le_bytes(pointer_bytes);
+        let mut class_bytes = [0u8; 96];
+
+        match core.read_bytes(class_pointer, &mut class_bytes) {
+            Ok(read) => {
+                tracing::warn!(
+                    "java_unk5 class[{index}] ptr={class_pointer:#x}, read={read:#x}: {:02x?}",
+                    &class_bytes[..read]
+                );
+            }
+            Err(error) => {
+                tracing::warn!("java_unk5 class[{index}] ptr={class_pointer:#x}: read failed: {error}");
+            }
+        }
+    }
 
     Ok(())
 }
