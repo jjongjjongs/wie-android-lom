@@ -156,9 +156,9 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
     }
 
     let argc = a2.min(16);
-    let mut rust_args = Vec::with_capacity(argc.saturating_sub(1) as usize);
+    let mut rust_args = Vec::with_capacity(argc as usize);
 
-    for index in 1..argc {
+    for index in 0..argc {
         let pointer_address = a3.wrapping_add(index * 4);
         let mut pointer_bytes = [0u8; 4];
 
