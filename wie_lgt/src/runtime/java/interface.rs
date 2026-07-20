@@ -31,10 +31,21 @@ pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u3
     Ok(())
 }
 
-pub async fn java_unk5(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Result<()> {
+pub async fn java_unk5(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Result<()> {
     tracing::warn!("java_unk5({a0:#x}, {a1:#x})");
 
-    // a0: class list
+    for (name, address) in [("a0", a0), ("a1", a1)] {
+        let mut bytes = [0u8; 128];
+
+        match core.read_bytes(address, &mut bytes) {
+            Ok(read) => {
+                tracing::warn!("java_unk5 {name} @{address:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
+            }
+            Err(error) => {
+                tracing::warn!("java_unk5 {name} @{address:#x}: read failed: {error}");
+            }
+        }
+    }
 
     Ok(())
 }
