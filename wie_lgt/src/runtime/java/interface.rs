@@ -1,11 +1,12 @@
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
 
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm_rust::ClassDefinitionImpl;
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result};
 
-use crate::runtime::{SVC_CATEGORY_INIT, svc_ids::InitSvcId};
+use crate::runtime::{SVC_CATEGORY_INIT, java::classes::lm::Lm, svc_ids::InitSvcId};
 
 /// Diagnostic SVC range used for unresolved LGT Java-interface imports.
 /// The low 12 bits preserve the original function index.
@@ -175,9 +176,20 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
     tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
+
+    let lm_class = ClassDefinitionImpl::from_class_proto(Lm::as_proto(), Box::new(()) as Box<_>);
+
+    match jvm.register_class(Box::new(lm_class), None).await {
+        Ok(_) => {
+            tracing::warn!("Registered Lm stub class");
+        }
+        Err(error) => {
+            tracing::warn!("Lm stub class registration failed: {error:?}");
+        }
+    }
 
     let mut argv_raw = [0u8; 64];
     if core.read_bytes(a3, &mut argv_raw).is_ok() {
@@ -271,9 +283,9 @@ pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2
             }
         }
     }
-    let mut args_array = match _jvm.instantiate_array("Ljava/lang/String;", argc as usize).await {
+    let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", argc as usize).await {
         Ok(array) => array,
-        Err(error) => return Err(JvmSupport::to_wie_err(_jvm, error).await),
+        Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
     };
 
     for index in 0..argc {
@@ -287,22 +299,22 @@ pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2
         let end = argument_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
 
         let argument = String::from_utf8_lossy(&argument_bytes[..end]);
-        let java_argument = match JavaLangString::from_rust_string(_jvm, argument.as_ref()).await {
+        let java_argument = match JavaLangString::from_rust_string(jvm, argument.as_ref()).await {
             Ok(argument) => argument,
-            Err(error) => return Err(JvmSupport::to_wie_err(_jvm, error).await),
+            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
         };
 
-        if let Err(error) = _jvm.store_array(&mut args_array, index as usize, vec![java_argument]).await {
-            return Err(JvmSupport::to_wie_err(_jvm, error).await);
+        if let Err(error) = jvm.store_array(&mut args_array, index as usize, vec![java_argument]).await {
+            return Err(JvmSupport::to_wie_err(jvm, error).await);
         }
     }
 
-    let result: JvmResult<()> = _jvm
+    let result: JvmResult<()> = jvm
         .invoke_static("org/kwis/msp/lcdui/Main", "main", "([Ljava/lang/String;)V", (args_array,))
         .await;
 
     if let Err(error) = result {
-        return Err(JvmSupport::to_wie_err(_jvm, error).await);
+        return Err(JvmSupport::to_wie_err(jvm, error).await);
     }
 
     Ok(0)
