@@ -33,7 +33,11 @@ impl Main {
         let wipi_midlet = jvm.new_class("net/wie/WIPIMIDlet", "()V", ()).await?;
 
         let main_class_name = JavaLangString::to_rust_string(jvm, &jvm.load_array(&args, 0, 1).await?[0]).await?;
-        let _main_class = jvm.new_class(&main_class_name, "()V", ()).await?;
+        let main_class = jvm.new_class(&main_class_name, "()V", ()).await?;
+
+        let _: () = jvm
+            .invoke_virtual(&wipi_midlet, "setCurrentJlet", "(Lorg/kwis/msp/lcdui/Jlet;)V", (main_class,))
+            .await?;
 
         jvm.invoke_static("net/wie/Launcher", "startMIDlet", "(Ljavax/microedition/midlet/MIDlet;)V", (wipi_midlet,))
             .await
