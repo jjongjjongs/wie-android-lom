@@ -43,6 +43,13 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
         let a2 = core.read_param(2)?;
         let a3 = core.read_param(3)?;
         tracing::warn!("lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+        if function_index == 0x54 {
+            let address = Allocator::alloc(core, a0)?;
+            tracing::warn!("lgt_java_alloc(size={a0:#x}) -> {address:#x}");
+            address.write(core, lr)?;
+            return Ok(());
+        }
+
         0u32.write(core, lr)?;
         return Ok(());
     }
