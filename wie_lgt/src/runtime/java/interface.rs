@@ -308,8 +308,19 @@ pub async fn java_unk11(core: &mut ArmCore, _jvm: &mut Jvm, a0: u32, a1: u32, a2
     Ok(0)
 }
 
-pub async fn java_unk12(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
+pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     tracing::warn!("java_unk12({a0:#x})");
+
+    let mut bytes = [0u8; 128];
+
+    match core.read_bytes(a0, &mut bytes) {
+        Ok(read) => {
+            tracing::warn!("java_unk12 classes @{a0:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
+        }
+        Err(error) => {
+            tracing::warn!("java_unk12 classes @{a0:#x}: read failed: {error}");
+        }
+    }
 
     Ok(())
 }
