@@ -31,7 +31,7 @@ pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u3
     Ok(())
 }
 
-pub async fn java_unk5(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Result<u32> {
+pub async fn java_unk5(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Result<()> {
     tracing::warn!("java_unk5({a0:#x}, {a1:#x})");
 
     for (name, address) in [("a0", a0), ("a1", a1)] {
@@ -73,8 +73,7 @@ pub async fn java_unk5(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Resu
         }
     }
 
-    tracing::warn!("java_unk5 returning metadata pointer {a1:#x}");
-    Ok(a1)
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
