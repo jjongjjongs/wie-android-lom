@@ -58,7 +58,7 @@ pub async fn java_unk5(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Resu
         core.read_bytes(pointer_address, &mut pointer_bytes)?;
 
         let class_pointer = u32::from_le_bytes(pointer_bytes);
-        let mut class_bytes = [0u8; 96];
+        let mut class_bytes = [0u8; 512];
 
         match core.read_bytes(class_pointer, &mut class_bytes) {
             Ok(read) => {
