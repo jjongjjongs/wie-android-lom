@@ -322,5 +322,17 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
         }
     }
 
+    let a1 = 0x01400ac4u32;
+    let mut metadata = [0u8; 512];
+
+    match core.read_bytes(a1, &mut metadata) {
+        Ok(read) => {
+            tracing::warn!("java_unk12 metadata @{a1:#x}, read={read:#x}: {:02x?}", &metadata[..read]);
+        }
+        Err(error) => {
+            tracing::warn!("java_unk12 metadata @{a1:#x}: read failed: {error}");
+        }
+    }
+
     Ok(())
 }
