@@ -334,5 +334,17 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
         }
     }
 
+    let lm_address = 0x01400000u32;
+    let mut lm_metadata = [0u8; 2048];
+
+    match core.read_bytes(lm_address, &mut lm_metadata) {
+        Ok(read) => {
+            tracing::warn!("java_unk12 Lm metadata @{lm_address:#x}, read={read:#x}: {:02x?}", &lm_metadata[..read]);
+        }
+        Err(error) => {
+            tracing::warn!("java_unk12 Lm metadata @{lm_address:#x}: read failed: {error}");
+        }
+    }
+
     Ok(())
 }
