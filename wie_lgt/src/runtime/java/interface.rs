@@ -184,7 +184,13 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
     tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
 
-    let lm_class = ClassDefinitionImpl::from_class_proto(Lm::as_proto(), Box::new(LmContext { core: core.clone() }) as Box<_>);
+    let lm_class = ClassDefinitionImpl::from_class_proto(
+        Lm::as_proto(),
+        Box::new(LmContext {
+            core: core.clone(),
+            native_this: None,
+        }) as Box<_>,
+    );
 
     match jvm.register_class(Box::new(lm_class), None).await {
         Ok(_) => {

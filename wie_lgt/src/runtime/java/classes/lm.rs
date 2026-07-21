@@ -2,11 +2,12 @@ use alloc::{string::ToString, vec};
 use java_class_proto::{JavaClassProto, JavaMethodProto};
 use java_runtime::classes::java::lang::String;
 use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult};
-use wie_core_arm::ArmCore;
+use wie_core_arm::{Allocator, ArmCore};
 
 #[derive(Clone)]
 pub struct LmContext {
     pub core: ArmCore,
+    pub native_this: Option<u32>,
 }
 pub struct Lm;
 
@@ -29,18 +30,37 @@ impl Lm {
         }
     }
 
-    async fn init(jvm: &Jvm, _: &mut LmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
-        tracing::warn!("Lm::<init> stub");
+    async fn init(_: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::warn!("Lm::<init> -> native 0x10c8");
 
-        let _: () = jvm.invoke_special(&this, "org/kwis/msp/lcdui/Jlet", "<init>", "()V", ()).await?;
+        let native_this = match Allocator::alloc(&mut context.core, 0x10) {
+            Ok(address) => address,
+            Err(error) => {
+                tracing::error!("Lm native allocation failed: {error:?}");
+                return Ok(());
+            }
+        };
+
+        match context.core.run_function::<()>(0x10c8, &[native_this]).await {
+            Ok(_) => {
+                context.native_this = Some(native_this);
+                tracing::warn!("Lm native object initialized at {native_this:#x}");
+            }
+            Err(error) => {
+                tracing::error!("Lm native constructor failed: {error:?}");
+            }
+        }
 
         Ok(())
     }
 
     async fn start_app(jvm: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>, _: ClassInstanceRef<Array<String>>) -> JvmResult<()> {
         tracing::warn!("Lm::startApp -> native 0x1118");
-
-        match context.core.run_function::<()>(0x1118, &[]).await {
+        let Some(native_this) = context.native_this else {
+            tracing::error!("Lm::startApp called without native object");
+            return Ok(());
+        };
+        match context.core.run_function::<()>(0x1118, &[native_this]).await {
             Ok(_) => Ok(()),
             Err(error) => Err(jvm.exception("net/wie/WieError", &error.to_string()).await),
         }
