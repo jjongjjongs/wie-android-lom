@@ -115,9 +115,6 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     tracing::debug!("InitStruct: {:#x?}", init_param_1.ptr_init_struct);
     let init_struct: InitStruct = read_generic(core, init_param_1.ptr_init_struct)?;
 
-    tracing::debug!("Calling initializer at {:#x}", init_struct.fn_init);
-    let _: () = core.run_function(init_struct.fn_init, &[]).await?;
-
     let lm_stub_108 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x108)?;
     let lm_stub_110 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x110)?;
 
@@ -128,6 +125,9 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
         "Installed Lm runtime stubs: [0x01500a68]={lm_stub_108:#x}, \
      [0x01500a70]={lm_stub_110:#x}"
     );
+
+    tracing::debug!("Calling initializer at {:#x}", init_struct.fn_init);
+    let _: () = core.run_function(init_struct.fn_init, &[]).await?;
 
     Ok(())
 }
