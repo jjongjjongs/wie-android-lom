@@ -6,7 +6,11 @@ use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result};
 
-use crate::runtime::{SVC_CATEGORY_INIT, java::classes::lm::Lm, svc_ids::InitSvcId};
+use crate::runtime::{
+    SVC_CATEGORY_INIT,
+    java::classes::lm::{Lm, LmContext},
+    svc_ids::InitSvcId,
+};
 
 /// Diagnostic SVC range used for unresolved LGT Java-interface imports.
 /// The low 12 bits preserve the original function index.
@@ -180,7 +184,7 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
     tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
     tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
 
-    let lm_class = ClassDefinitionImpl::from_class_proto(Lm::as_proto(), Box::new(()) as Box<_>);
+    let lm_class = ClassDefinitionImpl::from_class_proto(Lm::as_proto(), Box::new(LmContext { core: core.clone() }) as Box<_>);
 
     match jvm.register_class(Box::new(lm_class), None).await {
         Ok(_) => {
