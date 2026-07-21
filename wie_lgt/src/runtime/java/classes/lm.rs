@@ -3,6 +3,7 @@ use java_class_proto::{JavaClassProto, JavaMethodProto};
 use java_runtime::classes::java::lang::String;
 use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult};
 use wie_core_arm::{Allocator, ArmCore};
+use wie_util::ByteRead;
 
 #[derive(Clone)]
 pub struct LmContext {
@@ -41,6 +42,17 @@ impl Lm {
             }
         };
 
+        let mut table_bytes = [0u8; 0x120];
+
+        match context.core.read_bytes(0x01500960, &mut table_bytes) {
+            Ok(read) => {
+                tracing::warn!("Lm runtime table @0x01500960, read={read:#x}: {:02x?}", &table_bytes[..read]);
+            }
+            Err(error) => {
+                tracing::error!("Lm runtime table read failed: {error:?}");
+            }
+        }
+
         match context.core.run_function::<()>(0x10c8, &[native_this]).await {
             Ok(_) => {
                 context.native_this = Some(native_this);
@@ -56,10 +68,12 @@ impl Lm {
 
     async fn start_app(jvm: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>, _: ClassInstanceRef<Array<String>>) -> JvmResult<()> {
         tracing::warn!("Lm::startApp -> native 0x1118");
+
         let Some(native_this) = context.native_this else {
             tracing::error!("Lm::startApp called without native object");
             return Ok(());
         };
+
         match context.core.run_function::<()>(0x1118, &[native_this]).await {
             Ok(_) => Ok(()),
             Err(error) => Err(jvm.exception("net/wie/WieError", &error.to_string()).await),
