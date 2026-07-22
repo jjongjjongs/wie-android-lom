@@ -104,6 +104,15 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
      init_state={init_state:#x}, guard_state={guard_state:#x}, callback={a1:#x}"
             );
 
+            write_generic(core, meta_ptr + 0x10, 5u16)?;
+
+            let patched_state: u16 = read_generic(core, meta_ptr + 0x10)?;
+
+            tracing::warn!(
+                "LGT import 0x0d patched state: root={root:#x}, meta={meta_ptr:#x}, \
+     before={init_state:#x}, after={patched_state:#x}"
+            );
+
             a0.write(core, lr)?;
             return Ok(());
         }
