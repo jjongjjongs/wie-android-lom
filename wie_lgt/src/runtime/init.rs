@@ -53,24 +53,34 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             return Ok(());
         }
         if function_index == 0x104 {
-            let vtable = Allocator::alloc(core, 8)?;
-            let method_stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
+            let vtable = Allocator::alloc(core, 12)?;
+            let method_stub_0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
+            let method_stub_1 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x106)?;
 
             write_generic(core, vtable, 0u32)?;
-            write_generic(core, vtable + 4, method_stub)?;
+            write_generic(core, vtable + 4, method_stub_0)?;
+            write_generic(core, vtable + 8, method_stub_1)?;
             write_generic(core, a0, vtable)?;
+
+            // startApp가 사용하는 두 virtual-method offset을 서로 다른 슬롯으로 분리한다.
+            // +0x22: index 17 -> vtable slot 0
+            // +0x24: index 18 -> vtable slot 1
+            write_generic(core, 0x01500e40 + 0x22, 0u16)?;
+            write_generic(core, 0x01500e40 + 0x24, 1u16)?;
             let object_word: u32 = read_generic(core, a0)?;
             let vtable_word0: u32 = read_generic(core, vtable)?;
             let vtable_word1: u32 = read_generic(core, vtable + 4)?;
+            let vtable_word2: u32 = read_generic(core, vtable + 8)?;
 
             tracing::warn!(
                 "Lm runtime object readback: object[0]={object_word:#x}, \
-     vtable[0]={vtable_word0:#x}, vtable[1]={vtable_word1:#x}"
+     vtable[0]={vtable_word0:#x}, vtable[1]={vtable_word1:#x}, \
+     vtable[2]={vtable_word2:#x}"
             );
 
             tracing::warn!(
                 "Lm runtime object initialized: object={a0:#x}, \
-         vtable={vtable:#x}, method={method_stub:#x}"
+         vtable={vtable:#x}, method0={method_stub_0:#x}, method1={method_stub_1:#x}"
             );
 
             a0.write(core, lr)?;
@@ -78,7 +88,13 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
         }
 
         if function_index == 0x105 {
-            tracing::warn!("Lm virtual method stub(a0={a0:#x})");
+            tracing::warn!("Lm virtual method stub 0(a0={a0:#x})");
+            a0.write(core, lr)?;
+            return Ok(());
+        }
+
+        if function_index == 0x106 {
+            tracing::warn!("Lm virtual method stub 1(a0={a0:#x})");
             a0.write(core, lr)?;
             return Ok(());
         }
