@@ -85,6 +85,20 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             let init_state: u16 = read_generic(core, meta_ptr + 0x10)?;
             let guard_state: u16 = read_generic(core, meta_ptr + 0x1a)?;
 
+            let mut meta_bytes = [0u8; 0x40];
+
+            match core.read_bytes(meta_ptr, &mut meta_bytes) {
+                Ok(read) => {
+                    tracing::warn!(
+                        "LGT import 0x0d meta bytes: root={root:#x}, meta={meta_ptr:#x}, read={read:#x}, bytes={:02x?}",
+                        &meta_bytes[..read]
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!("LGT import 0x0d meta bytes failed: root={root:#x}, meta={meta_ptr:#x}, error={error}");
+                }
+            }
+
             tracing::warn!(
                 "LGT import 0x0d class: lr={lr:#x}, root={root:#x}, meta={meta_ptr:#x}, \
      init_state={init_state:#x}, guard_state={guard_state:#x}, callback={a1:#x}"
