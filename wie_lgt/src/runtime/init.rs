@@ -54,20 +54,25 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
         }
         if function_index == 0x0d {
             tracing::warn!("LGT import 0x0d regs: a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}");
-            let a4 = core.read_param(4)?;
-            let a5 = core.read_param(5)?;
-            let a6 = core.read_param(6)?;
-            let a7 = core.read_param(7)?;
+            let root: u32 = match lr {
+                0x0000e6b8 => 0x014015dc,
+                0x000e98a8 => 0x01406274,
+                0x000f1ea0 => 0x0140649c,
+                _ => {
+                    tracing::warn!("LGT import 0x0d unknown call site: lr={lr:#x}");
+                    a0.write(core, lr)?;
+                    return Ok(());
+                }
+            };
 
-            tracing::warn!("LGT import 0x0d stack args: a4={a4:#x}, a5={a5:#x}, a6={a6:#x}, a7={a7:#x}");
-            let meta_ptr: u32 = 0x01401590;
-            let before: u16 = read_generic(core, meta_ptr + 0x10)?;
+            let meta_ptr: u32 = read_generic(core, root + 8)?;
+            let init_state: u16 = read_generic(core, meta_ptr + 0x10)?;
+            let guard_state: u16 = read_generic(core, meta_ptr + 0x1a)?;
 
-            tracing::warn!("LGT import 0x0d before: meta={meta_ptr:#x}, state={before:#x}, callback={a1:#x}");
-
-            let after: u16 = read_generic(core, meta_ptr + 0x10)?;
-
-            tracing::warn!("LGT import 0x0d after: meta={meta_ptr:#x}, state={after:#x}, callback={a1:#x}");
+            tracing::warn!(
+                "LGT import 0x0d class: lr={lr:#x}, root={root:#x}, meta={meta_ptr:#x}, \
+     init_state={init_state:#x}, guard_state={guard_state:#x}, callback={a1:#x}"
+            );
 
             a0.write(core, lr)?;
             return Ok(());
