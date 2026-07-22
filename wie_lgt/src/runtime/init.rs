@@ -53,9 +53,9 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             let vtable = Allocator::alloc(core, 8)?;
             let method_stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
 
-            0u32.write(core, vtable)?;
-            method_stub.write(core, vtable + 4)?;
-            vtable.write(core, a0)?;
+            write_generic(core, vtable, 0u32)?;
+            write_generic(core, vtable + 4, method_stub)?;
+            write_generic(core, a0, vtable)?;
             let object_word: u32 = read_generic(core, a0)?;
             let vtable_word0: u32 = read_generic(core, vtable)?;
             let vtable_word1: u32 = read_generic(core, vtable + 4)?;
