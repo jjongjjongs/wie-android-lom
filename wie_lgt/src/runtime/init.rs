@@ -49,8 +49,29 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             address.write(core, lr)?;
             return Ok(());
         }
+        if function_index == 0x104 {
+            let vtable = Allocator::alloc(core, 8)?;
+            let method_stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
 
-        if function_index == 0x0f || function_index == 0xfc || function_index == 0x104 || function_index == 0x108 || function_index == 0x110 {
+            0u32.write(core, vtable)?;
+            method_stub.write(core, vtable + 4)?;
+            vtable.write(core, a0)?;
+
+            tracing::warn!(
+                "Lm runtime object initialized: object={a0:#x}, \
+         vtable={vtable:#x}, method={method_stub:#x}"
+            );
+
+            a0.write(core, lr)?;
+            return Ok(());
+        }
+
+        if function_index == 0x105 {
+            tracing::warn!("Lm virtual method stub(a0={a0:#x})");
+            a0.write(core, lr)?;
+            return Ok(());
+        }
+        if function_index == 0x0f || function_index == 0xfc || function_index == 0x108 || function_index == 0x110 {
             tracing::warn!("Lm runtime passthrough(index={function_index:#x}, a0={a0:#x})");
             a0.write(core, lr)?;
             return Ok(());
