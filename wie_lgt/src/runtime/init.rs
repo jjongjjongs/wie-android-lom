@@ -50,7 +50,7 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             return Ok(());
         }
 
-        if function_index == 0xfc || function_index == 0x108 || function_index == 0x110 {
+        if function_index == 0x0f || function_index == 0xfc || function_index == 0x104 || function_index == 0x108 || function_index == 0x110 {
             tracing::warn!("Lm runtime passthrough(index={function_index:#x}, a0={a0:#x})");
             a0.write(core, lr)?;
             return Ok(());
@@ -116,15 +116,18 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     let init_struct: InitStruct = read_generic(core, init_param_1.ptr_init_struct)?;
 
     let lm_stub_fc = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xfc)?;
+    let lm_stub_104 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x104)?;
     let lm_stub_108 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x108)?;
     let lm_stub_110 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x110)?;
 
     write_generic(core, 0x01500a5c, lm_stub_fc)?;
+    write_generic(core, 0x01500a64, lm_stub_104)?;
     write_generic(core, 0x01500a68, lm_stub_108)?;
     write_generic(core, 0x01500a70, lm_stub_110)?;
 
     tracing::warn!(
         "Installed Lm runtime stubs: [0x01500a5c]={lm_stub_fc:#x}, \
+     [0x01500a64]={lm_stub_104:#x}, \
      [0x01500a68]={lm_stub_108:#x}, \
      [0x01500a70]={lm_stub_110:#x}"
     );
