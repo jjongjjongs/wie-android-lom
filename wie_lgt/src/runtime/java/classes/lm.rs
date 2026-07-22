@@ -77,6 +77,16 @@ impl Lm {
             return Ok(());
         }
 
+        let mut runtime_data = [0u8; 0x30];
+        match context.core.read_bytes(0x01500e40, &mut runtime_data) {
+            Ok(read) => {
+                tracing::warn!("Lm runtime data @0x01500e40, read={read:#x}: {:02x?}", &runtime_data[..read]);
+            }
+            Err(error) => {
+                tracing::error!("Lm runtime data read failed: {error:?}");
+            }
+        }
+
         match context.core.run_function::<()>(0x1118, &[native_this]).await {
             Ok(_) => Ok(()),
             Err(error) => Err(jvm.exception("net/wie/WieError", &error.to_string()).await),
