@@ -135,6 +135,29 @@ pub async fn java_load_classes(
     let class_count = u32::from_le_bytes(class_count_bytes).min(64);
 
     tracing::warn!("java_load_classes class_count={class_count}");
+    for index in [17u32, 18u32] {
+        let pointer_address = virtual_methods.wrapping_add(index * 4);
+        let mut pointer_bytes = [0u8; 4];
+
+        _core.read_bytes(pointer_address, &mut pointer_bytes)?;
+        let descriptor_pointer = u32::from_le_bytes(pointer_bytes);
+
+        let mut descriptor_bytes = [0u8; 96];
+
+        match _core.read_bytes(descriptor_pointer, &mut descriptor_bytes) {
+            Ok(read) => {
+                let end = descriptor_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
+
+                tracing::warn!(
+                    "java_load_classes virtual_method[{index}] slot={pointer_address:#x}, descriptor={descriptor_pointer:#x}, text={}",
+                    String::from_utf8_lossy(&descriptor_bytes[..end])
+                );
+            }
+            Err(error) => {
+                tracing::warn!("java_load_classes virtual_method[{index}] descriptor={descriptor_pointer:#x}: read failed: {error}");
+            }
+        }
+    }
 
     for index in 0..class_count {
         // classes + 4 뒤부터 클래스당 6개의 u32, 즉 24바이트
