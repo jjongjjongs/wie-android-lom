@@ -1,4 +1,5 @@
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec, vec::Vec};
+use core::sync::atomic::AtomicU32;
 
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_rust::ClassDefinitionImpl;
@@ -188,7 +189,7 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
         Lm::as_proto(),
         Box::new(LmContext {
             core: core.clone(),
-            native_this: None,
+            native_this: Arc::new(AtomicU32::new(0)),
         }) as Box<_>,
     );
 

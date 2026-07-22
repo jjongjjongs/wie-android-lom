@@ -1,4 +1,5 @@
-use alloc::{string::ToString, vec};
+use alloc::{string::ToString, sync::Arc, vec};
+use core::sync::atomic::{AtomicU32, Ordering};
 use java_class_proto::{JavaClassProto, JavaMethodProto};
 use java_runtime::classes::java::lang::String;
 use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult};
@@ -8,7 +9,7 @@ use wie_util::ByteRead;
 #[derive(Clone)]
 pub struct LmContext {
     pub core: ArmCore,
-    pub native_this: Option<u32>,
+    pub native_this: Arc<AtomicU32>,
 }
 pub struct Lm;
 
@@ -55,7 +56,7 @@ impl Lm {
 
         match context.core.run_function::<()>(0x10c8, &[native_this]).await {
             Ok(_) => {
-                context.native_this = Some(native_this);
+                context.native_this.store(native_this, Ordering::SeqCst);
                 tracing::warn!("Lm native object initialized at {native_this:#x}");
             }
             Err(error) => {
@@ -69,10 +70,12 @@ impl Lm {
     async fn start_app(jvm: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>, _: ClassInstanceRef<Array<String>>) -> JvmResult<()> {
         tracing::warn!("Lm::startApp -> native 0x1118");
 
-        let Some(native_this) = context.native_this else {
+        let native_this = context.native_this.load(Ordering::SeqCst);
+
+        if native_this == 0 {
             tracing::error!("Lm::startApp called without native object");
             return Ok(());
-        };
+        }
 
         match context.core.run_function::<()>(0x1118, &[native_this]).await {
             Ok(_) => Ok(()),
