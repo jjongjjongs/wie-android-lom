@@ -54,6 +54,12 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
         }
         if function_index == 0x0d {
             tracing::warn!("LGT import 0x0d regs: a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}");
+            let a4 = core.read_param(4)?;
+            let a5 = core.read_param(5)?;
+            let a6 = core.read_param(6)?;
+            let a7 = core.read_param(7)?;
+
+            tracing::warn!("LGT import 0x0d stack args: a4={a4:#x}, a5={a5:#x}, a6={a6:#x}, a7={a7:#x}");
             let meta_ptr: u32 = 0x01401590;
             let before: u16 = read_generic(core, meta_ptr + 0x10)?;
 
