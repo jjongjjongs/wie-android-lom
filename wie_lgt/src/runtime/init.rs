@@ -8,7 +8,7 @@ use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
-use wie_util::{Result, WieError, read_generic, write_generic};
+use wie_util::{ByteRead, Result, WieError, read_generic, write_generic};
 
 use super::{
     SVC_CATEGORY_INIT, SVC_CATEGORY_STDLIB, SVC_CATEGORY_WIPIC,
@@ -53,6 +53,18 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             return Ok(());
         }
         if function_index == 0x104 {
+            let mut original = [0u8; 16];
+            match core.read_bytes(a0, &mut original) {
+                Ok(read) => {
+                    tracing::warn!(
+                        "LGT callback object before 0x104: object={a0:#x}, read={read:#x}, bytes={:02x?}",
+                        &original[..read]
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!("LGT callback object before 0x104: object={a0:#x}, read failed: {error}");
+                }
+            }
             let vtable = Allocator::alloc(core, 12)?;
             let method_stub_0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
             let method_stub_1 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x106)?;
