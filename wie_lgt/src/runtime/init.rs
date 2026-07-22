@@ -65,6 +65,16 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
                     tracing::warn!("LGT callback object before 0x104: object={a0:#x}, read failed: {error}");
                 }
             }
+            let mut class_meta = [0u8; 0x40];
+
+            match core.read_bytes(0x01401590, &mut class_meta) {
+                Ok(read) => {
+                    tracing::warn!("LGT class meta runtime 0x1401590: read={read:#x}, bytes={:02x?}", &class_meta[..read]);
+                }
+                Err(error) => {
+                    tracing::warn!("LGT class meta runtime 0x1401590 read failed: {error}");
+                }
+            }
             let vtable = Allocator::alloc(core, 12)?;
             let method_stub_0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
             let method_stub_1 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x106)?;
