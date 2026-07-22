@@ -56,6 +56,14 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             0u32.write(core, vtable)?;
             method_stub.write(core, vtable + 4)?;
             vtable.write(core, a0)?;
+            let object_word: u32 = read_generic(core, a0)?;
+            let vtable_word0: u32 = read_generic(core, vtable)?;
+            let vtable_word1: u32 = read_generic(core, vtable + 4)?;
+
+            tracing::warn!(
+                "Lm runtime object readback: object[0]={object_word:#x}, \
+     vtable[0]={vtable_word0:#x}, vtable[1]={vtable_word1:#x}"
+            );
 
             tracing::warn!(
                 "Lm runtime object initialized: object={a0:#x}, \
