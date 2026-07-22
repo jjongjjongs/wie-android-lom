@@ -52,6 +52,20 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             address.write(core, lr)?;
             return Ok(());
         }
+        if function_index == 0x0d {
+            let meta_ptr: u32 = 0x01401590;
+            let before: u16 = read_generic(core, meta_ptr + 0x10)?;
+
+            tracing::warn!("LGT import 0x0d before: meta={meta_ptr:#x}, state={before:#x}, callback={a1:#x}");
+
+            let after: u16 = read_generic(core, meta_ptr + 0x10)?;
+
+            tracing::warn!("LGT import 0x0d after: meta={meta_ptr:#x}, state={after:#x}, callback={a1:#x}");
+
+            a0.write(core, lr)?;
+            return Ok(());
+        }
+
         if function_index == 0x104 {
             let mut original = [0u8; 16];
             match core.read_bytes(a0, &mut original) {
