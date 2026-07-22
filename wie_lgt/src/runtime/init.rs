@@ -53,6 +53,7 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             return Ok(());
         }
         if function_index == 0x0d {
+            tracing::warn!("LGT import 0x0d regs: a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}");
             let meta_ptr: u32 = 0x01401590;
             let before: u16 = read_generic(core, meta_ptr + 0x10)?;
 
