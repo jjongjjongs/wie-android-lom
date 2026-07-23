@@ -264,6 +264,22 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     tracing::debug!("InitStruct: {:#x?}", init_param_1.ptr_init_struct);
     let init_struct: InitStruct = read_generic(core, init_param_1.ptr_init_struct)?;
 
+    for address in [
+        0x015009e4u32,
+        0x015009ec,
+        0x015009f0,
+        0x015009f8,
+        0x01500a50,
+        0x01500a58,
+        0x01500a5c,
+        0x01500a64,
+        0x01500a68,
+        0x01500a70,
+    ] {
+        let value: u32 = read_generic(core, address)?;
+        tracing::warn!("Lm runtime slot before patch [{address:#x}] = {value:#x}");
+    }
+
     let lm_stub_84 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x84)?;
     let lm_stub_8c = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x8c)?;
     let lm_stub_90 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x90)?;
