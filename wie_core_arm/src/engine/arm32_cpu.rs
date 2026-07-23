@@ -65,6 +65,19 @@ impl ArmEngine for Arm32CpuEngine {
                 tracing::warn!("LGT e8 resolver probe: pc={pc:#x}, r0={r0:#x}, r1={r1:#x}, r3={r3:#x}, r6={r6:#x}");
             }
 
+            if pc == 0x0000e8c4 {
+                let mut stub = [0u8; 16];
+
+                match self.mem.read_range(0x01406958, 16, &mut stub) {
+                    Ok(_) => {
+                        tracing::warn!("LGT resolver patched stub: {:02x?}", stub);
+                    }
+                    Err(err) => {
+                        tracing::warn!("LGT resolver patched stub read failed: {err:?}");
+                    }
+                }
+            }
+
             if self.is_svc_exception() {
                 return self.read_svc_result();
             }
