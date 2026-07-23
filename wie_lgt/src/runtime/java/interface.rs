@@ -398,8 +398,11 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
 
     Ok(())
 }
-pub async fn java_import_0e(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("java_import_0e(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+pub async fn java_import_0e(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    let (pc, lr) = core.read_pc_lr()?;
+
+    tracing::warn!("java_import_0e(pc={pc:#x}, lr={lr:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+
     Ok(0)
 }
 
