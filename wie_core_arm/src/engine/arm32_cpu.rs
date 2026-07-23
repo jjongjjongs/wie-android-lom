@@ -47,13 +47,13 @@ impl ArmEngine for Arm32CpuEngine {
         loop {
             let pc = self.cpu.reg_get(Mode::User, reg::PC);
 
-            if (0x0000eb98..=0x0000ebac).contains(&pc) {
+            if (0x0000ec30..=0x0000ec40).contains(&pc) {
                 let r0 = self.cpu.reg_get(Mode::User, 0);
                 let r3 = self.cpu.reg_get(Mode::User, 3);
                 let r7 = self.cpu.reg_get(Mode::User, 7);
                 let r8 = self.cpu.reg_get(Mode::User, 8);
 
-                tracing::warn!("LGT eb range probe: pc={pc:#x}, r0={r0:#x}, r3={r3:#x}, r7={r7:#x}, r8={r8:#x}");
+                tracing::warn!("LGT ec30 range probe: pc={pc:#x}, r0={r0:#x}, r3={r3:#x}, r7={r7:#x}, r8={r8:#x}");
             }
 
             if self.is_svc_exception() {
