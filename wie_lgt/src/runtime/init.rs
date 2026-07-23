@@ -221,7 +221,7 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
         InitSvcId::JavaLoadClasses => EmulatedFunction::call(&java_load_classes, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk9 => EmulatedFunction::call(&java_unk9, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk11 => EmulatedFunction::call(&java_unk11, core, jvm).await?.write(core, lr),
-        InitSvcId::JavaImport0e => EmulatedFunction::call(&java_import_0e, core, &mut ()).await?.write(core, lr),
+        InitSvcId::JavaImport0e => EmulatedFunction::call(&java_import_0e, core, jvm).await?.write(core, lr),
         InitSvcId::JavaImport10 => EmulatedFunction::call(&java_import_10, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
