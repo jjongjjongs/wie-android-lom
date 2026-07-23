@@ -317,6 +317,23 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
 
     tracing::debug!("Calling initializer at {:#x}", init_struct.fn_init);
     let _: () = core.run_function(init_struct.fn_init, &[]).await?;
+
+    for address in [
+        0x015009e4u32,
+        0x015009ec,
+        0x015009f0,
+        0x015009f8,
+        0x01500a50,
+        0x01500a58,
+        0x01500a5c,
+        0x01500a64,
+        0x01500a68,
+        0x01500a70,
+    ] {
+        let value: u32 = read_generic(core, address)?;
+        tracing::warn!("Lm runtime slot after fn_init [{address:#x}] = {value:#x}");
+    }
+
     for offset in (0..0x30).step_by(4) {
         let address = 0x01500e40 + offset;
         let value: u32 = read_generic(core, address)?;
