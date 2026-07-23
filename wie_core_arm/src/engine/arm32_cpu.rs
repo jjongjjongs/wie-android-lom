@@ -47,7 +47,7 @@ impl ArmEngine for Arm32CpuEngine {
         loop {
             let pc = self.cpu.reg_get(Mode::User, reg::PC);
 
-            if pc == 0x0000ec1c {
+            if pc == 0x0000ec24 {
                 let r0 = self.cpu.reg_get(Mode::User, 0);
                 let r3 = self.cpu.reg_get(Mode::User, 3);
                 let r7 = self.cpu.reg_get(Mode::User, 7);
