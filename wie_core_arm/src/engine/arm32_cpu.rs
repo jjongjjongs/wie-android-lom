@@ -47,6 +47,15 @@ impl ArmEngine for Arm32CpuEngine {
         loop {
             let pc = self.cpu.reg_get(Mode::User, reg::PC);
 
+            if pc == 0x0000ec1c {
+                let r0 = self.cpu.reg_get(Mode::User, 0);
+                let r3 = self.cpu.reg_get(Mode::User, 3);
+                let r7 = self.cpu.reg_get(Mode::User, 7);
+                let r8 = self.cpu.reg_get(Mode::User, 8);
+
+                tracing::warn!("LGT ec1c range check: r0={r0:#x}, count={r3:#x}, index={r7:#x}, object={r8:#x}");
+            }
+
             if self.is_svc_exception() {
                 return self.read_svc_result();
             }
