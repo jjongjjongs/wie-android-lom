@@ -174,8 +174,6 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             // startApp가 사용하는 두 virtual-method offset을 서로 다른 슬롯으로 분리한다.
             // +0x22: index 17 -> vtable slot 0
             // +0x24: index 18 -> vtable slot 1
-            write_generic(core, 0x01500e40 + 0x22, 0u16)?;
-            write_generic(core, 0x01500e40 + 0x24, 1u16)?;
             let object_word: u32 = read_generic(core, a0)?;
             let vtable_word0: u32 = read_generic(core, vtable)?;
             let vtable_word1: u32 = read_generic(core, vtable + 4)?;
