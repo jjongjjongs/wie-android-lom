@@ -156,6 +156,12 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     tracing::warn!("LGT class meta runtime 0x1401590 read failed: {error}");
                 }
             }
+            let original_index_0: u16 = read_generic(core, 0x01500e40 + 0x22)?;
+            let original_index_1: u16 = read_generic(core, 0x01500e40 + 0x24)?;
+            tracing::warn!(
+                "Lm original method indexes before patch: +0x22={original_index_0}, +0x24={original_index_1}"
+            );
+
             let vtable = Allocator::alloc(core, 12)?;
             let method_stub_0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
             let method_stub_1 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x106)?;
