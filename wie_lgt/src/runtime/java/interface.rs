@@ -1,17 +1,20 @@
-use alloc::{boxed::Box, string::String, sync::Arc, vec, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
 use core::sync::atomic::AtomicU32;
 
-use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::{ClassInstance, Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_rust::ClassDefinitionImpl;
-use wie_core_arm::ArmCore;
+use spin::Mutex;
+use wie_core_arm::{Allocator, ArmCore};
 use wie_jvm_support::JvmSupport;
-use wie_util::{ByteRead, Result};
+use wie_util::{ByteRead, Result, write_generic};
 
 use crate::runtime::{
     SVC_CATEGORY_INIT,
     java::classes::lm::{Lm, LmContext},
     svc_ids::InitSvcId,
 };
+
+pub type JavaHandleTable = Arc<Mutex<BTreeMap<u32, Box<dyn ClassInstance>>>>;
 
 /// Diagnostic SVC range used for unresolved LGT Java-interface imports.
 /// The low 12 bits preserve the original function index.
@@ -402,15 +405,14 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
 
 pub async fn java_import_09(
     core: &mut ArmCore,
+    java_handles: &mut JavaHandleTable,
     jvm: &mut Jvm,
     _a0: u32,
     a1: u32,
     a2: u32,
     a3: u32,
 ) -> Result<u32> {
-    tracing::warn!(
-        "java_import_09(utf16={a1:#x}, length={a2:#x}, output={a3:#x})"
-    );
+    tracing::warn!("java_import_09(utf16={a1:#x}, length={a2:#x}, output={a3:#x})");
 
     let mut bytes = vec![0u8; (a2 as usize) * 2];
     core.read_bytes(a1, &mut bytes)?;
@@ -429,8 +431,19 @@ pub async fn java_import_09(
 
     let identity = java_string.identity();
 
+    // The original LGT VM uses a 12-byte native object handle.
+    // Allocate an equally sized opaque guest-side handle and retain the
+    // corresponding Rust JVM object in the per-runtime handle table.
+    let handle = Allocator::alloc(core, 12)?;
+    write_generic(core, handle, 0u32)?;
+    write_generic(core, handle + 4, 0u32)?;
+    write_generic(core, handle + 8, 0xffff_ffffu32)?;
+
+    java_handles.lock().insert(handle, java_string);
+    write_generic(core, a3, handle)?;
+
     tracing::warn!(
-        "java_import_09 created {:?}, identity={identity:#x}; output slot not written yet",
+        "java_import_09 created {:?}, identity={identity:#x}, handle={handle:#x}, output={a3:#x}",
         rust_string
     );
 

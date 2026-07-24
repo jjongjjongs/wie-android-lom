@@ -15,8 +15,8 @@ use super::{
     java::{
         get_java_interface_method,
         interface::{
-            JAVA_DIAG_SVC_BASE, java_import_09, java_import_0e, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk5, java_unk9,
-            java_unk11, java_unk12,
+            JAVA_DIAG_SVC_BASE, JavaHandleTable, java_import_0e, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes,
+            java_unk0, java_unk5, java_unk9, java_unk11, java_unk12,
         },
     },
     stdlib::register_stdlib_svc_handler,
@@ -24,15 +24,31 @@ use super::{
     wipi_c::register_wipic_svc_handler,
 };
 
+#[derive(Clone)]
+struct InitSvcContext {
+    wipic_category: u32,
+    stdlib_category: u32,
+    jvm: Jvm,
+    java_handles: JavaHandleTable,
+}
+
 fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
     core.register_svc_handler(
         SVC_CATEGORY_INIT,
         handle_init_svc,
-        &(SVC_CATEGORY_WIPIC, SVC_CATEGORY_STDLIB, jvm.clone()),
+        &InitSvcContext {
+            wipic_category: SVC_CATEGORY_WIPIC,
+            stdlib_category: SVC_CATEGORY_STDLIB,
+            jvm: jvm.clone(),
+            java_handles: Default::default(),
+        },
     )
 }
 
-async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, jvm): &mut (u32, u32, Jvm), id: SvcId) -> Result<()> {
+async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: SvcId) -> Result<()> {
+    let wipic_category = &context.wipic_category;
+    let stdlib_category = &context.stdlib_category;
+    let jvm = &mut context.jvm;
     let (_, lr) = core.read_pc_lr()?;
 
     // Diagnostic fallback for Java-interface indices that do not yet have a
@@ -227,7 +243,16 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
         InitSvcId::JavaLoadClasses => EmulatedFunction::call(&java_load_classes, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk9 => EmulatedFunction::call(&java_unk9, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk11 => EmulatedFunction::call(&java_unk11, core, jvm).await?.write(core, lr),
-        InitSvcId::JavaImport09 => EmulatedFunction::call(&java_import_09, core, jvm).await?.write(core, lr),
+        InitSvcId::JavaImport09 => {
+            let a0 = core.read_param(0)?;
+            let a1 = core.read_param(1)?;
+            let a2 = core.read_param(2)?;
+            let a3 = core.read_param(3)?;
+
+            let result = java_import_09(core, &mut context.java_handles, jvm, a0, a1, a2, a3).await?;
+
+            result.write(core, lr)
+        }
         InitSvcId::JavaImport0e => EmulatedFunction::call(&java_import_0e, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport10 => EmulatedFunction::call(&java_import_10, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
