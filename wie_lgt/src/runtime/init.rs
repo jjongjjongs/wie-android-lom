@@ -104,8 +104,8 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
      init_state={init_state:#x}, guard_state={guard_state:#x}, callback={a1:#x}"
             );
 
-            write_generic(core, meta_ptr + 0x10, 5u16)?;
-
+            // Diagnostic test: do not overwrite meta_ptr + 0x10.
+            // The observed values resemble code offsets rather than an init-state enum.
             let patched_state: u16 = read_generic(core, meta_ptr + 0x10)?;
 
             tracing::warn!(
