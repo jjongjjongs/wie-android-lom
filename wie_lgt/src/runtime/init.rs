@@ -15,7 +15,7 @@ use super::{
     java::{
         get_java_interface_method,
         interface::{
-            JAVA_DIAG_SVC_BASE, java_import_0e, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk5, java_unk9,
+            JAVA_DIAG_SVC_BASE, java_import_09, java_import_0e, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk5, java_unk9,
             java_unk11, java_unk12,
         },
     },
@@ -227,6 +227,7 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
         InitSvcId::JavaLoadClasses => EmulatedFunction::call(&java_load_classes, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk9 => EmulatedFunction::call(&java_unk9, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk11 => EmulatedFunction::call(&java_unk11, core, jvm).await?.write(core, lr),
+        InitSvcId::JavaImport09 => EmulatedFunction::call(&java_import_09, core, jvm).await?.write(core, lr),
         InitSvcId::JavaImport0e => EmulatedFunction::call(&java_import_0e, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport10 => EmulatedFunction::call(&java_import_10, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),

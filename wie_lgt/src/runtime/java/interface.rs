@@ -22,6 +22,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk0)?,
         0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk12)?,
         0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk5)?,
+        0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport09)?,
         0x0e => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport0e)?,
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport10)?,
         0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport11)?,
@@ -398,6 +399,44 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
 
     Ok(())
 }
+
+pub async fn java_import_09(
+    core: &mut ArmCore,
+    jvm: &mut Jvm,
+    _a0: u32,
+    a1: u32,
+    a2: u32,
+    a3: u32,
+) -> Result<u32> {
+    tracing::warn!(
+        "java_import_09(utf16={a1:#x}, length={a2:#x}, output={a3:#x})"
+    );
+
+    let mut bytes = vec![0u8; (a2 as usize) * 2];
+    core.read_bytes(a1, &mut bytes)?;
+
+    let utf16 = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+
+    let rust_string = String::from_utf16_lossy(&utf16);
+
+    let java_string = match JavaLangString::from_rust_string(jvm, &rust_string).await {
+        Ok(value) => value,
+        Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+    };
+
+    let identity = java_string.identity();
+
+    tracing::warn!(
+        "java_import_09 created {:?}, identity={identity:#x}; output slot not written yet",
+        rust_string
+    );
+
+    Ok(0)
+}
+
 pub async fn java_import_0e(core: &mut ArmCore, _ctx: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     let (pc, lr) = core.read_pc_lr()?;
 
