@@ -201,6 +201,12 @@ async fn handle_init_svc(core: &mut ArmCore, (wipic_category, stdlib_category, j
             return Ok(());
         }
 
+        if function_index == 0x83 {
+            tracing::warn!("LGT import 0x83 unimplemented: a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}");
+            0u32.write(core, lr)?;
+            return Ok(());
+        }
+
         0u32.write(core, lr)?;
         return Ok(());
     }
