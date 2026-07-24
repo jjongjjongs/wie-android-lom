@@ -195,7 +195,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
 
         if function_index == 0x105 {
-            tracing::warn!("Lm virtual method stub 0(a0={a0:#x})");
+            tracing::warn!("Lm virtual method stub 0(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
             a0.write(core, lr)?;
             return Ok(());
         }
