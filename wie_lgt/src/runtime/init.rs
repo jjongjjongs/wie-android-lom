@@ -205,6 +205,19 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             a0.write(core, lr)?;
             return Ok(());
         }
+        if function_index == 0xfc {
+            let mut table = [0u8; 0x120];
+            match core.read_bytes(a3, &mut table) {
+                Ok(read) => tracing::warn!(
+                    "Lm runtime import table @{a3:#x}, read={read:#x}: {:02x?}",
+                    &table[..read]
+                ),
+                Err(error) => tracing::warn!(
+                    "Lm runtime import table @{a3:#x}: read failed: {error}"
+                ),
+            }
+        }
+
         if function_index == 0x0f {
             let mut bytes = [0u8; 32];
             match core.read_bytes(a0, &mut bytes) {
