@@ -355,6 +355,7 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     let lm_stub_110 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x110)?;
 
     write_generic(core, 0x015009f0, lm_stub_90)?;
+    write_generic(core, 0x015009f8, lm_stub_98)?;
     write_generic(core, 0x01500a50, lm_stub_f0)?;
     write_generic(core, 0x01500a58, lm_stub_f8)?;
     write_generic(core, 0x01500a5c, lm_stub_fc)?;
