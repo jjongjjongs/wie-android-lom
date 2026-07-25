@@ -354,16 +354,9 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     let lm_stub_108 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x108)?;
     let lm_stub_110 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x110)?;
 
-    write_generic(core, 0x015009e4, lm_stub_84)?;
-    write_generic(core, 0x015009ec, lm_stub_8c)?;
-    write_generic(core, 0x015009f0, lm_stub_90)?;
-    write_generic(core, 0x015009f8, lm_stub_98)?;
-    write_generic(core, 0x01500a50, lm_stub_f0)?;
-    write_generic(core, 0x01500a58, lm_stub_f8)?;
-    write_generic(core, 0x01500a5c, lm_stub_fc)?;
-    write_generic(core, 0x01500a64, lm_stub_104)?;
-    write_generic(core, 0x01500a68, lm_stub_108)?;
-    write_generic(core, 0x01500a70, lm_stub_110)?;
+    tracing::warn!(
+        "Lm runtime stub installation temporarily disabled:          84={lm_stub_84:#x}, 8c={lm_stub_8c:#x}, 90={lm_stub_90:#x},          98={lm_stub_98:#x}, f0={lm_stub_f0:#x}, f8={lm_stub_f8:#x},          fc={lm_stub_fc:#x}, 104={lm_stub_104:#x},          108={lm_stub_108:#x}, 110={lm_stub_110:#x}"
+    );
 
     tracing::warn!(
         "Installed Lm runtime stubs: [0x015009e4]={lm_stub_84:#x}, \
