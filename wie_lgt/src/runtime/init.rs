@@ -162,13 +162,14 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
      init_state={init_state:#x}, guard_state={guard_state:#x}, callback={a1:#x}"
             );
 
-            // Diagnostic test: do not overwrite meta_ptr + 0x10.
-            // The observed values resemble code offsets rather than an init-state enum.
-            let patched_state: u16 = read_generic(core, meta_ptr + 0x10)?;
+            let activated_data: u32 = read_generic(core, a0 + 8)?;
+            let state_before: u16 = read_generic(core, activated_data + 0x10)?;
+            write_generic(core, activated_data + 0x10, 5u16)?;
+            let state_after: u16 = read_generic(core, activated_data + 0x10)?;
 
             tracing::warn!(
-                "LGT import 0x0d patched state: root={root:#x}, meta={meta_ptr:#x}, \
-     before={init_state:#x}, after={patched_state:#x}"
+                "LGT vm_initialize_class(handle={a0:#x}, data={activated_data:#x}, callback={a1:#x}) \
+                 state {state_before:#x} -> {state_after:#x}"
             );
 
             a0.write(core, lr)?;
