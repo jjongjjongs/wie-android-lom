@@ -241,6 +241,37 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
         if function_index == 0x105 {
             tracing::warn!("Lm virtual method stub 0(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+
+            let mut argument_object = [0u8; 16];
+            match core.read_bytes(a1, &mut argument_object) {
+                Ok(read) => tracing::warn!(
+                    "Lm stub 0 argument object: object={a1:#x}, read={read:#x}, bytes={:02x?}",
+                    &argument_object[..read]
+                ),
+                Err(error) => tracing::warn!(
+                    "Lm stub 0 argument object: object={a1:#x}, read failed: {error}"
+                ),
+            }
+
+            match read_generic::<u32, _>(core, a1 + 8) {
+                Ok(class_root) => {
+                    let mut class_bytes = [0u8; 0x40];
+                    match core.read_bytes(class_root, &mut class_bytes) {
+                        Ok(read) => tracing::warn!(
+                            "Lm stub 0 argument class: root={class_root:#x}, read={read:#x}, bytes={:02x?}",
+                            &class_bytes[..read]
+                        ),
+                        Err(error) => tracing::warn!(
+                            "Lm stub 0 argument class: root={class_root:#x}, read failed: {error}"
+                        ),
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    "Lm stub 0 argument class root read failed at {:#x}: {error}",
+                    a1 + 8
+                ),
+            }
+
             a0.write(core, lr)?;
             return Ok(());
         }
