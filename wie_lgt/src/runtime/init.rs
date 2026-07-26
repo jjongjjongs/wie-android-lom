@@ -201,6 +201,8 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             }
             let original_index_0: u16 = read_generic(core, 0x01500e40 + 0x22)?;
             let original_index_1: u16 = read_generic(core, 0x01500e40 + 0x24)?;
+            write_generic(core, 0x01500e40 + 0x22, 0u16)?;
+            write_generic(core, 0x01500e40 + 0x24, 1u16)?;
             tracing::warn!(
                 "Lm original method indexes before patch: +0x22={original_index_0}, +0x24={original_index_1}"
             );
