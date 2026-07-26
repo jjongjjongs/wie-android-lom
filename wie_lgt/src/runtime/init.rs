@@ -220,20 +220,20 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
 
         if function_index == 0x0f {
-            let mut bytes = [0u8; 32];
-            match core.read_bytes(a0, &mut bytes) {
-                Ok(read) => tracing::warn!(
-                    "Lm vm_instantiate input @{a0:#x}, read={read:#x}: {:02x?}",
-                    &bytes[..read]
-                ),
-                Err(error) => tracing::warn!(
-                    "Lm vm_instantiate input @{a0:#x}: read failed: {error}"
-                ),
-            }
+            let instance = Allocator::alloc(core, 12)?;
+            write_generic(core, instance, 0u32)?;
+            write_generic(core, instance + 4, 0u32)?;
+            write_generic(core, instance + 8, a0)?;
+
+            tracing::warn!(
+                "Lm vm_instantiate(class={a0:#x}) -> instance={instance:#x}"
+            );
+
+            instance.write(core, lr)?;
+            return Ok(());
         }
 
-        if function_index == 0x0f
-            || function_index == 0xf0
+        if function_index == 0xf0
             || function_index == 0xf8
             || function_index == 0xfc
             || function_index == 0x108
