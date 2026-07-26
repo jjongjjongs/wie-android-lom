@@ -26,6 +26,7 @@ use super::{
 };
 
 type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
+type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
 
 #[derive(Clone)]
 struct InitSvcContext {
@@ -34,6 +35,7 @@ struct InitSvcContext {
     jvm: Jvm,
     java_handles: JavaHandleTable,
     java_class_tables: JavaClassTables,
+    java_activated_classes: JavaActivatedClasses,
 }
 
 fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
@@ -46,6 +48,7 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
             jvm: jvm.clone(),
             java_handles: Default::default(),
             java_class_tables: Default::default(),
+            java_activated_classes: Default::default(),
         },
     )
 }
@@ -73,20 +76,54 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             address.write(core, lr)?;
             return Ok(());
         }
-        if function_index == 0x0b || function_index == 0x0c {
+        if function_index == 0x0b {
             let root = a0;
-            let meta_before: u32 = read_generic(core, root + 8)?;
+            let meta: u32 = read_generic(core, root + 8)?;
+            write_generic(core, meta + 0x1a, 3u16)?;
 
             tracing::warn!(
-                "LGT import {function_index:#x} before: root={root:#x}, \
-         meta={meta_before:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}"
+                "LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3"
             );
 
-            let meta_after: u32 = read_generic(core, root + 8)?;
+            root.write(core, lr)?;
+            return Ok(());
+        }
 
-            tracing::warn!("LGT import {function_index:#x} after: root={root:#x}, meta={meta_after:#x}");
+        if function_index == 0x0c {
+            let root = a0;
 
-            a0.write(core, lr)?;
+            if let Some(&activated) = context.java_activated_classes.lock().get(&root) {
+                tracing::warn!(
+                    "LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> cached={activated:#x}"
+                );
+                activated.write(core, lr)?;
+                return Ok(());
+            }
+
+            let data = Allocator::alloc(core, 20)?;
+            write_generic(core, data, 0u16)?;
+            write_generic(core, data + 2, 0u16)?;
+            write_generic(core, data + 4, 0u32)?;
+            write_generic(core, data + 8, root)?;
+            write_generic(core, data + 12, 0u32)?;
+            write_generic(core, data + 16, 4u16)?;
+            write_generic(core, data + 18, 0u16)?;
+
+            let activated = Allocator::alloc(core, 12)?;
+            write_generic(core, activated, 0u32)?;
+            write_generic(core, activated + 4, 0u32)?;
+            write_generic(core, activated + 8, data)?;
+
+            context
+                .java_activated_classes
+                .lock()
+                .insert(root, activated);
+
+            tracing::warn!(
+                "LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}"
+            );
+
+            activated.write(core, lr)?;
             return Ok(());
         }
         if function_index == 0x0d {
