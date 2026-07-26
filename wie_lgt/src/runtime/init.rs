@@ -16,7 +16,7 @@ use super::{
     java::{
         get_java_interface_method,
         interface::{
-            JAVA_DIAG_SVC_BASE, JavaHandleTable, java_import_0e, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes,
+            JAVA_DIAG_SVC_BASE, JavaHandleTable, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes,
             java_unk0, java_unk9, java_unk11, java_unk12,
         },
     },
@@ -365,7 +365,36 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             result.write(core, lr)
         }
-        InitSvcId::JavaImport0e => EmulatedFunction::call(&java_import_0e, core, &mut ()).await?.write(core, lr),
+        InitSvcId::JavaImport0e => {
+            let a0 = core.read_param(0)?;
+            let a1 = core.read_param(1)?;
+            let a2 = core.read_param(2)?;
+            let a3 = core.read_param(3)?;
+
+            let classes = context
+                .java_class_tables
+                .lock()
+                .values()
+                .next()
+                .map(|(classes, _)| *classes)
+                .unwrap_or(0);
+
+            let class = if classes == 0 {
+                0
+            } else {
+                let count: u32 = read_generic(core, classes)?;
+                if a2 < count {
+                    read_generic(core, classes + 8 + a2 * 4)?
+                } else {
+                    0
+                }
+            };
+
+            tracing::warn!(
+                "java_import_0e(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}) -> {class:#x}"
+            );
+            class.write(core, lr)
+        }
         InitSvcId::JavaImport10 => EmulatedFunction::call(&java_import_10, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
