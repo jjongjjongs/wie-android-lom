@@ -250,7 +250,7 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
                 match core.read_bytes(value, &mut object_bytes) {
                     Ok(_) => {
                         let words: Vec<u32> = object_bytes
-                            .chunks_exact(4)
+                            .chunks(4)
                             .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
                             .collect();
 
@@ -372,10 +372,7 @@ pub async fn java_import_09(
     let mut bytes = vec![0u8; (a2 as usize) * 2];
     core.read_bytes(a1, &mut bytes)?;
 
-    let utf16 = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect::<Vec<_>>();
+    let utf16 = bytes.chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>();
 
     let rust_string = String::from_utf16_lossy(&utf16);
 
