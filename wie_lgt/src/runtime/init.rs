@@ -16,8 +16,8 @@ use super::{
     java::{
         get_java_interface_method,
         interface::{
-            JAVA_DIAG_SVC_BASE, JavaHandleTable, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes,
-            java_unk0, java_unk9, java_unk11, java_unk12,
+            JAVA_DIAG_SVC_BASE, JavaHandleTable, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0,
+            java_unk9, java_unk11, java_unk12,
         },
     },
     stdlib::register_stdlib_svc_handler,
@@ -81,9 +81,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let meta: u32 = read_generic(core, root + 8)?;
             write_generic(core, meta + 0x1a, 3u16)?;
 
-            tracing::warn!(
-                "LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3"
-            );
+            tracing::warn!("LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3");
 
             root.write(core, lr)?;
             return Ok(());
@@ -93,9 +91,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let root = a0;
 
             if let Some(&activated) = context.java_activated_classes.lock().get(&root) {
-                tracing::warn!(
-                    "LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> cached={activated:#x}"
-                );
+                tracing::warn!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> cached={activated:#x}");
                 activated.write(core, lr)?;
                 return Ok(());
             }
@@ -114,14 +110,9 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             write_generic(core, activated + 4, 0u32)?;
             write_generic(core, activated + 8, data)?;
 
-            context
-                .java_activated_classes
-                .lock()
-                .insert(root, activated);
+            context.java_activated_classes.lock().insert(root, activated);
 
-            tracing::warn!(
-                "LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}"
-            );
+            tracing::warn!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}");
 
             activated.write(core, lr)?;
             return Ok(());
@@ -203,9 +194,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let original_index_1: u16 = read_generic(core, 0x01500e40 + 0x24)?;
             write_generic(core, 0x01500e40 + 0x22, 0u16)?;
             write_generic(core, 0x01500e40 + 0x24, 1u16)?;
-            tracing::warn!(
-                "Lm original method indexes before patch: +0x22={original_index_0}, +0x24={original_index_1}"
-            );
+            tracing::warn!("Lm original method indexes before patch: +0x22={original_index_0}, +0x24={original_index_1}");
 
             let vtable = Allocator::alloc(core, 12)?;
             let method_stub_0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
@@ -248,9 +237,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     "Lm stub 0 argument object: object={a1:#x}, read={read:#x}, bytes={:02x?}",
                     &argument_object[..read]
                 ),
-                Err(error) => tracing::warn!(
-                    "Lm stub 0 argument object: object={a1:#x}, read failed: {error}"
-                ),
+                Err(error) => tracing::warn!("Lm stub 0 argument object: object={a1:#x}, read failed: {error}"),
             }
 
             match read_generic::<u32, _>(core, a1 + 8) {
@@ -261,15 +248,10 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                             "Lm stub 0 argument class: root={class_root:#x}, read={read:#x}, bytes={:02x?}",
                             &class_bytes[..read]
                         ),
-                        Err(error) => tracing::warn!(
-                            "Lm stub 0 argument class: root={class_root:#x}, read failed: {error}"
-                        ),
+                        Err(error) => tracing::warn!("Lm stub 0 argument class: root={class_root:#x}, read failed: {error}"),
                     }
                 }
-                Err(error) => tracing::warn!(
-                    "Lm stub 0 argument class root read failed at {:#x}: {error}",
-                    a1 + 8
-                ),
+                Err(error) => tracing::warn!("Lm stub 0 argument class root read failed at {:#x}: {error}", a1 + 8),
             }
 
             a0.write(core, lr)?;
@@ -283,9 +265,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
         if function_index == 0xfc {
             let lm_class_handle = 0x014015dcu32;
-            tracing::warn!(
-                "Lm class getter(a0={a0:#x}) -> {lm_class_handle:#x}"
-            );
+            tracing::warn!("Lm class getter(a0={a0:#x}) -> {lm_class_handle:#x}");
             lm_class_handle.write(core, lr)?;
             return Ok(());
         }
@@ -296,9 +276,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             write_generic(core, instance + 4, 0u32)?;
             write_generic(core, instance + 8, a0)?;
 
-            tracing::warn!(
-                "Lm vm_instantiate(class={a0:#x}) -> instance={instance:#x}"
-            );
+            tracing::warn!("Lm vm_instantiate(class={a0:#x}) -> instance={instance:#x}");
 
             instance.write(core, lr)?;
             return Ok(());
@@ -347,9 +325,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let mut tables = context.java_class_tables.lock();
             let index = (0u32..).find(|index| !tables.contains_key(index)).unwrap();
             tables.insert(index, (classes, runtime_table));
-            tracing::warn!(
-                "java_register_classes(classes={classes:#x}, runtime_table={runtime_table:#x}) -> {index:#x}"
-            );
+            tracing::warn!("java_register_classes(classes={classes:#x}, runtime_table={runtime_table:#x}) -> {index:#x}");
             index.write(core, lr)
         }
         InitSvcId::JavaLoadClasses => EmulatedFunction::call(&java_load_classes, core, &mut ()).await?.write(core, lr),
@@ -371,28 +347,16 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let a2 = core.read_param(2)?;
             let a3 = core.read_param(3)?;
 
-            let classes = context
-                .java_class_tables
-                .lock()
-                .values()
-                .next()
-                .map(|(classes, _)| *classes)
-                .unwrap_or(0);
+            let classes = context.java_class_tables.lock().values().next().map(|(classes, _)| *classes).unwrap_or(0);
 
             let class = if classes == 0 {
                 0
             } else {
                 let count: u32 = read_generic(core, classes)?;
-                if a2 < count {
-                    read_generic(core, classes + 8 + a2 * 4)?
-                } else {
-                    0
-                }
+                if a2 < count { read_generic(core, classes + 8 + a2 * 4)? } else { 0 }
             };
 
-            tracing::warn!(
-                "java_import_0e(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}) -> {class:#x}"
-            );
+            tracing::warn!("java_import_0e(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}) -> {class:#x}");
             class.write(core, lr)
         }
         InitSvcId::JavaImport10 => EmulatedFunction::call(&java_import_10, core, &mut ()).await?.write(core, lr),
@@ -474,9 +438,7 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     write_generic(core, 0x01500a64, lm_stub_104)?;
     write_generic(core, 0x01500a68, lm_stub_108)?;
     write_generic(core, 0x01500a70, lm_stub_110)?;
-    tracing::warn!(
-        "Installed minimal Lm runtime stubs: +0xfc={lm_stub_fc:#x},          +0x108={lm_stub_108:#x}, +0x110={lm_stub_110:#x}"
-    );
+    tracing::warn!("Installed minimal Lm runtime stubs: +0xfc={lm_stub_fc:#x},          +0x108={lm_stub_108:#x}, +0x110={lm_stub_110:#x}");
 
     tracing::warn!(
         "Lm runtime stub installation temporarily disabled:          84={lm_stub_84:#x}, 8c={lm_stub_8c:#x}, 90={lm_stub_90:#x},          98={lm_stub_98:#x}, f0={lm_stub_f0:#x}, f8={lm_stub_f8:#x},          fc={lm_stub_fc:#x}, 104={lm_stub_104:#x},          108={lm_stub_108:#x}, 110={lm_stub_110:#x}"
