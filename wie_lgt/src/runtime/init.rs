@@ -401,85 +401,92 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     tracing::debug!("InitStruct: {:#x?}", init_param_1.ptr_init_struct);
     let init_struct: InitStruct = read_generic(core, init_param_1.ptr_init_struct)?;
 
-    for address in [
-        0x015009e4u32,
-        0x015009ec,
-        0x015009f0,
-        0x015009f8,
-        0x01500a50,
-        0x01500a58,
-        0x01500a5c,
-        0x01500a64,
-        0x01500a68,
-        0x01500a70,
-    ] {
-        let value: u32 = read_generic(core, address)?;
-        tracing::warn!("Lm runtime slot before patch [{address:#x}] = {value:#x}");
+    let mut lm_runtime_probe = [0u8; 4];
+    let has_lm_runtime = core.read_bytes(0x015009e4, &mut lm_runtime_probe).is_ok();
+
+    if has_lm_runtime {
+        for address in [
+            0x015009e4u32,
+            0x015009ec,
+            0x015009f0,
+            0x015009f8,
+            0x01500a50,
+            0x01500a58,
+            0x01500a5c,
+            0x01500a64,
+            0x01500a68,
+            0x01500a70,
+        ] {
+            let value: u32 = read_generic(core, address)?;
+            tracing::warn!("Lm runtime slot before patch [{address:#x}] = {value:#x}");
+        }
+
+        let lm_stub_84 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x84)?;
+        let lm_stub_8c = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x8c)?;
+        let lm_stub_90 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x90)?;
+        let lm_stub_98 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x98)?;
+        let lm_stub_f0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xf0)?;
+        let lm_stub_f8 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xf8)?;
+        let lm_stub_fc = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xfc)?;
+        let lm_stub_104 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x104)?;
+        let lm_stub_108 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x108)?;
+        let lm_stub_110 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x110)?;
+
+        write_generic(core, 0x015009e4, lm_stub_84)?;
+        write_generic(core, 0x015009ec, lm_stub_8c)?;
+        write_generic(core, 0x015009f0, lm_stub_90)?;
+        write_generic(core, 0x015009f8, lm_stub_98)?;
+        write_generic(core, 0x01500a50, lm_stub_f0)?;
+        write_generic(core, 0x01500a58, lm_stub_f8)?;
+        write_generic(core, 0x01500a5c, lm_stub_fc)?;
+        write_generic(core, 0x01500a64, lm_stub_104)?;
+        write_generic(core, 0x01500a68, lm_stub_108)?;
+        write_generic(core, 0x01500a70, lm_stub_110)?;
+        tracing::warn!("Installed minimal Lm runtime stubs: +0xfc={lm_stub_fc:#x},          +0x108={lm_stub_108:#x}, +0x110={lm_stub_110:#x}");
+
+        tracing::warn!(
+            "Lm runtime stub installation temporarily disabled:          84={lm_stub_84:#x}, 8c={lm_stub_8c:#x}, 90={lm_stub_90:#x},          98={lm_stub_98:#x}, f0={lm_stub_f0:#x}, f8={lm_stub_f8:#x},          fc={lm_stub_fc:#x}, 104={lm_stub_104:#x},          108={lm_stub_108:#x}, 110={lm_stub_110:#x}"
+        );
+
+        tracing::warn!(
+            "Installed Lm runtime stubs: [0x015009e4]={lm_stub_84:#x}, \
+         [0x015009ec]={lm_stub_8c:#x}, \
+         [0x015009f0]={lm_stub_90:#x}, \
+         [0x015009f8]={lm_stub_98:#x}, \
+         [0x01500a50]={lm_stub_f0:#x}, \
+         [0x01500a58]={lm_stub_f8:#x}, \
+         [0x01500a5c]={lm_stub_fc:#x}, \
+         [0x01500a64]={lm_stub_104:#x}, \
+         [0x01500a68]={lm_stub_108:#x}, \
+         [0x01500a70]={lm_stub_110:#x}"
+        );
     }
-
-    let lm_stub_84 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x84)?;
-    let lm_stub_8c = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x8c)?;
-    let lm_stub_90 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x90)?;
-    let lm_stub_98 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x98)?;
-    let lm_stub_f0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xf0)?;
-    let lm_stub_f8 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xf8)?;
-    let lm_stub_fc = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xfc)?;
-    let lm_stub_104 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x104)?;
-    let lm_stub_108 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x108)?;
-    let lm_stub_110 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x110)?;
-
-    write_generic(core, 0x015009e4, lm_stub_84)?;
-    write_generic(core, 0x015009ec, lm_stub_8c)?;
-    write_generic(core, 0x015009f0, lm_stub_90)?;
-    write_generic(core, 0x015009f8, lm_stub_98)?;
-    write_generic(core, 0x01500a50, lm_stub_f0)?;
-    write_generic(core, 0x01500a58, lm_stub_f8)?;
-    write_generic(core, 0x01500a5c, lm_stub_fc)?;
-    write_generic(core, 0x01500a64, lm_stub_104)?;
-    write_generic(core, 0x01500a68, lm_stub_108)?;
-    write_generic(core, 0x01500a70, lm_stub_110)?;
-    tracing::warn!("Installed minimal Lm runtime stubs: +0xfc={lm_stub_fc:#x},          +0x108={lm_stub_108:#x}, +0x110={lm_stub_110:#x}");
-
-    tracing::warn!(
-        "Lm runtime stub installation temporarily disabled:          84={lm_stub_84:#x}, 8c={lm_stub_8c:#x}, 90={lm_stub_90:#x},          98={lm_stub_98:#x}, f0={lm_stub_f0:#x}, f8={lm_stub_f8:#x},          fc={lm_stub_fc:#x}, 104={lm_stub_104:#x},          108={lm_stub_108:#x}, 110={lm_stub_110:#x}"
-    );
-
-    tracing::warn!(
-        "Installed Lm runtime stubs: [0x015009e4]={lm_stub_84:#x}, \
-     [0x015009ec]={lm_stub_8c:#x}, \
-     [0x015009f0]={lm_stub_90:#x}, \
-     [0x015009f8]={lm_stub_98:#x}, \
-     [0x01500a50]={lm_stub_f0:#x}, \
-     [0x01500a58]={lm_stub_f8:#x}, \
-     [0x01500a5c]={lm_stub_fc:#x}, \
-     [0x01500a64]={lm_stub_104:#x}, \
-     [0x01500a68]={lm_stub_108:#x}, \
-     [0x01500a70]={lm_stub_110:#x}"
-    );
 
     tracing::debug!("Calling initializer at {:#x}", init_struct.fn_init);
     let _: () = core.run_function(init_struct.fn_init, &[]).await?;
 
-    for address in [
-        0x015009e4u32,
-        0x015009ec,
-        0x015009f0,
-        0x015009f8,
-        0x01500a50,
-        0x01500a58,
-        0x01500a5c,
-        0x01500a64,
-        0x01500a68,
-        0x01500a70,
-    ] {
-        let value: u32 = read_generic(core, address)?;
-        tracing::warn!("Lm runtime slot after fn_init [{address:#x}] = {value:#x}");
-    }
+    if has_lm_runtime {
+        for address in [
+            0x015009e4u32,
+            0x015009ec,
+            0x015009f0,
+            0x015009f8,
+            0x01500a50,
+            0x01500a58,
+            0x01500a5c,
+            0x01500a64,
+            0x01500a68,
+            0x01500a70,
+        ] {
+            let value: u32 = read_generic(core, address)?;
+            tracing::warn!("Lm runtime slot after fn_init [{address:#x}] = {value:#x}");
+        }
 
-    for offset in (0..0x30).step_by(4) {
-        let address = 0x01500e40 + offset;
-        let value: u32 = read_generic(core, address)?;
-        tracing::warn!("Lm runtime data [{address:#x}] = {value:#x}");
+        for offset in (0..0x30).step_by(4) {
+            let address = 0x01500e40 + offset;
+            let value: u32 = read_generic(core, address)?;
+            tracing::warn!("Lm runtime data [{address:#x}] = {value:#x}");
+        }
     }
 
     Ok(())
