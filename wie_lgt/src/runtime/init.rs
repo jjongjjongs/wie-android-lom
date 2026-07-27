@@ -274,19 +274,9 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let instance = Allocator::alloc(core, 12)?;
             write_generic(core, instance, 0u32)?;
             write_generic(core, instance + 4, 0u32)?;
+            write_generic(core, instance + 8, a0)?;
 
-            if a1 == 0 {
-                write_generic(core, instance + 8, a0)?;
-                tracing::warn!("Lm vm_instantiate(class={a0:#x}, type={a2:#x}) -> instance={instance:#x}");
-            } else {
-                let element_size = if a2 == 5 { 2 } else { 4 };
-                let data = Allocator::alloc(core, 4 + a1 * element_size)?;
-                write_generic(core, data, a1)?;
-                write_generic(core, instance + 8, data)?;
-                tracing::warn!(
-                    "Lm vm_instantiate_array(class={a0:#x}, count={a1}, type={a2:#x}, element_size={element_size}) -> instance={instance:#x}, data={data:#x}"
-                );
-            }
+            tracing::warn!("Lm vm_instantiate(class={a0:#x}) -> instance={instance:#x}");
 
             instance.write(core, lr)?;
             return Ok(());
