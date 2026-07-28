@@ -19,6 +19,7 @@ use crate::relocation::{
 use super::{
     SVC_CATEGORY_INIT, SVC_CATEGORY_STDLIB, SVC_CATEGORY_WIPIC,
     java::{
+        app_classes::{self, AppClass},
         class_table::ClassTable,
         get_java_interface_method,
         handles::JavaHandles,
@@ -34,6 +35,8 @@ use super::{
 };
 
 type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
+/// Compiled classes the application registered, published by import `0x07`.
+type AppClasses = Arc<Mutex<Vec<AppClass>>>;
 type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
 type ImportFunctionCache = Arc<Mutex<BTreeMap<(u32, u32), u32>>>;
 type UnresolvedImportCallCounts = Arc<Mutex<BTreeMap<(u32, u32), u64>>>;
@@ -54,6 +57,8 @@ struct InitSvcContext {
     jvm: Jvm,
     java_handles: JavaHandles,
     imported_classes: ImportedClasses,
+    app_classes: AppClasses,
+    image_ranges: ImageRanges,
     java_class_tables: JavaClassTables,
     java_activated_classes: JavaActivatedClasses,
     import_function_cache: ImportFunctionCache,
@@ -61,7 +66,7 @@ struct InitSvcContext {
     lm_experiment: bool,
 }
 
-fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool) -> Result<()> {
+fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool, image_ranges: ImageRanges) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
     core.register_svc_handler(
@@ -73,6 +78,8 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool)
             jvm: jvm.clone(),
             java_handles,
             imported_classes: Default::default(),
+            app_classes: Default::default(),
+            image_ranges,
             java_class_tables: Default::default(),
             java_activated_classes: Default::default(),
             import_function_cache: Default::default(),
@@ -480,8 +487,21 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let index = (0u32..).find(|index| !tables.contains_key(index)).unwrap();
             tables.insert(index, (classes, runtime_table));
 
-            let count: u32 = read_generic(core, classes)?;
-            tracing::debug!("java_register_classes(classes={classes:#x}, runtime_table={runtime_table:#x}, count={count}) -> {index:#x}");
+            drop(tables);
+
+            let parsed = app_classes::parse_registered_classes(core, classes)?;
+            tracing::debug!(
+                "java_register_classes(classes={classes:#x}, runtime_table={runtime_table:#x}) -> {index:#x}, {} classes",
+                parsed.len()
+            );
+            for class in &parsed {
+                tracing::debug!("  {}", app_classes::describe(class));
+                for method in class.methods() {
+                    tracing::trace!("    {}", app_classes::describe_member(class, method));
+                }
+            }
+
+            context.app_classes.lock().extend(parsed);
 
             index.write(core, lr)
         }
@@ -510,7 +530,20 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             ().write(core, lr)
         }
         InitSvcId::JavaUnk9 => EmulatedFunction::call(&java_unk9, core, &mut ()).await?.write(core, lr),
-        InitSvcId::JavaUnk11 => EmulatedFunction::call(&java_unk11, core, jvm).await?.write(core, lr),
+        // Import 0x83: run a Java main class. The first two parameters name
+        // the class, which is always `org/kwis/msp/lcdui/Main`; the argument
+        // vector is what actually selects the application's Jlet.
+        InitSvcId::JavaUnk11 => {
+            let argc = core.read_param(2)?;
+            let argv = core.read_param(3)?;
+
+            let app_classes = context.app_classes.clone();
+            let app_classes = app_classes.lock();
+
+            let image_ranges = context.image_ranges.clone();
+
+            java_unk11(core, jvm, &app_classes, &image_ranges, argc, argv).await?.write(core, lr)
+        }
         InitSvcId::JavaImport09 => {
             let a0 = core.read_param(0)?;
             let a1 = core.read_param(1)?;
@@ -582,10 +615,10 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
         tracing::warn!("Enabling experimental {LM_EXPERIMENT_MAIN_CLASS} runtime patches; these are specific to that binary.mod");
     }
 
-    let entrypoint = load_executable(core, data)?;
+    let (entrypoint, image_ranges) = load_executable(core, data)?;
     register_wipic_svc_handler(core, system, jvm)?;
     register_stdlib_svc_handler(core, system)?;
-    register_init_svc_handler(core, jvm, lm_experiment)?;
+    register_init_svc_handler(core, jvm, lm_experiment, Arc::new(image_ranges))?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
     let ptr_init_param_2 = Allocator::alloc(core, size_of::<InitParam2>() as u32)?;
@@ -955,7 +988,11 @@ fn apply_relocations(core: &mut ArmCore, data: &[u8], section_headers: &[elf::se
     Ok(())
 }
 
-fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<u32> {
+/// Loaded section ranges, used to find classes the application never
+/// registered.
+type ImageRanges = Arc<Vec<(u32, u32)>>;
+
+fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u32)>)> {
     let elf = ElfBytes::<AnyEndian>::minimal_parse(data).map_err(|x| WieError::FatalError(format!("Failed to parse ELF binary.mod: {x}")))?;
 
     if elf.ehdr.e_machine != elf::abi::EM_ARM {
@@ -975,6 +1012,8 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<u32> {
     let strtab = strtab_opt.ok_or_else(|| WieError::FatalError("ELF is missing section name string table".into()))?;
     let section_headers: alloc::vec::Vec<_> = shdrs.iter().collect();
 
+    let mut ranges = Vec::new();
+
     for shdr in &section_headers {
         let section_name = strtab
             .get(shdr.sh_name as usize)
@@ -993,6 +1032,8 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<u32> {
                     .0;
                 core.load(section_data, shdr.sh_addr as u32, shdr.sh_size as usize)?;
             }
+
+            ranges.push((shdr.sh_addr as u32, shdr.sh_size as u32));
         }
     }
 
@@ -1000,7 +1041,7 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<u32> {
 
     tracing::debug!("Entrypoint: {:#x}", elf.ehdr.e_entry);
 
-    Ok(elf.ehdr.e_entry as u32)
+    Ok((elf.ehdr.e_entry as u32, ranges))
 }
 
 async fn unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<()> {

@@ -1,21 +1,24 @@
-use alloc::{boxed::Box, string::String, sync::Arc, vec, vec::Vec};
-use core::sync::atomic::AtomicU32;
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
 
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_rust::ClassDefinitionImpl;
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
-use wie_util::{ByteRead, Result, write_generic};
+use wie_util::{ByteRead, Result, read_generic, read_null_terminated_string_bytes, write_generic};
 
 use crate::runtime::{
     SVC_CATEGORY_INIT,
     java::{
+        app_classes::{self, AppClass},
         class_table::{ClassTable, OutputArrays},
         classes::lm::{Lm, LmContext},
         handles::JavaHandles,
     },
     svc_ids::InitSvcId,
 };
+
+/// Guard on the argument vector the application passes to `Main.main`.
+const MAX_MAIN_ARGUMENTS: u32 = 16;
 
 /// Diagnostic SVC range used for unresolved LGT Java-interface imports.
 /// The low 12 bits preserve the original function index.
@@ -168,141 +171,46 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-    tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
+/// Import `0x83`. The application asks the platform to run a Java main class,
+/// passing the Jlet's own class name as the first argument - the same shape
+/// KTF uses. The named class is one of the application's own compiled classes,
+/// so a bridge is registered for it before `Main` is entered.
+pub async fn java_unk11(
+    core: &mut ArmCore,
+    jvm: &mut Jvm,
+    app_classes: &[AppClass],
+    image_ranges: &[(u32, u32)],
+    argc: u32,
+    argv: u32,
+) -> Result<u32> {
+    let argc = argc.min(MAX_MAIN_ARGUMENTS);
 
-    let lm_class = ClassDefinitionImpl::from_class_proto(
-        Lm::as_proto(),
-        Box::new(LmContext {
-            core: core.clone(),
-            native_this: Arc::new(AtomicU32::new(0)),
-        }) as Box<_>,
-    );
-
-    match jvm.register_class(Box::new(lm_class), None).await {
-        Ok(_) => {
-            tracing::warn!("Registered Lm stub class");
-        }
-        Err(error) => {
-            tracing::warn!("Lm stub class registration failed: {error:?}");
-        }
-    }
-
-    let mut argv_raw = [0u8; 64];
-    if core.read_bytes(a3, &mut argv_raw).is_ok() {
-        tracing::warn!("java_unk11 argv raw @{a3:#x}: {argv_raw:02x?}");
-    }
-
-    let mut class_bytes = [0u8; 128];
-    match core.read_bytes(a0, &mut class_bytes) {
-        Ok(read) => {
-            let end = class_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-            tracing::warn!("java_unk11 class: {}", String::from_utf8_lossy(&class_bytes[..end]));
-        }
-        Err(error) => {
-            tracing::warn!("java_unk11 class read failed: {error}");
-        }
-    }
-
-    let argc = a2.min(16);
-
+    let mut arguments = Vec::with_capacity(argc as usize);
     for index in 0..argc {
-        let pointer_address = a3.wrapping_add(index * 4);
-        let mut pointer_bytes = [0u8; 4];
+        let pointer: u32 = read_generic(core, argv + index * 4)?;
+        let bytes = read_null_terminated_string_bytes(core, pointer)?;
 
-        if let Err(error) = core.read_bytes(pointer_address, &mut pointer_bytes) {
-            tracing::warn!("java_unk11 argv[{index}] pointer read failed @{pointer_address:#x}: {error}");
-            continue;
-        }
-
-        let pointer = u32::from_le_bytes(pointer_bytes);
-
-        let mut argument_bytes = [0u8; 128];
-        match core.read_bytes(pointer, &mut argument_bytes) {
-            Ok(read) => {
-                let end = argument_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-                tracing::warn!(
-                    "java_unk11 argv[{index}] ptr={pointer:#x}: {} | raw={:02x?}",
-                    String::from_utf8_lossy(&argument_bytes[..end]),
-                    &argument_bytes[..end]
-                );
-            }
-            Err(error) => {
-                tracing::warn!("java_unk11 argv[{index}] ptr={pointer:#x}: read failed: {error}");
-            }
-        }
+        arguments.push(String::from_utf8_lossy(&bytes).into_owned());
     }
 
-    // invoke static? used to be called with org/kwis/msp/lcdui/Main
+    tracing::debug!("java_run_main({arguments:?})");
 
-    // Diagnostic mode: keep the ARM application alive so the next missing
-    // interface call can be observed. A real JVM bridge will replace this.
-    for address in [0x01500954u32, 0x01500958u32] {
-        let mut value_bytes = [0u8; 4];
-
-        match core.read_bytes(address, &mut value_bytes) {
-            Ok(_) => {
-                let value = u32::from_le_bytes(value_bytes);
-                let mut object_bytes = [0u8; 32];
-
-                match core.read_bytes(value, &mut object_bytes) {
-                    Ok(_) => {
-                        let words: Vec<u32> = object_bytes
-                            .chunks(4)
-                            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-                            .collect();
-
-                        tracing::warn!("java_unk11 slot target @{value:#x}: {words:#x?}");
-                    }
-                    Err(error) => {
-                        tracing::warn!("java_unk11 slot target @{value:#x} read failed: {error}");
-                    }
-                }
-
-                tracing::warn!("java_unk11 global slot @{address:#x} = {value:#x}, thumb={}", value & 1);
-                for target in [0x71000001u32, 0x71000000u32, 0x71000011u32, 0x71000010u32] {
-                    let mut bytes = [0u8; 16];
-
-                    match core.read_bytes(target, &mut bytes) {
-                        Ok(_) => {
-                            tracing::warn!("java_unk11 candidate @{target:#x}: {bytes:02x?}");
-                        }
-                        Err(error) => {
-                            tracing::warn!("java_unk11 candidate @{target:#x} read failed: {error}");
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!("java_unk11 global slot @{address:#x} read failed: {error}");
-            }
-        }
+    if let Some(main_class_name) = arguments.first() {
+        register_app_class(jvm, core, app_classes, image_ranges, main_class_name).await;
     }
-    let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", argc as usize).await {
+
+    let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", arguments.len()).await {
         Ok(array) => array,
         Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
     };
 
-    for index in 0..argc {
-        let pointer_address = a3.wrapping_add(index * 4);
-        let mut pointer_bytes = [0u8; 4];
-        core.read_bytes(pointer_address, &mut pointer_bytes)?;
-
-        let pointer = u32::from_le_bytes(pointer_bytes);
-        let mut argument_bytes = [0u8; 128];
-        let read = core.read_bytes(pointer, &mut argument_bytes)?;
-        let end = argument_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-        let argument = String::from_utf8_lossy(&argument_bytes[..end]);
-        let java_argument = match JavaLangString::from_rust_string(jvm, argument.as_ref()).await {
-            Ok(argument) => argument,
+    for (index, argument) in arguments.iter().enumerate() {
+        let java_argument = match JavaLangString::from_rust_string(jvm, argument).await {
+            Ok(value) => value,
             Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
         };
 
-        if let Err(error) = jvm.store_array(&mut args_array, index as usize, vec![java_argument]).await {
+        if let Err(error) = jvm.store_array(&mut args_array, index, vec![java_argument]).await {
             return Err(JvmSupport::to_wie_err(jvm, error).await);
         }
     }
@@ -316,6 +224,47 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
     }
 
     Ok(0)
+}
+
+/// Registers a JVM stand-in for one of the application's compiled classes, so
+/// the platform's `Jlet` machinery can construct and drive it.
+async fn register_app_class(jvm: &Jvm, core: &ArmCore, app_classes: &[AppClass], image_ranges: &[(u32, u32)], name: &str) {
+    // The main class is usually absent from the registered table, so fall back
+    // to finding it by shape in the image.
+    let found;
+    let class = match app_classes.iter().find(|x| x.name == name) {
+        Some(class) => class,
+        None => match app_classes::find_class(core, image_ranges, name) {
+            Some(class) => {
+                found = class;
+                &found
+            }
+            None => {
+                tracing::error!("Application class {name} is nowhere in the image; cannot bridge it");
+                return;
+            }
+        },
+    };
+
+    // JavaClassProto holds both names for the life of the program, and they
+    // come from the guest. One application registers one main class per run,
+    // so leaking them is bounded.
+    let leaked_name: &'static str = String::leak(class.name.clone());
+    let leaked_parent: &'static str = String::leak(class.superclass.clone().unwrap_or_else(|| "java/lang/Object".into()));
+
+    tracing::debug!(
+        "Bridging application class {leaked_name} extends {leaked_parent} with {} compiled methods",
+        class.methods().count()
+    );
+
+    let definition = ClassDefinitionImpl::from_class_proto(
+        Lm::as_proto(leaked_name, leaked_parent),
+        Box::new(LmContext::new(core.clone(), class)) as Box<_>,
+    );
+
+    if let Err(error) = jvm.register_class(Box::new(definition), None).await {
+        tracing::error!("Failed to register application class {leaked_name}: {error:?}");
+    }
 }
 
 pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {

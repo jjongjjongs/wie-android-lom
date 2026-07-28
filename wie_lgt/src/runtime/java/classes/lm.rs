@@ -1,23 +1,72 @@
-use alloc::{string::ToString, sync::Arc, vec};
+//! Bridge for the Jlet of an ahead-of-time compiled LGT application.
+//!
+//! The application's main class has no bytecode - it was compiled into
+//! `binary.mod` - so this stands in for it on the JVM side and forwards the
+//! Jlet lifecycle to the compiled code. Entry points are resolved from the
+//! class table the application registered through import `0x07`, so nothing
+//! here is specific to one title.
+//!
+//! The instance the compiled code expects is not yet understood, so `<init>`
+//! hands it a bare allocation. That is enough for the constructor to be
+//! entered and not much further; see `docs/lgt.md`.
+
+use alloc::{
+    collections::BTreeMap,
+    string::{String as RustString, ToString},
+    sync::Arc,
+    vec,
+};
 use core::sync::atomic::{AtomicU32, Ordering};
+
 use java_class_proto::{JavaClassProto, JavaMethodProto};
 use java_runtime::classes::java::lang::String;
 use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult};
+
 use wie_core_arm::{Allocator, ArmCore};
-use wie_util::ByteRead;
+
+use crate::runtime::java::app_classes::AppClass;
+
+/// Size of the stand-in instance handed to the compiled constructor. The real
+/// object layout is still unknown.
+const NATIVE_INSTANCE_SIZE: u32 = 0x10;
 
 #[derive(Clone)]
 pub struct LmContext {
     pub core: ArmCore,
     pub native_this: Arc<AtomicU32>,
+    /// Method name to compiled entry point, read out of the application.
+    pub entries: Arc<BTreeMap<RustString, u32>>,
 }
+
+impl LmContext {
+    pub fn new(core: ArmCore, class: &AppClass) -> Self {
+        let entries = class
+            .methods()
+            .filter_map(|member| Some((member.name().to_string(), class.method_entry(member.name())?)))
+            .collect();
+
+        Self {
+            core,
+            native_this: Arc::new(AtomicU32::new(0)),
+            entries: Arc::new(entries),
+        }
+    }
+
+    fn entry(&self, name: &str) -> Option<u32> {
+        self.entries.get(name).copied()
+    }
+}
+
 pub struct Lm;
 
 impl Lm {
-    pub fn as_proto() -> JavaClassProto<LmContext> {
+    /// `name` and `parent` are leaked because `JavaClassProto` holds them for
+    /// the life of the program. Both come from the application's own class
+    /// table and are registered once per run.
+    pub fn as_proto(name: &'static str, parent: &'static str) -> JavaClassProto<LmContext> {
         JavaClassProto {
-            name: "Lm",
-            parent_class: Some("org/kwis/msp/lcdui/Jlet"),
+            name,
+            parent_class: Some(parent),
             interfaces: vec![],
             methods: vec![
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
@@ -25,91 +74,75 @@ impl Lm {
                 JavaMethodProto::new("pauseApp", "()V", Self::pause_app, Default::default()),
                 JavaMethodProto::new("resumeApp", "()V", Self::resume_app, Default::default()),
                 JavaMethodProto::new("destroyApp", "(Z)V", Self::destroy_app, Default::default()),
-                JavaMethodProto::new("a", "()V", Self::a, Default::default()),
             ],
             fields: vec![],
             access_flags: Default::default(),
         }
     }
 
-    async fn init(_: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
-        tracing::warn!("Lm::<init> -> native 0x10c8");
+    /// Runs a compiled lifecycle method with the stand-in instance.
+    async fn call_native(jvm: &Jvm, context: &mut LmContext, name: &str) -> JvmResult<()> {
+        let Some(entry) = context.entry(name) else {
+            tracing::warn!("Application class has no compiled {name}");
+            return Ok(());
+        };
 
-        let native_this = match Allocator::alloc(&mut context.core, 0x10) {
+        let native_this = context.native_this.load(Ordering::SeqCst);
+        if native_this == 0 {
+            tracing::error!("{name} called before the native instance was created");
+            return Ok(());
+        }
+
+        tracing::debug!("Calling compiled {name} at {entry:#x} with instance {native_this:#x}");
+
+        match context.core.run_function::<()>(entry, &[native_this]).await {
+            Ok(()) => Ok(()),
+            Err(error) => Err(jvm.exception("net/wie/WieError", &error.to_string()).await),
+        }
+    }
+
+    async fn init(_: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
+        let Some(entry) = context.entry("<init>") else {
+            tracing::warn!("Application class has no compiled <init>");
+            return Ok(());
+        };
+
+        let native_this = match Allocator::alloc(&mut context.core, NATIVE_INSTANCE_SIZE) {
             Ok(address) => address,
             Err(error) => {
-                tracing::error!("Lm native allocation failed: {error:?}");
+                tracing::error!("Failed to allocate the native instance: {error:?}");
                 return Ok(());
             }
         };
 
-        let mut table_bytes = [0u8; 0x120];
+        tracing::debug!("Calling compiled <init> at {entry:#x} with instance {native_this:#x}");
 
-        match context.core.read_bytes(0x01500960, &mut table_bytes) {
-            Ok(read) => {
-                tracing::warn!("Lm runtime table @0x01500960, read={read:#x}: {:02x?}", &table_bytes[..read]);
-            }
-            Err(error) => {
-                tracing::error!("Lm runtime table read failed: {error:?}");
-            }
-        }
-
-        match context.core.run_function::<()>(0x10c8, &[native_this]).await {
-            Ok(_) => {
+        match context.core.run_function::<()>(entry, &[native_this]).await {
+            Ok(()) => {
                 context.native_this.store(native_this, Ordering::SeqCst);
-                tracing::warn!("Lm native object initialized at {native_this:#x}");
+                tracing::debug!("Native instance initialized at {native_this:#x}");
             }
-            Err(error) => {
-                tracing::error!("Lm native constructor failed: {error:?}");
-            }
+            // The object layout the compiled constructor expects is not known
+            // yet, so this is the wall the application currently hits.
+            Err(error) => tracing::error!("Compiled <init> failed: {error:?}"),
         }
 
         Ok(())
     }
 
     async fn start_app(jvm: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>, _: ClassInstanceRef<Array<String>>) -> JvmResult<()> {
-        tracing::warn!("Lm::startApp -> native 0x1118");
-
-        let native_this = context.native_this.load(Ordering::SeqCst);
-
-        if native_this == 0 {
-            tracing::error!("Lm::startApp called without native object");
-            return Ok(());
-        }
-
-        let mut runtime_data = [0u8; 0x30];
-        match context.core.read_bytes(0x01500e40, &mut runtime_data) {
-            Ok(read) => {
-                tracing::warn!("Lm runtime data @0x01500e40, read={read:#x}: {:02x?}", &runtime_data[..read]);
-            }
-            Err(error) => {
-                tracing::error!("Lm runtime data read failed: {error:?}");
-            }
-        }
-
-        match context.core.run_function::<()>(0x1118, &[native_this]).await {
-            Ok(_) => Ok(()),
-            Err(error) => Err(jvm.exception("net/wie/WieError", &error.to_string()).await),
-        }
+        Self::call_native(jvm, context, "startApp").await
     }
 
-    async fn pause_app(_: &Jvm, _: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
-        tracing::warn!("Lm::pauseApp stub");
-        Ok(())
+    async fn pause_app(jvm: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
+        Self::call_native(jvm, context, "pauseApp").await
     }
 
-    async fn resume_app(_: &Jvm, _: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
-        tracing::warn!("Lm::resumeApp stub");
-        Ok(())
+    async fn resume_app(jvm: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
+        Self::call_native(jvm, context, "resumeApp").await
     }
 
-    async fn destroy_app(_: &Jvm, _: &mut LmContext, _: ClassInstanceRef<Self>, _: bool) -> JvmResult<()> {
-        tracing::warn!("Lm::destroyApp stub");
-        Ok(())
-    }
-
-    async fn a(_: &Jvm, _: &mut LmContext, _: ClassInstanceRef<Self>) -> JvmResult<()> {
-        tracing::warn!("Lm::a stub");
-        Ok(())
+    async fn destroy_app(jvm: &Jvm, context: &mut LmContext, _: ClassInstanceRef<Self>, _: bool) -> JvmResult<()> {
+        Self::call_native(jvm, context, "destroyApp").await
     }
 }
