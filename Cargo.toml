@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "wie_android",
     "wie_backend",
     "wie_cli",
     "wie_util",
