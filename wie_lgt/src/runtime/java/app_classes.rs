@@ -94,16 +94,6 @@ pub struct AppClass {
 }
 
 impl AppClass {
-    /// Entry point of the named method, ignoring overloads.
-    pub fn method_entry(&self, name: &str) -> Option<u32> {
-        self.members.iter().find_map(|member| match member {
-            AppMember::Method {
-                name: member_name, entry, ..
-            } if member_name == name => Some(*entry),
-            _ => None,
-        })
-    }
-
     pub fn methods(&self) -> impl Iterator<Item = &AppMember> {
         self.members.iter().filter(|x| matches!(x, AppMember::Method { .. }))
     }

@@ -21,13 +21,14 @@ use super::{
     java::{
         app_classes::{self, AppClass},
         class_table::ClassTable,
+        compiled_class::{self, CompiledContext},
         get_java_interface_method,
         handles::JavaHandles,
         interface::{
             JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE,
             java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12,
         },
-        method_bridge,
+        method_bridge::{self, ResolvedMember},
     },
     stdlib::register_stdlib_svc_handler,
     svc_ids::InitSvcId,
@@ -438,9 +439,9 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // then called on, so it has to carry that class's dispatch table in
         // its first word.
         if function_index == 0x0f {
-            let instance = instantiate_imported_class(core, context, a0)?;
+            let instance = instantiate(core, context, a0).await?;
 
-            tracing::debug!("LGT vm_instantiate(class object {a0:#x}) -> {instance:#x}");
+            tracing::debug!("LGT vm_instantiate({a0:#x}) -> {instance:#x}");
 
             instance.write(core, lr)?;
             return Ok(());
@@ -553,11 +554,12 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let argv = core.read_param(3)?;
 
             let app_classes = context.app_classes.clone();
-            let app_classes = app_classes.lock();
-
             let image_ranges = context.image_ranges.clone();
+            let java_handles = context.java_handles.clone();
 
-            java_unk11(core, jvm, &app_classes, &image_ranges, argc, argv).await?.write(core, lr)
+            java_unk11(core, jvm, &java_handles, &app_classes, &image_ranges, argc, argv)
+                .await?
+                .write(core, lr)
         }
         InitSvcId::JavaImport09 => {
             let a0 = core.read_param(0)?;
@@ -605,28 +607,101 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 /// `index` is the row of the static method table, which is all the stub
 /// carries; everything else comes from the table published at load time.
 async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
-    let imported_classes = context.imported_classes.clone();
-    let table = imported_classes.lock();
+    // The row is lifted out before the JVM runs: a call can re-enter the
+    // runtime and want the table again, and this lock does not nest.
+    let member = context
+        .imported_classes
+        .lock()
+        .as_ref()
+        .and_then(|table| ResolvedMember::static_method(table, index));
 
-    let Some(table) = table.as_ref() else {
-        return Err(WieError::FatalError(format!(
-            "Imported static method {index} called before the class table was loaded"
-        )));
-    };
-
-    let Some(Some(member)) = table.static_methods.get(index as usize) else {
+    let Some(member) = member else {
         return Err(WieError::FatalError(format!("Imported static method {index} has no descriptor")));
     };
 
     let handles = context.java_handles.clone();
     let jvm = context.jvm.clone();
 
-    method_bridge::invoke(core, &jvm, &handles, table, member, None).await
+    method_bridge::invoke(core, &jvm, &handles, &member, None).await
 }
 
 /// Words reserved at the head of an instance. Word 0 is the dispatch table
 /// pointer the compiled code loads for every virtual call.
 const INSTANCE_HEADER_WORDS: u32 = 2;
+
+/// Creates the object `vm_instantiate` was asked for.
+///
+/// The token is either a platform class - one handed out by a class's first
+/// reserved static row - or a handle to one of the application's own classes,
+/// produced by class activation. Both end up as a guest allocation with a JVM
+/// instance bound to it; only the platform case has a dispatch table to
+/// install, since an application class dispatches within its own code.
+async fn instantiate(core: &mut ArmCore, context: &mut InitSvcContext, token: u32) -> Result<u32> {
+    let known_platform_class = context
+        .imported_classes
+        .lock()
+        .as_ref()
+        .is_some_and(|table| table.class_of_object(token).is_some());
+
+    if known_platform_class {
+        return instantiate_imported_class(core, context, token);
+    }
+
+    instantiate_app_class(core, context, token).await
+}
+
+/// Instantiates one of the application's own classes.
+///
+/// The token is the handle class activation produced, which carries the class
+/// root. Registering the class gives the JVM something to construct, and
+/// binding it to a fresh allocation is what lets the superclass constructor
+/// the compiled code calls next find an object instead of building one.
+async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext, handle: u32) -> Result<u32> {
+    let root = context
+        .java_activated_classes
+        .lock()
+        .iter()
+        .find(|(_, activated)| **activated == handle)
+        .map(|(root, _)| *root);
+
+    let Some(root) = root else {
+        tracing::warn!("LGT vm_instantiate({handle:#x}) names neither a platform nor an application class");
+        return Ok(handle);
+    };
+
+    // The class definition is built while the lock is held; registering it and
+    // constructing runs JVM code, which re-enters the runtime.
+    let described = {
+        let app_classes = context.app_classes.lock();
+
+        app_classes
+            .iter()
+            .find(|x| x.root == root)
+            .map(|class| (class.name.clone(), compiled_class::as_proto(class)))
+    };
+
+    let Some((class, proto)) = described else {
+        tracing::warn!("LGT application class at {root:#x} was never registered");
+        return Ok(handle);
+    };
+
+    let compiled_context = CompiledContext {
+        core: core.clone(),
+        handles: context.java_handles.clone(),
+    };
+
+    let Some(instance) = compiled_class::instantiate(&context.jvm, &compiled_context, &class, proto).await else {
+        return Ok(handle);
+    };
+
+    // The application allocates and lays out its own instances, so the handle
+    // it already has is the object; only the JVM side is missing.
+    context.java_handles.bind(handle, instance);
+
+    tracing::debug!("LGT bound application class {class} to {handle:#x}");
+
+    Ok(handle)
+}
 
 /// Allocates an instance of the class a token names, with its dispatch table
 /// installed.
@@ -705,23 +780,20 @@ fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u
 async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
     let this = core.read_param(0)?;
 
-    let imported_classes = context.imported_classes.clone();
-    let table = imported_classes.lock();
+    let member = context
+        .imported_classes
+        .lock()
+        .as_ref()
+        .and_then(|table| ResolvedMember::virtual_method(table, index));
 
-    let Some(table) = table.as_ref() else {
-        return Err(WieError::FatalError(format!(
-            "Imported virtual method {index} called before the class table was loaded"
-        )));
-    };
-
-    let Some(Some(member)) = table.virtual_methods.get(index as usize) else {
+    let Some(member) = member else {
         return Err(WieError::FatalError(format!("Imported virtual method {index} has no descriptor")));
     };
 
     let handles = context.java_handles.clone();
     let jvm = context.jvm.clone();
 
-    method_bridge::invoke(core, &jvm, &handles, table, member, Some(this)).await
+    method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await
 }
 
 pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], main_class_name: Option<&str>) -> Result<()> {

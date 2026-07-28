@@ -26,9 +26,41 @@ use wie_jvm_support::JvmSupport;
 use wie_util::{Result, WieError};
 
 use super::{
-    class_table::{ClassTable, JavaMember, is_wide, split_descriptor},
+    class_table::{ClassTable, is_wide, split_descriptor},
     handles::JavaHandles,
 };
+
+/// A row of the class table, lifted out so the table's lock is not held while
+/// the JVM runs - a call can re-enter the runtime and want it again.
+pub struct ResolvedMember {
+    pub class_name: String,
+    pub name: String,
+    pub descriptor: String,
+}
+
+impl ResolvedMember {
+    /// Reads one row of the static method table.
+    pub fn static_method(table: &ClassTable, index: u32) -> Option<Self> {
+        let member = table.static_methods.get(index as usize)?.as_ref()?;
+
+        Some(Self {
+            class_name: table.class_name(member.class_index).into(),
+            name: member.name.clone(),
+            descriptor: member.descriptor.clone(),
+        })
+    }
+
+    /// Reads one row of the virtual method table.
+    pub fn virtual_method(table: &ClassTable, index: u32) -> Option<Self> {
+        let member = table.virtual_methods.get(index as usize)?.as_ref()?;
+
+        Some(Self {
+            class_name: table.class_name(member.class_index).into(),
+            name: member.name.clone(),
+            descriptor: member.descriptor.clone(),
+        })
+    }
+}
 
 /// Reads the `count` argument words a call was made with.
 fn read_arguments(core: &ArmCore, count: usize) -> Result<Vec<u32>> {
@@ -94,25 +126,22 @@ fn marshal_return(handles: &JavaHandles, value: JavaValue) -> Result<u32> {
 /// `receiver` is `None` for a static method. A `<init>` row is a constructor:
 /// the compiled code expects a new instance back, so it is handled as a
 /// construction rather than an invocation.
-pub async fn invoke(
-    core: &mut ArmCore,
-    jvm: &Jvm,
-    handles: &JavaHandles,
-    table: &ClassTable,
-    member: &JavaMember,
-    receiver: Option<u32>,
-) -> Result<u32> {
-    let class_name = table.class_name(member.class_index);
+pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member: &ResolvedMember, receiver: Option<u32>) -> Result<u32> {
+    let ResolvedMember {
+        class_name,
+        name,
+        descriptor,
+    } = member;
 
-    let Some((parameters, _)) = split_descriptor(&member.descriptor) else {
-        return Err(WieError::FatalError(format!("Malformed descriptor on {}", table.describe(member))));
+    let Some((parameters, _)) = split_descriptor(descriptor) else {
+        return Err(WieError::FatalError(format!("Malformed descriptor on {class_name}.{name}{descriptor}")));
     };
 
     // A constructor row is not a factory. The compiled code allocates the
     // object, prepares it through the class's first reserved row, then calls
     // the constructor on it - so `this` arrives in the first word and the
     // object it names is what the caller goes on to use.
-    if member.name == "<init>" {
+    if name == "<init>" {
         let this = core.read_param(0)?;
         let arguments = marshal_arguments(core, handles, &parameters, 1)?;
 
@@ -122,9 +151,9 @@ pub async fn invoke(
         // superclass is frequently abstract, so it could not be constructed
         // anyway.
         if let Some(instance) = handles.get(this) {
-            tracing::debug!("LGT {class_name}.<init>{} on existing {this:#x}", member.descriptor);
+            tracing::debug!("LGT {class_name}.<init>{descriptor} on existing {this:#x}");
 
-            let result: JvmResult<()> = jvm.invoke_special(&instance, class_name, "<init>", &member.descriptor, arguments).await;
+            let result: JvmResult<()> = jvm.invoke_special(&instance, class_name, "<init>", descriptor, arguments).await;
             if let Err(error) = result {
                 return Err(JvmSupport::to_wie_err(jvm, error).await);
             }
@@ -132,9 +161,9 @@ pub async fn invoke(
             return Ok(this);
         }
 
-        tracing::debug!("LGT new {class_name}{} on {this:#x}", member.descriptor);
+        tracing::debug!("LGT new {class_name}{descriptor} on {this:#x}");
 
-        let instance = match jvm.new_class(class_name, &member.descriptor, arguments).await {
+        let instance = match jvm.new_class(class_name, descriptor, arguments).await {
             Ok(instance) => instance,
             Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
         };
@@ -149,8 +178,7 @@ pub async fn invoke(
             Some(instance) => Some(instance),
             None => {
                 return Err(WieError::FatalError(format!(
-                    "{} called on unknown instance {handle:#x}",
-                    table.describe(member)
+                    "{class_name}.{name}{descriptor} called on unknown instance {handle:#x}"
                 )));
             }
         },
@@ -160,15 +188,13 @@ pub async fn invoke(
     let arguments = marshal_arguments(core, handles, &parameters, usize::from(receiver.is_some()))?;
 
     let result = if let Some(instance) = receiver {
-        tracing::debug!("LGT invoke virtual {class_name}.{}{}", member.name, member.descriptor);
+        tracing::debug!("LGT invoke virtual {class_name}.{name}{descriptor}");
 
-        jvm.invoke_virtual::<_, JavaValue>(&instance, &member.name, &member.descriptor, arguments)
-            .await
+        jvm.invoke_virtual::<_, JavaValue>(&instance, name, descriptor, arguments).await
     } else {
-        tracing::debug!("LGT invoke static {class_name}.{}{}", member.name, member.descriptor);
+        tracing::debug!("LGT invoke static {class_name}.{name}{descriptor}");
 
-        jvm.invoke_static::<_, JavaValue>(class_name, &member.name, &member.descriptor, arguments)
-            .await
+        jvm.invoke_static::<_, JavaValue>(class_name, name, descriptor, arguments).await
     };
 
     match result {
