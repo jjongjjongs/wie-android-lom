@@ -41,10 +41,6 @@ pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x3000;
 /// of its SVC range.
 pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x1000;
 
-/// Instance layout for platform objects the application allocates itself:
-/// a vtable pointer, the class index, then the fields.
-pub const INSTANCE_FIELD_BASE: u32 = 8;
-
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
     Ok(match function_index {
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk0)?,
@@ -89,8 +85,6 @@ pub async fn java_load_classes(
     interface_method_offsets: u32,
     static_method_offsets: u32,
 ) -> Result<ClassTable> {
-    let _ = handles;
-
     let mut table = ClassTable::parse(
         core,
         classes,
@@ -122,7 +116,7 @@ pub async fn java_load_classes(
         table.outputs.interface_method_offsets,
     );
 
-    install_dispatch(core, &mut table)?;
+    install_dispatch(core, handles, &mut table)?;
 
     Ok(table)
 }
@@ -142,7 +136,7 @@ pub async fn java_load_classes(
 ///
 /// so the table needs a leading word before its entries, and every instance
 /// needs to point at one.
-fn build_dispatch_tables(core: &mut ArmCore, table: &mut ClassTable) -> Result<()> {
+fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
     for index in 0..table.classes.len() as u32 {
         let (start, count) = {
             let class = &table.classes[index as usize];
@@ -169,6 +163,8 @@ fn build_dispatch_tables(core: &mut ArmCore, table: &mut ClassTable) -> Result<(
         write_generic(core, class_object, 0u32)?;
         write_generic(core, class_object + 4, index)?;
 
+        handles.set_dispatch_table(&table.classes[index as usize].name, vtable);
+
         tracing::trace!(
             "LGT class {} -> object {class_object:#x}, dispatch table {vtable:#x} ({count} slots)",
             table.classes[index as usize].name
@@ -185,7 +181,7 @@ fn build_dispatch_tables(core: &mut ArmCore, table: &mut ClassTable) -> Result<(
 ///
 /// Rows the application left blank are skipped: it reserves two at the head of
 /// every class's static method block, and what belongs there is not yet known.
-fn install_dispatch(core: &mut ArmCore, table: &mut ClassTable) -> Result<()> {
+fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
     if table.static_methods.len() as u32 > JAVA_METHOD_SVC_LIMIT {
         return Err(wie_util::WieError::FatalError(alloc::format!(
             "LGT static method table has {} rows, more than the {JAVA_METHOD_SVC_LIMIT} reserved",
@@ -232,18 +228,24 @@ fn install_dispatch(core: &mut ArmCore, table: &mut ClassTable) -> Result<()> {
         tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
     }
 
-    build_dispatch_tables(core, table)?;
+    build_dispatch_tables(core, handles, table)?;
 
-    for (index, member) in table.fields.iter().enumerate() {
-        let Some(member) = member else { continue };
-
-        let class = &table.classes[member.class_index as usize];
-        let offset = INSTANCE_FIELD_BASE + (index as u32 - class.field_start) * 4;
-
-        write_generic(core, table.outputs.field_offsets + index as u32 * 2, offset as u16)?;
-
-        tracing::trace!("LGT field[{index}] {} -> +{offset:#x}", table.describe(member));
+    // A field access is `fields[field_offsets[row]]`, where `fields` is the
+    // word array an instance points at. The rows are not the platform's own
+    // field table - the compiled code indexes far past it, into what must be
+    // the application's own fields - and nothing says which field a row means.
+    //
+    // It does not have to. The application only ever reaches a field through
+    // this array, so any assignment it agrees with itself on works, and giving
+    // every row its own word is the assignment that cannot collide. It costs
+    // an instance one word per row instead of one per field.
+    let capacity = table.field_offset_capacity();
+    for row in 0..capacity {
+        write_generic(core, table.outputs.field_offsets + row * 2, row as u16)?;
     }
+    handles.set_field_slots(capacity);
+
+    tracing::debug!("LGT field slots: {capacity} rows, identity mapped");
 
     Ok(())
 }

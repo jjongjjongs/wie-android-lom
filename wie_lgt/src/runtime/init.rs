@@ -504,10 +504,6 @@ async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext
     method_bridge::invoke(core, &jvm, &handles, &member, None).await
 }
 
-/// Words reserved at the head of an instance. Word 0 is the dispatch table
-/// pointer the compiled code loads for every virtual call.
-const INSTANCE_HEADER_WORDS: u32 = 2;
-
 /// Creates the object `vm_instantiate` was asked for.
 ///
 /// The token is either a platform class - one handed out by a class's first
@@ -584,7 +580,7 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
 
 /// Allocates an instance of the class a token names, with its dispatch table
 /// installed.
-fn instantiate_imported_class(core: &mut ArmCore, context: &mut InitSvcContext, class_object: u32) -> Result<u32> {
+fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcContext, class_object: u32) -> Result<u32> {
     let imported_classes = context.imported_classes.clone();
     let table = imported_classes.lock();
 
@@ -602,11 +598,9 @@ fn instantiate_imported_class(core: &mut ArmCore, context: &mut InitSvcContext, 
 
     drop(table);
 
-    let instance = Allocator::alloc(core, (INSTANCE_HEADER_WORDS + field_count) * 4)?;
-    write_generic(core, instance, vtable)?;
-    for word in 1..INSTANCE_HEADER_WORDS + field_count {
-        write_generic(core, instance + word * 4, 0u32)?;
-    }
+    let _ = field_count;
+
+    let instance = context.java_handles.allocate_instance(vtable)?;
 
     tracing::debug!("LGT new {name} instance at {instance:#x}, dispatch table {vtable:#x}");
 

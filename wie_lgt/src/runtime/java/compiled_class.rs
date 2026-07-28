@@ -128,6 +128,20 @@ impl MethodBody<JavaError, CompiledContext> for CompiledMethod {
     }
 }
 
+/// Methods a platform class invokes on a subclass.
+///
+/// An application's method names are obfuscated - Legend of Master's `Card`
+/// subclass calls its `paint` override `a` - so an override cannot be found by
+/// name. It can be found by signature: these are the points where the platform
+/// calls into application code, and a class that overrides one declares
+/// exactly one method with that descriptor.
+const PLATFORM_CALLBACKS: &[(&str, &str, &str)] = &[
+    ("org/kwis/msp/lcdui/Card", "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V"),
+    ("org/kwis/msp/lcdui/Card", "keyNotify", "(II)Z"),
+    ("org/kwis/msp/lcdui/Card", "showNotify", "(Z)V"),
+    ("org/kwis/msp/lcdui/Card", "pointerNotify", "(III)Z"),
+];
+
 /// Argument words a method occupies, `this` included when it takes one.
 fn expected_words(descriptor: &str, takes_receiver: bool) -> Option<u32> {
     let (parameters, _) = split_descriptor(descriptor)?;
@@ -188,6 +202,36 @@ pub fn as_proto(class: &AppClass) -> JavaClassProto<CompiledContext> {
                 MethodAccessFlags::STATIC
             },
             body: Box::new(body) as Box<dyn MethodBody<JavaError, CompiledContext>>,
+        });
+    }
+
+    for (callback_class, callback_name, descriptor) in PLATFORM_CALLBACKS {
+        if *callback_class != parent {
+            continue;
+        }
+        if methods.iter().any(|x| x.name == *callback_name && x.descriptor == *descriptor) {
+            continue;
+        }
+
+        let mut candidates = class.methods().filter(|x| x.descriptor() == *descriptor && x.is_instance_method());
+
+        let (Some(AppMember::Method { name: obfuscated, entry, .. }), None) = (candidates.next(), candidates.next()) else {
+            continue;
+        };
+
+        tracing::debug!("{}.{obfuscated}{descriptor} overrides {callback_class}.{callback_name}", class.name);
+
+        methods.push(JavaMethodProto {
+            name: (*callback_name).to_owned(),
+            descriptor: (*descriptor).to_owned(),
+            access_flags: MethodAccessFlags::empty(),
+            body: Box::new(CompiledMethod {
+                class_name: class.name.clone(),
+                name: (*callback_name).to_owned(),
+                descriptor: (*descriptor).to_owned(),
+                entry: *entry,
+                takes_receiver: true,
+            }) as Box<dyn MethodBody<JavaError, CompiledContext>>,
         });
     }
 

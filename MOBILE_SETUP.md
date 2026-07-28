@@ -69,7 +69,6 @@ engineered.
 LGT applications that register a CLET through `clet_register` run through
 `net/wie/CletWrapper`. Applications whose Java classes were compiled ahead of
 time into `binary.mod` - Legend of Master among them - load, resolve their
-platform imports and run well into `startApp`, creating platform objects,
-calling methods on them and constructing their own classes, but stop on a
-field access whose offset the platform does not yet supply. See
-`docs/lgt.md`.
+platform imports and boot: Legend of Master completes `startApp`, pushes its
+`Card` onto the display, and its `paint` override runs on every redraw. It
+does not draw anything yet. See `docs/lgt.md`.

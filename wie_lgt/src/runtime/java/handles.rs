@@ -5,7 +5,8 @@
 //! given a small guest allocation whose address is the handle, and the
 //! instance is retained here under that address.
 
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use jvm::ClassInstance;
 use spin::Mutex;
@@ -13,13 +14,25 @@ use spin::Mutex;
 use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{Result, write_generic};
 
-/// Size of the guest-side stand-in. The original VM uses a twelve byte native
-/// object header, and compiled code copies handles around by that size.
-const HANDLE_SIZE: u32 = 12;
+/// Instance header the compiled code relies on:
+///
+/// ```text
+/// +0x00 dispatch table
+/// +0x04 unused so far
+/// +0x08 word array holding the fields
+/// ```
+const INSTANCE_HEADER_SIZE: u32 = 12;
+const INSTANCE_FIELDS_OFFSET: u32 = 8;
 
 #[derive(Clone)]
 pub struct JavaHandles {
     core: ArmCore,
+    /// Words every instance's field array holds, one per row of
+    /// `field_offsets`, set once the class table is known.
+    field_slots: Arc<AtomicU32>,
+    /// Class name to dispatch table, so an object handed to the compiled code
+    /// can be given the table its virtual calls will go through.
+    dispatch_tables: Arc<Mutex<BTreeMap<String, u32>>>,
     entries: Arc<Mutex<BTreeMap<u32, Box<dyn ClassInstance>>>>,
     /// Instance identity to handle, so a value coming back from the JVM can be
     /// handed to the compiled code as the address it already knows.
@@ -30,19 +43,54 @@ impl JavaHandles {
     pub fn new(core: ArmCore) -> Self {
         Self {
             core,
+            field_slots: Arc::new(AtomicU32::new(0)),
+            dispatch_tables: Default::default(),
             entries: Default::default(),
             addresses: Default::default(),
         }
     }
 
-    /// Allocates a handle for `instance` and retains it.
-    pub fn insert(&self, instance: Box<dyn ClassInstance>) -> Result<u32> {
+    /// Records how many words an instance's field array needs.
+    pub fn set_field_slots(&self, slots: u32) {
+        self.field_slots.store(slots, Ordering::SeqCst);
+    }
+
+    /// Records the dispatch table to give instances of `class`.
+    pub fn set_dispatch_table(&self, class: &str, vtable: u32) {
+        self.dispatch_tables.lock().insert(class.into(), vtable);
+    }
+
+    /// Allocates an instance the compiled code can use: a header pointing at
+    /// its own field array.
+    pub fn allocate_instance(&self, vtable: u32) -> Result<u32> {
         let mut core = self.core.clone();
 
-        let handle = Allocator::alloc(&mut core, HANDLE_SIZE)?;
-        write_generic(&mut core, handle, 0u32)?;
-        write_generic(&mut core, handle + 4, 0u32)?;
-        write_generic(&mut core, handle + 8, 0xffff_ffffu32)?;
+        let slots = self.field_slots.load(Ordering::SeqCst);
+        let fields = Allocator::alloc(&mut core, slots.max(1) * 4)?;
+        for slot in 0..slots {
+            write_generic(&mut core, fields + slot * 4, 0u32)?;
+        }
+
+        let instance = Allocator::alloc(&mut core, INSTANCE_HEADER_SIZE)?;
+        write_generic(&mut core, instance, vtable)?;
+        write_generic(&mut core, instance + 4, 0u32)?;
+        write_generic(&mut core, instance + INSTANCE_FIELDS_OFFSET, fields)?;
+
+        Ok(instance)
+    }
+
+    /// Allocates a handle for `instance` and retains it.
+    pub fn insert(&self, instance: Box<dyn ClassInstance>) -> Result<u32> {
+        // An object crossing to the compiled code has its virtual calls
+        // dispatched through its own class's table, so it has to carry one.
+        let class = instance.class_definition().name();
+        let vtable = self.dispatch_tables.lock().get(&class).copied().unwrap_or(0);
+
+        if vtable == 0 {
+            tracing::debug!("No dispatch table for {class}; virtual calls on it will not resolve");
+        }
+
+        let handle = self.allocate_instance(vtable)?;
 
         self.addresses.lock().insert(instance.identity(), handle);
         self.entries.lock().insert(handle, instance);
