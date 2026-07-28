@@ -108,25 +108,72 @@ every class's static method block; what belongs in them is not yet known.
 
 The application registers its own compiled classes as
 `{ u32 count, u32 pad, u32 root[count] }`. Import `0x0e` resolves one by index
-and returns its root. A root is:
+and returns its root. Each root is preceded by a 76 byte metadata block and
+followed inline by its member table:
 
 ```text
-+0x00 runtime slots, zero in the image
-+0x08 u32 metadata
-+0x0c u32 flags
-+0x10 field descriptors, 20 bytes each:
-      { owner root, name, descriptor, flags, slot }
+metadata:
+  +0x00 u32 flags
+  +0x08 u32 name
+  +0x10 u32 superclass name, zero for none
+  +0x18 u16 member count
+
+root (immediately after the metadata):
+  +0x00 runtime slots, zero in the image
+  +0x08 u32 metadata
+  +0x0c u32 flags
+  +0x10 member table
 ```
 
-Legend of Master registers 18 classes. Its `Lm` root carries static fields
-`a:LLm;` and `b:Ljava/lang/Thread;`, and the metadata block holds a superclass
-name and entry point addresses.
+A described member starts with the owning class's root, then its name,
+descriptor and flags. Entries are **not** a fixed size - fields run 20 bytes
+and methods 28, with variants - so `wie_lgt` walks the table by resynchronising
+on that owner word rather than assuming a stride. Field and method rows are
+told apart by the descriptor: only a method descriptor starts with `(`.
 
-Reaching `startApp` needs these roots turned into JVM classes whose methods
-trampoline into the compiled code. That is not implemented: the application
-loads, resolves its imports and completes `fn_init`, then stops. Imports
+```text
+member:
+  +0x00 u32 owner root
+  +0x04 u32 name
+  +0x08 u32 descriptor
+  +0x0c u16 type/kind, u16 argument words (`this` included, methods only)
+  +0x14 u32 ARM entry point (methods) or slot (fields)
+```
+
+Not every class describes its members; some carry a bare vtable of entry points
+with no names. The walk stops at the first row it cannot read and records how
+far it got, so a partially described class is still usable.
+
+Two things about the class an application starts from:
+
+- **It is not in the registered table.** Legend of Master registers 18 classes,
+  `a` through `r`, and `Lm` is not among them. It is found by scanning the
+  loaded image for the root shape, which on that title finds all 23 classes and
+  nothing else.
+- **Its name comes from the argument vector**, not the descriptor. Import
+  `0x83` calls `org/kwis/msp/lcdui/Main.main(["Lm", "", "true", "true"])`, the
+  same shape KTF uses.
+
+`Lm` resolves to seven members, six of them the Jlet lifecycle:
+
+| method       | descriptor               | entry     |
+|--------------|--------------------------|-----------|
+| `<init>`     | `()V`                    | `0x10c8`  |
+| `startApp`   | `([Ljava/lang/String;)V` | `0x1118`  |
+| `pauseApp`   | `()V`                    | `0x1248`  |
+| `resumeApp`  | `()V`                    | `0x12d0`  |
+| `destroyApp` | `(Z)V`                   | `0x1358`  |
+
+`wie_lgt` registers a JVM class carrying those entry points, so `Main` can
+construct and drive the application's Jlet.
+
+#### Where it stops
+
+The compiled constructor is entered and immediately faults on a null
+dereference: the instance it is given is a bare allocation, and the object
+layout the compiled code expects is still unknown. That layout is what imports
 `0x0b`, `0x0c`, `0x0d` (class initialisation and activation) and `0x0f`
-(instantiation) are the remaining unknowns.
+(instantiation) exist to build, and they remain the open question.
 
 ### Standard Library
 

@@ -1,3 +1,4 @@
+pub mod app_classes;
 pub mod class_table;
 pub mod classes;
 pub mod handles;

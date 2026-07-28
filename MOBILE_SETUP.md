@@ -69,6 +69,6 @@ engineered.
 LGT applications that register a CLET through `clet_register` run through
 `net/wie/CletWrapper`. Applications whose Java classes were compiled ahead of
 time into `binary.mod` - Legend of Master among them - load, resolve their
-imports and complete `fn_init`, but do not start yet: the compiled-Java
-runtime behind import table `0x64` is still being worked out. See
-`docs/lgt.md`.
+platform imports, find their main class and enter its compiled constructor,
+which then faults: the object layout the compiled code expects is not known
+yet. See `docs/lgt.md`.
