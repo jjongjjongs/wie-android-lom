@@ -19,7 +19,7 @@
 
 use alloc::{format, string::String, vec::Vec};
 
-use jvm::{JavaValue, Jvm};
+use jvm::{JavaValue, Jvm, Result as JvmResult};
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
@@ -37,17 +37,14 @@ fn read_arguments(core: &ArmCore, count: usize) -> Result<Vec<u32>> {
 
 /// Converts raw argument words into JVM values using the parameter
 /// descriptors.
-fn marshal_arguments(core: &ArmCore, handles: &JavaHandles, parameters: &[String], receiver: Option<JavaValue>) -> Result<Vec<JavaValue>> {
+/// `first_word` is where the declared parameters start, which is one past
+/// `this` for anything called on an object.
+fn marshal_arguments(core: &ArmCore, handles: &JavaHandles, parameters: &[String], first_word: usize) -> Result<Vec<JavaValue>> {
     let slots: usize = parameters.iter().map(|x| if is_wide(x) { 2 } else { 1 }).sum();
-    let words = read_arguments(core, slots + usize::from(receiver.is_some()))?;
+    let words = read_arguments(core, slots + first_word)?;
 
-    let mut values = Vec::with_capacity(parameters.len() + 1);
-    let mut word = 0;
-
-    if let Some(receiver) = receiver {
-        values.push(receiver);
-        word += 1;
-    }
+    let mut values = Vec::with_capacity(parameters.len());
+    let mut word = first_word;
 
     for parameter in parameters {
         let value = match parameter.as_bytes()[0] {
@@ -111,17 +108,40 @@ pub async fn invoke(
         return Err(WieError::FatalError(format!("Malformed descriptor on {}", table.describe(member))));
     };
 
+    // A constructor row is not a factory. The compiled code allocates the
+    // object, prepares it through the class's first reserved row, then calls
+    // the constructor on it - so `this` arrives in the first word and the
+    // object it names is what the caller goes on to use.
     if member.name == "<init>" {
-        let arguments = marshal_arguments(core, handles, &parameters, None)?;
+        let this = core.read_param(0)?;
+        let arguments = marshal_arguments(core, handles, &parameters, 1)?;
 
-        tracing::debug!("LGT new {class_name}{}", member.descriptor);
+        // An object already bound to an instance is being initialized, not
+        // created: this is a subclass running its superclass constructor, and
+        // constructing a second object would discard the one in play. The
+        // superclass is frequently abstract, so it could not be constructed
+        // anyway.
+        if let Some(instance) = handles.get(this) {
+            tracing::debug!("LGT {class_name}.<init>{} on existing {this:#x}", member.descriptor);
+
+            let result: JvmResult<()> = jvm.invoke_special(&instance, class_name, "<init>", &member.descriptor, arguments).await;
+            if let Err(error) = result {
+                return Err(JvmSupport::to_wie_err(jvm, error).await);
+            }
+
+            return Ok(this);
+        }
+
+        tracing::debug!("LGT new {class_name}{} on {this:#x}", member.descriptor);
 
         let instance = match jvm.new_class(class_name, &member.descriptor, arguments).await {
             Ok(instance) => instance,
             Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
         };
 
-        return handles.insert(instance);
+        handles.bind(this, instance);
+
+        return Ok(this);
     }
 
     let receiver = match receiver {
@@ -137,14 +157,10 @@ pub async fn invoke(
         None => None,
     };
 
-    let arguments = marshal_arguments(core, handles, &parameters, receiver.clone().map(|x| JavaValue::Object(Some(x))))?;
+    let arguments = marshal_arguments(core, handles, &parameters, usize::from(receiver.is_some()))?;
 
     let result = if let Some(instance) = receiver {
         tracing::debug!("LGT invoke virtual {class_name}.{}{}", member.name, member.descriptor);
-
-        // The receiver was pushed as the first value; the JVM takes it
-        // separately.
-        let arguments = arguments[1..].to_vec();
 
         jvm.invoke_virtual::<_, JavaValue>(&instance, &member.name, &member.descriptor, arguments)
             .await

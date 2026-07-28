@@ -24,8 +24,8 @@ use super::{
         get_java_interface_method,
         handles::JavaHandles,
         interface::{
-            JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_STATIC_METHOD_SVC_BASE, java_import_09, java_import_10, java_import_11, java_import_23,
-            java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12,
+            JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE,
+            java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12,
         },
         method_bridge,
     },
@@ -129,6 +129,20 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
     if id.0 >= JAVA_STATIC_METHOD_SVC_BASE && id.0 < JAVA_STATIC_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let index = id.0 - JAVA_STATIC_METHOD_SVC_BASE;
         let result = invoke_imported_static(core, context, index).await?;
+
+        return result.write(core, lr);
+    }
+
+    if id.0 >= JAVA_VIRTUAL_METHOD_SVC_BASE && id.0 < JAVA_VIRTUAL_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        let index = id.0 - JAVA_VIRTUAL_METHOD_SVC_BASE;
+        let result = invoke_imported_virtual(core, context, index).await?;
+
+        return result.write(core, lr);
+    }
+
+    if id.0 >= JAVA_RESERVED_SLOT_SVC_BASE && id.0 < JAVA_RESERVED_SLOT_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        let index = id.0 - JAVA_RESERVED_SLOT_SVC_BASE;
+        let result = call_reserved_slot(core, context, index)?;
 
         return result.write(core, lr);
     }
@@ -419,13 +433,14 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             return Ok(());
         }
 
+        // Instantiation. The argument is the token a class's first reserved
+        // row handed back, and the result is the object the constructor is
+        // then called on, so it has to carry that class's dispatch table in
+        // its first word.
         if function_index == 0x0f {
-            let instance = Allocator::alloc(core, 12)?;
-            write_generic(core, instance, 0u32)?;
-            write_generic(core, instance + 4, 0u32)?;
-            write_generic(core, instance + 8, a0)?;
+            let instance = instantiate_imported_class(core, context, a0)?;
 
-            tracing::warn!("Lm vm_instantiate(class={a0:#x}) -> instance={instance:#x}");
+            tracing::debug!("LGT vm_instantiate(class object {a0:#x}) -> {instance:#x}");
 
             instance.write(core, lr)?;
             return Ok(());
@@ -607,6 +622,106 @@ async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext
     let jvm = context.jvm.clone();
 
     method_bridge::invoke(core, &jvm, &handles, table, member, None).await
+}
+
+/// Words reserved at the head of an instance. Word 0 is the dispatch table
+/// pointer the compiled code loads for every virtual call.
+const INSTANCE_HEADER_WORDS: u32 = 2;
+
+/// Allocates an instance of the class a token names, with its dispatch table
+/// installed.
+fn instantiate_imported_class(core: &mut ArmCore, context: &mut InitSvcContext, class_object: u32) -> Result<u32> {
+    let imported_classes = context.imported_classes.clone();
+    let table = imported_classes.lock();
+
+    let layout = table.as_ref().and_then(|table| {
+        let index = table.class_of_object(class_object)?;
+        let class = table.classes.get(index as usize)?;
+
+        Some((class.name.clone(), *table.vtables.get(index as usize)?, class.field_count))
+    });
+
+    let Some((name, vtable, field_count)) = layout else {
+        tracing::warn!("LGT vm_instantiate({class_object:#x}) does not name a class");
+        return Ok(class_object);
+    };
+
+    drop(table);
+
+    let instance = Allocator::alloc(core, (INSTANCE_HEADER_WORDS + field_count) * 4)?;
+    write_generic(core, instance, vtable)?;
+    for word in 1..INSTANCE_HEADER_WORDS + field_count {
+        write_generic(core, instance + word * 4, 0u32)?;
+    }
+
+    tracing::debug!("LGT new {name} instance at {instance:#x}, dispatch table {vtable:#x}");
+
+    Ok(instance)
+}
+
+/// Reports a call through one of the reserved rows at the head of a class's
+/// static method block, and returns the first argument.
+///
+/// Identity is a placeholder, not a semantic: these rows are called for their
+/// effect, and what that effect is has not been worked out. Returning the
+/// argument at least keeps a constructor that threads an allocation through
+/// them going, instead of stopping at a branch to zero.
+fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+    let a0 = core.read_param(0)?;
+
+    let imported_classes = context.imported_classes.clone();
+    let table = imported_classes.lock();
+
+    let Some(table) = table.as_ref() else {
+        return Ok(a0);
+    };
+    let Some((class, slot)) = table.static_method_owner(index) else {
+        tracing::warn!("LGT reserved static row {index} belongs to no class");
+        return Ok(a0);
+    };
+
+    // Slot 0 hands back the class token. A constructor calls it and drops the
+    // result, which is how a superclass gets initialized; `new` calls it and
+    // passes the result to vm_instantiate.
+    if slot == 0 {
+        let class_object = table
+            .classes
+            .iter()
+            .position(|x| core::ptr::eq(x, class))
+            .and_then(|index| table.class_objects.get(index).copied())
+            .unwrap_or(a0);
+
+        tracing::debug!("LGT class object of {} -> {class_object:#x}", class.name);
+
+        return Ok(class_object);
+    }
+
+    tracing::warn!("LGT reserved slot {slot} of {} called with a0={a0:#x}", class.name);
+
+    Ok(a0)
+}
+
+/// Handles a call the compiled code made through a class's dispatch table.
+async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+    let this = core.read_param(0)?;
+
+    let imported_classes = context.imported_classes.clone();
+    let table = imported_classes.lock();
+
+    let Some(table) = table.as_ref() else {
+        return Err(WieError::FatalError(format!(
+            "Imported virtual method {index} called before the class table was loaded"
+        )));
+    };
+
+    let Some(Some(member)) = table.virtual_methods.get(index as usize) else {
+        return Err(WieError::FatalError(format!("Imported virtual method {index} has no descriptor")));
+    };
+
+    let handles = context.java_handles.clone();
+    let jvm = context.jvm.clone();
+
+    method_bridge::invoke(core, &jvm, &handles, table, member, Some(this)).await
 }
 
 pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], main_class_name: Option<&str>) -> Result<()> {

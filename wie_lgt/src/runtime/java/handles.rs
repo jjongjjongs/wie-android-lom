@@ -45,6 +45,15 @@ impl JavaHandles {
         Ok(handle)
     }
 
+    /// Retains `instance` under an address the guest already owns.
+    ///
+    /// The compiled code allocates an object, prepares it, then calls the
+    /// constructor on it, so the JVM instance only exists once the guest
+    /// address does.
+    pub fn bind(&self, handle: u32, instance: Box<dyn ClassInstance>) {
+        self.entries.lock().insert(handle, instance);
+    }
+
     /// Instances are reference counted internally, so the clone shares state
     /// with the retained object rather than copying it.
     pub fn get(&self, handle: u32) -> Option<Box<dyn ClassInstance>> {

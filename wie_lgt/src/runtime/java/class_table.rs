@@ -73,6 +73,12 @@ pub struct OutputArrays {
 
 pub struct ClassTable {
     pub classes: Vec<JavaClass>,
+    /// Per class: the dispatch table an instance points at, or zero when the
+    /// class declares no virtual methods.
+    pub vtables: Vec<u32>,
+    /// Per class: the token the class's first reserved static row hands back,
+    /// which `vm_instantiate` turns into an instance.
+    pub class_objects: Vec<u32>,
     /// `None` where the application left a row blank, which it does for the
     /// slots reserved at the head of each class's static method block.
     pub static_methods: Vec<Option<JavaMember>>,
@@ -152,6 +158,8 @@ impl ClassTable {
 
         let mut table = Self {
             classes: Vec::with_capacity(count as usize),
+            vtables: Vec::new(),
+            class_objects: Vec::new(),
             static_methods: Vec::new(),
             virtual_methods: Vec::new(),
             fields: Vec::new(),
@@ -201,6 +209,20 @@ impl ClassTable {
         }
 
         Ok(table)
+    }
+
+    /// The class a token from a reserved row belongs to.
+    pub fn class_of_object(&self, class_object: u32) -> Option<u32> {
+        self.class_objects.iter().position(|x| *x == class_object).map(|x| x as u32)
+    }
+
+    /// The class whose static method block contains `index`, and the row's
+    /// position within that block.
+    pub fn static_method_owner(&self, index: u32) -> Option<(&JavaClass, u32)> {
+        self.classes
+            .iter()
+            .find(|class| index >= class.static_method_start && index < class.static_method_start + class.static_method_count)
+            .map(|class| (class, index - class.static_method_start))
     }
 
     pub fn class_name(&self, index: u32) -> &str {
