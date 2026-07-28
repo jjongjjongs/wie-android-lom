@@ -28,6 +28,16 @@ use super::{
 type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
 type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
 
+/// Main class of the one application the ahead-of-time compiled Java runtime
+/// has been reverse engineered against so far.
+///
+/// The handlers guarded by this are not a compatibility implementation: they
+/// poke absolute addresses (class roots, the runtime dispatch table at
+/// `0x015009e4`, the object layout at `0x01500e40`) that were read out of
+/// *this* `binary.mod`. Running them against any other LGT application writes
+/// over unrelated memory, so they stay off unless the descriptor names `Lm`.
+const LM_EXPERIMENT_MAIN_CLASS: &str = "Lm";
+
 #[derive(Clone)]
 struct InitSvcContext {
     wipic_category: u32,
@@ -36,9 +46,10 @@ struct InitSvcContext {
     java_handles: JavaHandleTable,
     java_class_tables: JavaClassTables,
     java_activated_classes: JavaActivatedClasses,
+    lm_experiment: bool,
 }
 
-fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
+fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool) -> Result<()> {
     core.register_svc_handler(
         SVC_CATEGORY_INIT,
         handle_init_svc,
@@ -49,6 +60,7 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
             java_handles: Default::default(),
             java_class_tables: Default::default(),
             java_activated_classes: Default::default(),
+            lm_experiment,
         },
     )
 }
@@ -117,7 +129,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             activated.write(core, lr)?;
             return Ok(());
         }
-        if function_index == 0x0d {
+        if function_index == 0x0d && context.lm_experiment {
             tracing::warn!("LGT import 0x0d regs: a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}");
             let root: u32 = match lr {
                 0x0000e6b8 => 0x014015dc,
@@ -167,7 +179,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             return Ok(());
         }
 
-        if function_index == 0x104 {
+        if function_index == 0x104 && context.lm_experiment {
             let mut original = [0u8; 16];
             match core.read_bytes(a0, &mut original) {
                 Ok(read) => {
@@ -263,7 +275,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             a0.write(core, lr)?;
             return Ok(());
         }
-        if function_index == 0xfc {
+        if function_index == 0xfc && context.lm_experiment {
             let lm_class_handle = 0x014015dcu32;
             tracing::warn!("Lm class getter(a0={a0:#x}) -> {lm_class_handle:#x}");
             lm_class_handle.write(core, lr)?;
@@ -364,11 +376,16 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
     }
 }
-pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8]) -> Result<()> {
+pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], main_class_name: Option<&str>) -> Result<()> {
+    let lm_experiment = main_class_name == Some(LM_EXPERIMENT_MAIN_CLASS);
+    if lm_experiment {
+        tracing::warn!("Enabling experimental {LM_EXPERIMENT_MAIN_CLASS} runtime patches; these are specific to that binary.mod");
+    }
+
     let entrypoint = load_executable(core, data)?;
     register_wipic_svc_handler(core, system, jvm)?;
     register_stdlib_svc_handler(core, system)?;
-    register_init_svc_handler(core, jvm)?;
+    register_init_svc_handler(core, jvm, lm_experiment)?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
     let ptr_init_param_2 = Allocator::alloc(core, size_of::<InitParam2>() as u32)?;
@@ -402,7 +419,7 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     let init_struct: InitStruct = read_generic(core, init_param_1.ptr_init_struct)?;
 
     let mut lm_runtime_probe = [0u8; 4];
-    let has_lm_runtime = core.read_bytes(0x015009e4, &mut lm_runtime_probe).is_ok();
+    let has_lm_runtime = lm_experiment && core.read_bytes(0x015009e4, &mut lm_runtime_probe).is_ok();
 
     if has_lm_runtime {
         for address in [

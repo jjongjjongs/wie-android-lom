@@ -80,4 +80,77 @@ pub fn extract_zip(zip: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
             Some(Ok((file.name().to_string(), data)))
         })
         .collect::<Result<_>>()
+        .map(strip_common_directory)
+}
+
+/// Feature phone archives are sometimes repacked with every entry below a
+/// single directory (`P/app_info`, `0002A4B1/app_info`, ...). The loaders all
+/// expect the app descriptor at the archive root, so drop a leading directory
+/// component when *every* entry shares it.
+fn strip_common_directory(files: BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<u8>> {
+    let mut prefix: Option<&str> = None;
+
+    for name in files.keys() {
+        let Some((directory, rest)) = name.split_once('/') else {
+            return files;
+        };
+        if rest.is_empty() {
+            return files;
+        }
+        match prefix {
+            Some(prefix) if prefix != directory => return files,
+            Some(_) => {}
+            None => prefix = Some(directory),
+        }
+    }
+
+    let Some(prefix) = prefix.map(|x| x.to_string()) else {
+        return files;
+    };
+
+    tracing::debug!("Stripping common archive directory {prefix}/");
+
+    files
+        .into_iter()
+        .map(|(name, data)| (name[prefix.len() + 1..].to_string(), data))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{
+        collections::BTreeMap,
+        string::{String, ToString},
+        vec::Vec,
+    };
+
+    use super::strip_common_directory;
+
+    fn archive(names: &[&str]) -> BTreeMap<String, Vec<u8>> {
+        names.iter().map(|x| (x.to_string(), Vec::new())).collect()
+    }
+
+    #[test]
+    fn strips_shared_directory() {
+        let files = strip_common_directory(archive(&["P/app_info", "P/0002A4B1.jar"]));
+
+        assert!(files.contains_key("app_info"));
+        assert!(files.contains_key("0002A4B1.jar"));
+    }
+
+    #[test]
+    fn keeps_root_entries() {
+        let files = strip_common_directory(archive(&["app_info", "res/0.png"]));
+
+        assert!(files.contains_key("app_info"));
+        assert!(files.contains_key("res/0.png"));
+    }
+
+    #[test]
+    fn keeps_multiple_directories() {
+        let files = strip_common_directory(archive(&["a/app_info", "b/0002A4B1.jar"]));
+
+        assert!(files.contains_key("a/app_info"));
+        assert!(files.contains_key("b/0002A4B1.jar"));
+    }
 }
