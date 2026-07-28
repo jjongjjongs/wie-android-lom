@@ -211,6 +211,31 @@ impl ClassTable {
         Ok(table)
     }
 
+    /// How many rows `field_offsets` has room for, bounded by whichever
+    /// output array follows it in `.bss`.
+    ///
+    /// The application never says how long the array is, and the compiled code
+    /// indexes it far past the platform's own field table - Legend of Master
+    /// reads row 413 of it - so the bound is taken from the layout instead.
+    pub fn field_offset_capacity(&self) -> u32 {
+        let field_offsets = self.outputs.field_offsets;
+
+        let next = [
+            self.outputs.static_field_offsets,
+            self.outputs.virtual_method_offsets,
+            self.outputs.interface_method_offsets,
+            self.outputs.static_method_offsets,
+        ]
+        .into_iter()
+        .filter(|x| *x > field_offsets)
+        .min();
+
+        match next {
+            Some(next) => (next - field_offsets) / 2,
+            None => 0,
+        }
+    }
+
     /// The class a token from a reserved row belongs to.
     pub fn class_of_object(&self, class_object: u32) -> Option<u32> {
         self.class_objects.iter().position(|x| *x == class_object).map(|x| x as u32)

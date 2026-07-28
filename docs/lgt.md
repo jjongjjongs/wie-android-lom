@@ -231,19 +231,57 @@ into the JVM re-enters the runtime through the SVC handler and wants the same
 tables, so every handler lifts what it needs out - a `ResolvedMember`, a class
 definition - and lets go before running anything.
 
+#### Instance layout
+
+Disassembling the field access settled the rest of the object:
+
+```text
+ldr   ip, [r7, #8]           ; the field array, at the instance's +0x08
+ldrsh r3, [r2, #row * 2]     ; r2 = field_offsets
+str   r4, [ip, r3, lsl #2]   ; fields[slot] = value
+```
+
+So an instance is
+
+```text
++0x00 dispatch table
++0x04 unused so far
++0x08 word array holding the fields
+```
+
+and `field_offsets` holds **word indices** into that array, not byte offsets.
+
+Its rows are not the platform's own field table - Legend of Master reads row
+413, and the platform declares one field in total - so they must be the
+application's own fields, and nothing says which field a row means.
+
+It does not have to. The application only ever reaches a field through this
+array, so any assignment it agrees with itself on works, and giving every row
+its own word is the assignment that cannot collide. The row count is taken
+from the gap to whichever output array follows in `.bss`, which on Legend of
+Master gives 416.
+
+#### Obfuscated overrides
+
+An application's method names are obfuscated, so an override cannot be found
+by name: Legend of Master's `Card` subclass calls its `paint` override `a`.
+It can be found by signature. `PLATFORM_CALLBACKS` lists the points where the
+platform calls into application code, and a class that overrides one declares
+exactly one method with that descriptor - `a(Lorg/kwis/msp/lcdui/Graphics;)V`
+is unambiguously `Card.paint`.
+
 #### Where it stops
 
-Legend of Master gets well into `startApp`. It creates an
-`AnnunciatorComponent` and calls `show()` on it through the dispatch table,
-reaches `Display.getDefaultDisplay()`, initialises and instantiates three of
-its own classes, constructs a `java/util/Random`, and builds its version
-string.
+Legend of Master boots. `startApp` runs to completion: it creates an
+`AnnunciatorComponent` and calls `show()` through the dispatch table, gets the
+default display, initialises and instantiates its own classes, constructs a
+`java/util/Random`, and finishes by pushing its `Card` onto the display. The
+`paint` override then runs on every redraw without faulting.
 
-It then faults reading a field. `field_offsets` is only filled for rows that
-carry a descriptor, and the compiled code indexes it for more than that, so it
-reads a zero where an offset belongs. Working out that array - and imports
-`0x10`, `0x11` and `0x23`, which appear alongside it and look like field and
-class access - is the next step.
+Nothing is drawn yet - `paint` allocates and returns without issuing a
+graphics call, so the game is presumably waiting on state that is not set up.
+Imports `0x10`, `0x11` and `0x23`, which appear around class and field access
+and currently return zero, are the most likely place to look next.
 
 ### Standard Library
 
