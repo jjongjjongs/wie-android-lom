@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, format, sync::Arc};
+use alloc::{collections::BTreeMap, format, sync::Arc, vec::Vec};
 use core::mem::size_of;
 
 use elf::{ElfBytes, endian::AnyEndian};
@@ -14,11 +14,14 @@ use wie_util::{ByteRead, Result, WieError, read_generic, write_generic};
 use super::{
     SVC_CATEGORY_INIT, SVC_CATEGORY_STDLIB, SVC_CATEGORY_WIPIC,
     java::{
+        class_table::ClassTable,
         get_java_interface_method,
+        handles::JavaHandles,
         interface::{
-            JAVA_DIAG_SVC_BASE, JavaHandleTable, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0,
-            java_unk9, java_unk11, java_unk12,
+            JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_STATIC_METHOD_SVC_BASE, java_import_09, java_import_10, java_import_11, java_import_23,
+            java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12,
         },
+        method_bridge,
     },
     stdlib::register_stdlib_svc_handler,
     svc_ids::InitSvcId,
@@ -27,6 +30,8 @@ use super::{
 
 type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
 type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
+/// Platform classes the application imports, published by import `0x14`.
+type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
 
 /// Main class of the one application the ahead-of-time compiled Java runtime
 /// has been reverse engineered against so far.
@@ -43,13 +48,16 @@ struct InitSvcContext {
     wipic_category: u32,
     stdlib_category: u32,
     jvm: Jvm,
-    java_handles: JavaHandleTable,
+    java_handles: JavaHandles,
+    imported_classes: ImportedClasses,
     java_class_tables: JavaClassTables,
     java_activated_classes: JavaActivatedClasses,
     lm_experiment: bool,
 }
 
 fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool) -> Result<()> {
+    let java_handles = JavaHandles::new(core.clone());
+
     core.register_svc_handler(
         SVC_CATEGORY_INIT,
         handle_init_svc,
@@ -57,7 +65,8 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool)
             wipic_category: SVC_CATEGORY_WIPIC,
             stdlib_category: SVC_CATEGORY_STDLIB,
             jvm: jvm.clone(),
-            java_handles: Default::default(),
+            java_handles,
+            imported_classes: Default::default(),
             java_class_tables: Default::default(),
             java_activated_classes: Default::default(),
             lm_experiment,
@@ -70,6 +79,13 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
     let stdlib_category = &context.stdlib_category;
     let jvm = &mut context.jvm;
     let (_, lr) = core.read_pc_lr()?;
+
+    if id.0 >= JAVA_STATIC_METHOD_SVC_BASE && id.0 < JAVA_STATIC_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        let index = id.0 - JAVA_STATIC_METHOD_SVC_BASE;
+        let result = invoke_imported_static(core, context, index).await?;
+
+        return result.write(core, lr);
+    }
 
     // Diagnostic fallback for Java-interface indices that do not yet have a
     // semantic implementation. Log the first four ABI parameters and return 0.
@@ -331,16 +347,47 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         InitSvcId::JavaUnk3 => EmulatedFunction::call(&java_unk3, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaInterfaceUnk0 => EmulatedFunction::call(&java_unk0, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaInterfaceUnk12 => EmulatedFunction::call(&java_unk12, core, &mut ()).await?.write(core, lr),
+        // Import 0x07. The application registers its *own* classes - the ones
+        // its Java source was compiled into - as `{ u32 count, u32 pad, u32
+        // root[count] }`. This is the other half of the class model: import
+        // 0x14 declares what the application needs from the platform, this
+        // declares what it brings.
         InitSvcId::JavaInterfaceUnk5 => {
             let classes = core.read_param(0)?;
             let runtime_table = core.read_param(1)?;
             let mut tables = context.java_class_tables.lock();
             let index = (0u32..).find(|index| !tables.contains_key(index)).unwrap();
             tables.insert(index, (classes, runtime_table));
-            tracing::warn!("java_register_classes(classes={classes:#x}, runtime_table={runtime_table:#x}) -> {index:#x}");
+
+            let count: u32 = read_generic(core, classes)?;
+            tracing::debug!("java_register_classes(classes={classes:#x}, runtime_table={runtime_table:#x}, count={count}) -> {index:#x}");
+
             index.write(core, lr)
         }
-        InitSvcId::JavaLoadClasses => EmulatedFunction::call(&java_load_classes, core, &mut ()).await?.write(core, lr),
+        InitSvcId::JavaLoadClasses => {
+            let arguments: Vec<u32> = (0..11).map(|index| core.read_param(index)).collect::<Result<_>>()?;
+
+            let table = java_load_classes(
+                core,
+                &context.java_handles,
+                arguments[0],
+                arguments[1],
+                arguments[2],
+                arguments[3],
+                arguments[4],
+                arguments[5],
+                arguments[6],
+                arguments[7],
+                arguments[8],
+                arguments[9],
+                arguments[10],
+            )
+            .await?;
+
+            *context.imported_classes.lock() = Some(table);
+
+            ().write(core, lr)
+        }
         InitSvcId::JavaUnk9 => EmulatedFunction::call(&java_unk9, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk11 => EmulatedFunction::call(&java_unk11, core, jvm).await?.write(core, lr),
         InitSvcId::JavaImport09 => {
@@ -349,7 +396,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let a2 = core.read_param(2)?;
             let a3 = core.read_param(3)?;
 
-            let result = java_import_09(core, &mut context.java_handles, jvm, a0, a1, a2, a3).await?;
+            let result = java_import_09(core, &context.java_handles, jvm, a0, a1, a2, a3).await?;
 
             result.write(core, lr)
         }
@@ -359,16 +406,24 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let a2 = core.read_param(2)?;
             let a3 = core.read_param(3)?;
 
+            // Resolves one of the application's own classes by index into the
+            // table registered by import 0x07, returning its root.
             let classes = context.java_class_tables.lock().values().next().map(|(classes, _)| *classes).unwrap_or(0);
 
             let class = if classes == 0 {
+                tracing::warn!("java_import_0e({a2}) before any class table was registered");
                 0
             } else {
                 let count: u32 = read_generic(core, classes)?;
-                if a2 < count { read_generic(core, classes + 8 + a2 * 4)? } else { 0 }
+                if a2 < count {
+                    read_generic(core, classes + 8 + a2 * 4)?
+                } else {
+                    tracing::warn!("java_import_0e({a2}) is out of range for {count} classes");
+                    0
+                }
             };
 
-            tracing::warn!("java_import_0e(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}) -> {class:#x}");
+            tracing::debug!("java_import_0e(a0={a0:#x}, a1={a1:#x}, index={a2}, a3={a3:#x}) -> root {class:#x}");
             class.write(core, lr)
         }
         InitSvcId::JavaImport10 => EmulatedFunction::call(&java_import_10, core, &mut ()).await?.write(core, lr),
@@ -376,6 +431,30 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
     }
 }
+/// Handles a call the compiled code made through `static_method_offsets`.
+///
+/// `index` is the row of the static method table, which is all the stub
+/// carries; everything else comes from the table published at load time.
+async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+    let imported_classes = context.imported_classes.clone();
+    let table = imported_classes.lock();
+
+    let Some(table) = table.as_ref() else {
+        return Err(WieError::FatalError(format!(
+            "Imported static method {index} called before the class table was loaded"
+        )));
+    };
+
+    let Some(Some(member)) = table.static_methods.get(index as usize) else {
+        return Err(WieError::FatalError(format!("Imported static method {index} has no descriptor")));
+    };
+
+    let handles = context.java_handles.clone();
+    let jvm = context.jvm.clone();
+
+    method_bridge::invoke(core, &jvm, &handles, table, member, None).await
+}
+
 pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], main_class_name: Option<&str>) -> Result<()> {
     let lm_experiment = main_class_name == Some(LM_EXPERIMENT_MAIN_CLASS);
     if lm_experiment {
@@ -418,93 +497,8 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     tracing::debug!("InitStruct: {:#x?}", init_param_1.ptr_init_struct);
     let init_struct: InitStruct = read_generic(core, init_param_1.ptr_init_struct)?;
 
-    let mut lm_runtime_probe = [0u8; 4];
-    let has_lm_runtime = lm_experiment && core.read_bytes(0x015009e4, &mut lm_runtime_probe).is_ok();
-
-    if has_lm_runtime {
-        for address in [
-            0x015009e4u32,
-            0x015009ec,
-            0x015009f0,
-            0x015009f8,
-            0x01500a50,
-            0x01500a58,
-            0x01500a5c,
-            0x01500a64,
-            0x01500a68,
-            0x01500a70,
-        ] {
-            let value: u32 = read_generic(core, address)?;
-            tracing::warn!("Lm runtime slot before patch [{address:#x}] = {value:#x}");
-        }
-
-        let lm_stub_84 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x84)?;
-        let lm_stub_8c = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x8c)?;
-        let lm_stub_90 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x90)?;
-        let lm_stub_98 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x98)?;
-        let lm_stub_f0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xf0)?;
-        let lm_stub_f8 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xf8)?;
-        let lm_stub_fc = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0xfc)?;
-        let lm_stub_104 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x104)?;
-        let lm_stub_108 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x108)?;
-        let lm_stub_110 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x110)?;
-
-        write_generic(core, 0x015009e4, lm_stub_84)?;
-        write_generic(core, 0x015009ec, lm_stub_8c)?;
-        write_generic(core, 0x015009f0, lm_stub_90)?;
-        write_generic(core, 0x015009f8, lm_stub_98)?;
-        write_generic(core, 0x01500a50, lm_stub_f0)?;
-        write_generic(core, 0x01500a58, lm_stub_f8)?;
-        write_generic(core, 0x01500a5c, lm_stub_fc)?;
-        write_generic(core, 0x01500a64, lm_stub_104)?;
-        write_generic(core, 0x01500a68, lm_stub_108)?;
-        write_generic(core, 0x01500a70, lm_stub_110)?;
-        tracing::warn!("Installed minimal Lm runtime stubs: +0xfc={lm_stub_fc:#x},          +0x108={lm_stub_108:#x}, +0x110={lm_stub_110:#x}");
-
-        tracing::warn!(
-            "Lm runtime stub installation temporarily disabled:          84={lm_stub_84:#x}, 8c={lm_stub_8c:#x}, 90={lm_stub_90:#x},          98={lm_stub_98:#x}, f0={lm_stub_f0:#x}, f8={lm_stub_f8:#x},          fc={lm_stub_fc:#x}, 104={lm_stub_104:#x},          108={lm_stub_108:#x}, 110={lm_stub_110:#x}"
-        );
-
-        tracing::warn!(
-            "Installed Lm runtime stubs: [0x015009e4]={lm_stub_84:#x}, \
-         [0x015009ec]={lm_stub_8c:#x}, \
-         [0x015009f0]={lm_stub_90:#x}, \
-         [0x015009f8]={lm_stub_98:#x}, \
-         [0x01500a50]={lm_stub_f0:#x}, \
-         [0x01500a58]={lm_stub_f8:#x}, \
-         [0x01500a5c]={lm_stub_fc:#x}, \
-         [0x01500a64]={lm_stub_104:#x}, \
-         [0x01500a68]={lm_stub_108:#x}, \
-         [0x01500a70]={lm_stub_110:#x}"
-        );
-    }
-
     tracing::debug!("Calling initializer at {:#x}", init_struct.fn_init);
     let _: () = core.run_function(init_struct.fn_init, &[]).await?;
-
-    if has_lm_runtime {
-        for address in [
-            0x015009e4u32,
-            0x015009ec,
-            0x015009f0,
-            0x015009f8,
-            0x01500a50,
-            0x01500a58,
-            0x01500a5c,
-            0x01500a64,
-            0x01500a68,
-            0x01500a70,
-        ] {
-            let value: u32 = read_generic(core, address)?;
-            tracing::warn!("Lm runtime slot after fn_init [{address:#x}] = {value:#x}");
-        }
-
-        for offset in (0..0x30).step_by(4) {
-            let address = 0x01500e40 + offset;
-            let value: u32 = read_generic(core, address)?;
-            tracing::warn!("Lm runtime data [{address:#x}] = {value:#x}");
-        }
-    }
 
     Ok(())
 }
