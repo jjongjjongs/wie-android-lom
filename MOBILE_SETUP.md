@@ -69,6 +69,7 @@ engineered.
 LGT applications that register a CLET through `clet_register` run through
 `net/wie/CletWrapper`. Applications whose Java classes were compiled ahead of
 time into `binary.mod` - Legend of Master among them - load, resolve their
-platform imports and run into `startApp`, where they create platform objects
-and call methods on them, but stop when they instantiate one of their own
-classes: those have no JVM object behind them yet. See `docs/lgt.md`.
+platform imports and run well into `startApp`, creating platform objects,
+calling methods on them and constructing their own classes, but stop on a
+field access whose offset the platform does not yet supply. See
+`docs/lgt.md`.

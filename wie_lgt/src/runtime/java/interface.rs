@@ -1,7 +1,8 @@
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
+
+use spin::Mutex;
 
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
-use jvm_rust::ClassDefinitionImpl;
 use wie_core_arm::{Allocator, ArmCore};
 use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result, read_generic, read_null_terminated_string_bytes, write_generic};
@@ -11,7 +12,7 @@ use crate::runtime::{
     java::{
         app_classes::{self, AppClass},
         class_table::{ClassTable, OutputArrays},
-        classes::lm::{Lm, LmContext},
+        compiled_class::{self, CompiledContext},
         handles::JavaHandles,
     },
     svc_ids::InitSvcId,
@@ -257,10 +258,12 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
 /// passing the Jlet's own class name as the first argument - the same shape
 /// KTF uses. The named class is one of the application's own compiled classes,
 /// so a bridge is registered for it before `Main` is entered.
+#[allow(clippy::too_many_arguments)]
 pub async fn java_unk11(
     core: &mut ArmCore,
     jvm: &mut Jvm,
-    app_classes: &[AppClass],
+    handles: &JavaHandles,
+    app_classes: &Mutex<Vec<AppClass>>,
     image_ranges: &[(u32, u32)],
     argc: u32,
     argv: u32,
@@ -278,7 +281,7 @@ pub async fn java_unk11(
     tracing::debug!("java_run_main({arguments:?})");
 
     if let Some(main_class_name) = arguments.first() {
-        register_app_class(jvm, core, app_classes, image_ranges, main_class_name).await;
+        register_app_class(jvm, core, handles, app_classes, image_ranges, main_class_name).await;
     }
 
     let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", arguments.len()).await {
@@ -310,43 +313,40 @@ pub async fn java_unk11(
 
 /// Registers a JVM stand-in for one of the application's compiled classes, so
 /// the platform's `Jlet` machinery can construct and drive it.
-async fn register_app_class(jvm: &Jvm, core: &ArmCore, app_classes: &[AppClass], image_ranges: &[(u32, u32)], name: &str) {
+async fn register_app_class(
+    jvm: &Jvm,
+    core: &ArmCore,
+    handles: &JavaHandles,
+    app_classes: &Mutex<Vec<AppClass>>,
+    image_ranges: &[(u32, u32)],
+    name: &str,
+) {
+    // The definition is built while the lock is held, and the lock is let go
+    // before the JVM runs: registering re-enters the runtime.
+    //
     // The main class is usually absent from the registered table, so fall back
     // to finding it by shape in the image.
-    let found;
-    let class = match app_classes.iter().find(|x| x.name == name) {
-        Some(class) => class,
-        None => match app_classes::find_class(core, image_ranges, name) {
-            Some(class) => {
-                found = class;
-                &found
-            }
-            None => {
-                tracing::error!("Application class {name} is nowhere in the image; cannot bridge it");
-                return;
-            }
-        },
+    let proto = {
+        let app_classes = app_classes.lock();
+
+        app_classes.iter().find(|x| x.name == name).map(compiled_class::as_proto)
+    };
+    let proto = match proto {
+        Some(proto) => Some(proto),
+        None => app_classes::find_class(core, image_ranges, name).map(|class| compiled_class::as_proto(&class)),
     };
 
-    // JavaClassProto holds both names for the life of the program, and they
-    // come from the guest. One application registers one main class per run,
-    // so leaking them is bounded.
-    let leaked_name: &'static str = String::leak(class.name.clone());
-    let leaked_parent: &'static str = String::leak(class.superclass.clone().unwrap_or_else(|| "java/lang/Object".into()));
+    let Some(proto) = proto else {
+        tracing::error!("Application class {name} is nowhere in the image; cannot bridge it");
+        return;
+    };
 
-    tracing::debug!(
-        "Bridging application class {leaked_name} extends {leaked_parent} with {} compiled methods",
-        class.methods().count()
-    );
+    let context = CompiledContext {
+        core: core.clone(),
+        handles: handles.clone(),
+    };
 
-    let definition = ClassDefinitionImpl::from_class_proto(
-        Lm::as_proto(leaked_name, leaked_parent),
-        Box::new(LmContext::new(core.clone(), class)) as Box<_>,
-    );
-
-    if let Err(error) = jvm.register_class(Box::new(definition), None).await {
-        tracing::error!("Failed to register application class {leaked_name}: {error:?}");
-    }
+    compiled_class::register(jvm, &context, name, proto).await;
 }
 
 pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {

@@ -21,6 +21,9 @@ const HANDLE_SIZE: u32 = 12;
 pub struct JavaHandles {
     core: ArmCore,
     entries: Arc<Mutex<BTreeMap<u32, Box<dyn ClassInstance>>>>,
+    /// Instance identity to handle, so a value coming back from the JVM can be
+    /// handed to the compiled code as the address it already knows.
+    addresses: Arc<Mutex<BTreeMap<usize, u32>>>,
 }
 
 impl JavaHandles {
@@ -28,6 +31,7 @@ impl JavaHandles {
         Self {
             core,
             entries: Default::default(),
+            addresses: Default::default(),
         }
     }
 
@@ -40,6 +44,7 @@ impl JavaHandles {
         write_generic(&mut core, handle + 4, 0u32)?;
         write_generic(&mut core, handle + 8, 0xffff_ffffu32)?;
 
+        self.addresses.lock().insert(instance.identity(), handle);
         self.entries.lock().insert(handle, instance);
 
         Ok(handle)
@@ -51,7 +56,18 @@ impl JavaHandles {
     /// constructor on it, so the JVM instance only exists once the guest
     /// address does.
     pub fn bind(&self, handle: u32, instance: Box<dyn ClassInstance>) {
+        self.addresses.lock().insert(instance.identity(), handle);
         self.entries.lock().insert(handle, instance);
+    }
+
+    /// The address the compiled code knows `instance` by, allocating one if it
+    /// has not crossed the boundary before.
+    pub fn address_of(&self, instance: Box<dyn ClassInstance>) -> Result<u32> {
+        if let Some(handle) = self.addresses.lock().get(&instance.identity()).copied() {
+            return Ok(handle);
+        }
+
+        self.insert(instance)
     }
 
     /// Instances are reference counted internally, so the clone shares state

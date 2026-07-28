@@ -205,20 +205,45 @@ So every instance carries its class's dispatch table in word 0, and the table
 has a leading word before its entries. `wie_lgt` builds one per class at load
 time, filled with stubs that dispatch into the JVM.
 
+#### Bridging the application's own classes
+
+An application class has no bytecode, but the platform still has to construct
+it and call its methods - the Jlet machinery drives the main class, and a
+`Card` subclass has `paint` called from the display. Each one is registered as
+a JVM class whose methods trampoline into the compiled code at the entry
+points its member table lists.
+
+Method bodies are built from that table at runtime, so they cannot be ordinary
+Rust functions with fixed arities. `JavaMethodProto` takes a boxed `MethodBody`
+directly, which is what `compiled_class::CompiledMethod` implements: it
+converts the JVM's arguments to words, runs the entry point, and converts the
+result back using the descriptor. Objects cross as the address the compiled
+code already knows them by.
+
+`vm_instantiate` therefore handles two kinds of token. A platform class token
+becomes a fresh allocation with that class's dispatch table installed. An
+application class handle - produced by class activation, imports `0x0b` and
+`0x0c` - is left as the address the application already owns, with a JVM
+instance bound to it, since the application lays out its own objects.
+
+One thing to watch: none of these locks may be held across an `await`. A call
+into the JVM re-enters the runtime through the SVC handler and wants the same
+tables, so every handler lifts what it needs out - a `ResolvedMember`, a class
+definition - and lets go before running anything.
+
 #### Where it stops
 
-Legend of Master now runs into `startApp`: it creates an
-`AnnunciatorComponent`, calls `show()` on it through the dispatch table, and
-reaches `Display.getDefaultDisplay()`. It then initialises its own `Card`
-subclass through imports `0x0b`, `0x0c` and `0x0d`, instantiates it, and calls
-`Card.<init>` on the result - which fails, because that instance has no JVM
-object behind it.
+Legend of Master gets well into `startApp`. It creates an
+`AnnunciatorComponent` and calls `show()` on it through the dispatch table,
+reaches `Display.getDefaultDisplay()`, initialises and instantiates three of
+its own classes, constructs a `java/util/Random`, and builds its version
+string.
 
-`vm_instantiate` only recognises platform class tokens. Given an application
-class it returns the address unchanged, so nothing is bound and the superclass
-constructor is taken for a construction of the abstract `Card`. Bridging
-application classes there, the way the main class is already bridged, is the
-next step.
+It then faults reading a field. `field_offsets` is only filled for rows that
+carry a descriptor, and the compiled code indexes it for more than that, so it
+reads a zero where an offset belongs. Working out that array - and imports
+`0x10`, `0x11` and `0x23`, which appear alongside it and look like field and
+class access - is the next step.
 
 ### Standard Library
 
