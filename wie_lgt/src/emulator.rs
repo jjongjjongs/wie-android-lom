@@ -107,7 +107,7 @@ impl LgtEmulator {
     }
 
     #[tracing::instrument(name = "start", skip_all)]
-    async fn do_start(core: &mut ArmCore, system: &mut System, jar_filename: String, _main_class_name: Option<String>) -> Result<()> {
+    async fn do_start(core: &mut ArmCore, system: &mut System, jar_filename: String, main_class_name: Option<String>) -> Result<()> {
         let protos = [wie_midp::get_protos().into(), wie_wipi_java::get_protos().into()];
         let jvm = JvmSupport::new_jvm(system, Some(&jar_filename), Box::new(protos), &[], RustJavaJvmImplementation).await?; // TODO use lgt's java implementation
 
@@ -119,7 +119,7 @@ impl LgtEmulator {
 
         let binary_mod = JavaIoInputStream::read_until_end(&jvm, &stream).await.unwrap();
 
-        load_native(core, system, &jvm, &binary_mod).await?;
+        load_native(core, system, &jvm, &binary_mod, main_class_name.as_deref()).await?;
 
         Ok(())
     }

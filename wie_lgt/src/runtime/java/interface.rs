@@ -1,24 +1,37 @@
-use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, vec, vec::Vec};
 use core::sync::atomic::AtomicU32;
 
-use jvm::{ClassInstance, Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_rust::ClassDefinitionImpl;
-use spin::Mutex;
-use wie_core_arm::{Allocator, ArmCore};
+use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result, write_generic};
 
 use crate::runtime::{
     SVC_CATEGORY_INIT,
-    java::classes::lm::{Lm, LmContext},
+    java::{
+        class_table::{ClassTable, OutputArrays},
+        classes::lm::{Lm, LmContext},
+        handles::JavaHandles,
+    },
     svc_ids::InitSvcId,
 };
-
-pub type JavaHandleTable = Arc<Mutex<BTreeMap<u32, Box<dyn ClassInstance>>>>;
 
 /// Diagnostic SVC range used for unresolved LGT Java-interface imports.
 /// The low 12 bits preserve the original function index.
 pub const JAVA_DIAG_SVC_BASE: u32 = 0x1000;
+
+/// One SVC id per row of the application's static method table. The low bits
+/// carry the row index, which is how the handler knows what was called.
+pub const JAVA_STATIC_METHOD_SVC_BASE: u32 = 0x2000;
+
+/// Upper bound on rows, so a table that fails to parse cannot run off the end
+/// of its SVC range.
+pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x1000;
+
+/// Instance layout for platform objects the application allocates itself:
+/// a vtable pointer, the class index, then the fields.
+pub const INSTANCE_FIELD_BASE: u32 = 8;
 
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
     Ok(match function_index {
@@ -45,117 +58,105 @@ pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u3
     Ok(())
 }
 
+/// Import `0x14`. Reads the tables describing every platform class the
+/// application imports, then fills the output arrays so the compiled code can
+/// reach them.
 #[allow(clippy::too_many_arguments)]
 pub async fn java_load_classes(
-    _core: &mut ArmCore,
-    _: &mut (),
+    core: &mut ArmCore,
+    handles: &JavaHandles,
     classes: u32,
     fields: u32,
     static_fields: u32,
     virtual_methods: u32,
-    a4: u32,
+    interface_methods: u32,
     static_methods: u32,
     field_offsets: u32,
     static_field_offsets: u32,
     virtual_method_offsets: u32,
-    a9: u32,
+    interface_method_offsets: u32,
     static_method_offsets: u32,
-) -> Result<()> {
+) -> Result<ClassTable> {
+    let _ = handles;
+
+    let table = ClassTable::parse(
+        core,
+        classes,
+        fields,
+        static_fields,
+        virtual_methods,
+        interface_methods,
+        static_methods,
+        OutputArrays {
+            field_offsets,
+            static_field_offsets,
+            virtual_method_offsets,
+            interface_method_offsets,
+            static_method_offsets,
+        },
+    )?;
+
     tracing::debug!(
-        "java_load_classes({classes:#x}, {fields:#x}, {static_fields:#x}, {virtual_methods:#x}, {a4:#x}, {static_methods:#x}, {field_offsets:#x}, {static_field_offsets:#x}, {virtual_method_offsets:#x}, {a9:#x}, {static_method_offsets:#x})"
+        "java_load_classes: {} classes, {} static methods, {} virtual methods; outputs at \
+         static_method_offsets={:#x}, virtual_method_offsets={:#x}, field_offsets={:#x}, \
+         static_field_offsets={:#x}, interface_method_offsets={:#x}",
+        table.classes.len(),
+        table.static_methods.len(),
+        table.virtual_methods.len(),
+        table.outputs.static_method_offsets,
+        table.outputs.virtual_method_offsets,
+        table.outputs.field_offsets,
+        table.outputs.static_field_offsets,
+        table.outputs.interface_method_offsets,
     );
-    for (name, address) in [
-        ("classes", classes),
-        ("fields", fields),
-        ("static_fields", static_fields),
-        ("virtual_methods", virtual_methods),
-        ("a4", a4),
-        ("static_methods", static_methods),
-        ("field_offsets", field_offsets),
-        ("static_field_offsets", static_field_offsets),
-        ("virtual_method_offsets", virtual_method_offsets),
-        ("a9", a9),
-        ("static_method_offsets", static_method_offsets),
-    ] {
-        let mut bytes = [0u8; 64];
 
-        match _core.read_bytes(address, &mut bytes) {
-            Ok(read) => {
-                tracing::warn!("java_load_classes {name} @{address:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
-            }
-            Err(error) => {
-                tracing::warn!("java_load_classes {name} @{address:#x}: read failed: {error}");
-            }
-        }
+    install_dispatch(core, &table)?;
+
+    Ok(table)
+}
+
+/// Publishes the table into the arrays the compiled code reads.
+///
+/// Rows the application left blank are skipped: it reserves two at the head of
+/// every class's static method block, and what belongs there is not yet known.
+fn install_dispatch(core: &mut ArmCore, table: &ClassTable) -> Result<()> {
+    if table.static_methods.len() as u32 > JAVA_METHOD_SVC_LIMIT {
+        return Err(wie_util::WieError::FatalError(alloc::format!(
+            "LGT static method table has {} rows, more than the {JAVA_METHOD_SVC_LIMIT} reserved",
+            table.static_methods.len()
+        )));
     }
 
-    let mut class_count_bytes = [0u8; 4];
-    _core.read_bytes(classes, &mut class_count_bytes)?;
-    let class_count = u32::from_le_bytes(class_count_bytes).min(64);
+    for (index, member) in table.static_methods.iter().enumerate() {
+        let Some(member) = member else { continue };
 
-    tracing::warn!("java_load_classes class_count={class_count}");
-    for index in [17u32, 18u32] {
-        let pointer_address = virtual_methods.wrapping_add(index * 4);
-        let mut pointer_bytes = [0u8; 4];
+        let stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_STATIC_METHOD_SVC_BASE + index as u32)?;
+        write_generic(core, table.outputs.static_method_offsets + index as u32 * 4, stub)?;
 
-        _core.read_bytes(pointer_address, &mut pointer_bytes)?;
-        let descriptor_pointer = u32::from_le_bytes(pointer_bytes);
-
-        let mut descriptor_bytes = [0u8; 96];
-
-        match _core.read_bytes(descriptor_pointer, &mut descriptor_bytes) {
-            Ok(read) => {
-                let end = descriptor_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-                tracing::warn!(
-                    "java_load_classes virtual_method[{index}] slot={pointer_address:#x}, descriptor={descriptor_pointer:#x}, text={}",
-                    String::from_utf8_lossy(&descriptor_bytes[..end])
-                );
-            }
-            Err(error) => {
-                tracing::warn!("java_load_classes virtual_method[{index}] descriptor={descriptor_pointer:#x}: read failed: {error}");
-            }
-        }
+        tracing::trace!("LGT static method[{index}] {} -> {stub:#x}", table.describe(member));
     }
 
-    for index in 0..class_count {
-        // classes + 4 뒤부터 클래스당 6개의 u32, 즉 24바이트
-        let entry_address = classes.wrapping_add(4 + index * 24);
+    // Virtual methods are dispatched through the receiver, so the array holds
+    // the slot to index its vtable with rather than an address. The entries are
+    // halfwords: the array is only large enough for one per row at that width.
+    for (index, member) in table.virtual_methods.iter().enumerate() {
+        let Some(member) = member else { continue };
+        let Some(slot) = table.virtual_slot(index as u32) else { continue };
 
-        let mut entry_bytes = [0u8; 24];
+        write_generic(core, table.outputs.virtual_method_offsets + index as u32 * 2, slot as u16)?;
 
-        if let Err(error) = _core.read_bytes(entry_address, &mut entry_bytes) {
-            tracing::warn!(
-                "java_load_classes class[{index}] entry read failed \
-             @{entry_address:#x}: {error}"
-            );
-            continue;
-        }
+        tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
+    }
 
-        let name_pointer = u32::from_le_bytes([entry_bytes[0], entry_bytes[1], entry_bytes[2], entry_bytes[3]]);
+    for (index, member) in table.fields.iter().enumerate() {
+        let Some(member) = member else { continue };
 
-        let mut name_bytes = [0u8; 128];
+        let class = &table.classes[member.class_index as usize];
+        let offset = INSTANCE_FIELD_BASE + (index as u32 - class.field_start) * 4;
 
-        match _core.read_bytes(name_pointer, &mut name_bytes) {
-            Ok(read) => {
-                let end = name_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
+        write_generic(core, table.outputs.field_offsets + index as u32 * 2, offset as u16)?;
 
-                tracing::warn!(
-                    "java_load_classes class[{index}] entry={entry_address:#x}, \
-                 name_ptr={name_pointer:#x}, name={}, raw={:02x?}",
-                    String::from_utf8_lossy(&name_bytes[..end]),
-                    entry_bytes
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    "java_load_classes class[{index}] entry={entry_address:#x}, \
-                 name_ptr={name_pointer:#x}: name read failed: {error}, \
-                 raw={:02x?}",
-                    entry_bytes
-                );
-            }
-        }
+        tracing::trace!("LGT field[{index}] {} -> +{offset:#x}", table.describe(member));
     }
 
     Ok(())
@@ -358,22 +359,11 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_import_09(
-    core: &mut ArmCore,
-    java_handles: &mut JavaHandleTable,
-    jvm: &mut Jvm,
-    _a0: u32,
-    a1: u32,
-    a2: u32,
-    a3: u32,
-) -> Result<u32> {
-    tracing::warn!("java_import_09(utf16={a1:#x}, length={a2:#x}, output={a3:#x})");
-
+pub async fn java_import_09(core: &mut ArmCore, handles: &JavaHandles, jvm: &mut Jvm, _a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     let mut bytes = vec![0u8; (a2 as usize) * 2];
     core.read_bytes(a1, &mut bytes)?;
 
     let utf16 = bytes.chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>();
-
     let rust_string = String::from_utf16_lossy(&utf16);
 
     let java_string = match JavaLangString::from_rust_string(jvm, &rust_string).await {
@@ -381,23 +371,10 @@ pub async fn java_import_09(
         Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
     };
 
-    let identity = java_string.identity();
-
-    // The original LGT VM uses a 12-byte native object handle.
-    // Allocate an equally sized opaque guest-side handle and retain the
-    // corresponding Rust JVM object in the per-runtime handle table.
-    let handle = Allocator::alloc(core, 12)?;
-    write_generic(core, handle, 0u32)?;
-    write_generic(core, handle + 4, 0u32)?;
-    write_generic(core, handle + 8, 0xffff_ffffu32)?;
-
-    java_handles.lock().insert(handle, java_string);
+    let handle = handles.insert(java_string)?;
     write_generic(core, a3, handle)?;
 
-    tracing::warn!(
-        "java_import_09 created {:?}, identity={identity:#x}, handle={handle:#x}, output={a3:#x}",
-        rust_string
-    );
+    tracing::debug!("java_import_09 created {rust_string:?}, handle={handle:#x}, output={a3:#x}");
 
     Ok(0)
 }

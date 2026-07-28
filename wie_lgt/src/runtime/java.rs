@@ -1,4 +1,7 @@
+pub mod class_table;
 pub mod classes;
+pub mod handles;
 pub mod interface;
+pub mod method_bridge;
 
 pub use interface::get_java_interface_method;
