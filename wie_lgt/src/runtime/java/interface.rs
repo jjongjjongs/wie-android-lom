@@ -2,7 +2,7 @@ use alloc::{boxed::Box, string::String, vec, vec::Vec};
 
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_rust::ClassDefinitionImpl;
-use wie_core_arm::ArmCore;
+use wie_core_arm::{Allocator, ArmCore};
 use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result, read_generic, read_null_terminated_string_bytes, write_generic};
 
@@ -27,6 +27,14 @@ pub const JAVA_DIAG_SVC_BASE: u32 = 0x1000;
 /// One SVC id per row of the application's static method table. The low bits
 /// carry the row index, which is how the handler knows what was called.
 pub const JAVA_STATIC_METHOD_SVC_BASE: u32 = 0x2000;
+
+/// One SVC id per row of the virtual method table. The stub sits in a class's
+/// dispatch table, so the receiver arrives in the first word.
+pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x4000;
+
+/// One SVC id per row of the static method table that carries no descriptor.
+/// The compiled code calls these too, so they cannot be left null.
+pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x3000;
 
 /// Upper bound on rows, so a table that fails to parse cannot run off the end
 /// of its SVC range.
@@ -82,7 +90,7 @@ pub async fn java_load_classes(
 ) -> Result<ClassTable> {
     let _ = handles;
 
-    let table = ClassTable::parse(
+    let mut table = ClassTable::parse(
         core,
         classes,
         fields,
@@ -113,16 +121,70 @@ pub async fn java_load_classes(
         table.outputs.interface_method_offsets,
     );
 
-    install_dispatch(core, &table)?;
+    install_dispatch(core, &mut table)?;
 
     Ok(table)
+}
+
+/// Builds, per class, the dispatch table an instance points at and the token
+/// its first reserved static row hands back.
+///
+/// The compiled code dispatches a virtual call as
+///
+/// ```text
+/// ldrsh r2, [r8, #row * 2]   ; slot, from virtual_method_offsets
+/// ldr   r3, [r5]             ; the receiver's dispatch table, at its word 0
+/// add   r3, r3, r2, lsl #2
+/// ldr   ip, [r3, #4]         ; the entry, one word past the slot
+/// bx    ip
+/// ```
+///
+/// so the table needs a leading word before its entries, and every instance
+/// needs to point at one.
+fn build_dispatch_tables(core: &mut ArmCore, table: &mut ClassTable) -> Result<()> {
+    for index in 0..table.classes.len() as u32 {
+        let (start, count) = {
+            let class = &table.classes[index as usize];
+            (class.virtual_method_start, class.virtual_method_count)
+        };
+
+        let vtable = if count == 0 {
+            0
+        } else {
+            let vtable = Allocator::alloc(core, (count + 1) * 4)?;
+            write_generic(core, vtable, 0u32)?;
+
+            for slot in 0..count {
+                let stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_VIRTUAL_METHOD_SVC_BASE + start + slot)?;
+                write_generic(core, vtable + 4 + slot * 4, stub)?;
+            }
+
+            vtable
+        };
+
+        // Eight bytes is the smallest allocation that reads back distinctly;
+        // nothing inspects the contents, the address is the identity.
+        let class_object = Allocator::alloc(core, 8)?;
+        write_generic(core, class_object, 0u32)?;
+        write_generic(core, class_object + 4, index)?;
+
+        tracing::trace!(
+            "LGT class {} -> object {class_object:#x}, dispatch table {vtable:#x} ({count} slots)",
+            table.classes[index as usize].name
+        );
+
+        table.vtables.push(vtable);
+        table.class_objects.push(class_object);
+    }
+
+    Ok(())
 }
 
 /// Publishes the table into the arrays the compiled code reads.
 ///
 /// Rows the application left blank are skipped: it reserves two at the head of
 /// every class's static method block, and what belongs there is not yet known.
-fn install_dispatch(core: &mut ArmCore, table: &ClassTable) -> Result<()> {
+fn install_dispatch(core: &mut ArmCore, table: &mut ClassTable) -> Result<()> {
     if table.static_methods.len() as u32 > JAVA_METHOD_SVC_LIMIT {
         return Err(wie_util::WieError::FatalError(alloc::format!(
             "LGT static method table has {} rows, more than the {JAVA_METHOD_SVC_LIMIT} reserved",
@@ -130,26 +192,46 @@ fn install_dispatch(core: &mut ArmCore, table: &ClassTable) -> Result<()> {
         )));
     }
 
-    for (index, member) in table.static_methods.iter().enumerate() {
-        let Some(member) = member else { continue };
+    for index in 0..table.static_methods.len() as u32 {
+        let (svc, description) = match &table.static_methods[index as usize] {
+            Some(member) => (JAVA_STATIC_METHOD_SVC_BASE + index, table.describe(member)),
+            // Every class reserves two rows at the head of its static method
+            // block, and the compiled code branches through them: an LGT
+            // constructor calls its class's first reserved row before the
+            // superclass constructor. Leaving them null turns that into a
+            // branch to address zero, so they get a stub that reports what it
+            // was called with. What they are meant to do is still unknown.
+            None => {
+                let (class, slot) = table
+                    .static_method_owner(index)
+                    .map(|(class, slot)| (class.name.as_str(), slot))
+                    .unwrap_or(("<unowned>", 0));
 
-        let stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_STATIC_METHOD_SVC_BASE + index as u32)?;
-        write_generic(core, table.outputs.static_method_offsets + index as u32 * 4, stub)?;
+                (JAVA_RESERVED_SLOT_SVC_BASE + index, alloc::format!("{class} reserved slot {slot}"))
+            }
+        };
 
-        tracing::trace!("LGT static method[{index}] {} -> {stub:#x}", table.describe(member));
+        let stub = core.make_svc_stub(SVC_CATEGORY_INIT, svc)?;
+        write_generic(core, table.outputs.static_method_offsets + index * 4, stub)?;
+
+        tracing::trace!("LGT static method[{index}] {description} -> {stub:#x}");
     }
 
     // Virtual methods are dispatched through the receiver, so the array holds
-    // the slot to index its vtable with rather than an address. The entries are
-    // halfwords: the array is only large enough for one per row at that width.
-    for (index, member) in table.virtual_methods.iter().enumerate() {
-        let Some(member) = member else { continue };
-        let Some(slot) = table.virtual_slot(index as u32) else { continue };
+    // the slot to index its vtable with rather than an address. The compiled
+    // code reads it with `ldrsh`, so the entries are signed halfwords.
+    for index in 0..table.virtual_methods.len() as u32 {
+        let Some(member) = table.virtual_methods[index as usize].as_ref() else {
+            continue;
+        };
+        let Some(slot) = table.virtual_slot(index) else { continue };
 
-        write_generic(core, table.outputs.virtual_method_offsets + index as u32 * 2, slot as u16)?;
+        write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
 
         tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
     }
+
+    build_dispatch_tables(core, table)?;
 
     for (index, member) in table.fields.iter().enumerate() {
         let Some(member) = member else { continue };

@@ -167,13 +167,58 @@ Two things about the class an application starts from:
 `wie_lgt` registers a JVM class carrying those entry points, so `Main` can
 construct and drive the application's Jlet.
 
+#### The object model
+
+The compiled code builds an object in four steps, and the platform supplies
+each one:
+
+```text
+p     = alloc(n)                  ; a scratch buffer
+token = <class>.reserved_row_0(p) ; the class token
+obj   = vm_instantiate(token)     ; an instance, with its dispatch table
+        <class>.<init>(obj, ...)  ; the constructor, on that instance
+```
+
+The two rows every class reserves at the head of its static method block are
+called, not skipped: a constructor calls its own class's first reserved row
+before the superclass constructor, which is how a superclass gets initialised.
+Leaving them null turns that into a branch to address zero.
+
+A constructor row is therefore **not a factory**. `this` arrives in the first
+argument word and the object it names is what the caller goes on to use, so
+`<init>` initialises rather than creates. When the object is already bound to
+an instance, the call is a subclass running its superclass constructor and is
+dispatched with `invoke_special`; the superclass is frequently abstract and
+could not be constructed anyway.
+
+Virtual calls go through the receiver:
+
+```text
+ldrsh r2, [r8, #row * 2]   ; slot, from virtual_method_offsets (signed)
+ldr   r3, [r5]             ; the receiver's dispatch table, at its word 0
+add   r3, r3, r2, lsl #2
+ldr   ip, [r3, #4]         ; the entry, one word past the slot
+bx    ip
+```
+
+So every instance carries its class's dispatch table in word 0, and the table
+has a leading word before its entries. `wie_lgt` builds one per class at load
+time, filled with stubs that dispatch into the JVM.
+
 #### Where it stops
 
-The compiled constructor is entered and immediately faults on a null
-dereference: the instance it is given is a bare allocation, and the object
-layout the compiled code expects is still unknown. That layout is what imports
-`0x0b`, `0x0c`, `0x0d` (class initialisation and activation) and `0x0f`
-(instantiation) exist to build, and they remain the open question.
+Legend of Master now runs into `startApp`: it creates an
+`AnnunciatorComponent`, calls `show()` on it through the dispatch table, and
+reaches `Display.getDefaultDisplay()`. It then initialises its own `Card`
+subclass through imports `0x0b`, `0x0c` and `0x0d`, instantiates it, and calls
+`Card.<init>` on the result - which fails, because that instance has no JVM
+object behind it.
+
+`vm_instantiate` only recognises platform class tokens. Given an application
+class it returns the address unchanged, so nothing is bound and the superclass
+constructor is taken for a construction of the abstract `Card`. Bridging
+application classes there, the way the main class is already bridged, is the
+next step.
 
 ### Standard Library
 
