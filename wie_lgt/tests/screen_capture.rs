@@ -186,3 +186,47 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
 fn capture_legend_of_master() {
     run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 2000);
 }
+
+/// Runs every archive under `$WIE_ARCHIVES`, which can be a directory or a
+/// list of paths separated by `:`.
+///
+/// Retail archives are not in the repository, so the one title that is has its
+/// own test above and this one does nothing without the variable. Comparing a
+/// batch is how a change that helps one title and breaks four gets noticed.
+#[test]
+#[ignore = "diagnostic"]
+fn capture_archives() {
+    let Ok(paths) = std::env::var("WIE_ARCHIVES") else {
+        eprintln!("Set WIE_ARCHIVES to a directory or a ':' separated list of archives");
+        return;
+    };
+
+    let ticks = std::env::var("WIE_TICKS").ok().and_then(|x| x.parse().ok()).unwrap_or(2000);
+
+    let mut archives = Vec::new();
+    for path in paths.split(':').filter(|x| !x.is_empty()).map(std::path::PathBuf::from) {
+        if path.is_dir() {
+            let mut entries = std::fs::read_dir(&path)
+                .unwrap()
+                .filter_map(|x| x.ok().map(|x| x.path()))
+                .filter(|x| x.is_file())
+                .collect::<Vec<_>>();
+            entries.sort();
+            archives.extend(entries);
+        } else {
+            archives.push(path);
+        }
+    }
+
+    for archive in archives {
+        let label = archive.file_name().unwrap_or_default().to_string_lossy().into_owned();
+
+        // One archive that stops the runtime must not take the batch with it.
+        let data = std::fs::read(&archive).unwrap();
+        let result = std::panic::catch_unwind(|| run(&label, &data, ticks));
+
+        if result.is_err() {
+            eprintln!("[{label}] panicked");
+        }
+    }
+}

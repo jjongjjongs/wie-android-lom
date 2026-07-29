@@ -9,7 +9,7 @@ use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
-use wie_util::{ByteRead, Result, WieError, read_generic, write_generic};
+use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
 
 use crate::relocation::{
     R_ARM_ABS32, R_ARM_CALL, R_ARM_JUMP24, R_ARM_NONE, R_ARM_PC24, R_ARM_RABS32, R_ARM_RBASE, R_ARM_REL32, R_ARM_RPC24, R_ARM_RREL32, R_ARM_THM_CALL,
@@ -24,9 +24,9 @@ use super::{
         compiled_class, get_java_interface_method,
         handles::JavaHandles,
         interface::{
-            DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE,
-            JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, bridge_class_chain, java_import_09, java_import_10, java_import_11,
-            java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12,
+            ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE,
+            JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain, java_import_09, java_import_11,
+            java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
     },
@@ -51,6 +51,10 @@ const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
 /// Master's compiled main class.
 const LM_EXPERIMENT_MAIN_CLASS: &str = "Lm";
 
+/// Bytes one `vm_alloc_save_point` entry takes, which is the stride of the
+/// pool the platform hands them out of.
+const SAVE_POINT_SIZE: u32 = 0x10c;
+
 #[derive(Clone)]
 struct InitSvcContext {
     wipic_category: u32,
@@ -64,6 +68,9 @@ struct InitSvcContext {
     java_activated_classes: JavaActivatedClasses,
     import_function_cache: ImportFunctionCache,
     unresolved_import_call_counts: UnresolvedImportCallCounts,
+    /// Array classes handed out by `vm_get_array_class`, to the size of one of
+    /// their elements.
+    array_classes: ArrayClasses,
     lm_experiment: bool,
 }
 
@@ -85,6 +92,7 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool,
             java_activated_classes: Default::default(),
             import_function_cache: Default::default(),
             unresolved_import_call_counts: Default::default(),
+            array_classes: Default::default(),
             lm_experiment,
         },
     )
@@ -166,10 +174,36 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         let a2 = core.read_param(2)?;
         let a3 = core.read_param(3)?;
         tracing::warn!("lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+        // `vm_check_stack_overflow(words)`, which the compiled code calls at
+        // the head of every method with the frame it is about to use. It was
+        // read as an allocator, which meant a heap allocation per call whose
+        // result the caller then discarded. The emulated stack is the host's,
+        // and it has room.
         if function_index == 0x54 {
-            let address = Allocator::alloc(core, a0)?;
-            tracing::warn!("lgt_java_alloc(size={a0:#x}) -> {address:#x}");
-            address.write(core, lr)?;
+            tracing::trace!("vm_check_stack_overflow({a0})");
+            0u32.write(core, lr)?;
+            return Ok(());
+        }
+
+        // `vm_alloc_save_point(depth)` takes an entry out of a per-thread pool
+        // of 0x10c byte blocks and hands it back for the compiled code to
+        // record its unwind state in; `vm_free_save_point` returns it. Zero
+        // means the pool is exhausted, and an application that reads zero goes
+        // down its out-of-memory path - which is what Legend of Master was
+        // doing, several thousand instructions before the point where it
+        // looked like something else had gone wrong.
+        if function_index == 0x1f {
+            let save_point = Allocator::alloc(core, SAVE_POINT_SIZE)?;
+            core.write_bytes(save_point, &[0; SAVE_POINT_SIZE as usize])?;
+
+            tracing::debug!("vm_alloc_save_point({a0}) -> {save_point:#x}");
+
+            save_point.write(core, lr)?;
+            return Ok(());
+        }
+        if function_index == 0x20 {
+            tracing::debug!("vm_free_save_point({a0:#x})");
+            0u32.write(core, lr)?;
             return Ok(());
         }
         if function_index == 0x0b {
@@ -589,36 +623,21 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             result.write(core, lr)
         }
         InitSvcId::JavaImport0e => {
-            let a0 = core.read_param(0)?;
-            let a1 = core.read_param(1)?;
-            let a2 = core.read_param(2)?;
-            let a3 = core.read_param(3)?;
+            let dimensions = core.read_param(0)?;
+            let element_class = core.read_param(1)?;
+            let atype = core.read_param(2)?;
 
-            // Resolves one of the application's own classes by index into the
-            // table registered by import 0x07, returning its root.
-            let classes = context.java_class_tables.lock().values().next().map(|(classes, _)| *classes).unwrap_or(0);
+            let class = get_array_class(core, context, dimensions, element_class, atype)?;
 
-            let class = if classes == 0 {
-                tracing::warn!("java_import_0e({a2}) before any class table was registered");
-                0
-            } else {
-                let count: u32 = read_generic(core, classes)?;
-                if a2 < count {
-                    read_generic(core, classes + 8 + a2 * 4)?
-                } else {
-                    tracing::warn!("java_import_0e({a2}) is out of range for {count} classes");
-                    0
-                }
-            };
-
-            tracing::debug!("java_import_0e(a0={a0:#x}, a1={a1:#x}, index={a2}, a3={a3:#x}) -> root {class:#x}");
             class.write(core, lr)
         }
         InitSvcId::JavaImport10 => {
-            let class_root = core.read_param(0)?;
+            let class = core.read_param(0)?;
             let length = core.read_param(1)?;
 
-            java_import_10(&context.java_handles, class_root, length).await?.write(core, lr)
+            vm_instantiate_array(&context.java_handles, &context.array_classes, class, length)
+                .await?
+                .write(core, lr)
         }
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
@@ -654,6 +673,55 @@ async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext
 /// produced by class activation. Both end up as a guest allocation with a JVM
 /// instance bound to it; only the platform case has a dispatch table to
 /// install, since an application class dispatches within its own code.
+/// `vm_get_array_class(dimensions, element_class, atype)`.
+///
+/// The platform builds the array's descriptor from these three - `dimensions`
+/// leading `[`, then either the element class's name or the descriptor letter
+/// its `atype` stands for - and looks the class up by that name. Nothing here
+/// has classes to look up, so the call hands back a token that stands for the
+/// array class, and what it has to carry is the size of one element:
+/// `vm_instantiate_array` is given the token and a length and nothing else.
+///
+/// An element is a reference when the array is of objects or of arrays, and
+/// otherwise as wide as the primitive `atype` names.
+fn get_array_class(core: &mut ArmCore, context: &InitSvcContext, dimensions: u32, element_class: u32, atype: u32) -> Result<u32> {
+    let element_size = if dimensions > 1 || element_class != 0 {
+        REFERENCE_SIZE
+    } else {
+        match primitive_element_size(atype) {
+            Some(size) => size,
+            None => {
+                tracing::warn!("vm_get_array_class({dimensions}, {element_class:#x}, {atype}) names no primitive type");
+
+                REFERENCE_SIZE
+            }
+        }
+    };
+
+    // One token per shape, so an application that asks twice gets the same
+    // class back, the way it would from a class table.
+    let existing = context
+        .array_classes
+        .lock()
+        .iter()
+        .find(|(_, size)| **size == element_size)
+        .map(|(class, _)| *class);
+
+    if let Some(class) = existing {
+        return Ok(class);
+    }
+
+    let class = Allocator::alloc(core, 8)?;
+    write_generic(core, class, element_size)?;
+    write_generic(core, class + 4, dimensions)?;
+
+    context.array_classes.lock().insert(class, element_size);
+
+    tracing::debug!("vm_get_array_class({dimensions}, {element_class:#x}, {atype}) -> {class:#x}, {element_size} bytes an element");
+
+    Ok(class)
+}
+
 async fn instantiate(core: &mut ArmCore, context: &mut InitSvcContext, token: u32) -> Result<u32> {
     let known_platform_class = context
         .imported_classes
