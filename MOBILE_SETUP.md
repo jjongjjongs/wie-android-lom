@@ -69,11 +69,16 @@ engineered.
 LGT titles come in two kinds, and `app_info`'s `MClass` says which.
 
 `MClass:Clet` is a native Clet: it registers through `clet_register`, runs as
-a `net/wie/CletWrapper` Jlet, and **renders**. Eight of eleven retail archives
-tested run this way. These are the LGT titles worth running today.
+a `net/wie/CletWrapper` Jlet, and **renders**. Nine of the twelve archives in
+the batch run this way, which is what `screen_capture`'s `capture_archives`
+is for:
+
+```
+WIE_ARCHIVES=/path/to/archives cargo test -p wie_lgt --test screen_capture \
+    capture_archives -- --ignored --nocapture
+```
 
 Anything else names a class that LGT's toolchain compiled ahead of time into
-`binary.mod`, Legend of Master (`MClass:Lm`) among them. Those now boot,
-`startApp` completes, and the real `paint` and `keyNotify` overrides run - but
-the screen stays one colour, because the game loop thread the application
-would run its state machine on never starts. See `docs/lgt.md`.
+`binary.mod`, Legend of Master (`MClass:Lm`) among them. Those boot, run their
+real `paint` and `keyNotify` overrides, and get a long way into their setup
+before stopping on something named in `docs/lgt.md`.

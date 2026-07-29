@@ -129,16 +129,32 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         clock: Arc::new(AtomicU64::new(0)),
     });
 
-    let files = extract_zip(archive).unwrap();
-    let mut emulator = wie_lgt::LgtEmulator::from_archive(
+    let files = match extract_zip(archive) {
+        Ok(files) => files,
+        Err(error) => {
+            eprintln!("[{label}] not readable as an archive: {error}");
+            return;
+        }
+    };
+
+    // A bare jar carries no `app_info`, so it is not an LGT archive at all and
+    // the loader is right to refuse it; say so rather than failing the batch.
+    let emulator = wie_lgt::LgtEmulator::from_archive(
         platform,
         files,
         Options {
             enable_gdbserver: false,
             profile: None,
         },
-    )
-    .unwrap();
+    );
+
+    let mut emulator = match emulator {
+        Ok(emulator) => emulator,
+        Err(error) => {
+            eprintln!("[{label}] did not load: {error}");
+            return;
+        }
+    };
 
     let mut ticks = 0;
     while !exited.load(Ordering::SeqCst) && ticks < ticks_limit {

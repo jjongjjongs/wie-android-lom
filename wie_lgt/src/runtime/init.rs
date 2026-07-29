@@ -20,8 +20,8 @@ use super::{
         handles::JavaHandles,
         interface::{
             ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE,
-            JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain, java_import_09, java_import_11,
-            java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size, vm_instantiate_array,
+            JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain, java_import_11, java_import_23,
+            java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size, vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
     },
@@ -50,6 +50,11 @@ const LM_EXPERIMENT_MAIN_CLASS: &str = "Lm";
 /// Bytes one `vm_alloc_save_point` entry takes, which is the stride of the
 /// pool the platform hands them out of.
 const SAVE_POINT_SIZE: u32 = 0x10c;
+
+/// Where a class's metadata keeps its dispatch table and how many slots that
+/// table has.
+const CLASS_DISPATCH_TABLE: u32 = 0x0c;
+const CLASS_DISPATCH_SLOTS: u32 = 0x26;
 
 #[derive(Clone)]
 struct InitSvcContext {
@@ -196,15 +201,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             write_generic(core, data + 16, 4u16)?;
             write_generic(core, data + 18, 0u16)?;
 
-            // An application class's objects have their virtual calls
-            // dispatched through this table by the compiled code, so it needs
-            // one or the call reads a zero and branches through it. Which
-            // method each slot means is not known yet, so every slot reports
-            // what was called and returns zero. Borrowing the table of the
-            // nearest platform superclass was tried and is worse: `f` extends
-            // `Card`, so slot 1 answered `Card.getHeight()` and the
-            // application went on to dereference 320 as an object.
-            let vtable = context.java_handles.fallback_dispatch_table();
+            let vtable = activate_dispatch_table(core, context, root)?;
 
             let activated = Allocator::alloc(core, 12)?;
             write_generic(core, activated, vtable)?;
@@ -492,12 +489,11 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 .write(core, lr)
         }
         InitSvcId::JavaImport09 => {
-            let a0 = core.read_param(0)?;
-            let a1 = core.read_param(1)?;
-            let a2 = core.read_param(2)?;
-            let a3 = core.read_param(3)?;
+            let chars = core.read_param(1)?;
+            let length = core.read_param(2)?;
+            let cache = core.read_param(3)?;
 
-            let result = java_import_09(core, &context.java_handles, jvm, a0, a1, a2, a3).await?;
+            let result = vm_get_constant_string(core, &context.java_handles, jvm, chars, length, cache).await?;
 
             result.write(core, lr)
         }
@@ -552,6 +548,82 @@ async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext
 /// produced by class activation. Both end up as a guest allocation with a JVM
 /// instance bound to it; only the platform case has a dispatch table to
 /// install, since an application class dispatches within its own code.
+/// The dispatch table an application class's instances go through.
+///
+/// A class carries its own at `metadata + 0x0c`, with the slot count at
+/// `metadata + 0x26`. The layout is fixed and shared with the platform's own
+/// classes, which is what lets the compiled code emit a slot number directly:
+///
+/// ```text
+/// word 0  the class root
+/// slot 0  <init>
+/// slot 1  java/lang/Object.getClass
+/// slot 2  java/lang/Object.hashCode
+/// slot 3  java/lang/Object.equals
+/// slot 4  java/lang/Object.toString
+/// slot 5  java/lang/Object.notify
+/// slot 6  java/lang/Object.notifyAll
+/// slot 7  java/lang/Object.wait()
+/// slot 8  java/lang/Object.wait(J)
+/// slot 9  java/lang/Object.wait(JI)
+/// slot 10 the superclass chain's virtual methods, then the class's own
+/// ```
+///
+/// The application fills in the slots it has code for and leaves the rest
+/// zero, because those are the platform's to provide - which is what
+/// activation is for. The zero slots are filled here with the reporting stubs
+/// the fallback table already carries, so a call to one says what it wanted
+/// instead of branching to address zero.
+///
+/// A class with no table of its own gets the fallback table whole.
+fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Result<u32> {
+    let fallback = context.java_handles.fallback_dispatch_table();
+
+    let metadata: u32 = read_generic(core, root + 8)?;
+    if metadata == 0 {
+        return Ok(fallback);
+    }
+
+    let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
+    let slots: u16 = read_generic(core, metadata + CLASS_DISPATCH_SLOTS)?;
+
+    if vtable == 0 {
+        tracing::debug!("LGT class at {root:#x} carries no dispatch table; using the fallback");
+
+        return Ok(fallback);
+    }
+
+    // Copied into a table of this runtime's own size rather than filled in
+    // place. The application's table is exactly as long as it declares, and
+    // the compiled code reaches past that end for methods the platform is
+    // expected to provide - writing the stubs into the image would land them
+    // on whatever follows the table, and leaving them out puts a zero where a
+    // call goes.
+    let slots = u32::from(slots).min(DISPATCH_TABLE_SLOTS);
+
+    let installed = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
+    write_generic(core, installed, root)?;
+
+    let mut declared = 0;
+
+    for slot in 0..DISPATCH_TABLE_SLOTS {
+        let entry: u32 = if slot < slots { read_generic(core, vtable + 4 + slot * 4)? } else { 0 };
+
+        let entry = if entry != 0 {
+            declared += 1;
+            entry
+        } else {
+            read_generic(core, fallback + 4 + slot * 4)?
+        };
+
+        write_generic(core, installed + 4 + slot * 4, entry)?;
+    }
+
+    tracing::debug!("LGT class at {root:#x} dispatches through {installed:#x}, {declared} of {slots} slots its own");
+
+    Ok(installed)
+}
+
 /// `vm_get_array_class(dimensions, element_class, atype)`.
 ///
 /// The platform builds the array's descriptor from these three - `dimensions`
@@ -744,6 +816,25 @@ fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u
 /// nothing else a game does with a fresh thread fits.
 const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[("java/lang/Thread", 10, "start", "()V")];
 
+/// Slots 1 to 9 of every dispatch table, which the platform fills in for the
+/// class whatever the class is.
+///
+/// Read out of `liblgt_system.so`, where `dt_java_lang_Object` names them and
+/// every other `dt_` repeats them in the same order - `dt_java_lang_Card` and
+/// `dt_java_lang_StringBuffer` differ only where they override one. Slot 0 is
+/// the class's own `<init>`, so it is not here.
+const OBJECT_DISPATCH_SLOTS: &[(&str, &str)] = &[
+    ("getClass", "()Ljava/lang/Class;"),
+    ("hashCode", "()I"),
+    ("equals", "(Ljava/lang/Object;)Z"),
+    ("toString", "()Ljava/lang/String;"),
+    ("notify", "()V"),
+    ("notifyAll", "()V"),
+    ("wait", "()V"),
+    ("wait", "(J)V"),
+    ("wait", "(JI)V"),
+];
+
 /// Reports a call through a dispatch table slot the class does not declare.
 ///
 /// The compiled code emits fixed slot numbers for methods the platform is
@@ -752,6 +843,29 @@ const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[("java/lang/Thread", 
 /// look for.
 async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, class_index: u32, slot: u32) -> Result<u32> {
     let this = core.read_param(0)?;
+
+    // Slots 1 to 9 are `java/lang/Object`'s, in every dispatch table there
+    // is, so they can be answered without knowing whose table this one is.
+    if let Some((name, descriptor)) = OBJECT_DISPATCH_SLOTS.get((slot as usize).wrapping_sub(1)) {
+        let member = ResolvedMember {
+            class_name: "java/lang/Object".into(),
+            name: (*name).into(),
+            descriptor: (*descriptor).into(),
+        };
+
+        let handles = context.java_handles.clone();
+        let jvm = context.jvm.clone();
+
+        // An object the compiled code built for itself has no instance on the
+        // JVM side to call these on.
+        if handles.get(this).is_some() {
+            return method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await;
+        }
+
+        tracing::debug!("LGT java/lang/Object.{name}{descriptor} on {this:#x}, which has no instance");
+
+        return Ok(0);
+    }
 
     let class = context
         .imported_classes
