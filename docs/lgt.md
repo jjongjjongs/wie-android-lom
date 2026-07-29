@@ -278,10 +278,34 @@ default display, initialises and instantiates its own classes, constructs a
 `java/util/Random`, and finishes by pushing its `Card` onto the display. The
 `paint` override then runs on every redraw without faulting.
 
-Nothing is drawn yet - `paint` allocates and returns without issuing a
-graphics call, so the game is presumably waiting on state that is not set up.
-Imports `0x10`, `0x11` and `0x23`, which appear around class and field access
-and currently return zero, are the most likely place to look next.
+It draws nothing, and the reason is visible in `paint` itself:
+
+```text
+ldrsh r3, [sb, #0x26c]       ; sb = field_offsets, row 310
+ldr   r2, [r7, #8]           ; this.fields
+ldr   lr, [r2, r3, lsl #2]
+sub   lr, lr, #1
+str   lr, [r2, r3, lsl #2]
+blt   <epilogue>             ; nothing is drawn while the field is <= 0
+```
+
+It decrements a field and returns unless the result is positive, so the
+application is waiting on state nothing has set. `screen_capture` confirms it:
+600 ticks paint 15 frames of a single colour.
+
+Whatever advances that state never runs - the application constructs no
+`java/lang/Thread` and sets no timer, though it imports both. Finding what
+drives its main loop is the next step. Imports `0x10`, `0x11` and `0x23`
+appear around class and field access and still return zero, which is the most
+likely place for it to be going wrong.
+
+#### Clets, by contrast, render
+
+An LGT application whose `app_info` says `MClass:Clet` needs none of the
+above: it registers through `clet_register` and runs as a `net/wie/CletWrapper`
+Jlet. That path works. A commercial Clet title paints 613 frames of 36 colours
+over 600 ticks - a real screen, not a blank one - so Clet titles are the ones
+worth pointing the Android app at today.
 
 ### Standard Library
 
