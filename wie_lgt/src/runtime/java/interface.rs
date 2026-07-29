@@ -1,4 +1,4 @@
-use alloc::{borrow::ToOwned, string::String, vec, vec::Vec};
+use alloc::{borrow::ToOwned, collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
 
 use spin::Mutex;
 
@@ -489,20 +489,49 @@ pub async fn java_import_09(core: &mut ArmCore, handles: &JavaHandles, jvm: &mut
     Ok(0)
 }
 
-/// Words an object array's elements take. Primitive arrays are narrower, but
-/// nothing has been seen taking this path to build one.
-const REFERENCE_SIZE: u32 = 4;
+/// Array classes handed out by `vm_get_array_class`, mapped to the size of
+/// one of their elements. The class is a token this runtime invents, so the
+/// size it stands for has to be remembered alongside it.
+pub type ArrayClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
 
-/// Allocates an array: `new <class>[length]`.
+/// Bytes a reference takes, which is also what an element of an array of
+/// arrays takes.
+pub const REFERENCE_SIZE: u32 = 4;
+
+/// Bytes one element of a primitive array takes.
 ///
-/// The compiled code resolves the element class through import `0x0e` first
-/// and passes its root here with the length, which is the whole call. There
-/// is no class of its own for the array, so it dispatches through the
-/// fallback table like anything else the application never declared.
-pub async fn java_import_10(handles: &JavaHandles, class_root: u32, length: u32) -> Result<u32> {
-    let array = handles.allocate_array(handles.fallback_dispatch_table(), length, REFERENCE_SIZE)?;
+/// The codes are the JVM's `newarray` atypes, which is what
+/// `vm_get_array_class` indexes its descriptor letters with: 4 `boolean`,
+/// 5 `char`, 6 `float`, 7 `double`, 8 `byte`, 9 `short`, 10 `int`, 11 `long`.
+pub fn primitive_element_size(atype: u32) -> Option<u32> {
+    Some(match atype {
+        4 | 8 => 1,
+        5 | 9 => 2,
+        6 | 10 => 4,
+        7 | 11 => 8,
+        _ => return None,
+    })
+}
 
-    tracing::debug!("java_import_10 created a {length} element array of the class at {class_root:#x} at {array:#x}");
+/// `vm_instantiate_array(array_class, length)`.
+///
+/// The compiled code asks `vm_get_array_class` for the class first, so the
+/// element size is whatever that call recorded for it. An array has no class
+/// of its own here, so it dispatches through the fallback table like anything
+/// else the application never declared.
+pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClasses, class: u32, length: u32) -> Result<u32> {
+    let element_size = match array_class.lock().get(&class).copied() {
+        Some(size) => size,
+        None => {
+            tracing::warn!("vm_instantiate_array({class:#x}, {length}) names no array class; assuming references");
+
+            REFERENCE_SIZE
+        }
+    };
+
+    let array = handles.allocate_array(handles.fallback_dispatch_table(), length, element_size)?;
+
+    tracing::debug!("vm_instantiate_array({class:#x}, {length}) -> {array:#x}, {element_size} bytes an element");
 
     Ok(array)
 }
