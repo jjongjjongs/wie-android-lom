@@ -469,9 +469,23 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_import_09(core: &mut ArmCore, handles: &JavaHandles, jvm: &mut Jvm, _a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    let mut bytes = vec![0u8; (a2 as usize) * 2];
-    core.read_bytes(a1, &mut bytes)?;
+/// `vm_get_constant_string(class, chars, length, cache)`.
+///
+/// The application keeps one word per string constant and passes its address
+/// as `cache`. A non-zero word means the constant has been interned already
+/// and is handed straight back; otherwise the string is built, stored there,
+/// and **returned** - the compiled code takes the result from `r0` and only
+/// reads the cache word on a later call. Returning zero here handed the
+/// application a null every time a constant was first used, which is how
+/// `new StringBuffer("/res/script/")` came to be constructed on a null.
+pub async fn vm_get_constant_string(core: &mut ArmCore, handles: &JavaHandles, jvm: &mut Jvm, chars: u32, length: u32, cache: u32) -> Result<u32> {
+    let interned: u32 = read_generic(core, cache)?;
+    if interned != 0 {
+        return Ok(interned);
+    }
+
+    let mut bytes = vec![0u8; (length as usize) * 2];
+    core.read_bytes(chars, &mut bytes)?;
 
     let utf16 = bytes.chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>();
     let rust_string = String::from_utf16_lossy(&utf16);
@@ -482,11 +496,11 @@ pub async fn java_import_09(core: &mut ArmCore, handles: &JavaHandles, jvm: &mut
     };
 
     let handle = handles.insert(java_string)?;
-    write_generic(core, a3, handle)?;
+    write_generic(core, cache, handle)?;
 
-    tracing::debug!("java_import_09 created {rust_string:?}, handle={handle:#x}, output={a3:#x}");
+    tracing::debug!("vm_get_constant_string({rust_string:?}) -> {handle:#x}, cached at {cache:#x}");
 
-    Ok(0)
+    Ok(handle)
 }
 
 /// Array classes handed out by `vm_get_array_class`, mapped to the size of

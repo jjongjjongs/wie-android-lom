@@ -88,7 +88,22 @@ fn marshal_arguments(core: &ArmCore, handles: &JavaHandles, parameters: &[String
             b'F' => JavaValue::Float(f32::from_bits(words[word])),
             b'J' => JavaValue::Long(((words[word + 1] as u64) << 32 | words[word] as u64) as i64),
             b'D' => JavaValue::Double(f64::from_bits((words[word + 1] as u64) << 32 | words[word] as u64)),
-            _ => JavaValue::Object(handles.get(words[word])),
+            // A zero word is a null reference, which is a value. A non-zero
+            // one this runtime never handed out is not: passing it on as null
+            // reaches a platform method that dereferences it without checking,
+            // and the failure then reads as a bug in that method rather than
+            // as the missing object it is.
+            _ => match handles.get(words[word]) {
+                Some(instance) => JavaValue::Object(Some(instance)),
+                None if words[word] == 0 => JavaValue::Object(None),
+                None => {
+                    return Err(WieError::FatalError(format!(
+                        "Argument {word} of {} is {:#x}, which names no object this runtime handed out",
+                        parameters.join(""),
+                        words[word]
+                    )));
+                }
+            },
         };
 
         word += if is_wide(parameter) { 2 } else { 1 };

@@ -144,6 +144,10 @@ async fn printf(core: &mut ArmCore, _: &mut (), format: u32) -> Result<u32> {
 async fn strncmp(core: &mut ArmCore, _: &mut (), ptr_str1: u32, ptr_str2: u32, size: u32) -> Result<u32> {
     tracing::debug!("strncmp({ptr_str1:#x}, {ptr_str2:#x}, {size})");
 
+    if ptr_str1 == 0 || ptr_str2 == 0 {
+        return Ok(u32::from(ptr_str1 != ptr_str2));
+    }
+
     let str1 = read_null_terminated_string_bytes(core, ptr_str1)?;
     let str2 = read_null_terminated_string_bytes(core, ptr_str2)?;
 
@@ -158,6 +162,14 @@ async fn strncmp(core: &mut ArmCore, _: &mut (), ptr_str1: u32, ptr_str2: u32, s
 /// zero. This used to do nothing and return zero, which reads as "not found"
 /// and is a plausible answer, so nothing ever looked wrong.
 async fn strstr(core: &mut ArmCore, _: &mut (), haystack: u32, needle: u32) -> Result<u32> {
+    // Applications pass a null haystack and expect "not found" rather than a
+    // fault, which is what they got while this was a stub that did nothing.
+    if haystack == 0 || needle == 0 {
+        tracing::debug!("strstr({haystack:#x}, {needle:#x}) -> 0x0");
+
+        return Ok(0);
+    }
+
     let haystack_bytes = read_null_terminated_string_bytes(core, haystack)?;
     let needle_bytes = read_null_terminated_string_bytes(core, needle)?;
 

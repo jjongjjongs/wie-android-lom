@@ -316,6 +316,44 @@ made the first look like a solved problem.
 The fix for the first removed the need for the second. There is no descriptor
 matching now.
 
+#### The vendor runtime
+
+The names in this document are not guesses. `WipiPlayer_plus_all.apk` ships
+`liblgt_system.so`, LGT's own WIPI runtime, unstripped, with an
+`_export_table_<module>` per DLL: `{u32 id, void *function, char *name}` per
+row, and a descriptor beside each table carrying the DLL id the application
+asks for.
+
+| DLL id | table                   | what the application uses it for |
+|--------|-------------------------|----------------------------------|
+| `0x01` | `_export_table_kernel`  | C library, threads, processes    |
+| `0x64` | `_export_table_cldc`    | the Java runtime                 |
+| `0x1fb`| `_export_table_wipic`   | WIPI-C                           |
+| `0x201`| `_export_table_bankon_lib` | -                             |
+| `0x203`| `_export_table_vm`      | the INI native interface         |
+
+So every import index has a name. Several of the ones this runtime had worked
+out by watching what applications did with them were wrong:
+
+| index | was | is |
+|-------|-----|----|
+| cldc `0x09`   | create a string, return 0 | `vm_get_constant_string`, which **returns** it |
+| cldc `0x0e`   | resolve class number N    | `vm_get_array_class(dimensions, element_class, atype)` |
+| cldc `0x10`   | new object array          | `vm_instantiate_array(class, length)` |
+| cldc `0x11`   | -                         | `vm_instantiate_multi_array` |
+| cldc `0x1f`   | -                         | `vm_alloc_save_point` |
+| cldc `0x23`   | -                         | `vm_throw_array_index_out_of_bounds_exception` |
+| cldc `0x54`   | allocate `n` bytes        | `vm_check_stack_overflow(words)` |
+| cldc `0x83`   | run `Main.main`           | `vm_run_main_class` |
+| kernel `0x3f6`| "error exit?"             | `printf` |
+| kernel `0x40a`| nothing                   | `strncmp` |
+| kernel `0x410`| nothing                   | `strstr` |
+| kernel `0x424`| call it now               | `atexit`, which registers rather than calls |
+
+`vm_check_stack_overflow` is the expensive one: every compiled method calls it
+on entry with the frame it is about to use, and reading it as an allocator
+meant a heap allocation per call whose result the caller discarded.
+
 #### Arrays
 
 An array is an instance like any other, and what its `+0x08` points at is:
@@ -329,58 +367,67 @@ Every bounds check the compiled code makes reads that count directly -
 `ldr r3, [r0]; cmp index, r3` - so an array whose block does not start with
 its length reads as empty and every access throws.
 
-Import `0x10` is `new <class>[length]`: the compiled code resolves the element
-class through import `0x0e` first and passes its root with the length. It used
-to return zero, so `f.<init>` threw on the first element it touched and
-returned without finishing. It now allocates, and `f.<init>` builds 48 arrays
-and gets as far as opening `/res/gData.dat`.
+`vm_get_array_class` builds the array's descriptor from `dimensions` leading
+`[` and then either the element class's name or the letter its `atype` stands
+for, where `atype` is the JVM's `newarray` code: 4 `boolean`, 5 `char`, 6
+`float`, 7 `double`, 8 `byte`, 9 `short`, 10 `int`, 11 `long`. That code is
+also how wide an element is. This runtime has no classes to look up, so the
+call hands back a token carrying the element size, and `vm_instantiate_array`
+reads the size off it - the token is all it gets besides the length.
+
+#### Dispatch tables
+
+`liblgt_system.so` has one per class as `dt_<class>`, and they settle the
+layout completely:
+
+```text
+word 0   the class root
+slot 0   <init>
+slot 1   java/lang/Object.getClass
+slot 2   java/lang/Object.hashCode
+slot 3   java/lang/Object.equals
+slot 4   java/lang/Object.toString
+slot 5   java/lang/Object.notify
+slot 6   java/lang/Object.notifyAll
+slot 7   java/lang/Object.wait()
+slot 8   java/lang/Object.wait(J)
+slot 9   java/lang/Object.wait(JI)
+slot 10  the superclass chain's virtual methods, then the class's own
+```
+
+`dt_java_lang_StringBuffer` repeats slots 1 to 9 verbatim except slot 4, which
+it overrides, and starts its own at 10. `dt_org_kwis_msp_lcdui_Card` leaves 1
+to 9 null - it overrides none of them - and starts at 10 with `move`.
+
+An application ships the same structure at `metadata + 0x0c`, with the slot
+count at `metadata + 0x26`, and leaves every slot the platform is expected to
+provide at zero. `vm_activate_class` is where those get filled in. This
+runtime copies the class's table into one of its own size and fills the gaps
+with reporting stubs, rather than writing into the image: an application's
+table is exactly as long as it declares, and the compiled code reaches past
+that end.
+
+Slots 1 to 9 are answered by invoking the method on the receiver's JVM
+instance, which needs no knowledge of whose table it is.
 
 #### Where it stops
 
-Legend of Master boots and paints. `startApp` runs to completion: it creates an
-`AnnunciatorComponent` and calls `show()` through the dispatch table, gets the
-default display, initialises and instantiates its own classes, constructs a
-`java/util/Random`, and finishes by pushing its `Card` onto the display.
-`f.paint` then runs on every redraw and `f.keyNotify` on every key, both
-without faulting.
+Legend of Master boots and paints. `startApp` runs to completion, `f.paint`
+runs on every redraw and `f.keyNotify` on every key, and `f.<init>` now builds
+54 arrays and opens `/res/gData.dat` and `/res/dat/tri.dat`.
 
-`paint` calls `System.currentTimeMillis()`, `Graphics.translate`,
+It stops in `f.<init>` on `new StringBuffer(String)` whose argument is
+`0x24420088` - a word that names no object this runtime handed out, and which
+is exactly half a handle it did hand out. Where the halving happens is not
+known.
+
+`paint` itself calls `System.currentTimeMillis()`, `Graphics.translate`,
 `Graphics.setColor` and `Graphics.fillRect`, then dispatches on a state field
-through a 22 entry jump table. The state is zero, whose case does nothing, and
-the clear runs as `setColor(0)` / `fillRect(0, 0, 0, 0)` - so the screen stays
-one colour.
-
-What has not run is `f.run()`. The class implements `java/lang/Runnable`, and
-the last thing `f.<init>` does is construct a `java/lang/Thread` around itself
-and call `start()` through slot 10:
-
-```text
-ldr ip, [r6, #0xd4]   ; static import 53, Thread.<init>(Ljava/lang/Runnable;)V
-bx  ip
-str r7, [r3, r2, lsl #2]
-ldr r3, [r8]          ; the thread's dispatch table
-ldr ip, [r3, #0x2c]   ; slot 10, Thread.start()V
-bx  ip
-```
-
-`f.<init>` does not reach it. Three things are in the way, and the two that
-have been fixed moved the stopping point further down each time:
-
-1. **Arrays** did not exist. Fixed, above.
-2. **An application class's objects had no dispatch table**, so a virtual call
-   on one read a zero and branched through it. They now get the fallback
-   table, whose every slot reports what was called and returns zero.
-   Borrowing the nearest platform superclass's table was tried and is worse:
-   `f` extends `Card`, so slot 1 answered `Card.getHeight()` and the
-   application dereferenced 320 as an object.
-3. **Stdlib import `0x32`** is not implemented. It used to end the run; it now
-   reports and returns zero like the unknown WIPI-C and Java imports.
-
-What the run now asks for, and nothing yet answers, is a short list: dispatch
-slots 1, 2, 10, 11, 12, 13 and 14 on application classes, slot 18 on
-`java/lang/StringBuffer`, and stdlib import `0x32`. Giving application classes
-real dispatch tables is the next piece, and the slot numbers above are what
-they have to satisfy.
+through a 22 entry jump table. The state is zero, whose case does nothing.
+`f` implements `java/lang/Runnable` and the last thing `f.<init>` does is
+`new Thread(this).start()` through slot 10 - it does not get that far, but
+another title now does, and its `run()` loop calls `currentTimeMillis` and
+`Thread.yield` the way a game loop should.
 
 #### Clets, by contrast, render
 
