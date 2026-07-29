@@ -303,9 +303,24 @@ likely place for it to be going wrong.
 
 An LGT application whose `app_info` says `MClass:Clet` needs none of the
 above: it registers through `clet_register` and runs as a `net/wie/CletWrapper`
-Jlet. That path works. A commercial Clet title paints 613 frames of 36 colours
-over 600 ticks - a real screen, not a blank one - so Clet titles are the ones
-worth pointing the Android app at today.
+Jlet. That path works, and commercial Clet titles paint real screens.
+
+Running eleven retail archives through `screen_capture` turned up four things
+worth fixing, none of them in the Clet path itself:
+
+- **An unimplemented WIPI-C function ended the run.** Two titles stopped on
+  database id `0x19c` before drawing anything. An unknown id is now reported
+  and returns zero, the way unknown Java imports already did; both titles then
+  render.
+- **An archive need not agree with itself.** SEED's `app_info` declares
+  `AID:00027565` while the jar beside it is `00025A84.jar`. The declared name
+  is now a preference, not a requirement, when the archive holds one jar.
+- **Korean archives carry a bad Unicode Path extra field.** The name its
+  checksum was computed over is not the one in the header, which a strict
+  reader treats as a corrupt archive. `extract_zip` retries with those fields
+  renamed so they are skipped.
+- **`binary.mod` was loaded with `unwrap`**, so a missing one panicked instead
+  of reporting.
 
 ### Standard Library
 

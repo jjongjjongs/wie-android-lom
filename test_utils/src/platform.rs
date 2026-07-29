@@ -171,34 +171,23 @@ impl Database for MemoryDatabase {
 
 pub struct TestAudioSink;
 
+/// Discards audio. It used to panic on every method, which meant any test
+/// running a title that makes a sound died on the sound rather than on
+/// whatever it was testing.
 impl AudioSink for TestAudioSink {
-    fn play_wave(&self, _channel: u8, _sampling_rate: u32, _wave_data: &[i16]) {
-        todo!()
-    }
+    fn play_wave(&self, _channel: u8, _sampling_rate: u32, _wave_data: &[i16]) {}
 
-    fn midi_note_on(&self, _channel_id: u8, _note: u8, _velocity: u8) {
-        todo!()
-    }
+    fn midi_note_on(&self, _channel_id: u8, _note: u8, _velocity: u8) {}
 
-    fn midi_note_off(&self, _channel_id: u8, _note: u8, _velocity: u8) {
-        todo!()
-    }
+    fn midi_note_off(&self, _channel_id: u8, _note: u8, _velocity: u8) {}
 
-    fn midi_program_change(&self, _channel_id: u8, _program: u8) {
-        todo!()
-    }
+    fn midi_program_change(&self, _channel_id: u8, _program: u8) {}
 
-    fn midi_control_change(&self, _channel_id: u8, _control: u8, _value: u8) {
-        todo!()
-    }
+    fn midi_control_change(&self, _channel_id: u8, _control: u8, _value: u8) {}
 
-    fn midi_pitch_bend(&self, _channel_id: u8, _value: u16) {
-        todo!()
-    }
+    fn midi_pitch_bend(&self, _channel_id: u8, _value: u16) {}
 
-    fn midi_sysex(&self, _data: &[u8]) {
-        todo!()
-    }
+    fn midi_sysex(&self, _data: &[u8]) {}
 }
 
 #[derive(Default)]

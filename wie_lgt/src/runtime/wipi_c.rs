@@ -44,7 +44,23 @@ struct CMethodProxy {
 async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm), id: SvcId) -> Result<()> {
     let wipic_context = LgtWIPICContext::new(core.clone(), system.clone(), jvm.clone());
     let (_, lr) = core.read_pc_lr()?;
-    let method = match WIPICSvcId::try_from(id)? {
+    // An unimplemented WIPI-C function is reported and skipped rather than
+    // ending the run. Stopping on the first one hides everything a title does
+    // afterwards, and the calls that turn up are usually peripheral - Xenogia
+    // stops on database id 0x19c before drawing anything.
+    let svc_id = match WIPICSvcId::try_from(id) {
+        Ok(svc_id) => svc_id,
+        Err(error) => {
+            tracing::warn!("{error}; returning 0");
+
+            return WIPICMethodResult {
+                result: WIPICResult { results: vec![0] },
+            }
+            .write(core, lr);
+        }
+    };
+
+    let method = match svc_id {
         WIPICSvcId::CletRegister => {
             return EmulatedFunction::call(&clet_register, core, jvm).await?.write(core, lr);
         }
