@@ -117,32 +117,52 @@ metadata:
   +0x08 u32 name
   +0x10 u32 superclass name, zero for none
   +0x18 u16 member count
+  +0x28 u32 interface table, zero for none
+  +0x38 u32 method table, zero for none
 
 root (immediately after the metadata):
   +0x00 runtime slots, zero in the image
   +0x08 u32 metadata
   +0x0c u32 flags
-  +0x10 member table
+  +0x10 field table
 ```
 
-A described member starts with the owning class's root, then its name,
-descriptor and flags. Entries are **not** a fixed size - fields run 20 bytes
-and methods 28, with variants - so `wie_lgt` walks the table by resynchronising
-on that owner word rather than assuming a stride. Field and method rows are
-told apart by the descriptor: only a method descriptor starts with `(`.
+Fields and methods live in **two separate tables**. The fields start at
+`root+0x10` and run, 20 bytes each, right up to the method table. The method
+table opens with a `u32` count and continues with rows of 28 bytes. Both row
+kinds begin with the owning class's root, which is what makes the boundary
+checkable.
 
 ```text
-member:
+field:
   +0x00 u32 owner root
   +0x04 u32 name
   +0x08 u32 descriptor
-  +0x0c u16 type/kind, u16 argument words (`this` included, methods only)
-  +0x14 u32 ARM entry point (methods) or slot (fields)
+  +0x0c u32 flags
+  +0x10 u32 slot
+
+method:
+  +0x00 u32 owner root
+  +0x04 u32 name
+  +0x08 u32 descriptor
+  +0x0c u16 access flags, u16 argument words (`this` included)
+  +0x14 u32 ARM entry point
 ```
 
-Not every class describes its members; some carry a bare vtable of entry points
-with no names. The walk stops at the first row it cannot read and records how
-far it got, so a partially described class is still usable.
+The interface table at `+0x28` has the same shape - a `u32` count, then a name
+pointer each. Legend of Master's `f` implements `java/lang/Runnable`, `k` and
+`org/kwis/msp/media/PlayListener`.
+
+**The member count is not the size of either table.** `f` declares 425 and has
+409 fields and 372 methods. Reading only as many rows as the count names stops
+sixteen methods into the method table, which is exactly far enough to hide
+every method the class overrides - `paint` sits 350 rows further on. That is
+worth stating plainly because it produced a wrong conclusion that stood for a
+while: see "How an override is found" below.
+
+Most application classes carry no method table at all (`+0x38` is zero),
+because nothing outside the compiled code ever calls them by name. Those parse
+as a class with no members, which is correct rather than a failure.
 
 Two things about the class an application starts from:
 
@@ -277,43 +297,44 @@ its own word is the assignment that cannot collide. The row count is taken
 from the gap to whichever output array follows in `.bss`, which on Legend of
 Master gives 416.
 
-#### Obfuscated overrides
+#### How an override is found
 
-An application's method names are obfuscated, so an override cannot be found
-by name: Legend of Master's `Card` subclass calls its `paint` override `a`.
-It can be found by signature. `PLATFORM_CALLBACKS` lists the points where the
-platform calls into application code, and a class that overrides one declares
-exactly one method with that descriptor - `a(Lorg/kwis/msp/lcdui/Graphics;)V`
-is unambiguously `Card.paint`.
+By name. The compiler obfuscates an application's own methods into `a`, `b`,
+`c`, but it leaves the name of anything it overrides alone: Legend of Master's
+`f` declares `paint`, `run`, `keyNotify` and `playUpdate` under exactly those
+names, alongside 368 obfuscated ones.
+
+This was got wrong once, and the way it went wrong is worth keeping. Reading
+only as many member rows as the metadata's count names stopped sixteen methods
+into `f`'s method table, so `paint` was not among the methods found. The
+sixteen that were found included one lone `(Lorg/kwis/msp/lcdui/Graphics;)V`,
+so matching overrides by descriptor - which looked like the only option once
+names appeared to be obfuscated - picked it, and every redraw called `f.a`, a
+helper that draws a message box, in place of `paint`. Two bugs, and the second
+made the first look like a solved problem.
+
+The fix for the first removed the need for the second. There is no descriptor
+matching now.
 
 #### Where it stops
 
-Legend of Master boots. `startApp` runs to completion: it creates an
+Legend of Master boots and paints. `startApp` runs to completion: it creates an
 `AnnunciatorComponent` and calls `show()` through the dispatch table, gets the
 default display, initialises and instantiates its own classes, constructs a
-`java/util/Random`, and finishes by pushing its `Card` onto the display. The
-`paint` override then runs on every redraw without faulting.
+`java/util/Random`, and finishes by pushing its `Card` onto the display.
+`f.paint` then runs on every redraw and `f.keyNotify` on every key, both
+without faulting.
 
-It draws nothing, and the reason is visible in `paint` itself:
+`paint` calls `System.currentTimeMillis()`, `Graphics.translate`,
+`Graphics.setColor` and `Graphics.fillRect`, then dispatches on a state field
+through a 22 entry jump table. The state is zero, whose case does nothing, and
+the clear runs as `setColor(0)` / `fillRect(0, 0, 0, 0)` - so the screen stays
+one colour.
 
-```text
-ldrsh r3, [sb, #0x26c]       ; sb = field_offsets, row 310
-ldr   r2, [r7, #8]           ; this.fields
-ldr   lr, [r2, r3, lsl #2]
-sub   lr, lr, #1
-str   lr, [r2, r3, lsl #2]
-blt   <epilogue>             ; nothing is drawn while the field is <= 0
-```
-
-It decrements a field and returns unless the result is positive, so the
-application is waiting on state nothing has set. `screen_capture` confirms it:
-600 ticks paint 15 frames of a single colour.
-
-Whatever advances that state never runs - the application constructs no
-`java/lang/Thread` and sets no timer, though it imports both. Finding what
-drives its main loop is the next step. Imports `0x10`, `0x11` and `0x23`
-appear around class and field access and still return zero, which is the most
-likely place for it to be going wrong.
+What has not run is `f.run()`. The class implements `java/lang/Runnable` and
+the application imports `java/lang/Thread.<init>(Ljava/lang/Runnable;)V`, but
+it never calls it, so the game loop that would advance that state never
+starts. Finding what is supposed to construct that thread is the next step.
 
 #### Clets, by contrast, render
 

@@ -3565,6 +3565,7 @@ dependencies = [
  "spin",
  "test_utils",
  "tracing",
+ "tracing-subscriber",
  "wie_backend",
  "wie_core_arm",
  "wie_jvm_support",
