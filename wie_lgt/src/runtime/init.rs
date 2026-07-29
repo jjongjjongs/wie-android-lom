@@ -60,6 +60,9 @@ const SAVE_POINT_SIZE: u32 = 0x10c;
 const CLASS_DISPATCH_TABLE: u32 = 0x0c;
 const CLASS_DISPATCH_SLOTS: u32 = 0x26;
 
+/// Guard on how far a class hierarchy is walked looking for a platform class.
+const MAX_SUPERCLASS_DEPTH: usize = 32;
+
 #[derive(Clone)]
 struct InitSvcContext {
     wipic_category: u32,
@@ -708,10 +711,20 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
     let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
     let slots: u16 = read_generic(core, metadata + CLASS_DISPATCH_SLOTS)?;
 
+    // A class that overrides nothing ships no table, and inherits its
+    // superclass's whole. Legend of Master's `f` is one, and reaches
+    // `Card.showNotify` at slot 16 - `move`, `resize`, `getWidth`,
+    // `getHeight`, `getX`, `getY`, `showNotify` being Card's first seven,
+    // which land at slots 10 to 16.
     if vtable == 0 {
-        tracing::debug!("LGT class at {root:#x} carries no dispatch table; using the fallback");
+        let inherited = platform_superclass_dispatch_table(context, root);
 
-        return Ok(fallback);
+        tracing::debug!(
+            "LGT class at {root:#x} carries no dispatch table; using {}",
+            if inherited == fallback { "the fallback" } else { "its superclass's" }
+        );
+
+        return Ok(inherited);
     }
 
     // Copied into a table of this runtime's own size rather than filled in
@@ -743,6 +756,31 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
     tracing::debug!("LGT class at {root:#x} dispatches through {installed:#x}, {declared} of {slots} slots its own");
 
     Ok(installed)
+}
+
+/// The table of the nearest platform class an application class extends, or
+/// the fallback when the chain does not reach one.
+fn platform_superclass_dispatch_table(context: &InitSvcContext, root: u32) -> u32 {
+    let app_classes = context.app_classes.lock();
+    let mut superclass = app_classes.iter().find(|x| x.root == root).and_then(|x| x.superclass.clone());
+
+    for _ in 0..MAX_SUPERCLASS_DEPTH {
+        let Some(name) = superclass else { break };
+
+        let platform = context.imported_classes.lock().as_ref().and_then(|table| {
+            let index = table.classes.iter().position(|x| x.name == name)?;
+
+            table.vtables.get(index).copied()
+        });
+
+        if let Some(vtable) = platform {
+            return vtable;
+        }
+
+        superclass = app_classes.iter().find(|x| x.name == name).and_then(|x| x.superclass.clone());
+    }
+
+    context.java_handles.fallback_dispatch_table()
 }
 
 /// `vm_get_array_class(dimensions, element_class, atype)`.
@@ -847,13 +885,25 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
         return Ok(handle);
     };
 
-    // The application allocates and lays out its own instances, so the handle
-    // it already has is the object; only the JVM side is missing.
-    context.java_handles.bind(handle, instance);
+    // The activated class is not the object. Handing it back made every
+    // instance of a class the same address, and gave all of them the twenty
+    // byte block `vm_activate_class` allocates for the class itself as their
+    // fields - so a class wrote its fields over its own statics, and a field
+    // past the fifth landed in whatever allocation followed.
+    //
+    // Reading import 0x54 as an allocator is what made that look right: the
+    // compiled code appeared to allocate the object itself and hand it to
+    // `vm_instantiate`, so `vm_instantiate` had nothing left to do. It is
+    // `vm_check_stack_overflow`, the object was never allocated, and
+    // allocating it is the whole job.
+    let vtable: u32 = read_generic(core, handle)?;
+    let object = context.java_handles.allocate_instance(vtable)?;
 
-    tracing::debug!("LGT bound application class {class} to {handle:#x}");
+    context.java_handles.bind(object, instance);
 
-    Ok(handle)
+    tracing::debug!("LGT new {class} at {object:#x}, dispatch table {vtable:#x}");
+
+    Ok(object)
 }
 
 /// Allocates an instance of the class a token names, with its dispatch table
@@ -935,7 +985,14 @@ fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u
 /// with it. Battle Monster branches through slot 10 of a `java/lang/Thread`
 /// immediately after constructing it from a `Runnable`, which is `start`, and
 /// nothing else a game does with a fresh thread fits.
-const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[("java/lang/Thread", 10, "start", "()V")];
+const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
+    ("java/lang/Thread", 10, "start", "()V"),
+    // `dt_java_lang_StringBuffer` names this one. A platform class's slots
+    // are numbered over *all* its virtual methods, and the table the
+    // application registers lists only the ones it imports, so the two agree
+    // on where a class's methods start and not on the order within.
+    ("java/lang/StringBuffer", 18, "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
+];
 
 /// Slots 1 to 9 of every dispatch table, which the platform fills in for the
 /// class whatever the class is.

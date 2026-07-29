@@ -137,16 +137,19 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         }
     };
 
-    // A bare jar carries no `app_info`, so it is not an LGT archive at all and
-    // the loader is right to refuse it; say so rather than failing the batch.
-    let emulator = wie_lgt::LgtEmulator::from_archive(
-        platform,
-        files,
-        Options {
-            enable_gdbserver: false,
-            profile: None,
-        },
-    );
+    let options = Options {
+        enable_gdbserver: false,
+        profile: None,
+    };
+
+    // The same two ways in the player has: a descriptor with a jar beside it,
+    // or a bare jar that is the whole application. An archive stripped of its
+    // `app_info` is still a title, and takes the second path.
+    let emulator = if wie_lgt::LgtEmulator::loadable_archive(&files) {
+        wie_lgt::LgtEmulator::from_archive(platform, files, options)
+    } else {
+        wie_lgt::LgtEmulator::from_jar(platform, label, archive.to_vec(), label, label, None, options)
+    };
 
     let mut emulator = match emulator {
         Ok(emulator) => emulator,
