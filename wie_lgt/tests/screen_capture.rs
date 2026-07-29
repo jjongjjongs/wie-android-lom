@@ -13,6 +13,7 @@ use wie_util::Result;
 #[derive(Default)]
 struct Captured {
     frames: u32,
+    best_frame: u32,
     width: u32,
     height: u32,
     colors: BTreeMap<u32, u32>,
@@ -34,10 +35,18 @@ impl Screen for CaptureScreen {
         captured.frames += 1;
         captured.width = image.width();
         captured.height = image.height();
-        captured.colors.clear();
+
+        let mut colors = BTreeMap::new();
         for color in image.colors() {
             let packed = ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32;
-            *captured.colors.entry(packed).or_default() += 1;
+            *colors.entry(packed).or_default() += 1;
+        }
+
+        // Keep the busiest frame, not the last: a title that draws and then
+        // clears would otherwise look like it never drew.
+        if colors.len() >= captured.colors.len() {
+            captured.colors = colors;
+            captured.best_frame = captured.frames;
         }
     }
 
@@ -59,8 +68,12 @@ impl Platform for CapturePlatform {
     fn screen(&self) -> &dyn Screen {
         &self.screen
     }
+    /// Real time, not the fake clock the shared test platform steps by hand: a
+    /// title that waits on the clock never advances under that one.
     fn now(&self) -> Instant {
-        self.inner.now()
+        let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+
+        Instant::from_epoch_millis(since_epoch.as_millis() as _)
     }
     fn database_repository(&self) -> &dyn DatabaseRepository {
         self.inner.database_repository()
@@ -115,6 +128,14 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         if ticks % 40 == 0 {
             emulator.handle_event(Event::Redraw);
         }
+        // Titles wait on input: Legend of Master's first screen ends with
+        // "press any key".
+        if ticks % 200 == 100 {
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks % 200 == 120 {
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
         if let Err(error) = emulator.tick() {
             eprintln!("[{label}] stopped after {ticks} ticks: {error}");
             break;
@@ -124,10 +145,11 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
 
     let captured = screen.captured.lock().unwrap();
     eprintln!(
-        "[{label}] {ticks} ticks, {} frames painted, {}x{}, {} distinct colours",
+        "[{label}] {ticks} ticks, {} frames painted, {}x{}, busiest frame {} with {} distinct colours",
         captured.frames,
         captured.width,
         captured.height,
+        captured.best_frame,
         captured.colors.len()
     );
 
@@ -145,5 +167,5 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
 #[test]
 #[ignore = "diagnostic"]
 fn capture_legend_of_master() {
-    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 600);
+    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 2000);
 }
