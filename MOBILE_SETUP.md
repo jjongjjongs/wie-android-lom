@@ -66,9 +66,14 @@ adb logcat -s WIE
 and uploads a trace, which is how the LGT runtime is being reverse
 engineered.
 
-LGT applications that register a CLET through `clet_register` run through
-`net/wie/CletWrapper`. Applications whose Java classes were compiled ahead of
-time into `binary.mod` - Legend of Master among them - load, resolve their
-platform imports and boot: Legend of Master completes `startApp`, pushes its
-`Card` onto the display, and its `paint` override runs on every redraw. It
-does not draw anything yet. See `docs/lgt.md`.
+LGT titles come in two kinds, and `app_info`'s `MClass` says which.
+
+`MClass:Clet` is a native Clet: it registers through `clet_register`, runs as
+a `net/wie/CletWrapper` Jlet, and **renders**. These are the LGT titles worth
+running today.
+
+Anything else names a class that LGT's toolchain compiled ahead of time into
+`binary.mod`, Legend of Master (`MClass:Lm`) among them. Those now boot -
+`startApp` completes and the `paint` override runs every redraw - but draw
+nothing, because the application is waiting on state whose source has not been
+found. See `docs/lgt.md`.
