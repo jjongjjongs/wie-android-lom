@@ -20,6 +20,9 @@ struct Captured {
     /// The busiest frame's pixels, kept only when somewhere to write them was
     /// asked for.
     pixels: Vec<u8>,
+    /// The last frame's, which is where the title got to rather than the best
+    /// it managed.
+    last_pixels: Vec<u8>,
 }
 
 #[derive(Default, Clone)]
@@ -54,6 +57,10 @@ impl Screen for CaptureScreen {
             if std::env::var_os("WIE_CAPTURE_DIR").is_some() {
                 captured.pixels = image.colors().into_iter().flat_map(|color| [color.r, color.g, color.b]).collect();
             }
+        }
+
+        if std::env::var_os("WIE_CAPTURE_DIR").is_some() {
+            captured.last_pixels = image.colors().into_iter().flat_map(|color| [color.r, color.g, color.b]).collect();
         }
     }
 
@@ -196,19 +203,24 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         captured.colors.len()
     );
 
-    // A histogram says a title draws; only the picture says what it drew.
-    if let Some(directory) = std::env::var_os("WIE_CAPTURE_DIR")
-        && !captured.pixels.is_empty()
-    {
-        let path = std::path::Path::new(&directory).join(format!("{label}.ppm"));
-        let header = format!("P6\n{} {}\n255\n", captured.width, captured.height);
+    // A histogram says a title draws; only the picture says what it drew, and
+    // only the last frame says whether it got anywhere.
+    if let Some(directory) = std::env::var_os("WIE_CAPTURE_DIR") {
+        for (suffix, pixels) in [("", &captured.pixels), ("-final", &captured.last_pixels)] {
+            if pixels.is_empty() {
+                continue;
+            }
 
-        let mut file = header.into_bytes();
-        file.extend_from_slice(&captured.pixels);
+            let path = std::path::Path::new(&directory).join(format!("{label}{suffix}.ppm"));
+            let header = format!("P6\n{} {}\n255\n", captured.width, captured.height);
 
-        match std::fs::write(&path, file) {
-            Ok(()) => eprintln!("[{label}] wrote {}", path.display()),
-            Err(error) => eprintln!("[{label}] could not write {}: {error}", path.display()),
+            let mut file = header.into_bytes();
+            file.extend_from_slice(pixels);
+
+            match std::fs::write(&path, file) {
+                Ok(()) => eprintln!("[{label}] wrote {}", path.display()),
+                Err(error) => eprintln!("[{label}] could not write {}: {error}", path.display()),
+            }
         }
     }
 

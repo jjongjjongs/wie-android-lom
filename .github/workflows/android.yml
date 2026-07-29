@@ -1,9 +1,13 @@
 name: Android APK
 
+# The apk is the deliverable, so it gets built on the branches it is being
+# worked on as well as on main - a workflow that only runs after merge cannot
+# tell anyone whether the thing builds.
 on:
   push:
     branches:
       - main
+      - 'claude/**'
   pull_request:
   workflow_dispatch:
 
