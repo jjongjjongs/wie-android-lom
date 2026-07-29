@@ -36,6 +36,16 @@ pub const JAVA_STATIC_METHOD_SVC_BASE: u32 = 0x2000;
 /// dispatch table, so the receiver arrives in the first word.
 pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x4000;
 
+/// Slots every dispatch table has room for, declared or not.
+pub const DISPATCH_TABLE_SLOTS: u32 = 64;
+
+/// Classes that can have their own reserved block of unknown-slot ids. One
+/// past the last is the fallback table's index.
+pub const MAX_DISPATCH_CLASSES: u32 = 63;
+
+/// One SVC id per (class, slot) pair a dispatch table does not account for.
+pub const JAVA_UNKNOWN_SLOT_SVC_BASE: u32 = 0x5000;
+
 /// One SVC id per row of the static method table that carries no descriptor.
 /// The compiled code calls these too, so they cannot be left null.
 pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x3000;
@@ -140,25 +150,20 @@ pub async fn java_load_classes(
 /// so the table needs a leading word before its entries, and every instance
 /// needs to point at one.
 fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
+    if table.classes.len() as u32 > MAX_DISPATCH_CLASSES {
+        return Err(wie_util::WieError::FatalError(alloc::format!(
+            "LGT class table has {} classes, more than the {MAX_DISPATCH_CLASSES} with reserved dispatch slots",
+            table.classes.len()
+        )));
+    }
+
     for index in 0..table.classes.len() as u32 {
         let (start, count) = {
             let class = &table.classes[index as usize];
             (class.virtual_method_start, class.virtual_method_count)
         };
 
-        let vtable = if count == 0 {
-            0
-        } else {
-            let vtable = Allocator::alloc(core, (count + 1) * 4)?;
-            write_generic(core, vtable, 0u32)?;
-
-            for slot in 0..count {
-                let stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_VIRTUAL_METHOD_SVC_BASE + start + slot)?;
-                write_generic(core, vtable + 4 + slot * 4, stub)?;
-            }
-
-            vtable
-        };
+        let vtable = build_dispatch_table(core, index, start, count)?;
 
         // Eight bytes is the smallest allocation that reads back distinctly;
         // nothing inspects the contents, the address is the identity.
@@ -169,7 +174,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
         handles.set_dispatch_table(&table.classes[index as usize].name, vtable);
 
         tracing::trace!(
-            "LGT class {} -> object {class_object:#x}, dispatch table {vtable:#x} ({count} slots)",
+            "LGT class {} -> object {class_object:#x}, dispatch table {vtable:#x} ({count} declared slots)",
             table.classes[index as usize].name
         );
 
@@ -177,7 +182,41 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
         table.class_objects.push(class_object);
     }
 
+    // Objects of a class the application never declared still get called on,
+    // so they need a table too.
+    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0)?;
+    handles.set_fallback_dispatch_table(fallback);
+
+    tracing::debug!("LGT fallback dispatch table at {fallback:#x}");
+
     Ok(())
+}
+
+/// Builds one dispatch table.
+///
+/// Every table is the same size, whatever the class declares. The compiled
+/// code does not always take its slot from `virtual_method_offsets`: it also
+/// emits fixed offsets for methods the platform is expected to provide, and
+/// Battle Monster branches through slot 13 of a `java/lang/Runtime` that
+/// declares no virtual methods at all. A short table leaves that slot zero and
+/// the branch goes to address zero, so the slots a class does not declare are
+/// filled with stubs that report what was called instead.
+fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32) -> Result<u32> {
+    let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
+    write_generic(core, vtable, 0u32)?;
+
+    for slot in 0..DISPATCH_TABLE_SLOTS {
+        let svc = if slot < count {
+            JAVA_VIRTUAL_METHOD_SVC_BASE + start + slot
+        } else {
+            JAVA_UNKNOWN_SLOT_SVC_BASE + class_index * DISPATCH_TABLE_SLOTS + slot
+        };
+
+        let stub = core.make_svc_stub(SVC_CATEGORY_INIT, svc)?;
+        write_generic(core, vtable + 4 + slot * 4, stub)?;
+    }
+
+    Ok(vtable)
 }
 
 /// Publishes the table into the arrays the compiled code reads.

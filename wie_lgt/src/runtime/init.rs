@@ -19,9 +19,9 @@ use super::{
         compiled_class, get_java_interface_method,
         handles::JavaHandles,
         interface::{
-            JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE,
-            bridge_class_chain, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11,
-            java_unk12,
+            DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE,
+            JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, bridge_class_chain, java_import_09, java_import_10, java_import_11,
+            java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12,
         },
         method_bridge::{self, ResolvedMember},
     },
@@ -98,6 +98,13 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
     if id.0 >= JAVA_VIRTUAL_METHOD_SVC_BASE && id.0 < JAVA_VIRTUAL_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let index = id.0 - JAVA_VIRTUAL_METHOD_SVC_BASE;
         let result = invoke_imported_virtual(core, context, index).await?;
+
+        return result.write(core, lr);
+    }
+
+    if id.0 >= JAVA_UNKNOWN_SLOT_SVC_BASE && id.0 < JAVA_UNKNOWN_SLOT_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        let encoded = id.0 - JAVA_UNKNOWN_SLOT_SVC_BASE;
+        let result = call_unknown_slot(core, context, encoded / DISPATCH_TABLE_SLOTS, encoded % DISPATCH_TABLE_SLOTS).await?;
 
         return result.write(core, lr);
     }
@@ -642,6 +649,57 @@ fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u
     tracing::warn!("LGT reserved slot {slot} of {} called with a0={a0:#x}", class.name);
 
     Ok(a0)
+}
+
+/// Dispatch table slots the compiled code reaches by a fixed number, with the
+/// method each one turns out to be.
+///
+/// A class does not declare these - the platform is expected to provide them -
+/// so which method a slot means has to be worked out from what the caller does
+/// with it. Battle Monster branches through slot 10 of a `java/lang/Thread`
+/// immediately after constructing it from a `Runnable`, which is `start`, and
+/// nothing else a game does with a fresh thread fits.
+const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[("java/lang/Thread", 10, "start", "()V")];
+
+/// Reports a call through a dispatch table slot the class does not declare.
+///
+/// The compiled code emits fixed slot numbers for methods the platform is
+/// expected to provide, and which method a given slot means is not yet known.
+/// Returning zero at least keeps the caller going, and the log says what to
+/// look for.
+async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, class_index: u32, slot: u32) -> Result<u32> {
+    let this = core.read_param(0)?;
+
+    let class = context
+        .imported_classes
+        .lock()
+        .as_ref()
+        .and_then(|table| table.classes.get(class_index as usize).map(|x| x.name.clone()));
+
+    let Some(class) = class else {
+        tracing::warn!("LGT undeclared dispatch slot {slot} called on {this:#x}");
+        return Ok(0);
+    };
+
+    if let Some((_, _, name, descriptor)) = KNOWN_DISPATCH_SLOTS
+        .iter()
+        .find(|(known_class, known_slot, _, _)| *known_class == class && *known_slot == slot)
+    {
+        let member = ResolvedMember {
+            class_name: class,
+            name: (*name).into(),
+            descriptor: (*descriptor).into(),
+        };
+
+        let handles = context.java_handles.clone();
+        let jvm = context.jvm.clone();
+
+        return method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await;
+    }
+
+    tracing::warn!("LGT undeclared dispatch slot {slot} of {class} called on {this:#x}");
+
+    Ok(0)
 }
 
 /// Handles a call the compiled code made through a class's dispatch table.

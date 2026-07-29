@@ -205,6 +205,22 @@ So every instance carries its class's dispatch table in word 0, and the table
 has a leading word before its entries. `wie_lgt` builds one per class at load
 time, filled with stubs that dispatch into the JVM.
 
+**The slot is not always read from `virtual_method_offsets`.** The compiled
+code also emits fixed slot numbers for methods the platform is expected to
+provide but the class table never declares - Battle Monster branches through
+slot 13 of a `java/lang/Runtime` that declares no virtual methods at all, and
+slot 10 of a `java/lang/Thread` immediately after constructing it from a
+`Runnable`.
+
+Every table is therefore the same size whatever its class declares, and the
+slots a class does not account for hold stubs that report what was called
+rather than a zero to branch to. Objects of a class the application never
+declared get a fallback table for the same reason.
+
+Which method a fixed slot means has to be worked out from what the caller does
+with it. `KNOWN_DISPATCH_SLOTS` records the ones identified so far; the rest
+are reported and return zero.
+
 #### Bridging the application's own classes
 
 An application class has no bytecode, but the platform still has to construct

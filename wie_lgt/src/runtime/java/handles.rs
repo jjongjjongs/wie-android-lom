@@ -33,6 +33,9 @@ pub struct JavaHandles {
     /// Class name to dispatch table, so an object handed to the compiled code
     /// can be given the table its virtual calls will go through.
     dispatch_tables: Arc<Mutex<BTreeMap<String, u32>>>,
+    /// Table for a class the application never declared, so a call on one of
+    /// its objects is reported rather than branching to zero.
+    fallback_dispatch_table: Arc<AtomicU32>,
     entries: Arc<Mutex<BTreeMap<u32, Box<dyn ClassInstance>>>>,
     /// Instance identity to handle, so a value coming back from the JVM can be
     /// handed to the compiled code as the address it already knows.
@@ -45,6 +48,7 @@ impl JavaHandles {
             core,
             field_slots: Arc::new(AtomicU32::new(0)),
             dispatch_tables: Default::default(),
+            fallback_dispatch_table: Arc::new(AtomicU32::new(0)),
             entries: Default::default(),
             addresses: Default::default(),
         }
@@ -58,6 +62,11 @@ impl JavaHandles {
     /// Records the dispatch table to give instances of `class`.
     pub fn set_dispatch_table(&self, class: &str, vtable: u32) {
         self.dispatch_tables.lock().insert(class.into(), vtable);
+    }
+
+    /// Records the table to give instances of anything else.
+    pub fn set_fallback_dispatch_table(&self, vtable: u32) {
+        self.fallback_dispatch_table.store(vtable, Ordering::SeqCst);
     }
 
     /// Allocates an instance the compiled code can use: a header pointing at
@@ -84,11 +93,16 @@ impl JavaHandles {
         // An object crossing to the compiled code has its virtual calls
         // dispatched through its own class's table, so it has to carry one.
         let class = instance.class_definition().name();
-        let vtable = self.dispatch_tables.lock().get(&class).copied().unwrap_or(0);
+        let declared = self.dispatch_tables.lock().get(&class).copied();
 
-        if vtable == 0 {
-            tracing::debug!("No dispatch table for {class}; virtual calls on it will not resolve");
-        }
+        let vtable = match declared {
+            Some(vtable) => vtable,
+            None => {
+                tracing::debug!("{class} declares no dispatch table; using the fallback");
+
+                self.fallback_dispatch_table.load(Ordering::SeqCst)
+            }
+        };
 
         let handle = self.allocate_instance(vtable)?;
 
