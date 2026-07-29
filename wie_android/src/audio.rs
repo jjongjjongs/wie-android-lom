@@ -7,18 +7,23 @@
 //! | opcode | layout                                                              |
 //! |--------|---------------------------------------------------------------------|
 //! | 1      | `channel:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]` |
-//! | 2      | `pad:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]`    |
+//! | 2      | `channels:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]` |
 //! | 8      | `intensity:u8`, `duration_ms:u64`                                   |
 //!
-//! Opcode 1 is a clip: Java fires one track at it and forgets it. Opcode 2 is
-//! the synthesiser's continuous output, which needs a track that stays open
-//! between chunks or every seam would be a click.
+//! Opcode 1 is a clip, always mono: Java fires one track at it and forgets it.
+//! Opcode 2 is the synthesiser's continuous output, which needs a track that
+//! stays open between chunks or every seam would be a click; its samples are
+//! interleaved across however many channels the header names, and its count is
+//! of samples rather than of frames.
 //!
 //! MIDI never reaches Java. Android has no synthesiser that takes live MIDI
-//! events, so [`crate::synth`] renders the sequence here and it leaves as
+//! events, so [`crate::ma3`] renders the sequence here and it leaves as
 //! opcode 2.
 
-use crate::{platform::Shared, synth::SAMPLE_RATE};
+use crate::{
+    ma3::{CHANNELS, SAMPLE_RATE},
+    platform::Shared,
+};
 
 const OPCODE_PLAY_WAVE: u8 = 1;
 const OPCODE_STREAM: u8 = 2;
@@ -57,7 +62,7 @@ pub fn stream_command(samples: &[i16]) -> Vec<u8> {
     let mut command = Vec::with_capacity(HEADER_LEN + samples.len() * 2);
 
     command.push(OPCODE_STREAM);
-    command.push(0);
+    command.push(CHANNELS as u8);
     command.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
     command.extend_from_slice(&(samples.len() as u32).to_le_bytes());
     for sample in samples {
@@ -106,10 +111,11 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         self.shared.synth().pitch_bend(channel_id, value);
     }
 
-    /// System exclusive is where a handset's own chip was configured, which
-    /// this synthesiser has no equivalent for.
+    /// System exclusive is where a file sends the voices it wants played, so
+    /// this is what makes a title sound like itself rather than like a set of
+    /// stand ins.
     fn midi_sysex(&self, data: &[u8]) {
-        tracing::trace!("midi_sysex({} bytes), which this synthesiser has no use for", data.len());
+        self.shared.synth().sysex(data);
     }
 }
 

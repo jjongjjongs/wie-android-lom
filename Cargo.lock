@@ -3418,6 +3418,7 @@ dependencies = [
  "async-trait",
  "jni 0.21.1",
  "md5",
+ "smaf_player",
  "tracing",
  "tracing-subscriber",
  "wie_backend",

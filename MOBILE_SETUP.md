@@ -16,11 +16,34 @@ Java never talks to the emulator directly. `NativeBridge` exposes ten calls;
 `wie_android/src/lib.rs` documents each one and `wie_android/src/audio.rs`
 documents the byte encoding used for audio and vibration.
 
+## Sound
+
 A `.mmf` carries PCM waves for effects and a MIDI-like sequence for the music.
-Android has no synthesiser that takes live MIDI events, so `wie_android/src/synth.rs`
-renders the sequence to PCM here and sends it as a stream Java keeps one track
-open for. Without it, a title whose music is entirely sequenced plays silently
-- which is most of them.
+Android has no synthesiser that takes live MIDI events, so `wie_android/src/ma3/`
+renders the sequence to PCM here and sends it as a stereo stream Java keeps one
+track open for. Without it, a title whose music is entirely sequenced plays
+silently - which is most of them.
+
+`ma3` is the Yamaha MA-3 a handset had, in software: four operator FM, with the
+waveforms, envelope rates, key scaling, detune, low frequency oscillator and
+output attenuation taken from the chip's own tables (`ma3/data/`, extracted
+from a handset ROM). The instruments are the ones the file itself carries, sent
+as system exclusive in its setup chunk and sometimes part way through the
+sequence; `ma3/tone.rs` reads them.
+
+Two things a handset kept in ROM are not reproduced, and get stand-in patches
+instead, marked as such where they are built:
+
+- the melodic bank a file falls back on when it defines no voice of its own;
+- the recorded drums behind twenty one of the kit's 128 keys. The other forty
+  are voices, and are played properly.
+
+To listen to a change rather than only measure it:
+
+```
+WIE_MMF=music.mmf WIE_WAV=out.wav \
+  cargo test -p wie_android --lib render_a_file -- --ignored --nocapture
+```
 
 ## Building
 

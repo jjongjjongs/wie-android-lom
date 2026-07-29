@@ -25,9 +25,10 @@ import java.util.List;
  *   <tr><td>8</td><td>{@code intensity:u8, durationMs:u64}</td></tr>
  * </table>
  *
- * <p>Opcode 1 is a clip: a track is fired at it and forgotten. Opcode 2 is the
- * synthesiser's continuous output, which goes to one track that stays open —
- * a track per chunk would put a click at every seam.
+ * <p>Opcode 1 is a clip: a track is fired at it and forgotten, and is always
+ * mono. Opcode 2 is the synthesiser's continuous output, which goes to one
+ * track that stays open — a track per chunk would put a click at every seam —
+ * and carries however many channels its header names, interleaved.
  */
 final class AndroidAudioOutput {
     private static final int OPCODE_PLAY_WAVE = 1;
@@ -48,6 +49,7 @@ final class AndroidAudioOutput {
 
     private AudioTrack stream;
     private int streamRate;
+    private int streamChannels;
 
     AndroidAudioOutput(Context context) {
         this.vibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
@@ -170,24 +172,26 @@ final class AndroidAudioOutput {
             return;
         }
 
+        int channels = command[1] & 0xFF;
         int sampleRate = readInt(command, 2);
         int byteCount = Math.min(readInt(command, 6) * 2, command.length - HEADER_LEN);
 
-        if (sampleRate < MIN_SAMPLE_RATE || sampleRate > MAX_SAMPLE_RATE || byteCount <= 0) {
+        if (channels < 1 || channels > 2 || sampleRate < MIN_SAMPLE_RATE || sampleRate > MAX_SAMPLE_RATE || byteCount <= 0) {
             return;
         }
 
-        if (stream != null && streamRate != sampleRate) {
+        if (stream != null && (streamRate != sampleRate || streamChannels != channels)) {
             stream.release();
             stream = null;
         }
 
         if (stream == null) {
-            stream = openStream(sampleRate);
+            stream = openStream(sampleRate, channels);
             if (stream == null) {
                 return;
             }
             streamRate = sampleRate;
+            streamChannels = channels;
         }
 
         try {
@@ -202,8 +206,10 @@ final class AndroidAudioOutput {
         }
     }
 
-    private AudioTrack openStream(int sampleRate) {
-        int minimum = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+    private AudioTrack openStream(int sampleRate, int channels) {
+        int mask = channels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
+
+        int minimum = AudioTrack.getMinBufferSize(sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT);
         if (minimum <= 0) {
             return null;
         }
@@ -213,7 +219,7 @@ final class AndroidAudioOutput {
         try {
             AudioTrack track;
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                track = new AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, AudioFormat.CHANNEL_OUT_MONO,
+                track = new AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, mask,
                         AudioFormat.ENCODING_PCM_16BIT, bufferSize, AudioTrack.MODE_STREAM);
             } else {
                 track = new AudioTrack.Builder()
@@ -224,7 +230,7 @@ final class AndroidAudioOutput {
                         .setAudioFormat(new AudioFormat.Builder()
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                 .setSampleRate(sampleRate)
-                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .setChannelMask(mask)
                                 .build())
                         .setBufferSizeInBytes(bufferSize)
                         .setTransferMode(AudioTrack.MODE_STREAM)

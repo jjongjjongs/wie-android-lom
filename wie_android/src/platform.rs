@@ -11,7 +11,7 @@ use std::{
 use wie_backend::{AudioSink, DatabaseRepository, Filesystem, Instant, Platform, Screen, canvas::Image};
 use wie_util::Result;
 
-use crate::{audio::AndroidAudioSink, database::AndroidDatabaseRepository, filesystem::AndroidFilesystem, synth::Synth};
+use crate::{audio::AndroidAudioSink, database::AndroidDatabaseRepository, filesystem::AndroidFilesystem, ma3::Synth};
 
 /// A frame handed to `Screen::paint`, kept until Java collects it.
 pub struct Frame {
@@ -74,7 +74,7 @@ impl Shared {
             return;
         }
 
-        let frames = (crate::synth::SAMPLE_RATE as usize * millis as usize) / 1000;
+        let frames = (crate::ma3::SAMPLE_RATE as usize * millis as usize) / 1000;
 
         if let Some(samples) = self.synth().render(frames) {
             self.push_audio(crate::audio::stream_command(&samples));

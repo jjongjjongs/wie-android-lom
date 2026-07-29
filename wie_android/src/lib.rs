@@ -13,9 +13,9 @@ mod audio;
 mod database;
 mod filesystem;
 mod logging;
+mod ma3;
 mod platform;
 mod runner;
-mod synth;
 
 use std::{panic::AssertUnwindSafe, path::PathBuf, time::Duration};
 
