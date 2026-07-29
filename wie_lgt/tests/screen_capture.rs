@@ -7,7 +7,12 @@ use std::{
 };
 
 use test_utils::{TestPlatform, TestPlatformEvent};
-use wie_backend::{AudioSink, DatabaseRepository, Emulator, Event, Filesystem, Instant, Options, Platform, Screen, canvas::Image, extract_zip};
+use wie_backend::{
+    AudioSink, DatabaseRepository, Emulator, Event, Filesystem, Instant, KeyCode, Options, Platform, Screen, canvas::Image, extract_zip,
+};
+
+/// Ticks between one key press and the next.
+const KEY_PERIOD: u32 = 200;
 use wie_util::Result;
 
 #[derive(Default)]
@@ -173,18 +178,29 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         }
     };
 
+    let keys = match std::env::var("WIE_KEYS") {
+        Ok(names) => names.split(',').filter(|x| !x.is_empty()).map(KeyCode::parse).collect::<Vec<_>>(),
+        Err(_) => vec![KeyCode::OK, KeyCode::NUM1, KeyCode::LEFT_SOFT_KEY, KeyCode::NUM5],
+    };
+
     let mut ticks = 0;
     while !exited.load(Ordering::SeqCst) && ticks < ticks_limit {
         if ticks % 40 == 0 {
             emulator.handle_event(Event::Redraw);
         }
-        // Titles wait on input: Legend of Master's first screen ends with
-        // "press any key".
-        if ticks % 200 == 100 {
-            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        // Titles wait on input, and not always the same key: Legend of Master's
+        // first screen ends with "press any key", and SEED 2 opens on a consent
+        // screen that wants `1`. Nothing here knows which, so they take turns.
+        //
+        // `$WIE_KEYS` narrows it to one when a title is being looked at on its
+        // own: `WIE_KEYS=NUM1` answers a consent screen and nothing else.
+        let key = keys[(ticks / KEY_PERIOD) as usize % keys.len()];
+
+        if ticks % KEY_PERIOD == KEY_PERIOD / 2 {
+            emulator.handle_event(Event::Keydown(key));
         }
-        if ticks % 200 == 120 {
-            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        if ticks % KEY_PERIOD == KEY_PERIOD / 2 + 20 {
+            emulator.handle_event(Event::Keyup(key));
         }
         if let Err(error) = emulator.tick() {
             eprintln!("[{label}] stopped after {ticks} ticks: {error}");
