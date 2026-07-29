@@ -316,6 +316,25 @@ made the first look like a solved problem.
 The fix for the first removed the need for the second. There is no descriptor
 matching now.
 
+#### Arrays
+
+An array is an instance like any other, and what its `+0x08` points at is:
+
+```text
++0x00 element count
++0x04 elements
+```
+
+Every bounds check the compiled code makes reads that count directly -
+`ldr r3, [r0]; cmp index, r3` - so an array whose block does not start with
+its length reads as empty and every access throws.
+
+Import `0x10` is `new <class>[length]`: the compiled code resolves the element
+class through import `0x0e` first and passes its root with the length. It used
+to return zero, so `f.<init>` threw on the first element it touched and
+returned without finishing. It now allocates, and `f.<init>` builds 48 arrays
+and gets as far as opening `/res/gData.dat`.
+
 #### Where it stops
 
 Legend of Master boots and paints. `startApp` runs to completion: it creates an
@@ -331,10 +350,37 @@ through a 22 entry jump table. The state is zero, whose case does nothing, and
 the clear runs as `setColor(0)` / `fillRect(0, 0, 0, 0)` - so the screen stays
 one colour.
 
-What has not run is `f.run()`. The class implements `java/lang/Runnable` and
-the application imports `java/lang/Thread.<init>(Ljava/lang/Runnable;)V`, but
-it never calls it, so the game loop that would advance that state never
-starts. Finding what is supposed to construct that thread is the next step.
+What has not run is `f.run()`. The class implements `java/lang/Runnable`, and
+the last thing `f.<init>` does is construct a `java/lang/Thread` around itself
+and call `start()` through slot 10:
+
+```text
+ldr ip, [r6, #0xd4]   ; static import 53, Thread.<init>(Ljava/lang/Runnable;)V
+bx  ip
+str r7, [r3, r2, lsl #2]
+ldr r3, [r8]          ; the thread's dispatch table
+ldr ip, [r3, #0x2c]   ; slot 10, Thread.start()V
+bx  ip
+```
+
+`f.<init>` does not reach it. Three things are in the way, and the two that
+have been fixed moved the stopping point further down each time:
+
+1. **Arrays** did not exist. Fixed, above.
+2. **An application class's objects had no dispatch table**, so a virtual call
+   on one read a zero and branched through it. They now get the fallback
+   table, whose every slot reports what was called and returns zero.
+   Borrowing the nearest platform superclass's table was tried and is worse:
+   `f` extends `Card`, so slot 1 answered `Card.getHeight()` and the
+   application dereferenced 320 as an object.
+3. **Stdlib import `0x32`** is not implemented. It used to end the run; it now
+   reports and returns zero like the unknown WIPI-C and Java imports.
+
+What the run now asks for, and nothing yet answers, is a short list: dispatch
+slots 1, 2, 10, 11, 12, 13 and 14 on application classes, slot 18 on
+`java/lang/StringBuffer`, and stdlib import `0x32`. Giving application classes
+real dispatch tables is the next piece, and the slot numbers above are what
+they have to satisfy.
 
 #### Clets, by contrast, render
 

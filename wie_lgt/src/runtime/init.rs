@@ -201,14 +201,24 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             write_generic(core, data + 16, 4u16)?;
             write_generic(core, data + 18, 0u16)?;
 
+            // An application class's objects have their virtual calls
+            // dispatched through this table by the compiled code, so it needs
+            // one or the call reads a zero and branches through it. Which
+            // method each slot means is not known yet, so every slot reports
+            // what was called and returns zero. Borrowing the table of the
+            // nearest platform superclass was tried and is worse: `f` extends
+            // `Card`, so slot 1 answered `Card.getHeight()` and the
+            // application went on to dereference 320 as an object.
+            let vtable = context.java_handles.fallback_dispatch_table();
+
             let activated = Allocator::alloc(core, 12)?;
-            write_generic(core, activated, 0u32)?;
+            write_generic(core, activated, vtable)?;
             write_generic(core, activated + 4, 0u32)?;
             write_generic(core, activated + 8, data)?;
 
             context.java_activated_classes.lock().insert(root, activated);
 
-            tracing::warn!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}");
+            tracing::warn!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, vtable={vtable:#x}");
 
             activated.write(core, lr)?;
             return Ok(());
@@ -604,7 +614,12 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             tracing::debug!("java_import_0e(a0={a0:#x}, a1={a1:#x}, index={a2}, a3={a3:#x}) -> root {class:#x}");
             class.write(core, lr)
         }
-        InitSvcId::JavaImport10 => EmulatedFunction::call(&java_import_10, core, &mut ()).await?.write(core, lr),
+        InitSvcId::JavaImport10 => {
+            let class_root = core.read_param(0)?;
+            let length = core.read_param(1)?;
+
+            java_import_10(&context.java_handles, class_root, length).await?.write(core, lr)
+        }
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
     }

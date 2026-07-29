@@ -489,12 +489,22 @@ pub async fn java_import_09(core: &mut ArmCore, handles: &JavaHandles, jvm: &mut
     Ok(0)
 }
 
-pub async fn java_import_10(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    let (pc, lr) = core.read_pc_lr()?;
+/// Words an object array's elements take. Primitive arrays are narrower, but
+/// nothing has been seen taking this path to build one.
+const REFERENCE_SIZE: u32 = 4;
 
-    tracing::warn!("java_import_10(pc={pc:#x}, lr={lr:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+/// Allocates an array: `new <class>[length]`.
+///
+/// The compiled code resolves the element class through import `0x0e` first
+/// and passes its root here with the length, which is the whole call. There
+/// is no class of its own for the array, so it dispatches through the
+/// fallback table like anything else the application never declared.
+pub async fn java_import_10(handles: &JavaHandles, class_root: u32, length: u32) -> Result<u32> {
+    let array = handles.allocate_array(handles.fallback_dispatch_table(), length, REFERENCE_SIZE)?;
 
-    Ok(0)
+    tracing::debug!("java_import_10 created a {length} element array of the class at {class_root:#x} at {array:#x}");
+
+    Ok(array)
 }
 
 pub async fn java_import_11(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
