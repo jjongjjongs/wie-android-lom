@@ -30,6 +30,55 @@ struct Captured {
     last_pixels: Vec<u8>,
 }
 
+/// Counts what an application asks the audio sink for.
+///
+/// A `.mmf` carries both PCM waves and a MIDI-like sequence, and only the
+/// waves reach a device: `AndroidAudioSink` drops every MIDI event because
+/// there is no synth on the other side. So which of the two a title's music
+/// is decides whether it makes a sound at all.
+#[derive(Default)]
+struct AudioTally {
+    waves: u32,
+    wave_samples: u64,
+    notes: u32,
+    other_midi: u32,
+}
+
+#[derive(Default, Clone)]
+struct CaptureAudio {
+    tally: Arc<Mutex<AudioTally>>,
+}
+
+impl AudioSink for CaptureAudio {
+    fn play_wave(&self, _channel: u8, _sampling_rate: u32, wave_data: &[i16]) {
+        let mut tally = self.tally.lock().unwrap();
+        tally.waves += 1;
+        tally.wave_samples += wave_data.len() as u64;
+    }
+
+    fn midi_note_on(&self, _channel: u8, _note: u8, _velocity: u8) {
+        self.tally.lock().unwrap().notes += 1;
+    }
+
+    fn midi_note_off(&self, _channel: u8, _note: u8, _velocity: u8) {}
+
+    fn midi_program_change(&self, _channel: u8, _program: u8) {
+        self.tally.lock().unwrap().other_midi += 1;
+    }
+
+    fn midi_control_change(&self, _channel: u8, _control: u8, _value: u8) {
+        self.tally.lock().unwrap().other_midi += 1;
+    }
+
+    fn midi_pitch_bend(&self, _channel: u8, _value: u16) {
+        self.tally.lock().unwrap().other_midi += 1;
+    }
+
+    fn midi_sysex(&self, _data: &[u8]) {
+        self.tally.lock().unwrap().other_midi += 1;
+    }
+}
+
 #[derive(Default, Clone)]
 struct CaptureScreen {
     captured: Arc<Mutex<Captured>>,
@@ -81,6 +130,7 @@ impl Screen for CaptureScreen {
 struct CapturePlatform {
     inner: TestPlatform,
     screen: CaptureScreen,
+    audio: CaptureAudio,
     clock: Arc<AtomicU64>,
 }
 
@@ -110,7 +160,7 @@ impl Platform for CapturePlatform {
         self.inner.filesystem()
     }
     fn audio_sink(&self) -> Box<dyn AudioSink> {
-        self.inner.audio_sink()
+        Box::new(self.audio.clone())
     }
     fn write_stdout(&self, buf: &[u8]) {
         self.inner.write_stdout(buf)
@@ -138,6 +188,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
     let exited = Arc::new(AtomicBool::new(false));
     let exited_clone = exited.clone();
     let screen = CaptureScreen::default();
+    let audio = CaptureAudio::default();
 
     let platform = Box::new(CapturePlatform {
         inner: TestPlatform::with_event_handler(move |event| match event {
@@ -145,6 +196,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             TestPlatformEvent::Exit => exited_clone.store(true, Ordering::SeqCst),
         }),
         screen: screen.clone(),
+        audio: audio.clone(),
         clock: Arc::new(AtomicU64::new(0)),
     });
 
@@ -239,6 +291,13 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             }
         }
     }
+
+    let tally = audio.tally.lock().unwrap();
+    eprintln!(
+        "[{label}] audio: {} waves ({} samples), {} notes, {} other midi",
+        tally.waves, tally.wave_samples, tally.notes, tally.other_midi
+    );
+    drop(tally);
 
     let mut top: Vec<_> = captured.colors.iter().collect();
     top.sort_by_key(|(_, count)| core::cmp::Reverse(**count));
