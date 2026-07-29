@@ -5,14 +5,14 @@
 //! given a small guest allocation whose address is the handle, and the
 //! instance is retained here under that address.
 
-use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use jvm::ClassInstance;
 use spin::Mutex;
 
 use wie_core_arm::{Allocator, ArmCore};
-use wie_util::{Result, write_generic};
+use wie_util::{ByteWrite, Result, write_generic};
 
 /// Instance header the compiled code relies on:
 ///
@@ -23,6 +23,9 @@ use wie_util::{Result, write_generic};
 /// ```
 const INSTANCE_HEADER_SIZE: u32 = 12;
 const INSTANCE_FIELDS_OFFSET: u32 = 8;
+
+/// Words an array's block spends on its length before the elements start.
+const ARRAY_HEADER_SIZE: u32 = 4;
 
 #[derive(Clone)]
 pub struct JavaHandles {
@@ -86,6 +89,42 @@ impl JavaHandles {
         write_generic(&mut core, instance + INSTANCE_FIELDS_OFFSET, fields)?;
 
         Ok(instance)
+    }
+
+    /// Allocates an array the compiled code can use.
+    ///
+    /// An array has the same header as any other instance, and what `+0x08`
+    /// points at is:
+    ///
+    /// ```text
+    /// +0x00 element count
+    /// +0x04 elements
+    /// ```
+    ///
+    /// The count is read straight off that block for every bounds check the
+    /// compiled code makes - `ldr r3, [r0]; cmp index, r3` - so an array whose
+    /// block does not start with its length reads as empty and every access
+    /// throws.
+    pub fn allocate_array(&self, vtable: u32, length: u32, element_size: u32) -> Result<u32> {
+        let mut core = self.core.clone();
+
+        let size = length * element_size;
+        let data = Allocator::alloc(&mut core, ARRAY_HEADER_SIZE + size)?;
+
+        write_generic(&mut core, data, length)?;
+        core.write_bytes(data + ARRAY_HEADER_SIZE, &vec![0; size as usize])?;
+
+        let instance = Allocator::alloc(&mut core, INSTANCE_HEADER_SIZE)?;
+        write_generic(&mut core, instance, vtable)?;
+        write_generic(&mut core, instance + 4, 0u32)?;
+        write_generic(&mut core, instance + INSTANCE_FIELDS_OFFSET, data)?;
+
+        Ok(instance)
+    }
+
+    /// The table to give an object whose class declares none.
+    pub fn fallback_dispatch_table(&self) -> u32 {
+        self.fallback_dispatch_table.load(Ordering::SeqCst)
     }
 
     /// Allocates a handle for `instance` and retains it.

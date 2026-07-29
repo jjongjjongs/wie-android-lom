@@ -1,10 +1,10 @@
-use alloc::{format, string::String};
+use alloc::string::String;
 use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Timelike};
 use core::cmp::min;
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId, stdlib};
-use wie_util::{ByteWrite, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes};
+use wie_util::{ByteWrite, Result, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes};
 
 use crate::runtime::{SVC_CATEGORY_STDLIB, svc_ids::StdlibSvcId};
 
@@ -27,7 +27,20 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System) -> Resul
             x if x == StdlibSvcId::Time as u32 => EmulatedFunction::call(&time, core, system).await?.write(core, lr),
             x if x == StdlibSvcId::Localtime as u32 => EmulatedFunction::call(&localtime, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Unk3 as u32 => EmulatedFunction::call(&unk3, core, &mut ()).await?.write(core, lr),
-            _ => Err(WieError::FatalError(format!("Unknown lgt stdlib import: {:#x}", id.0))),
+            // An unrecognised import is reported and returns zero, the way
+            // unknown WIPI-C and Java imports already do. Ending the run
+            // instead hides everything the application would have done next,
+            // which is the only way to find out what the import was for.
+            index => {
+                let a0 = core.read_param(0)?;
+                let a1 = core.read_param(1)?;
+                let a2 = core.read_param(2)?;
+                let a3 = core.read_param(3)?;
+
+                tracing::warn!("Unknown LGT stdlib import {index:#x}(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+
+                0u32.write(core, lr)
+            }
         }
     }
 
