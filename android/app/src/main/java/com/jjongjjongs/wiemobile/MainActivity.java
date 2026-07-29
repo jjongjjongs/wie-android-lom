@@ -16,11 +16,11 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.util.Log;
+import android.util.SparseArray;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -33,7 +33,9 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -62,6 +64,18 @@ public final class MainActivity extends Activity {
 
     /** Ticks without a frame before the status line shows what tick reported. */
     private static final int STATUS_TICKS = 60;
+
+    /** How the player splits its height between the screen and the keypad. */
+    private static final float GAME_WEIGHT = 2.3f;
+    private static final float KEYPAD_WEIGHT = 1f;
+
+    /** Share of the keypad's left half taken by the call and C row. */
+    private static final float KEYPAD_TOP_ROW = 0.26f;
+
+    /** How a key is painted. */
+    private static final int KEY_PLAIN = 0;
+    private static final int KEY_CALL = 1;
+    private static final int KEY_CLEAR = 2;
 
     private static final int COLOR_BG = Color.rgb(47, 47, 47);
     private static final int COLOR_PANEL = Color.rgb(35, 35, 35);
@@ -141,14 +155,52 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(COLOR_BG);
 
+        TextView bar = new TextView(this);
+        bar.setText("WIE WIPI Player");
+        bar.setTextSize(21f);
+        bar.setTextColor(Color.WHITE);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(18), 0, dp(18), 0);
+        bar.setBackgroundColor(COLOR_PANEL);
+        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(18), dp(20), dp(18), dp(8));
+
         TextView title = new TextView(this);
         title.setText("WIE WIPI Player");
-        title.setTextSize(21f);
+        title.setTextSize(27f);
         title.setTextColor(Color.WHITE);
-        title.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        title.setPadding(dp(18), 0, dp(18), 0);
-        title.setBackgroundColor(COLOR_PANEL);
-        root.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        title.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        header.addView(title);
+
+        TextView about = new TextView(this);
+        about.setText("독립 실행형 WIPI 에뮬레이터\n게임 저장소: " + gamesDir.getAbsolutePath());
+        about.setTextSize(14f);
+        about.setTextColor(COLOR_SUBTEXT);
+        about.setPadding(0, dp(18), 0, 0);
+        header.addView(about);
+
+        TextView hint = new TextView(this);
+        hint.setText("게임 실행: 한 번 누르기 · 삭제: 길게 누르기");
+        hint.setTextSize(14f);
+        hint.setTextColor(COLOR_SUBTEXT);
+        hint.setPadding(0, dp(16), 0, dp(14));
+        header.addView(hint);
+
+        LinearLayout actions = new LinearLayout(this);
+
+        Button refresh = flatButton("목록 새로고침");
+        refresh.setOnClickListener(v -> showLibrary());
+        actions.addView(refresh, buttonParams(0));
+
+        Button pick = flatButton("APK/ZIP 가져오기");
+        pick.setOnClickListener(v -> openPicker());
+        actions.addView(pick, buttonParams(dp(12)));
+
+        header.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+        root.addView(header);
 
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -158,21 +210,14 @@ public final class MainActivity extends Activity {
         scroll.addView(list);
         root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setBackgroundColor(COLOR_PANEL);
-
-        Button refresh = flatButton("목록 새로고침");
-        refresh.setOnClickListener(v -> showLibrary());
-        actions.addView(refresh, new LinearLayout.LayoutParams(0, dp(52), 1f));
-
-        Button pick = flatButton("APK/ZIP 가져오기");
-        pick.setOnClickListener(v -> openPicker());
-        actions.addView(pick, new LinearLayout.LayoutParams(0, dp(52), 1f));
-
-        root.addView(actions);
-
         applyStatusBarInset(root);
         setContentView(root);
+    }
+
+    private LinearLayout.LayoutParams buttonParams(int leftMargin) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+        params.leftMargin = leftMargin;
+        return params;
     }
 
     private void populateGames(LinearLayout list) {
@@ -387,24 +432,22 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.BLACK);
 
-        gameView = new GameView(this);
-        root.addView(gameView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
+        // The title bar doubles as the status line: it carries the game's name
+        // once there is one, and what the loader is doing until then.
         playerStatus = new TextView(this);
         playerStatus.setText("게임을 시작하는 중...");
-        playerStatus.setTextColor(Color.DKGRAY);
-        playerStatus.setTextSize(11f);
-        playerStatus.setGravity(android.view.Gravity.CENTER);
-        playerStatus.setBackgroundColor(Color.WHITE);
-        root.addView(playerStatus, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22)));
+        playerStatus.setTextColor(COLOR_TEXT);
+        playerStatus.setTextSize(16f);
+        playerStatus.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        playerStatus.setPadding(dp(14), 0, dp(14), 0);
+        playerStatus.setSingleLine(true);
+        playerStatus.setBackgroundColor(Color.BLACK);
+        root.addView(playerStatus, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
-        LinearLayout softKeys = new LinearLayout(this);
-        softKeys.setBackgroundColor(Color.rgb(202, 202, 202));
-        softKeys.addView(keyButton("메뉴", 5), new LinearLayout.LayoutParams(0, dp(42), 1f));
-        softKeys.addView(keyButton("뒤로", 6), new LinearLayout.LayoutParams(0, dp(42), 1f));
-        root.addView(softKeys);
+        gameView = new GameView(this);
+        root.addView(gameView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, GAME_WEIGHT));
 
-        root.addView(createPhoneKeypad(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(196)));
+        root.addView(new KeypadView(this), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, KEYPAD_WEIGHT));
 
         applyStatusBarInset(root);
         setContentView(root);
@@ -480,83 +523,15 @@ public final class MainActivity extends Activity {
 
     // --- input -----------------------------------------------------------
 
-    private View createPhoneKeypad() {
-        GridLayout grid = new GridLayout(this);
-        grid.setColumnCount(5);
-        grid.setRowCount(3);
-        grid.setPadding(dp(3), dp(3), dp(3), dp(3));
-        grid.setBackgroundColor(Color.rgb(180, 180, 180));
-
-        addKey(grid, "1", 9, 0, 0);
-        addKey(grid, "2\nabc", 10, 1, 0);
-        addKey(grid, "3\ndef", 11, 2, 0);
-        addKey(grid, "*", 18, 3, 0);
-        addKey(grid, "← 지움", 7, 4, 0);
-
-        addKey(grid, "4\nghi", 12, 0, 1);
-        addKey(grid, "5\njkl", 13, 1, 1);
-        addKey(grid, "6\nmno", 14, 2, 1);
-        addKey(grid, "0", 8, 3, 1);
-        addKey(grid, "↵", 4, 4, 1);
-
-        addKey(grid, "7\npqrs", 15, 0, 2);
-        addKey(grid, "8\ntuv", 16, 1, 2);
-        addKey(grid, "9\nwxyz", 17, 2, 2);
-        addKey(grid, "#", 19, 3, 2);
-
-        grid.addView(new DpadView(this), cellParams(4, 2));
-
-        return grid;
-    }
-
-    private void addKey(GridLayout grid, String label, int keyIndex, int column, int row) {
-        grid.addView(keyButton(label, keyIndex), cellParams(column, row));
-    }
-
-    private GridLayout.LayoutParams cellParams(int column, int row) {
-        GridLayout.LayoutParams params = new GridLayout.LayoutParams(GridLayout.spec(row, 1, 1f), GridLayout.spec(column, 1, 1f));
-        params.width = 0;
-        params.height = 0;
-        params.setMargins(dp(2), dp(2), dp(2), dp(2));
-        return params;
-    }
-
-    private Button keyButton(String label, int keyIndex) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextSize(15f);
-        button.setTextColor(Color.BLACK);
-        button.setAllCaps(false);
-        button.setPadding(0, 0, 0, 0);
-        button.setOnTouchListener((view, event) -> handleKeyTouch(view, event, keyIndex));
-        return button;
-    }
-
-    private boolean handleKeyTouch(View view, MotionEvent event, int keyIndex) {
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                Log.d(TAG, "key down: " + keyIndex);
-                NativeBridge.nativeKey(keyIndex, 1);
-                return true;
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
-                Log.d(TAG, "key up: " + keyIndex);
-                NativeBridge.nativeKey(keyIndex, 0);
-                view.performClick();
-                return true;
-            default:
-                return false;
-        }
-    }
-
     // --- helpers ---------------------------------------------------------
 
     private Button flatButton(String label) {
         Button button = new Button(this);
         button.setText(label);
         button.setTextSize(16f);
-        button.setTextColor(Color.WHITE);
+        button.setTextColor(Color.rgb(30, 30, 30));
         button.setAllCaps(false);
+        button.setBackgroundColor(Color.rgb(211, 211, 211));
         return button;
     }
 
@@ -633,74 +608,237 @@ public final class MainActivity extends Activity {
     }
 
     /**
-     * Four-way pad occupying one keypad cell. Whichever direction the touch
-     * leans furthest is held down, so sliding across the pad releases the old
-     * direction before pressing the new one.
+     * The whole keypad, drawn and handled as one view.
+     *
+     * <p>It has to be one view to work at all. A grid of {@link Button}s
+     * cannot take two fingers: the first view to accept a touch owns the
+     * gesture, so a second finger landing on another button is delivered to
+     * the first one and that button never hears about it. Diagonal movement,
+     * a direction held while a number is tapped, and SEED 2's "press 0 and #"
+     * are all impossible that way.
+     *
+     * <p>Layout is the screen's width split in half: directions on the left,
+     * the number pad on the right.
      */
-    private final class DpadView extends View {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private int active = -1;
+    private final class KeypadView extends View {
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-        DpadView(MainActivity activity) {
+        private final List<Key> keys = new ArrayList<>();
+        private final SparseArray<Key> underFinger = new SparseArray<>();
+
+        KeypadView(MainActivity activity) {
             super(activity);
-            paint.setTextAlign(Paint.Align.CENTER);
-            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            setBackgroundColor(Color.rgb(13, 13, 13));
+
+            ink.setTextAlign(Paint.Align.CENTER);
+            ink.setTypeface(Typeface.DEFAULT_BOLD);
+
+            keys.add(new Key("통화", "저장", 20, KEY_CALL));
+            keys.add(new Key("C", null, 7, KEY_CLEAR));
+
+            keys.add(new Key("▲", null, 0, KEY_PLAIN));
+            keys.add(new Key("◀", null, 2, KEY_PLAIN));
+            keys.add(new Key("OK", null, 4, KEY_PLAIN));
+            keys.add(new Key("▶", null, 3, KEY_PLAIN));
+            keys.add(new Key("▼", null, 1, KEY_PLAIN));
+
+            for (int digit = 1; digit <= 9; digit++) {
+                keys.add(new Key(String.valueOf(digit), null, 8 + digit, KEY_PLAIN));
+            }
+            keys.add(new Key("✱", null, 18, KEY_PLAIN));
+            keys.add(new Key("0", null, 8, KEY_PLAIN));
+            keys.add(new Key("#", null, 19, KEY_PLAIN));
+        }
+
+        @Override
+        protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+            float pad = dp(5);
+            float gap = dp(4);
+
+            float half = (width - 2 * pad - gap) / 2f;
+            float leftX = pad;
+            float rightX = pad + half + gap;
+            float top = pad;
+            float usable = height - 2 * pad;
+
+            float topRow = (usable - gap) * KEYPAD_TOP_ROW;
+            float cross = usable - gap - topRow;
+
+            place(0, leftX, top, half / 2 - gap / 2, topRow);
+            place(1, leftX + half / 2 + gap / 2, top, half / 2 - gap / 2, topRow);
+
+            // A three by three grid with only the plus filled in, so each
+            // direction is its own key and two of them can be held at once.
+            float cellWidth = (half - 2 * gap) / 3f;
+            float cellHeight = (cross - 2 * gap) / 3f;
+            float crossTop = top + topRow + gap;
+
+            place(2, leftX + cellWidth + gap, crossTop, cellWidth, cellHeight);
+            place(3, leftX, crossTop + cellHeight + gap, cellWidth, cellHeight);
+            place(4, leftX + cellWidth + gap, crossTop + cellHeight + gap, cellWidth, cellHeight);
+            place(5, leftX + 2 * (cellWidth + gap), crossTop + cellHeight + gap, cellWidth, cellHeight);
+            place(6, leftX + cellWidth + gap, crossTop + 2 * (cellHeight + gap), cellWidth, cellHeight);
+
+            float numberWidth = (half - 2 * gap) / 3f;
+            float numberHeight = (usable - 3 * gap) / 4f;
+
+            for (int index = 0; index < 12; index++) {
+                float x = rightX + (index % 3) * (numberWidth + gap);
+                float y = top + (index / 3) * (numberHeight + gap);
+
+                place(7 + index, x, y, numberWidth, numberHeight);
+            }
+
+            ink.setTextSize(Math.min(numberHeight * 0.42f, dp(22)));
+        }
+
+        private void place(int index, float x, float y, float width, float height) {
+            keys.get(index).bounds.set(x, y, x + width, y + height);
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
-            paint.setColor(Color.rgb(70, 70, 70));
-            canvas.drawRoundRect(0, 0, getWidth(), getHeight(), dp(4), dp(4), paint);
+            float radius = dp(5);
 
-            paint.setColor(Color.WHITE);
-            paint.setTextSize(dp(13));
+            for (Key key : keys) {
+                fill.setColor(key.color());
+                canvas.drawRoundRect(key.bounds, radius, radius, fill);
 
-            float centerX = getWidth() / 2f;
-            float centerY = getHeight() / 2f;
+                ink.setColor(key.textColor());
 
-            canvas.drawText("▲", centerX, dp(15), paint);
-            canvas.drawText("▼", centerX, getHeight() - dp(4), paint);
-            canvas.drawText("◀", dp(12), centerY + dp(5), paint);
-            canvas.drawText("▶", getWidth() - dp(12), centerY + dp(5), paint);
+                float centerX = key.bounds.centerX();
+                float centerY = key.bounds.centerY();
+
+                if (key.sub == null) {
+                    canvas.drawText(key.label, centerX, centerY + ink.getTextSize() * 0.36f, ink);
+                    continue;
+                }
+
+                // Two lines, so "통화 / 저장" fits a key the width of one digit.
+                float line = ink.getTextSize() * 0.62f;
+                float small = ink.getTextSize() * 0.62f;
+                float was = ink.getTextSize();
+
+                ink.setTextSize(small);
+                canvas.drawText(key.label, centerX, centerY - line * 0.1f, ink);
+                canvas.drawText(key.sub, centerX, centerY + line * 0.95f, ink);
+                ink.setTextSize(was);
+            }
         }
 
         @Override
         public boolean onTouchEvent(MotionEvent event) {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
-                case MotionEvent.ACTION_MOVE:
-                    press(direction(event));
-                    return true;
+                case MotionEvent.ACTION_POINTER_DOWN: {
+                    int pointer = event.getActionIndex();
+                    underFinger.put(event.getPointerId(pointer), keyAt(event.getX(pointer), event.getY(pointer)));
+                    break;
+                }
+                case MotionEvent.ACTION_MOVE: {
+                    for (int pointer = 0; pointer < event.getPointerCount(); pointer++) {
+                        underFinger.put(event.getPointerId(pointer), keyAt(event.getX(pointer), event.getY(pointer)));
+                    }
+                    break;
+                }
                 case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    press(-1);
-                    return true;
+                case MotionEvent.ACTION_POINTER_UP: {
+                    underFinger.remove(event.getPointerId(event.getActionIndex()));
+                    break;
+                }
+                case MotionEvent.ACTION_CANCEL: {
+                    underFinger.clear();
+                    break;
+                }
                 default:
                     return true;
             }
+
+            settle();
+            return true;
         }
 
-        private int direction(MotionEvent event) {
-            float offsetX = event.getX() - getWidth() / 2f;
-            float offsetY = event.getY() - getHeight() / 2f;
-
-            if (Math.abs(offsetX) > Math.abs(offsetY)) {
-                return offsetX < 0 ? 2 : 3;
+        private Key keyAt(float x, float y) {
+            for (Key key : keys) {
+                if (key.bounds.contains(x, y)) {
+                    return key;
+                }
             }
-            return offsetY < 0 ? 0 : 1;
+            return null;
         }
 
-        private void press(int direction) {
-            if (direction == active) {
-                return;
+        /**
+         * Sends the difference between what is held now and what was held
+         * before, so a finger sliding off a key releases it and two fingers on
+         * one key still press it once.
+         */
+        private void settle() {
+            boolean changed = false;
+
+            for (Key key : keys) {
+                boolean held = false;
+                for (int index = 0; index < underFinger.size(); index++) {
+                    if (underFinger.valueAt(index) == key) {
+                        held = true;
+                        break;
+                    }
+                }
+
+                if (held == key.down) {
+                    continue;
+                }
+
+                key.down = held;
+                changed = true;
+                Log.d(TAG, (held ? "key down: " : "key up: ") + key.code);
+                NativeBridge.nativeKey(key.code, held ? 1 : 0);
             }
 
-            if (active >= 0) {
-                NativeBridge.nativeKey(active, 0);
+            if (changed) {
+                invalidate();
             }
-            active = direction;
-            if (active >= 0) {
-                NativeBridge.nativeKey(active, 1);
+        }
+    }
+
+    /** One key of {@link KeypadView}. */
+    private static final class Key {
+        final String label;
+        final String sub;
+        final int code;
+        final int style;
+        final RectF bounds = new RectF();
+        boolean down;
+
+        Key(String label, String sub, int code, int style) {
+            this.label = label;
+            this.sub = sub;
+            this.code = code;
+            this.style = style;
+        }
+
+        int color() {
+            if (down) {
+                return Color.rgb(90, 90, 90);
+            }
+            switch (style) {
+                case KEY_CALL:
+                    return Color.rgb(29, 58, 36);
+                case KEY_CLEAR:
+                    return Color.rgb(58, 32, 32);
+                default:
+                    return Color.rgb(38, 38, 38);
+            }
+        }
+
+        int textColor() {
+            switch (style) {
+                case KEY_CALL:
+                    return Color.rgb(126, 224, 143);
+                case KEY_CLEAR:
+                    return Color.rgb(240, 160, 160);
+                default:
+                    return Color.rgb(242, 242, 242);
             }
         }
     }

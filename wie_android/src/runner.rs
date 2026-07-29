@@ -43,6 +43,8 @@ fn key_code(index: i32) -> Option<KeyCode> {
         17 => KeyCode::NUM9,
         18 => KeyCode::STAR,
         19 => KeyCode::HASH,
+        20 => KeyCode::CALL,
+        21 => KeyCode::HANGUP,
         _ => return None,
     })
 }
