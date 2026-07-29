@@ -7,14 +7,21 @@
 //! | opcode | layout                                                              |
 //! |--------|---------------------------------------------------------------------|
 //! | 1      | `channel:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]` |
+//! | 2      | `pad:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]`    |
 //! | 8      | `intensity:u8`, `duration_ms:u64`                                   |
 //!
-//! MIDI is not represented: Android has no general MIDI synth to hand it to,
-//! so those events are dropped rather than silently mistranslated.
+//! Opcode 1 is a clip: Java fires one track at it and forgets it. Opcode 2 is
+//! the synthesiser's continuous output, which needs a track that stays open
+//! between chunks or every seam would be a click.
+//!
+//! MIDI never reaches Java. Android has no synthesiser that takes live MIDI
+//! events, so [`crate::synth`] renders the sequence here and it leaves as
+//! opcode 2.
 
-use crate::platform::Shared;
+use crate::{platform::Shared, synth::SAMPLE_RATE};
 
 const OPCODE_PLAY_WAVE: u8 = 1;
+const OPCODE_STREAM: u8 = 2;
 const OPCODE_VIBRATE: u8 = 8;
 
 /// Header length shared by both commands; `AndroidAudioOutput` rejects
@@ -45,6 +52,21 @@ fn play_wave_command(channel: u8, sampling_rate: u32, wave_data: &[i16]) -> Vec<
     command
 }
 
+/// Packs a chunk of the synthesiser's output for the track Java keeps open.
+pub fn stream_command(samples: &[i16]) -> Vec<u8> {
+    let mut command = Vec::with_capacity(HEADER_LEN + samples.len() * 2);
+
+    command.push(OPCODE_STREAM);
+    command.push(0);
+    command.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    command.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+    for sample in samples {
+        command.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    command
+}
+
 pub struct AndroidAudioSink {
     shared: Shared,
 }
@@ -65,27 +87,29 @@ impl wie_backend::AudioSink for AndroidAudioSink {
     }
 
     fn midi_note_on(&self, channel_id: u8, note: u8, velocity: u8) {
-        tracing::debug!("midi_note_on({channel_id}, {note}, {velocity}) - no synth on Android");
+        self.shared.synth().note_on(channel_id, note, velocity);
     }
 
-    fn midi_note_off(&self, channel_id: u8, note: u8, velocity: u8) {
-        tracing::debug!("midi_note_off({channel_id}, {note}, {velocity}) - no synth on Android");
+    fn midi_note_off(&self, channel_id: u8, note: u8, _velocity: u8) {
+        self.shared.synth().note_off(channel_id, note);
     }
 
     fn midi_program_change(&self, channel_id: u8, program: u8) {
-        tracing::debug!("midi_program_change({channel_id}, {program}) - no synth on Android");
+        self.shared.synth().program_change(channel_id, program);
     }
 
     fn midi_control_change(&self, channel_id: u8, control: u8, value: u8) {
-        tracing::debug!("midi_control_change({channel_id}, {control}, {value}) - no synth on Android");
+        self.shared.synth().control_change(channel_id, control, value);
     }
 
     fn midi_pitch_bend(&self, channel_id: u8, value: u16) {
-        tracing::debug!("midi_pitch_bend({channel_id}, {value}) - no synth on Android");
+        self.shared.synth().pitch_bend(channel_id, value);
     }
 
+    /// System exclusive is where a handset's own chip was configured, which
+    /// this synthesiser has no equivalent for.
     fn midi_sysex(&self, data: &[u8]) {
-        tracing::debug!("midi_sysex({} bytes) - no synth on Android", data.len());
+        tracing::trace!("midi_sysex({} bytes), which this synthesiser has no use for", data.len());
     }
 }
 

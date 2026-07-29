@@ -115,6 +115,12 @@ impl Runner {
     }
 
     pub fn stop(&mut self) {
+        // Otherwise whatever the sequence was holding goes on sounding after
+        // the game it belongs to has gone.
+        if let Some(instance) = self.instance.as_ref() {
+            instance.shared.synth().silence();
+        }
+
         self.instance = None;
     }
 
@@ -141,6 +147,10 @@ impl Runner {
             instance.emulator.handle_event(Event::Redraw);
         }
 
+        // The synthesiser has to keep producing between the bursts a sequence
+        // arrives in, so it is pumped once a tick rather than from the sink.
+        instance.shared.render_synth();
+
         let deadline = Instant::now() + budget;
         loop {
             if let Err(error) = instance.emulator.tick() {
@@ -148,6 +158,7 @@ impl Runner {
                 tracing::error!("Emulator stopped: {message}");
 
                 self.last_error = message.clone();
+                instance.shared.synth().silence();
                 self.instance = None;
 
                 return message;
@@ -308,7 +319,9 @@ mod tests {
         assert!(matches!(key_code(8), Some(KeyCode::NUM0)));
         assert!(matches!(key_code(17), Some(KeyCode::NUM9)));
         assert!(matches!(key_code(19), Some(KeyCode::HASH)));
-        assert!(key_code(20).is_none());
+        // The keypad's call key, which a handset's games treat as save.
+        assert!(matches!(key_code(20), Some(KeyCode::CALL)));
+        assert!(key_code(22).is_none());
         assert!(key_code(-1).is_none());
     }
 

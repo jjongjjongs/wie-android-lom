@@ -16,6 +16,12 @@ Java never talks to the emulator directly. `NativeBridge` exposes ten calls;
 `wie_android/src/lib.rs` documents each one and `wie_android/src/audio.rs`
 documents the byte encoding used for audio and vibration.
 
+A `.mmf` carries PCM waves for effects and a MIDI-like sequence for the music.
+Android has no synthesiser that takes live MIDI events, so `wie_android/src/synth.rs`
+renders the sequence to PCM here and sends it as a stream Java keeps one track
+open for. Without it, a title whose music is entirely sequenced plays silently
+- which is most of them.
+
 ## Building
 
 ```

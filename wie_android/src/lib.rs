@@ -15,6 +15,7 @@ mod filesystem;
 mod logging;
 mod platform;
 mod runner;
+mod synth;
 
 use std::{panic::AssertUnwindSafe, path::PathBuf, time::Duration};
 
