@@ -76,11 +76,15 @@ public final class MainActivity extends Activity {
     private static final int KEY_PLAIN = 0;
     private static final int KEY_CALL = 1;
     private static final int KEY_CLEAR = 2;
+    private static final int KEY_DIRECTION = 3;
 
     private static final int COLOR_BG = Color.rgb(47, 47, 47);
     private static final int COLOR_PANEL = Color.rgb(35, 35, 35);
     private static final int COLOR_TEXT = Color.rgb(232, 232, 232);
     private static final int COLOR_SUBTEXT = Color.rgb(190, 190, 190);
+
+    /** Handset keypad: light keys with a black face, dark keys for the pad. */
+    private static final int COLOR_KEYPAD_TRAY = Color.rgb(186, 186, 186);
 
     private final ScheduledExecutorService emulatorThread = Executors.newSingleThreadScheduledExecutor();
 
@@ -623,25 +627,29 @@ public final class MainActivity extends Activity {
     private final class KeypadView extends View {
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         private final List<Key> keys = new ArrayList<>();
         private final SparseArray<Key> underFinger = new SparseArray<>();
 
         KeypadView(MainActivity activity) {
             super(activity);
-            setBackgroundColor(Color.rgb(13, 13, 13));
+            setBackgroundColor(COLOR_KEYPAD_TRAY);
 
             ink.setTextAlign(Paint.Align.CENTER);
             ink.setTypeface(Typeface.DEFAULT_BOLD);
 
+            edge.setStyle(Paint.Style.STROKE);
+            edge.setStrokeWidth(Math.max(1f, dp(1) * 0.8f));
+
             keys.add(new Key("통화", "저장", 20, KEY_CALL));
             keys.add(new Key("C", null, 7, KEY_CLEAR));
 
-            keys.add(new Key("▲", null, 0, KEY_PLAIN));
-            keys.add(new Key("◀", null, 2, KEY_PLAIN));
+            keys.add(new Key("▲", null, 0, KEY_DIRECTION));
+            keys.add(new Key("◀", null, 2, KEY_DIRECTION));
             keys.add(new Key("OK", null, 4, KEY_PLAIN));
-            keys.add(new Key("▶", null, 3, KEY_PLAIN));
-            keys.add(new Key("▼", null, 1, KEY_PLAIN));
+            keys.add(new Key("▶", null, 3, KEY_DIRECTION));
+            keys.add(new Key("▼", null, 1, KEY_DIRECTION));
 
             for (int digit = 1; digit <= 9; digit++) {
                 keys.add(new Key(String.valueOf(digit), null, 8 + digit, KEY_PLAIN));
@@ -694,7 +702,9 @@ public final class MainActivity extends Activity {
         }
 
         private void place(int index, float x, float y, float width, float height) {
-            keys.get(index).bounds.set(x, y, x + width, y + height);
+            Key key = keys.get(index);
+            key.bounds.set(x, y, x + width, y + height);
+            key.shade();
         }
 
         @Override
@@ -702,8 +712,18 @@ public final class MainActivity extends Activity {
             float radius = dp(5);
 
             for (Key key : keys) {
-                fill.setColor(key.color());
+                if (key.down) {
+                    fill.setShader(null);
+                    fill.setColor(key.pressedColor());
+                } else {
+                    fill.setShader(key.shader);
+                    fill.setColor(Color.WHITE);
+                }
                 canvas.drawRoundRect(key.bounds, radius, radius, fill);
+                fill.setShader(null);
+
+                edge.setColor(key.borderColor());
+                canvas.drawRoundRect(key.bounds, radius, radius, edge);
 
                 ink.setColor(key.textColor());
 
@@ -808,6 +828,7 @@ public final class MainActivity extends Activity {
         final int code;
         final int style;
         final RectF bounds = new RectF();
+        android.graphics.Shader shader;
         boolean down;
 
         Key(String label, String sub, int code, int style) {
@@ -817,29 +838,67 @@ public final class MainActivity extends Activity {
             this.style = style;
         }
 
-        int color() {
-            if (down) {
-                return Color.rgb(90, 90, 90);
-            }
+        /** Rebuilds the face gradient for the bounds the key was just given. */
+        void shade() {
+            shader = new android.graphics.LinearGradient(
+                    0, bounds.top, 0, bounds.bottom,
+                    topColor(), bottomColor(), android.graphics.Shader.TileMode.CLAMP);
+        }
+
+        private int topColor() {
             switch (style) {
                 case KEY_CALL:
-                    return Color.rgb(29, 58, 36);
+                    return Color.rgb(63, 143, 82);
                 case KEY_CLEAR:
-                    return Color.rgb(58, 32, 32);
+                    return Color.rgb(154, 64, 64);
+                case KEY_DIRECTION:
+                    return Color.rgb(108, 108, 108);
                 default:
-                    return Color.rgb(38, 38, 38);
+                    return Color.rgb(251, 251, 251);
+            }
+        }
+
+        private int bottomColor() {
+            switch (style) {
+                case KEY_CALL:
+                    return Color.rgb(44, 107, 59);
+                case KEY_CLEAR:
+                    return Color.rgb(122, 47, 47);
+                case KEY_DIRECTION:
+                    return Color.rgb(82, 82, 82);
+                default:
+                    return Color.rgb(210, 210, 210);
+            }
+        }
+
+        int borderColor() {
+            switch (style) {
+                case KEY_CALL:
+                    return Color.rgb(36, 82, 49);
+                case KEY_CLEAR:
+                    return Color.rgb(94, 35, 35);
+                case KEY_DIRECTION:
+                    return Color.rgb(68, 68, 68);
+                default:
+                    return Color.rgb(169, 169, 169);
+            }
+        }
+
+        int pressedColor() {
+            switch (style) {
+                case KEY_CALL:
+                    return Color.rgb(92, 180, 112);
+                case KEY_CLEAR:
+                    return Color.rgb(190, 90, 90);
+                case KEY_DIRECTION:
+                    return Color.rgb(140, 140, 140);
+                default:
+                    return Color.rgb(160, 160, 160);
             }
         }
 
         int textColor() {
-            switch (style) {
-                case KEY_CALL:
-                    return Color.rgb(126, 224, 143);
-                case KEY_CLEAR:
-                    return Color.rgb(240, 160, 160);
-                default:
-                    return Color.rgb(242, 242, 242);
-            }
+            return style == KEY_PLAIN ? Color.rgb(22, 24, 28) : Color.WHITE;
         }
     }
 }
