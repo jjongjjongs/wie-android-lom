@@ -40,6 +40,10 @@ pub struct JavaHandles {
     /// its objects is reported rather than branching to zero.
     fallback_dispatch_table: Arc<AtomicU32>,
     entries: Arc<Mutex<BTreeMap<u32, Box<dyn ClassInstance>>>>,
+    /// Arrays handed to the compiled code, to their length and element size.
+    /// An array has no instance on the JVM side; one is built when it crosses
+    /// to a platform method and copied back after.
+    arrays: Arc<Mutex<BTreeMap<u32, (u32, u32)>>>,
     /// Instance identity to handle, so a value coming back from the JVM can be
     /// handed to the compiled code as the address it already knows.
     addresses: Arc<Mutex<BTreeMap<usize, u32>>>,
@@ -53,6 +57,7 @@ impl JavaHandles {
             dispatch_tables: Default::default(),
             fallback_dispatch_table: Arc::new(AtomicU32::new(0)),
             entries: Default::default(),
+            arrays: Default::default(),
             addresses: Default::default(),
         }
     }
@@ -119,7 +124,21 @@ impl JavaHandles {
         write_generic(&mut core, instance + 4, 0u32)?;
         write_generic(&mut core, instance + INSTANCE_FIELDS_OFFSET, data)?;
 
+        self.arrays.lock().insert(instance, (length, element_size));
+
         Ok(instance)
+    }
+
+    /// The length and element size of an array this handed out.
+    pub fn array_at(&self, address: u32) -> Option<(u32, u32)> {
+        self.arrays.lock().get(&address).copied()
+    }
+
+    /// Where an array's elements start.
+    pub fn array_data(&self, address: u32) -> Result<u32> {
+        let data: u32 = wie_util::read_generic(&self.core, address + INSTANCE_FIELDS_OFFSET)?;
+
+        Ok(data + ARRAY_HEADER_SIZE)
     }
 
     /// The table to give an object whose class declares none.

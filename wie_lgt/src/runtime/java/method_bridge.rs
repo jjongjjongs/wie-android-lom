@@ -17,13 +17,13 @@
 //! two slots each. They are converted using the method descriptor, since the
 //! raw words carry no type information.
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
 
-use jvm::{JavaValue, Jvm, Result as JvmResult};
+use jvm::{ClassInstance, JavaValue, Jvm, Result as JvmResult};
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
-use wie_util::{Result, WieError};
+use wie_util::{ByteRead, ByteWrite, Result, WieError};
 
 use super::{
     class_table::{ClassTable, is_wide, split_descriptor},
@@ -71,6 +71,111 @@ fn read_arguments(core: &ArmCore, count: usize) -> Result<Vec<u32>> {
 /// descriptors.
 /// `first_word` is where the declared parameters start, which is one past
 /// `this` for anything called on an object.
+/// An array argument, with the guest allocation it was built from so what the
+/// callee writes can be copied back.
+struct BorrowedArray {
+    guest: u32,
+    element_size: u32,
+    length: u32,
+    instance: Box<dyn ClassInstance>,
+}
+
+/// Builds a JVM array holding what a guest array holds.
+///
+/// The compiled code builds arrays itself, in guest memory, with no instance
+/// on the JVM side - which is fine until one is passed to a platform method.
+/// `String.<init>([BII)` takes one, and so does every `read` an application
+/// loads a resource with.
+async fn borrow_array(core: &ArmCore, jvm: &Jvm, handles: &JavaHandles, element: u8, guest: u32) -> Result<Option<BorrowedArray>> {
+    let Some((length, element_size)) = handles.array_at(guest) else {
+        return Ok(None);
+    };
+
+    let data = handles.array_data(guest)?;
+    let mut bytes = vec![0u8; (length * element_size) as usize];
+    core.read_bytes(data, &mut bytes)?;
+
+    let element_type = alloc::string::String::from_utf8_lossy(&[element]).into_owned();
+
+    let mut instance = match jvm.instantiate_array(&element_type, length as _).await {
+        Ok(instance) => instance,
+        Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+    };
+
+    let stored = match element {
+        b'B' | b'Z' => {
+            jvm.store_array(&mut instance, 0, bytes.iter().map(|x| *x as i8).collect::<Vec<_>>())
+                .await
+        }
+        b'C' => {
+            jvm.store_array(
+                &mut instance,
+                0,
+                bytes.chunks(2).map(|x| u16::from_le_bytes([x[0], x[1]])).collect::<Vec<_>>(),
+            )
+            .await
+        }
+        b'S' => {
+            jvm.store_array(
+                &mut instance,
+                0,
+                bytes.chunks(2).map(|x| i16::from_le_bytes([x[0], x[1]])).collect::<Vec<_>>(),
+            )
+            .await
+        }
+        b'I' => {
+            jvm.store_array(
+                &mut instance,
+                0,
+                bytes.chunks(4).map(|x| i32::from_le_bytes([x[0], x[1], x[2], x[3]])).collect::<Vec<_>>(),
+            )
+            .await
+        }
+        // Anything wider or an array of objects: the array exists and is the
+        // right length, and its contents do not cross.
+        _ => Ok(()),
+    };
+
+    if let Err(error) = stored {
+        return Err(JvmSupport::to_wie_err(jvm, error).await);
+    }
+
+    Ok(Some(BorrowedArray {
+        guest,
+        element_size,
+        length,
+        instance,
+    }))
+}
+
+/// Writes back what the callee put in a borrowed array.
+async fn return_array(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, borrowed: &BorrowedArray, element: u8) -> Result<()> {
+    let bytes = match element {
+        b'B' | b'Z' => match jvm.load_array::<i8>(&borrowed.instance, 0, borrowed.length as _).await {
+            Ok(values) => values.into_iter().map(|x| x as u8).collect::<Vec<_>>(),
+            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+        },
+        b'C' => match jvm.load_array::<u16>(&borrowed.instance, 0, borrowed.length as _).await {
+            Ok(values) => values.into_iter().flat_map(u16::to_le_bytes).collect(),
+            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+        },
+        b'S' => match jvm.load_array::<i16>(&borrowed.instance, 0, borrowed.length as _).await {
+            Ok(values) => values.into_iter().flat_map(i16::to_le_bytes).collect(),
+            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+        },
+        b'I' => match jvm.load_array::<i32>(&borrowed.instance, 0, borrowed.length as _).await {
+            Ok(values) => values.into_iter().flat_map(i32::to_le_bytes).collect(),
+            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+        },
+        _ => return Ok(()),
+    };
+
+    let data = handles.array_data(borrowed.guest)?;
+    core.write_bytes(data, &bytes[..(borrowed.length * borrowed.element_size) as usize])?;
+
+    Ok(())
+}
+
 fn marshal_arguments(core: &ArmCore, handles: &JavaHandles, parameters: &[String], first_word: usize) -> Result<Vec<JavaValue>> {
     let slots: usize = parameters.iter().map(|x| if is_wide(x) { 2 } else { 1 }).sum();
     let words = read_arguments(core, slots + first_word)?;
@@ -93,6 +198,8 @@ fn marshal_arguments(core: &ArmCore, handles: &JavaHandles, parameters: &[String
             // reaches a platform method that dereferences it without checking,
             // and the failure then reads as a bug in that method rather than
             // as the missing object it is.
+            // An array is filled in by the caller, which needs the JVM.
+            b'[' => JavaValue::Object(None),
             _ => match handles.get(words[word]) {
                 Some(instance) => JavaValue::Object(Some(instance)),
                 None if words[word] == 0 => JavaValue::Object(None),
@@ -136,6 +243,46 @@ fn marshal_return(handles: &JavaHandles, value: JavaValue) -> Result<u32> {
     })
 }
 
+/// Marshals the arguments, building a JVM array for every array among them.
+///
+/// The borrowed arrays come back with the values so the caller can write what
+/// the callee put in them back into guest memory.
+async fn marshal(
+    core: &mut ArmCore,
+    jvm: &Jvm,
+    handles: &JavaHandles,
+    parameters: &[String],
+    first_word: usize,
+) -> Result<(Vec<JavaValue>, Vec<(BorrowedArray, u8)>)> {
+    let mut values = marshal_arguments(core, handles, parameters, first_word)?;
+    let mut borrowed = Vec::new();
+    let mut word = first_word;
+
+    for (index, parameter) in parameters.iter().enumerate() {
+        // One dimension of a primitive, which is what crosses; an array of
+        // arrays or of objects holds handles that mean nothing to the JVM.
+        let element = parameter
+            .strip_prefix('[')
+            .filter(|rest| rest.len() == 1)
+            .and_then(|rest| rest.bytes().next());
+
+        if let Some(element) = element {
+            let handle = core.read_param(word)?;
+
+            if let Some(array) = borrow_array(core, jvm, handles, element, handle).await? {
+                values[index] = JavaValue::Object(Some(array.instance.clone()));
+                borrowed.push((array, element));
+            } else if handle != 0 {
+                tracing::warn!("Array argument {index} is {handle:#x}, which names no array this runtime handed out");
+            }
+        }
+
+        word += if is_wide(parameter) { 2 } else { 1 };
+    }
+
+    Ok((values, borrowed))
+}
+
 /// Invokes an imported method and returns the word to put in `r0`.
 ///
 /// `receiver` is `None` for a static method. A `<init>` row is a constructor:
@@ -158,7 +305,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     // object it names is what the caller goes on to use.
     if name == "<init>" {
         let this = core.read_param(0)?;
-        let arguments = marshal_arguments(core, handles, &parameters, 1)?;
+        let (arguments, borrowed) = marshal(core, jvm, handles, &parameters, 1).await?;
 
         // An object already bound to an instance is being initialized, not
         // created: this is a subclass running its superclass constructor, and
@@ -173,6 +320,10 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
                 return Err(JvmSupport::to_wie_err(jvm, error).await);
             }
 
+            for (array, element) in &borrowed {
+                return_array(core, jvm, handles, array, *element).await?;
+            }
+
             return Ok(this);
         }
 
@@ -182,6 +333,10 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
             Ok(instance) => instance,
             Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
         };
+
+        for (array, element) in &borrowed {
+            return_array(core, jvm, handles, array, *element).await?;
+        }
 
         handles.bind(this, instance);
 
@@ -200,7 +355,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         None => None,
     };
 
-    let arguments = marshal_arguments(core, handles, &parameters, usize::from(receiver.is_some()))?;
+    let (arguments, borrowed) = marshal(core, jvm, handles, &parameters, usize::from(receiver.is_some())).await?;
 
     let result = if let Some(instance) = receiver {
         tracing::debug!("LGT invoke virtual {class_name}.{name}{descriptor}");
@@ -212,8 +367,14 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         jvm.invoke_static::<_, JavaValue>(class_name, name, descriptor, arguments).await
     };
 
-    match result {
-        Ok(value) => marshal_return(handles, value),
-        Err(error) => Err(JvmSupport::to_wie_err(jvm, error).await),
+    let value = match result {
+        Ok(value) => value,
+        Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+    };
+
+    for (array, element) in &borrowed {
+        return_array(core, jvm, handles, array, *element).await?;
     }
+
+    marshal_return(handles, value)
 }

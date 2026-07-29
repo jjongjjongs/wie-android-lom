@@ -19,11 +19,13 @@ use super::{
         compiled_class, get_java_interface_method,
         handles::JavaHandles,
         interface::{
-            ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE,
-            JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain, java_import_11, java_import_23,
-            java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size, vm_get_constant_string, vm_instantiate_array,
+            ARRAY_ELEMENT_ACCESSORS, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE,
+            JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, array_element, bridge_class_chain,
+            java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size,
+            vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
+        platform_slots::platform_method,
     },
     stdlib::register_stdlib_svc_handler,
     svc_ids::InitSvcId,
@@ -168,6 +170,12 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             tracing::debug!("vm_alloc_save_point({a0}) -> {save_point:#x}");
 
             save_point.write(core, lr)?;
+            return Ok(());
+        }
+        if let Some((_, element_size, stores)) = ARRAY_ELEMENT_ACCESSORS.iter().find(|(import, _, _)| *import == function_index) {
+            let result = array_element(core, function_index, *element_size, *stores, a0, a1, a2)?;
+
+            result.write(core, lr)?;
             return Ok(());
         }
         if function_index == 0x20 {
@@ -922,6 +930,40 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
         tracing::debug!("LGT java/lang/Object.{name}{descriptor} on {this:#x}, which has no instance");
 
         return Ok(0);
+    }
+
+    // The receiver's own class knows what it put in the slot, whether or not
+    // the application imported that class: `getClass().getResourceAsStream()`
+    // reaches `java/lang/Class` slot 16, and nothing the application registers
+    // mentions `java/lang/Class` at all.
+    let receiver_class = context.java_handles.get(this).map(|x| x.class_definition().name());
+
+    if let Some(receiver_class) = receiver_class
+        && let Some((name, descriptor)) = platform_method(&receiver_class, slot)
+    {
+        let member = ResolvedMember {
+            class_name: receiver_class.clone(),
+            name: name.into(),
+            descriptor: descriptor.into(),
+        };
+
+        let handles = context.java_handles.clone();
+        let jvm = context.jvm.clone();
+
+        // Knowing what the application asked for is not the same as having
+        // it: `org/kwis/msp/media/Clip.free` is a real slot on a real class
+        // that `wie_wipi_java` does not implement. Reporting it and returning
+        // zero is what an unimplemented platform function has always done
+        // here, and ending the run instead would make naming the slot a
+        // regression over not knowing it.
+        return match method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                tracing::warn!("LGT {receiver_class}.{name}{descriptor} at slot {slot} failed: {error}");
+
+                Ok(0)
+            }
+        };
     }
 
     let class = context

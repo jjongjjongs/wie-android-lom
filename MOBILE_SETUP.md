@@ -79,9 +79,12 @@ WIE_ARCHIVES=/path/to/archives cargo test -p wie_lgt --test screen_capture \
 ```
 
 Anything else names a class that LGT's toolchain compiled ahead of time into
-`binary.mod`, Legend of Master (`MClass:Lm`) among them. Those boot and run
-their real `paint` and `keyNotify` overrides, but paint one colour; what they
-are still waiting on is in `docs/lgt.md`.
+`binary.mod`, Legend of Master (`MClass:Lm`) among them. Those run too - Legend
+of Master draws its notice screen and runs its game loop. See `docs/lgt.md`.
+
+Set `WIE_CAPTURE_DIR` alongside `WIE_ARCHIVES` to have each title's busiest
+frame written out as a PPM, which is how you tell a title that draws from one
+that only paints.
 
 An archive stripped of its `app_info` is still a title. `binary.mod` inside a
 bare jar is detected and run the same way, so a game that arrives as just its

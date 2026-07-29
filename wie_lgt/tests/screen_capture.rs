@@ -17,6 +17,9 @@ struct Captured {
     width: u32,
     height: u32,
     colors: BTreeMap<u32, u32>,
+    /// The busiest frame's pixels, kept only when somewhere to write them was
+    /// asked for.
+    pixels: Vec<u8>,
 }
 
 #[derive(Default, Clone)]
@@ -47,6 +50,10 @@ impl Screen for CaptureScreen {
         if colors.len() >= captured.colors.len() {
             captured.colors = colors;
             captured.best_frame = captured.frames;
+
+            if std::env::var_os("WIE_CAPTURE_DIR").is_some() {
+                captured.pixels = image.colors().into_iter().flat_map(|color| [color.r, color.g, color.b]).collect();
+            }
         }
     }
 
@@ -188,6 +195,22 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         captured.best_frame,
         captured.colors.len()
     );
+
+    // A histogram says a title draws; only the picture says what it drew.
+    if let Some(directory) = std::env::var_os("WIE_CAPTURE_DIR")
+        && !captured.pixels.is_empty()
+    {
+        let path = std::path::Path::new(&directory).join(format!("{label}.ppm"));
+        let header = format!("P6\n{} {}\n255\n", captured.width, captured.height);
+
+        let mut file = header.into_bytes();
+        file.extend_from_slice(&captured.pixels);
+
+        match std::fs::write(&path, file) {
+            Ok(()) => eprintln!("[{label}] wrote {}", path.display()),
+            Err(error) => eprintln!("[{label}] could not write {}: {error}", path.display()),
+        }
+    }
 
     let mut top: Vec<_> = captured.colors.iter().collect();
     top.sort_by_key(|(_, count)| core::cmp::Reverse(**count));
