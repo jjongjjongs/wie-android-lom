@@ -21,12 +21,12 @@ use super::{
     java::{
         app_classes::{self, AppClass},
         class_table::ClassTable,
-        compiled_class::{self, CompiledContext},
-        get_java_interface_method,
+        compiled_class, get_java_interface_method,
         handles::JavaHandles,
         interface::{
             JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE,
-            java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12,
+            bridge_class_chain, java_import_09, java_import_10, java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11,
+            java_unk12,
         },
         method_bridge::{self, ResolvedMember},
     },
@@ -665,28 +665,23 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
         return Ok(handle);
     };
 
-    // The class definition is built while the lock is held; registering it and
-    // constructing runs JVM code, which re-enters the runtime.
-    let described = {
-        let app_classes = context.app_classes.lock();
+    let class = context.app_classes.lock().iter().find(|x| x.root == root).map(|x| x.name.clone());
 
-        app_classes
-            .iter()
-            .find(|x| x.root == root)
-            .map(|class| (class.name.clone(), compiled_class::as_proto(class)))
-    };
-
-    let Some((class, proto)) = described else {
+    let Some(class) = class else {
         tracing::warn!("LGT application class at {root:#x} was never registered");
         return Ok(handle);
     };
 
-    let compiled_context = CompiledContext {
-        core: core.clone(),
-        handles: context.java_handles.clone(),
-    };
+    let app_classes = context.app_classes.clone();
+    let image_ranges = context.image_ranges.clone();
+    let jvm = context.jvm.clone();
+    let handles = context.java_handles.clone();
 
-    let Some(instance) = compiled_class::instantiate(&context.jvm, &compiled_context, &class, proto).await else {
+    if !bridge_class_chain(&jvm, core, &handles, &app_classes, &image_ranges, &class).await {
+        return Ok(handle);
+    }
+
+    let Some(instance) = compiled_class::instantiate(&jvm, &class).await else {
         return Ok(handle);
     };
 

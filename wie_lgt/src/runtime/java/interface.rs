@@ -1,4 +1,4 @@
-use alloc::{string::String, vec, vec::Vec};
+use alloc::{borrow::ToOwned, string::String, vec, vec::Vec};
 
 use spin::Mutex;
 
@@ -20,6 +20,9 @@ use crate::runtime::{
 
 /// Guard on the argument vector the application passes to `Main.main`.
 const MAX_MAIN_ARGUMENTS: u32 = 16;
+
+/// Guard on how far an application class hierarchy is followed.
+const MAX_CLASS_DEPTH: usize = 32;
 
 /// Diagnostic SVC range used for unresolved LGT Java-interface imports.
 /// The low 12 bits preserve the original function index.
@@ -283,7 +286,7 @@ pub async fn java_unk11(
     tracing::debug!("java_run_main({arguments:?})");
 
     if let Some(main_class_name) = arguments.first() {
-        register_app_class(jvm, core, handles, app_classes, image_ranges, main_class_name).await;
+        bridge_class_chain(jvm, core, handles, app_classes, image_ranges, main_class_name).await;
     }
 
     let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", arguments.len()).await {
@@ -313,42 +316,77 @@ pub async fn java_unk11(
     Ok(0)
 }
 
-/// Registers a JVM stand-in for one of the application's compiled classes, so
-/// the platform's `Jlet` machinery can construct and drive it.
-async fn register_app_class(
+/// Registers a JVM stand-in for an application class and everything it
+/// inherits from.
+///
+/// An application class can extend another one - Battle Monster's `Game`
+/// extends `a`, which extends `org/kwis/msp/lcdui/Jlet` - so the chain is
+/// walked to the first platform class and registered from the top down. A
+/// class cannot be registered before its parent.
+pub async fn bridge_class_chain(
     jvm: &Jvm,
     core: &ArmCore,
     handles: &JavaHandles,
     app_classes: &Mutex<Vec<AppClass>>,
     image_ranges: &[(u32, u32)],
     name: &str,
-) {
-    // The definition is built while the lock is held, and the lock is let go
-    // before the JVM runs: registering re-enters the runtime.
-    //
-    // The main class is usually absent from the registered table, so fall back
-    // to finding it by shape in the image.
-    let proto = {
-        let app_classes = app_classes.lock();
+) -> bool {
+    let mut chain = Vec::new();
+    let mut next = Some(name.to_owned());
 
-        app_classes.iter().find(|x| x.name == name).map(compiled_class::as_proto)
-    };
-    let proto = match proto {
-        Some(proto) => Some(proto),
-        None => app_classes::find_class(core, image_ranges, name).map(|class| compiled_class::as_proto(&class)),
-    };
+    while let Some(class_name) = next {
+        if chain.len() >= MAX_CLASS_DEPTH {
+            tracing::warn!("Application class {name} inherits more than {MAX_CLASS_DEPTH} deep; giving up");
+            return false;
+        }
 
-    let Some(proto) = proto else {
+        // The definition is built while the lock is held, and the lock is let
+        // go before the JVM runs: registering re-enters the runtime.
+        //
+        // The main class is usually absent from the registered table, so fall
+        // back to finding it by shape in the image.
+        let described = {
+            let app_classes = app_classes.lock();
+
+            app_classes
+                .iter()
+                .find(|x| x.name == class_name)
+                .map(|class| (class.superclass.clone(), compiled_class::as_proto(class)))
+        };
+        let described = match described {
+            Some(described) => Some(described),
+            None => {
+                app_classes::find_class(core, image_ranges, &class_name).map(|class| (class.superclass.clone(), compiled_class::as_proto(&class)))
+            }
+        };
+
+        // Not one of the application's classes, so it is a platform class the
+        // JVM already knows and the chain ends here.
+        let Some((superclass, proto)) = described else {
+            break;
+        };
+
+        chain.push((class_name, proto));
+        next = superclass;
+    }
+
+    if chain.is_empty() {
         tracing::error!("Application class {name} is nowhere in the image; cannot bridge it");
-        return;
-    };
+        return false;
+    }
 
     let context = CompiledContext {
         core: core.clone(),
         handles: handles.clone(),
     };
 
-    compiled_class::register(jvm, &context, name, proto).await;
+    for (class_name, proto) in chain.into_iter().rev() {
+        if !compiled_class::register(jvm, &context, &class_name, proto).await {
+            return false;
+        }
+    }
+
+    true
 }
 
 pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {

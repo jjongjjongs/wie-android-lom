@@ -322,6 +322,17 @@ worth fixing, none of them in the Clet path itself:
 - **`binary.mod` was loaded with `unwrap`**, so a missing one panicked instead
   of reporting.
 
+#### Application class hierarchies
+
+A class's metadata points at its superclass either by name, when that is a
+platform class, or **by root**, when it is another of the application's own -
+Battle Monster's `Game` extends `a`, which extends `org/kwis/msp/lcdui/Jlet`.
+Reading the pointer only as a name left `Game` extending `java/lang/Object`,
+which meant the `Jlet` constructor could not find its own field on it.
+
+Registering one class therefore means registering everything it inherits from,
+parents first, up to the first platform class.
+
 ### Standard Library
 
 LGT-specific: provides C standard library functions (memcpy, strlen, etc.) that the native binary expects from the platform. KTF binaries include these in their own binary; LGT imports them.

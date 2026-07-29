@@ -270,13 +270,9 @@ pub async fn register(jvm: &Jvm, context: &CompiledContext, name: &str, proto: J
     }
 }
 
-/// Registers a class and creates an instance of it, without running any
+/// Creates an instance of an already registered class, without running any
 /// constructor - the compiled code calls that itself.
-pub async fn instantiate(jvm: &Jvm, context: &CompiledContext, name: &str, proto: JavaClassProto<CompiledContext>) -> Option<Box<dyn ClassInstance>> {
-    if !register(jvm, context, name, proto).await {
-        return None;
-    }
-
+pub async fn instantiate(jvm: &Jvm, name: &str) -> Option<Box<dyn ClassInstance>> {
     match jvm.instantiate_class(name).await {
         Ok(instance) => Some(instance),
         Err(error) => {
