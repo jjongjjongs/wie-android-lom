@@ -10,43 +10,66 @@
 //!   +0x08 u32 name
 //!   +0x10 u32 superclass name, zero for none
 //!   +0x18 u16 member count
+//!   +0x28 u32 interface table, zero for none
+//!   +0x38 u32 method table, zero for none
 //!
 //! root (immediately after the metadata):
 //!   +0x00 runtime slots, zero in the image
 //!   +0x08 u32 metadata
 //!   +0x0c u32 flags
-//!   +0x10 member table
+//!   +0x10 field table
 //! ```
 //!
-//! A described member is `{ owner root, name, descriptor, flags, ... }`, but
-//! the entries are **not** a fixed size: fields run 20 bytes and methods 28,
-//! with variants. Rather than guess a size, the table is walked by its one
-//! invariant - a described entry begins with the owning class's root - which
-//! resynchronises after anything unrecognised.
+//! A class keeps its fields and its methods in two separate tables. The fields
+//! start at `root+0x10` and run, 20 bytes each, right up to the method table.
+//! The method table opens with a `u32` count and continues with rows of 28
+//! bytes. Both row kinds begin with the owning class's root, which is what
+//! makes the boundary checkable.
 //!
-//! Field and method rows are told apart by the descriptor, not by a flag bit:
-//! only a method descriptor starts with `(`. A method's ARM entry point sits
-//! at `+0x14`, and the high half of its flags is the number of argument words
-//! it expects, `this` included.
+//! ```text
+//! field:  { u32 owner, u32 name, u32 descriptor, u32 flags, u32 slot }
+//! method: { u32 owner, u32 name, u32 descriptor, u32 flags, u32, u32 entry, u32 }
+//! ```
 //!
-//! Not every class describes its members. Some carry a bare vtable of entry
-//! points with no names at all, so the walk stops at the first row it cannot
-//! read and reports how far it got rather than failing: a partially read class
-//! is still useful for looking entry points up, and an application should not
-//! fail to load over one.
+//! The high half of a method's flags is the number of argument words it
+//! expects, `this` included.
+//!
+//! The metadata's own member count is **not** the size of these tables -
+//! Legend of Master's `f` declares 425 and has 409 fields and 372 methods - so
+//! it is recorded for the trace and nothing else. Getting this wrong is
+//! expensive rather than merely incomplete: reading only the first 425 rows
+//! stops in the middle of the method table, which hides every method a class
+//! overrides and leaves an earlier row of the same descriptor looking like the
+//! override.
+//!
+//! Not every class carries these tables. Most of an application's classes have
+//! no method table at all, because nothing outside the compiled code ever
+//! needs to call them by name; those parse as a class with no members, which
+//! is correct rather than a failure.
 
 use alloc::{format, string::String, vec::Vec};
 
 use wie_util::{ByteRead, Result, WieError, read_generic, read_null_terminated_string_bytes};
 
 const METADATA_SIZE: u32 = 0x4c;
-const MEMBER_TABLE_OFFSET: u32 = 0x10;
-const METHOD_ENTRY_OFFSET: u32 = 0x14;
+
+const METADATA_NAME: u32 = 0x08;
+const METADATA_SUPERCLASS: u32 = 0x10;
+const METADATA_MEMBER_COUNT: u32 = 0x18;
+const METADATA_INTERFACES: u32 = 0x28;
+const METADATA_METHODS: u32 = 0x38;
+
+const FIELD_TABLE_OFFSET: u32 = 0x10;
+const FIELD_ROW_SIZE: u32 = 0x14;
 const FIELD_SLOT_OFFSET: u32 = 0x10;
 
-/// How far the walk will look for the next entry before giving up. Member
-/// tables are dense; a gap this large means the table was misparsed.
-const MAX_ENTRY_GAP: u32 = 0x100;
+const METHOD_ROW_SIZE: u32 = 0x1c;
+const METHOD_ENTRY_OFFSET: u32 = 0x14;
+
+/// A ceiling on either table, so a stray pointer cannot make the loader walk
+/// the whole image. The largest class seen so far declares 409 fields and 372
+/// methods.
+const MAX_MEMBERS: u32 = 8192;
 
 /// Applications register a few dozen classes.
 const MAX_CLASSES: u32 = 4096;
@@ -87,9 +110,10 @@ pub struct AppClass {
     pub root: u32,
     pub name: String,
     pub superclass: Option<String>,
+    pub interfaces: Vec<String>,
     pub members: Vec<AppMember>,
-    /// Members the metadata declared, which is more than `members` holds when
-    /// the class does not describe all of them.
+    /// The count the metadata carries, which is neither the number of fields
+    /// nor the number of methods nor their sum. Kept for the trace.
     pub declared_members: u32,
 }
 
@@ -140,7 +164,109 @@ where
     read_string(reader, pointer)
 }
 
-/// Reads one class and its member table.
+/// Reads the name and descriptor a member row opens with, once the row is
+/// known to belong to `root`. `None` for anything that does not read as a
+/// described member, which ends the table it is in.
+fn read_member_head<R>(reader: &R, root: u32, row: u32) -> Option<(String, String)>
+where
+    R: ?Sized + ByteRead,
+{
+    if read_generic::<u32, _>(reader, row).ok()? != root {
+        return None;
+    }
+
+    let name = read_string(reader, read_generic(reader, row + 4).ok()?).ok()??;
+    let descriptor = read_string(reader, read_generic(reader, row + 8).ok()?).ok()??;
+
+    Some((name, descriptor))
+}
+
+/// Reads the fields between the root and the method table.
+fn parse_fields<R>(reader: &R, root: u32, end: u32) -> Result<Vec<AppMember>>
+where
+    R: ?Sized + ByteRead,
+{
+    let mut fields = Vec::new();
+    let mut row = root + FIELD_TABLE_OFFSET;
+
+    while row + FIELD_ROW_SIZE <= end && fields.len() < MAX_MEMBERS as usize {
+        let Some((name, descriptor)) = read_member_head(reader, root, row) else {
+            break;
+        };
+
+        fields.push(AppMember::Field {
+            name,
+            descriptor,
+            slot: read_generic(reader, row + FIELD_SLOT_OFFSET)?,
+        });
+
+        row += FIELD_ROW_SIZE;
+    }
+
+    Ok(fields)
+}
+
+/// Reads the counted method table.
+fn parse_methods<R>(reader: &R, root: u32, table: u32) -> Result<Vec<AppMember>>
+where
+    R: ?Sized + ByteRead,
+{
+    let count: u32 = read_generic(reader, table)?;
+    if count > MAX_MEMBERS {
+        return Err(WieError::FatalError(format!(
+            "LGT class root {root:#x} declares {count} methods at {table:#x}"
+        )));
+    }
+
+    let mut methods = Vec::with_capacity(count as usize);
+
+    for index in 0..count {
+        let row = table + 4 + index * METHOD_ROW_SIZE;
+
+        let Some((name, descriptor)) = read_member_head(reader, root, row) else {
+            break;
+        };
+
+        let flags: u32 = read_generic(reader, row + 0xc)?;
+
+        methods.push(AppMember::Method {
+            name,
+            descriptor,
+            entry: read_generic(reader, row + METHOD_ENTRY_OFFSET)?,
+            argument_words: flags >> 16,
+        });
+    }
+
+    Ok(methods)
+}
+
+/// Reads the counted table of interface names a class implements.
+fn parse_interfaces<R>(reader: &R, table: u32) -> Result<Vec<String>>
+where
+    R: ?Sized + ByteRead,
+{
+    if table == 0 {
+        return Ok(Vec::new());
+    }
+
+    let count: u32 = read_generic(reader, table)?;
+    if count > MAX_MEMBERS {
+        return Ok(Vec::new());
+    }
+
+    let mut interfaces = Vec::with_capacity(count as usize);
+
+    for index in 0..count {
+        match read_string(reader, read_generic(reader, table + 4 + index * 4)?)? {
+            Some(name) => interfaces.push(name),
+            None => break,
+        }
+    }
+
+    Ok(interfaces)
+}
+
+/// Reads one class and its member tables.
 fn parse_class<R>(reader: &R, root: u32) -> Result<AppClass>
 where
     R: ?Sized + ByteRead,
@@ -152,60 +278,33 @@ where
         )));
     }
 
-    let name = read_string(reader, read_generic(reader, metadata + 8)?)?
+    let name = read_string(reader, read_generic(reader, metadata + METADATA_NAME)?)?
         .ok_or_else(|| WieError::FatalError(format!("LGT class root {root:#x} has no name")))?;
-    let superclass = read_superclass(reader, read_generic(reader, metadata + 0x10)?)?;
-    let count: u16 = read_generic(reader, metadata + 0x18)?;
+    let superclass = read_superclass(reader, read_generic(reader, metadata + METADATA_SUPERCLASS)?)?;
+    let declared_members: u16 = read_generic(reader, metadata + METADATA_MEMBER_COUNT)?;
 
-    let mut members = Vec::with_capacity(count.into());
-    let mut cursor = root + MEMBER_TABLE_OFFSET;
+    let methods_table: u32 = read_generic(reader, metadata + METADATA_METHODS)?;
+    let interfaces = parse_interfaces(reader, read_generic(reader, metadata + METADATA_INTERFACES)?)?;
 
-    for _ in 0..count {
-        // Resynchronise on the owner word, which starts every described entry.
-        let mut owner: u32 = read_generic(reader, cursor)?;
-        let limit = cursor + MAX_ENTRY_GAP;
-        while owner != root && cursor < limit {
-            cursor += 4;
-            owner = read_generic(reader, cursor)?;
-        }
-        if owner != root {
-            break;
-        }
+    // Without a method table there is nothing to bound the fields with, and a
+    // class with neither describes no members at all.
+    let mut members = if methods_table > root + FIELD_TABLE_OFFSET {
+        parse_fields(reader, root, methods_table)?
+    } else {
+        Vec::new()
+    };
 
-        let member_name = read_string(reader, read_generic(reader, cursor + 4)?)?;
-        let descriptor = read_string(reader, read_generic(reader, cursor + 8)?)?;
-        let flags: u32 = read_generic(reader, cursor + 0xc)?;
-
-        // A row without both strings is a placeholder, or a table that does
-        // not describe its members at all.
-        let (Some(member_name), Some(descriptor)) = (member_name, descriptor) else {
-            break;
-        };
-
-        members.push(if descriptor.starts_with('(') {
-            AppMember::Method {
-                name: member_name,
-                descriptor,
-                entry: read_generic(reader, cursor + METHOD_ENTRY_OFFSET)?,
-                argument_words: flags >> 16,
-            }
-        } else {
-            AppMember::Field {
-                name: member_name,
-                descriptor,
-                slot: read_generic(reader, cursor + FIELD_SLOT_OFFSET)?,
-            }
-        });
-
-        cursor += 4;
+    if methods_table != 0 {
+        members.extend(parse_methods(reader, root, methods_table)?);
     }
 
     Ok(AppClass {
         root,
         name,
         superclass,
+        interfaces,
         members,
-        declared_members: count.into(),
+        declared_members: declared_members.into(),
     })
 }
 
@@ -289,12 +388,14 @@ pub fn describe(class: &AppClass) -> String {
     let methods = class.methods().count();
 
     format!(
-        "{} extends {} at {:#x} ({} methods, {}/{} members described)",
+        "{} extends {}{}{} at {:#x} ({} fields, {} methods, {} declared)",
         class.name,
         class.superclass.as_deref().unwrap_or("-"),
+        if class.interfaces.is_empty() { "" } else { " implements " },
+        class.interfaces.join(", "),
         class.root,
+        class.members.len() - methods,
         methods,
-        class.members.len(),
         class.declared_members
     )
 }
@@ -355,9 +456,152 @@ pub fn descriptor_argument_words(descriptor: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString;
+    use alloc::{string::ToString, vec, vec::Vec};
 
-    use super::{AppMember, descriptor_argument_words};
+    use wie_util::{ByteRead, Result};
+
+    use super::{
+        AppMember, FIELD_ROW_SIZE, FIELD_SLOT_OFFSET, FIELD_TABLE_OFFSET, METADATA_MEMBER_COUNT, METADATA_METHODS, METADATA_NAME, METADATA_SIZE,
+        METADATA_SUPERCLASS, METHOD_ENTRY_OFFSET, METHOD_ROW_SIZE, descriptor_argument_words, parse_class,
+    };
+
+    /// A flat image laid out from a fixed base, so a class can be built by
+    /// writing words and strings at known addresses.
+    struct Image {
+        base: u32,
+        data: Vec<u8>,
+    }
+
+    impl Image {
+        fn new(base: u32, size: usize) -> Self {
+            Self { base, data: vec![0; size] }
+        }
+
+        fn word(&mut self, address: u32, value: u32) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        fn string(&mut self, address: u32, value: &str) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + value.len()].copy_from_slice(value.as_bytes());
+        }
+    }
+
+    impl ByteRead for Image {
+        fn read_bytes(&self, address: u32, result: &mut [u8]) -> Result<usize> {
+            let offset = (address - self.base) as usize;
+            let available = self.data.len() - offset;
+            let length = result.len().min(available);
+
+            result[..length].copy_from_slice(&self.data[offset..offset + length]);
+
+            Ok(length)
+        }
+    }
+
+    /// The shape of Legend of Master's `f`, cut down to two fields and two
+    /// methods: a member count that is neither table's length, a field table
+    /// that runs to the method table, and a method table with its own count.
+    fn legend_of_master_shaped_class() -> (Image, u32) {
+        let base = 0x1000;
+        let mut image = Image::new(base, 0x400);
+
+        let metadata = 0x1100;
+        let root = metadata + METADATA_SIZE;
+        let fields = root + FIELD_TABLE_OFFSET;
+        let methods = fields + 2 * FIELD_ROW_SIZE;
+
+        image.string(0x1000, "f");
+        image.string(0x1010, "org/kwis/msp/lcdui/Card");
+        image.string(0x1040, "paint");
+        image.string(0x1050, "(Lorg/kwis/msp/lcdui/Graphics;)V");
+        image.string(0x1080, "run");
+        image.string(0x1090, "()V");
+        image.string(0x10a0, "hp");
+        image.string(0x10b0, "I");
+        image.string(0x10c0, "name");
+        image.string(0x10d0, "Ljava/lang/String;");
+
+        image.word(metadata + METADATA_NAME, 0x1000);
+        image.word(metadata + METADATA_SUPERCLASS, 0x1010);
+        // Deliberately not two, and not four: the count in the image describes
+        // neither table.
+        image.word(metadata + METADATA_MEMBER_COUNT, 3);
+        image.word(metadata + METADATA_METHODS, methods);
+        image.word(root + 8, metadata);
+
+        for (index, (name, descriptor)) in [(0x10a0, 0x10b0), (0x10c0, 0x10d0)].into_iter().enumerate() {
+            let row = fields + index as u32 * FIELD_ROW_SIZE;
+            image.word(row, root);
+            image.word(row + 4, name);
+            image.word(row + 8, descriptor);
+            image.word(row + FIELD_SLOT_OFFSET, index as u32);
+        }
+
+        image.word(methods, 2);
+        for (index, (name, descriptor, entry, argument_words)) in [(0x1040, 0x1050, 0x91ebc, 2), (0x1080, 0x1090, 0x939cc, 1)].into_iter().enumerate()
+        {
+            let row = methods + 4 + index as u32 * METHOD_ROW_SIZE;
+            image.word(row, root);
+            image.word(row + 4, name);
+            image.word(row + 8, descriptor);
+            image.word(row + 0xc, argument_words << 16);
+            image.word(row + METHOD_ENTRY_OFFSET, entry);
+        }
+
+        (image, root)
+    }
+
+    #[test]
+    fn reads_both_member_tables() {
+        let (image, root) = legend_of_master_shaped_class();
+        let class = parse_class(&image, root).unwrap();
+
+        assert_eq!(class.name, "f");
+        assert_eq!(class.superclass.as_deref(), Some("org/kwis/msp/lcdui/Card"));
+
+        let methods = class.methods().collect::<Vec<_>>();
+        assert_eq!(methods.len(), 2);
+        assert_eq!(methods[0].name(), "paint");
+        assert_eq!(methods[1].name(), "run");
+
+        assert_eq!(class.members.len() - methods.len(), 2);
+    }
+
+    /// The member count must not bound either walk. Reading only as many rows
+    /// as it names stops inside the method table, which is how `paint` came to
+    /// be missed and a same-descriptor helper called in its place.
+    #[test]
+    fn ignores_the_declared_member_count() {
+        let (image, root) = legend_of_master_shaped_class();
+        let class = parse_class(&image, root).unwrap();
+
+        assert_eq!(class.declared_members, 3);
+        assert_eq!(class.members.len(), 4);
+        assert!(class.methods().any(|x| x.name() == "paint"));
+    }
+
+    /// Most application classes carry no tables at all, which is a class with
+    /// no members rather than a parse failure.
+    #[test]
+    fn accepts_a_class_without_tables() {
+        let base = 0x1000;
+        let mut image = Image::new(base, 0x400);
+
+        let metadata = 0x1100;
+        let root = metadata + METADATA_SIZE;
+
+        image.string(0x1000, "b");
+        image.word(metadata + METADATA_NAME, 0x1000);
+        image.word(metadata + METADATA_MEMBER_COUNT, 111);
+        image.word(root + 8, metadata);
+
+        let class = parse_class(&image, root).unwrap();
+
+        assert_eq!(class.name, "b");
+        assert!(class.members.is_empty());
+    }
 
     #[test]
     fn counts_argument_words() {

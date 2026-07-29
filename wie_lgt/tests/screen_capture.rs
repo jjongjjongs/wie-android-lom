@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -62,18 +62,27 @@ impl Screen for CaptureScreen {
 struct CapturePlatform {
     inner: TestPlatform,
     screen: CaptureScreen,
+    clock: Arc<AtomicU64>,
 }
 
 impl Platform for CapturePlatform {
     fn screen(&self) -> &dyn Screen {
         &self.screen
     }
-    /// Real time, not the fake clock the shared test platform steps by hand: a
-    /// title that waits on the clock never advances under that one.
+    /// A clock that advances a millisecond on every read.
+    ///
+    /// The wall clock does not work here. `Executor::tick` runs until eight
+    /// milliseconds have passed *or* every task is asleep, and an idle
+    /// emulator hits the second condition at once - so a loop that calls
+    /// `tick` as fast as it can burns thousands of iterations inside a single
+    /// wall millisecond and the application's `sleep(16)` almost never
+    /// expires. Emulated time then crawls, and a title that draws once per
+    /// frame looks like a title that never draws.
+    ///
+    /// Advancing on read is what the executor's own tests do, and it ties
+    /// emulated time to work done rather than to how fast the host is.
     fn now(&self) -> Instant {
-        let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-
-        Instant::from_epoch_millis(since_epoch.as_millis() as _)
+        Instant::from_epoch_millis(self.clock.fetch_add(1, Ordering::SeqCst))
     }
     fn database_repository(&self) -> &dyn DatabaseRepository {
         self.inner.database_repository()
@@ -100,6 +109,13 @@ impl Platform for CapturePlatform {
 
 /// Runs an archive for a while and reports the frames it painted.
 fn run(label: &str, archive: &[u8], ticks_limit: u32) {
+    // Diagnosing a blank screen means reading the runtime's own log, so honour
+    // `RUST_LOG` here the way `wie_cli` does.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .try_init();
+
     let exited = Arc::new(AtomicBool::new(false));
     let exited_clone = exited.clone();
     let screen = CaptureScreen::default();
@@ -110,6 +126,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             TestPlatformEvent::Exit => exited_clone.store(true, Ordering::SeqCst),
         }),
         screen: screen.clone(),
+        clock: Arc::new(AtomicU64::new(0)),
     });
 
     let files = extract_zip(archive).unwrap();

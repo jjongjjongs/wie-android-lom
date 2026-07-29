@@ -73,7 +73,7 @@ a `net/wie/CletWrapper` Jlet, and **renders**. Eight of eleven retail archives
 tested run this way. These are the LGT titles worth running today.
 
 Anything else names a class that LGT's toolchain compiled ahead of time into
-`binary.mod`, Legend of Master (`MClass:Lm`) among them. Those now boot -
-`startApp` completes and the `paint` override runs every redraw - but draw
-nothing, because the application is waiting on state whose source has not been
-found. See `docs/lgt.md`.
+`binary.mod`, Legend of Master (`MClass:Lm`) among them. Those now boot,
+`startApp` completes, and the real `paint` and `keyNotify` overrides run - but
+the screen stays one colour, because the game loop thread the application
+would run its state machine on never starts. See `docs/lgt.md`.
