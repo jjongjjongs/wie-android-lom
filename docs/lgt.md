@@ -407,27 +407,55 @@ with reporting stubs, rather than writing into the image: an application's
 table is exactly as long as it declares, and the compiled code reaches past
 that end.
 
+A class that overrides nothing ships no table at all and inherits its
+superclass's whole, so one gets the table of the nearest platform class it
+extends. Legend of Master's `f` is one of those, and reaches `Card.showNotify`
+at slot 16 - `move`, `resize`, `getWidth`, `getHeight`, `getX`, `getY`,
+`showNotify` being Card's first seven, at slots 10 to 16.
+
 Slots 1 to 9 are answered by invoking the method on the receiver's JVM
 instance, which needs no knowledge of whose table it is.
 
+Slot numbers within a platform class still do not always agree with the real
+layout. The table an application registers lists only the methods it imports,
+and the platform numbers slots over *all* of a class's virtual methods, so the
+two agree on where a class's methods start and not on the order within.
+`KNOWN_DISPATCH_SLOTS` carries the ones that have come up.
+
+#### Instances
+
+`vm_instantiate(class)` allocates the object. That sounds obvious and it was
+got wrong for a long time, because import `0x54` looked like an allocator: the
+compiled code appeared to allocate the object itself and hand it over, leaving
+`vm_instantiate` nothing to do but return what it was given. It is
+`vm_check_stack_overflow`.
+
+Handing back the activated class made every instance of a class the same
+address, and gave all of them the twenty byte block `vm_activate_class`
+allocates for the class itself as their fields - so a class wrote its instance
+fields over its own statics, and any field past the fifth landed in whatever
+allocation followed. Legend of Master's `f` has 409 fields.
+
 #### Where it stops
 
-Legend of Master boots and paints. `startApp` runs to completion, `f.paint`
-runs on every redraw and `f.keyNotify` on every key, and `f.<init>` now builds
-54 arrays and opens `/res/gData.dat` and `/res/dat/tri.dat`.
+No title in the batch of twelve fails any more. Nine render; three run without
+faulting and paint one colour, Legend of Master among them.
 
-It stops in `f.<init>` on `new StringBuffer(String)` whose argument is
-`0x24420088` - a word that names no object this runtime handed out, and which
-is exactly half a handle it did hand out. Where the halving happens is not
-known.
+Legend of Master's `startApp` runs to completion, `f.<init>` builds 69 arrays
+and opens `/res/gData.dat` and `/res/dat/tri.dat`, `f.paint` runs on every
+redraw and `f.keyNotify` on every key, and `Card.getWidth` and
+`Card.getHeight` resolve through slots 12 and 13.
 
-`paint` itself calls `System.currentTimeMillis()`, `Graphics.translate`,
+`paint` calls `System.currentTimeMillis()`, `Graphics.translate`,
 `Graphics.setColor` and `Graphics.fillRect`, then dispatches on a state field
 through a 22 entry jump table. The state is zero, whose case does nothing.
 `f` implements `java/lang/Runnable` and the last thing `f.<init>` does is
-`new Thread(this).start()` through slot 10 - it does not get that far, but
-another title now does, and its `run()` loop calls `currentTimeMillis` and
-`Thread.yield` the way a game loop should.
+`new Thread(this).start()` through slot 10; it still does not reach that,
+though another title now does, and its `run()` loop calls `currentTimeMillis`
+and `Thread.yield` the way a game loop should.
+
+One slot is still asked for and unanswered: 16, on an object whose class chain
+does not reach a platform class.
 
 #### Clets, by contrast, render
 

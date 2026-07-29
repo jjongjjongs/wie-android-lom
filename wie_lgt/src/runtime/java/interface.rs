@@ -39,6 +39,11 @@ pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x4000;
 /// Slots every dispatch table has room for, declared or not.
 pub const DISPATCH_TABLE_SLOTS: u32 = 64;
 
+/// Where a class's own virtual methods start in its dispatch table. Slot 0 is
+/// the class's `<init>` and slots 1 to 9 are `java/lang/Object`'s, in every
+/// `dt_` in `liblgt_system.so`.
+pub const FIRST_CLASS_SLOT: u32 = 10;
+
 /// Classes that can have their own reserved block of unknown-slot ids. One
 /// past the last is the fallback table's index.
 pub const MAX_DISPATCH_CLASSES: u32 = 63;
@@ -194,20 +199,29 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 
 /// Builds one dispatch table.
 ///
-/// Every table is the same size, whatever the class declares. The compiled
-/// code does not always take its slot from `virtual_method_offsets`: it also
-/// emits fixed offsets for methods the platform is expected to provide, and
-/// Battle Monster branches through slot 13 of a `java/lang/Runtime` that
-/// declares no virtual methods at all. A short table leaves that slot zero and
-/// the branch goes to address zero, so the slots a class does not declare are
-/// filled with stubs that report what was called instead.
+/// A class's own methods start at [`FIRST_CLASS_SLOT`], because the ten slots
+/// before them belong to `<init>` and `java/lang/Object` in every table the
+/// platform builds. Getting that wrong is not caught by anything the runtime
+/// can see on its own - the slots it hands out and the table it builds stay
+/// consistent with each other - but the compiled code also emits fixed slot
+/// numbers for methods the platform is expected to provide, and those are
+/// numbered from the real layout.
+///
+/// Every table is the same size whatever the class declares, because a class
+/// gets called at slots it never mentions: Battle Monster branches through
+/// slot 13 of a `java/lang/Runtime` that declares no virtual methods at all. A
+/// short table leaves that slot zero and the branch goes to address zero, so
+/// the slots a class does not declare are filled with stubs that report what
+/// was called instead.
 fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32) -> Result<u32> {
     let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
     write_generic(core, vtable, 0u32)?;
 
     for slot in 0..DISPATCH_TABLE_SLOTS {
-        let svc = if slot < count {
-            JAVA_VIRTUAL_METHOD_SVC_BASE + start + slot
+        let declared = slot.checked_sub(FIRST_CLASS_SLOT).filter(|index| *index < count);
+
+        let svc = if let Some(index) = declared {
+            JAVA_VIRTUAL_METHOD_SVC_BASE + start + index
         } else {
             JAVA_UNKNOWN_SLOT_SVC_BASE + class_index * DISPATCH_TABLE_SLOTS + slot
         };
@@ -264,6 +278,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
             continue;
         };
         let Some(slot) = table.virtual_slot(index) else { continue };
+        let slot = slot + FIRST_CLASS_SLOT;
 
         write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
 
