@@ -115,13 +115,38 @@ where
     Ok(Some(String::from_utf8_lossy(&bytes).into()))
 }
 
+/// Reads the superclass a class's metadata points at.
+///
+/// The pointer is a name when the superclass is a platform class, and another
+/// class's root when it is one of the application's own - Battle Monster's
+/// `Game` extends `a`, which extends `org/kwis/msp/lcdui/Jlet`. A root is
+/// recognisable by the metadata block sitting directly before it.
+fn read_superclass<R>(reader: &R, pointer: u32) -> Result<Option<String>>
+where
+    R: ?Sized + ByteRead,
+{
+    if pointer == 0 {
+        return Ok(None);
+    }
+
+    if let Ok(metadata) = read_generic::<u32, _>(reader, pointer + 8)
+        && metadata != 0
+        && metadata.checked_add(METADATA_SIZE) == Some(pointer)
+        && let Ok(name) = read_generic::<u32, _>(reader, metadata + 8)
+    {
+        return read_string(reader, name);
+    }
+
+    read_string(reader, pointer)
+}
+
 /// Reads one class and its member table.
 fn parse_class<R>(reader: &R, root: u32) -> Result<AppClass>
 where
     R: ?Sized + ByteRead,
 {
     let metadata: u32 = read_generic(reader, root + 8)?;
-    if metadata == 0 || metadata + METADATA_SIZE != root {
+    if metadata == 0 || metadata.checked_add(METADATA_SIZE) != Some(root) {
         return Err(WieError::FatalError(format!(
             "LGT class root {root:#x} has metadata at {metadata:#x}, which is not the block before it"
         )));
@@ -129,7 +154,7 @@ where
 
     let name = read_string(reader, read_generic(reader, metadata + 8)?)?
         .ok_or_else(|| WieError::FatalError(format!("LGT class root {root:#x} has no name")))?;
-    let superclass = read_string(reader, read_generic(reader, metadata + 0x10)?)?;
+    let superclass = read_superclass(reader, read_generic(reader, metadata + 0x10)?)?;
     let count: u16 = read_generic(reader, metadata + 0x18)?;
 
     let mut members = Vec::with_capacity(count.into());
@@ -193,7 +218,7 @@ where
     let Ok(metadata) = read_generic::<u32, _>(reader, root + 8) else {
         return false;
     };
-    if metadata == 0 || metadata + METADATA_SIZE != root {
+    if metadata == 0 || metadata.checked_add(METADATA_SIZE) != Some(root) {
         return false;
     }
 

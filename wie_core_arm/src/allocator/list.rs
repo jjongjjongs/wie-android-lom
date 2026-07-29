@@ -123,6 +123,8 @@ impl ListAllocator {
             }
         }
 
+        tracing::error!("No free block for {size:#x} bytes in the {base_size:#x} byte heap at {base_address:#x}");
+
         Err(WieError::AllocationFailure)
     }
 }
