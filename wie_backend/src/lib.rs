@@ -60,6 +60,22 @@ pub fn extract_zip(zip: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
     use std::io::{Cursor, Read};
     use zip::ZipArchive;
 
+    // Korean handset archives carry filenames in EUC-KR alongside an Info-ZIP
+    // Unicode Path extra field whose checksum does not match, because the name
+    // it was computed over is not the one in the header. That is fatal to a
+    // strict reader, so the field is dropped and the archive read again.
+    let patched;
+    let zip = match ZipArchive::new(Cursor::new(zip)) {
+        Ok(_) => zip,
+        Err(error) => {
+            patched = drop_unicode_path_fields(zip).ok_or_else(|| WieError::FatalError(format!("Invalid zip archive: {error}")))?;
+
+            tracing::warn!("Rereading archive without its Unicode path fields: {error}");
+
+            &patched
+        }
+    };
+
     let mut archive = ZipArchive::new(Cursor::new(zip)).map_err(|x| WieError::FatalError(format!("Invalid zip archive: {x}")))?;
 
     (0..archive.len())
@@ -81,6 +97,81 @@ pub fn extract_zip(zip: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
         })
         .collect::<Result<_>>()
         .map(strip_common_directory)
+}
+
+/// Info-ZIP Unicode Path, the extra field whose checksum these archives get
+/// wrong.
+const EXTRA_FIELD_UNICODE_PATH: u16 = 0x7075;
+
+/// Header id no writer assigns, so a reader skips the field instead of
+/// checking it.
+const EXTRA_FIELD_IGNORED: u16 = 0x9999;
+
+const LOCAL_HEADER_SIGNATURE: u32 = 0x0403_4b50;
+const CENTRAL_HEADER_SIGNATURE: u32 = 0x0201_4b50;
+
+fn read_u16(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(data.get(offset..offset + 2)?.try_into().ok()?))
+}
+
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(data.get(offset..offset + 4)?.try_into().ok()?))
+}
+
+/// Renames every Unicode Path extra field so a reader ignores it.
+///
+/// The edit is in place and the same length, so nothing an archive records
+/// about where its entries are moves. `None` if the bytes do not walk cleanly
+/// as a zip, in which case the caller reports the original error.
+fn drop_unicode_path_fields(zip: &[u8]) -> Option<Vec<u8>> {
+    let mut patched = zip.to_vec();
+
+    // Walk the local headers, which sit at the front and are self describing
+    // as long as none of them is corrupt.
+    let mut offset = 0;
+    while read_u32(&patched, offset) == Some(LOCAL_HEADER_SIGNATURE) {
+        let compressed_size = read_u32(&patched, offset + 18)? as usize;
+        let name_length = read_u16(&patched, offset + 26)? as usize;
+        let extra_length = read_u16(&patched, offset + 28)? as usize;
+        let extra = offset + 30 + name_length;
+
+        patch_extra_field(&mut patched, extra, extra_length)?;
+
+        offset = extra + extra_length + compressed_size;
+    }
+
+    // Then the central directory, wherever the walk left off.
+    while read_u32(&patched, offset) == Some(CENTRAL_HEADER_SIGNATURE) {
+        let name_length = read_u16(&patched, offset + 28)? as usize;
+        let extra_length = read_u16(&patched, offset + 30)? as usize;
+        let comment_length = read_u16(&patched, offset + 32)? as usize;
+        let extra = offset + 46 + name_length;
+
+        patch_extra_field(&mut patched, extra, extra_length)?;
+
+        offset = extra + extra_length + comment_length;
+    }
+
+    Some(patched)
+}
+
+/// Rewrites the ids in one extra field block.
+fn patch_extra_field(data: &mut [u8], start: usize, length: usize) -> Option<()> {
+    let mut offset = start;
+    let end = start + length;
+
+    while offset + 4 <= end {
+        let id = read_u16(data, offset)?;
+        let size = read_u16(data, offset + 2)? as usize;
+
+        if id == EXTRA_FIELD_UNICODE_PATH {
+            data.get_mut(offset..offset + 2)?.copy_from_slice(&EXTRA_FIELD_IGNORED.to_le_bytes());
+        }
+
+        offset += 4 + size;
+    }
+
+    Some(())
 }
 
 /// Feature phone archives are sometimes repacked with every entry below a

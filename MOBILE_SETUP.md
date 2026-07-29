@@ -69,8 +69,8 @@ engineered.
 LGT titles come in two kinds, and `app_info`'s `MClass` says which.
 
 `MClass:Clet` is a native Clet: it registers through `clet_register`, runs as
-a `net/wie/CletWrapper` Jlet, and **renders**. These are the LGT titles worth
-running today.
+a `net/wie/CletWrapper` Jlet, and **renders**. Eight of eleven retail archives
+tested run this way. These are the LGT titles worth running today.
 
 Anything else names a class that LGT's toolchain compiled ahead of time into
 `binary.mod`, Legend of Master (`MClass:Lm`) among them. Those now boot -

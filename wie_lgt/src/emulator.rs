@@ -36,7 +36,7 @@ impl LgtEmulator {
 
         tracing::info!("Loading app {}, pid {}, mclass {}", app_info.aid, app_info.pid, app_info.mclass);
 
-        let jar_filename = format!("{}.jar", app_info.aid);
+        let jar_filename = Self::find_jar(&files, &app_info.aid)?;
 
         Self::load(
             platform,
@@ -47,6 +47,33 @@ impl LgtEmulator {
             &files,
             options,
         )
+    }
+
+    /// The jar an archive's descriptor names, or the one it actually contains.
+    ///
+    /// Repacked archives do not always agree with themselves: SEED's `app_info`
+    /// declares `AID:00027565` while the jar beside it is `00025A84.jar`. When
+    /// the declared name is absent and there is exactly one jar, that jar is
+    /// what the descriptor meant.
+    fn find_jar(files: &BTreeMap<String, Vec<u8>>, aid: &str) -> Result<String> {
+        let declared = format!("{aid}.jar");
+        if files.contains_key(&declared) {
+            return Ok(declared);
+        }
+
+        let mut jars = files.keys().filter(|x| x.ends_with(".jar"));
+
+        match (jars.next(), jars.next()) {
+            (Some(jar), None) => {
+                tracing::warn!("LGT archive declares {declared} but contains {jar}; using it");
+
+                Ok(jar.clone())
+            }
+            (Some(_), Some(_)) => Err(WieError::FatalError(format!(
+                "LGT archive declares {declared}, which is missing, and holds several jars"
+            ))),
+            _ => Err(WieError::FatalError(format!("LGT archive holds no jar; expected {declared}"))),
+        }
     }
 
     pub fn from_jar(
@@ -111,13 +138,21 @@ impl LgtEmulator {
         let protos = [wie_midp::get_protos().into(), wie_wipi_java::get_protos().into()];
         let jvm = JvmSupport::new_jvm(system, Some(&jar_filename), Box::new(protos), &[], RustJavaJvmImplementation).await?; // TODO use lgt's java implementation
 
-        let class_loader = jvm.current_class_loader().await.unwrap();
-        let stream = JavaLangClassLoader::get_resource_as_stream(&jvm, &class_loader, "binary.mod")
-            .await
-            .unwrap()
-            .unwrap();
+        let class_loader = match jvm.current_class_loader().await {
+            Ok(class_loader) => class_loader,
+            Err(error) => return Err(JvmSupport::to_wie_err(&jvm, error).await),
+        };
 
-        let binary_mod = JavaIoInputStream::read_until_end(&jvm, &stream).await.unwrap();
+        let stream = match JavaLangClassLoader::get_resource_as_stream(&jvm, &class_loader, "binary.mod").await {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return Err(WieError::FatalError(format!("{jar_filename} has no binary.mod"))),
+            Err(error) => return Err(JvmSupport::to_wie_err(&jvm, error).await),
+        };
+
+        let binary_mod = match JavaIoInputStream::read_until_end(&jvm, &stream).await {
+            Ok(binary_mod) => binary_mod,
+            Err(error) => return Err(JvmSupport::to_wie_err(&jvm, error).await),
+        };
 
         load_native(core, system, &jvm, &binary_mod, main_class_name.as_deref()).await?;
 
