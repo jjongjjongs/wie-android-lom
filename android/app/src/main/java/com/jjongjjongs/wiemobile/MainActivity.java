@@ -74,9 +74,9 @@ public final class MainActivity extends Activity {
     private static final float KEYPAD_WEIGHT = 1f;
 
     /**
-     * Share of the keypad's height taken by the function row. It spans the
-     * whole width, the way the keys under a handset's screen did, which leaves
-     * the halves below it to the pad and the numbers alone.
+     * Share of the keypad's height taken by the function row, which sits where
+     * the keys under a handset's screen did. Two keys over each half, so the
+     * pad and the numbers below it each keep their whole half.
      */
     private static final float KEYPAD_TOP_ROW = 0.19f;
 
@@ -703,9 +703,9 @@ public final class MainActivity extends Activity {
      * a direction held while a number is tapped, and SEED 2's "press 0 and #"
      * are all impossible that way.
      *
-     * <p>Layout is a function row across the top - the two soft keys, save and
-     * C - and below it the width split in half: directions on the left, the
-     * number pad on the right.
+     * <p>Layout is the width split in half - directions on the left, the
+     * number pad on the right - under a function row that keeps the same
+     * split: the two soft keys over the pad, save and back over the numbers.
      */
     private final class KeypadView extends View {
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -725,13 +725,18 @@ public final class MainActivity extends Activity {
             edge.setStyle(Paint.Style.STROKE);
             edge.setStrokeWidth(Math.max(1f, dp(1) * 0.8f));
 
-            // The function row, left to right. The two soft keys are the ones
-            // a handset printed nothing on: what they do is whatever the game
-            // draws in the corners of its screen above them.
-            keys.add(new Key("좌 상단", 5, KEY_SOFT));
+            // The function row, left to right, grouped over what each pair
+            // belongs with: the soft keys sit over the pad they are used
+            // alongside, save and back over the numbers.
+            //
+            // The soft keys are the ones a handset printed nothing on - what
+            // they do is whatever the game draws in the corners of its screen
+            // above them. Back is the same key a handset marked C, which games
+            // use both for their menu and for stepping back out of it.
+            keys.add(new Key("좌상단", 5, KEY_SOFT));
+            keys.add(new Key("우상단", 6, KEY_SOFT));
             keys.add(new Key("저장", 20, KEY_SAVE));
-            keys.add(new Key("C", 7, KEY_CLEAR));
-            keys.add(new Key("우 상단", 6, KEY_SOFT));
+            keys.add(new Key("뒤로가기", 7, KEY_CLEAR));
 
             keys.add(new Key("▲", 0, KEY_DIRECTION));
             keys.add(new Key("◀", 2, KEY_DIRECTION));
@@ -762,11 +767,13 @@ public final class MainActivity extends Activity {
             float below = usable - gap - topRow;
             float padTop = top + topRow + gap;
 
-            // Four function keys across the whole width.
-            float functionWidth = (width - 2 * pad - 3 * gap) / 4f;
-            for (int index = 0; index < 4; index++) {
-                place(index, pad + index * (functionWidth + gap), top, functionWidth, topRow);
-            }
+            // Two function keys over each half, so the pair lines up with the
+            // pad it goes with.
+            float functionWidth = (half - gap) / 2f;
+            place(0, leftX, top, functionWidth, topRow);
+            place(1, leftX + functionWidth + gap, top, functionWidth, topRow);
+            place(2, rightX, top, functionWidth, topRow);
+            place(3, rightX + functionWidth + gap, top, functionWidth, topRow);
 
             // A three by three grid with only the plus filled in, so each
             // direction is its own key and two of them can be held at once.
