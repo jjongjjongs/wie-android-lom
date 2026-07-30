@@ -87,6 +87,8 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     runtime_dir: JString,
 ) -> jstring {
     logging::init();
+    // The saved log covers one run of one game, so it starts over here.
+    logging::reset();
 
     let data = match env.convert_byte_array(&archive) {
         Ok(data) => data,
@@ -269,6 +271,21 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
         Some(ids) => format!("{}\n{}", ids.records, ids.files),
         None => String::new(),
     })
+}
+
+/// `nativeLog() -> String`
+///
+/// Everything logged since the running game started, which is what the
+/// player's log button saves. Reading it does not clear it, so it can be taken
+/// more than once during a long run.
+///
+/// # Safety
+/// Called by the JVM with a valid `env` reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeLog(env: JNIEnv, _class: JClass) -> jstring {
+    logging::init();
+
+    guard_string(&env, logging::snapshot)
 }
 
 /// `nativeVersion() -> String`

@@ -75,6 +75,12 @@ final class NativeBridge {
      */
     static native String nativeSaveIds(byte[] archive);
 
+    /**
+     * Everything logged since the running game started. Reading does not clear
+     * it, so it can be taken more than once during a long run.
+     */
+    static native String nativeLog();
+
     /** Version of the native library. */
     static native String nativeVersion();
 }

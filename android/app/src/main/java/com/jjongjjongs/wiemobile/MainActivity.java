@@ -102,8 +102,8 @@ public final class MainActivity extends Activity {
     private GameView gameView;
     private TextView playerStatus;
     private String currentGameName;
-    /** Game whose saves are waiting on the storage permission. */
-    private File pendingExport;
+    /** What is waiting on the storage permission, if anything. */
+    private Runnable pendingDownload;
 
     private volatile boolean running;
     private volatile boolean foreground = true;
@@ -321,18 +321,15 @@ public final class MainActivity extends Activity {
      * nothing else can reach them.
      */
     private void exportSaves(File game) {
-        // Before Android 10, Downloads is a plain directory and writing to it
-        // needs asking. From 10 on, the MediaStore insert needs nothing.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
-                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            pendingExport = game;
-            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_DOWNLOADS);
-            return;
-        }
-
         String title = displayName(game);
-        Toast.makeText(this, "세이브 파일을 꺼내는 중...", Toast.LENGTH_SHORT).show();
 
+        withDownloadPermission(() -> {
+            Toast.makeText(this, "세이브 파일을 꺼내는 중...", Toast.LENGTH_SHORT).show();
+            exportSavesNow(game, title);
+        });
+    }
+
+    private void exportSavesNow(File game, String title) {
         emulatorThread.execute(() -> {
             try {
                 SaveExporter.Result result = SaveExporter.export(this, game, title);
@@ -351,21 +348,74 @@ public final class MainActivity extends Activity {
         });
     }
 
+    /**
+     * Saves the running game's log to Downloads.
+     *
+     * <p>It covers this run only - the native side starts the log over when a
+     * game starts - and can be taken while the game is still going, which is
+     * what a title that hangs rather than stops needs.
+     */
+    private void saveLog() {
+        String title = currentGameName != null ? currentGameName : "wie";
+
+        withDownloadPermission(() -> {
+            Toast.makeText(this, "로그를 저장하는 중...", Toast.LENGTH_SHORT).show();
+
+            emulatorThread.execute(() -> {
+                try {
+                    // The message shown in the title bar is cut off at one
+                    // line, so the whole of it goes at the top of the file.
+                    String error = NativeBridge.nativeLastError();
+                    String header = "wie " + NativeBridge.nativeVersion() + "\n"
+                            + "game: " + title + "\n"
+                            + "running: " + (NativeBridge.nativeRunning() != 0) + "\n"
+                            + (error.isEmpty() ? "" : "last error: " + error + "\n")
+                            + "\n";
+
+                    byte[] contents = (header + NativeBridge.nativeLog()).getBytes("UTF-8");
+                    String name = Downloads.safeName(title) + " 로그.txt";
+                    Downloads.write(this, name, "text/plain", contents);
+
+                    runOnUiThread(() -> Toast.makeText(this,
+                            "다운로드 폴더에 저장: " + name + " (" + (contents.length / 1024) + "KB)",
+                            Toast.LENGTH_LONG).show());
+                } catch (Exception e) {
+                    runOnUiThread(() -> Toast.makeText(this, "로그 저장 실패: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                }
+            });
+        });
+    }
+
+    /**
+     * Runs {@code action} once Downloads can be written to. Before Android 10
+     * that needs asking; from 10 on the MediaStore insert needs nothing.
+     */
+    private void withDownloadPermission(Runnable action) {
+        if (!Downloads.needsPermission()
+                || checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            action.run();
+            return;
+        }
+
+        pendingDownload = action;
+        requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_DOWNLOADS);
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] granted) {
         super.onRequestPermissionsResult(requestCode, permissions, granted);
 
-        File game = pendingExport;
-        pendingExport = null;
+        Runnable action = pendingDownload;
+        pendingDownload = null;
 
-        if (requestCode != REQUEST_WRITE_DOWNLOADS || game == null) {
+        if (requestCode != REQUEST_WRITE_DOWNLOADS || action == null) {
             return;
         }
 
         if (granted.length > 0 && granted[0] == PackageManager.PERMISSION_GRANTED) {
-            exportSaves(game);
+            action.run();
         } else {
-            Toast.makeText(this, "저장 공간 권한이 없어 꺼낼 수 없습니다.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "저장 공간 권한이 없어 다운로드 폴더에 쓸 수 없습니다.", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -519,16 +569,30 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
 
         // The title bar doubles as the status line: it carries the game's name
-        // once there is one, and what the loader is doing until then.
+        // once there is one, and what the loader is doing until then. A message
+        // long enough to matter does not fit, which is what the log is for.
+        LinearLayout titleBar = new LinearLayout(this);
+        titleBar.setBackgroundColor(Color.BLACK);
+        titleBar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
         playerStatus = new TextView(this);
         playerStatus.setText("게임을 시작하는 중...");
         playerStatus.setTextColor(COLOR_TEXT);
         playerStatus.setTextSize(16f);
         playerStatus.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        playerStatus.setPadding(dp(14), 0, dp(14), 0);
+        playerStatus.setPadding(dp(14), 0, dp(8), 0);
         playerStatus.setSingleLine(true);
-        playerStatus.setBackgroundColor(Color.BLACK);
-        root.addView(playerStatus, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        playerStatus.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        titleBar.addView(playerStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        Button log = flatButton("로그");
+        log.setTextSize(13f);
+        log.setOnClickListener(v -> saveLog());
+        LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(dp(64), dp(34));
+        logParams.rightMargin = dp(10);
+        titleBar.addView(log, logParams);
+
+        root.addView(titleBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
 
         gameView = new GameView(this);
         root.addView(gameView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, GAME_WEIGHT));

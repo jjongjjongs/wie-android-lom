@@ -111,6 +111,17 @@ adb logcat -s WIE
 `RUST_LOG` is honoured when set in the process environment; the default is
 `info`.
 
+A phone with no `adb` attached gets the same thing from the player: the "로그"
+button beside the status line writes it to Downloads as `<title> 로그.txt`.
+`logging.rs` keeps a copy of every line as well as sending it to logcat, and
+`nativeStart` clears it, so the file covers one run of one game. It can be
+taken while the game is still going, which is what a title that hangs rather
+than stops needs; the file also carries `nativeLastError` in full, since the
+status line only has room for one truncated line of it.
+
+The copy is bounded at 20,000 lines or 2MB, dropping oldest first, and says so
+at the top when it has dropped any.
+
 ## LGT status
 
 `.github/workflows/lom-diagnostic.yml` runs Legend of Master under `wie_cli`

@@ -1,19 +1,11 @@
 package com.jjongjjongs.wiemobile;
 
-import android.content.ContentResolver;
-import android.content.ContentValues;
 import android.content.Context;
-import android.net.Uri;
-import android.os.Build;
-import android.os.Environment;
-import android.provider.MediaStore;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipEntry;
@@ -90,8 +82,8 @@ final class SaveExporter {
             return null;
         }
 
-        String name = safeName(title) + " 세이브.zip";
-        write(context, name, buffer.toByteArray());
+        String name = Downloads.safeName(title) + " 세이브.zip";
+        Downloads.write(context, name, "application/zip", buffer.toByteArray());
 
         return new Result(name, files);
     }
@@ -153,53 +145,4 @@ final class SaveExporter {
         return written;
     }
 
-    /**
-     * Puts the zip in Downloads. From Android 10 that is a MediaStore insert
-     * and needs no permission; before it, Downloads is a plain directory.
-     */
-    private static void write(Context context, String name, byte[] contents) throws Exception {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            if (!downloads.exists() && !downloads.mkdirs()) {
-                throw new IllegalStateException("다운로드 폴더를 열 수 없습니다.");
-            }
-
-            try (FileOutputStream output = new FileOutputStream(new File(downloads, name))) {
-                output.write(contents);
-            }
-            return;
-        }
-
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.Downloads.DISPLAY_NAME, name);
-        values.put(MediaStore.Downloads.MIME_TYPE, "application/zip");
-
-        ContentResolver resolver = context.getContentResolver();
-        Uri target = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-        if (target == null) {
-            throw new IllegalStateException("다운로드 폴더에 쓸 수 없습니다.");
-        }
-
-        try (OutputStream output = resolver.openOutputStream(target)) {
-            if (output == null) {
-                throw new IllegalStateException("다운로드 폴더에 쓸 수 없습니다.");
-            }
-            output.write(contents);
-        } catch (Exception e) {
-            // A half-written entry would show up in Downloads as a broken file.
-            resolver.delete(target, null, null);
-            throw e;
-        }
-    }
-
-    /** Trims a title down to something a filesystem will take. */
-    private static String safeName(String title) {
-        String trimmed = title.replaceAll("[^A-Za-z0-9가-힣._ -]", "_").trim();
-
-        if (trimmed.isEmpty()) {
-            return "game";
-        }
-
-        return trimmed.length() > 60 ? trimmed.substring(0, 60).trim() : trimmed;
-    }
 }
