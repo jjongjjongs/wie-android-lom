@@ -246,6 +246,31 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     guard_string(&env, || runner::inspect(&data))
 }
 
+/// `nativeSaveIds(byte[] archive) -> String`
+///
+/// The two directory names, newline separated, that an archive's saved data
+/// sits under inside the runtime directory: the record store id first, then the
+/// filesystem id. Empty when the archive cannot be read at all.
+///
+/// Java needs these to collect a title's saves without the emulator running,
+/// and only the loader knows how an archive names itself.
+///
+/// # Safety
+/// Called by the JVM with valid `env` and `archive` references.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeSaveIds(env: JNIEnv, _class: JClass, archive: JByteArray) -> jstring {
+    logging::init();
+
+    let Ok(data) = env.convert_byte_array(&archive) else {
+        return empty_string(&env);
+    };
+
+    guard_string(&env, || match runner::save_ids(&data) {
+        Some(ids) => format!("{}\n{}", ids.records, ids.files),
+        None => String::new(),
+    })
+}
+
 /// `nativeVersion() -> String`
 ///
 /// # Safety

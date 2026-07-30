@@ -248,6 +248,79 @@ fn build_emulator(platform: Box<AndroidPlatform>, data: &[u8], options: Options)
     }
 }
 
+/// The two names a title's stored data sits under.
+///
+/// Record stores are keyed by the product id and the writable filesystem by the
+/// application id, and an archive's descriptor gives different values for the
+/// two - Legend of Master saves under `PD127080` but writes files under
+/// `0002A4B1`. Both are needed to collect everything a title has kept.
+pub struct SaveIds {
+    pub records: String,
+    pub files: String,
+}
+
+/// Where `data`'s saves would be, without running it.
+///
+/// This has to agree with what the emulators pass to `System::new`, or an
+/// export would quietly come back empty.
+pub fn save_ids(data: &[u8]) -> Option<SaveIds> {
+    let files = extract_zip(data).ok()?;
+
+    // The descriptor names both ids for the two archive formats that have one.
+    for descriptor in ["app_info", "__adf__"] {
+        let Some(contents) = files.get(descriptor) else {
+            continue;
+        };
+
+        let mut product = String::new();
+        let mut application = String::new();
+        for line in contents.split(|x| *x == b'\n') {
+            let line = String::from_utf8_lossy(line);
+            let line = line.trim();
+
+            if let Some(value) = line.strip_prefix("PID:") {
+                product = value.trim().to_owned();
+            }
+            if let Some(value) = line.strip_prefix("AID:") {
+                application = value.trim().to_owned();
+            }
+        }
+
+        if !product.is_empty() || !application.is_empty() {
+            return Some(SaveIds {
+                records: product.clone(),
+                files: if application.is_empty() { product } else { application },
+            });
+        }
+    }
+
+    // An SKT archive names itself in its descriptor, or failing that in the
+    // descriptor's own filename, and uses the one name for both.
+    if let Some((name, contents)) = files.iter().find(|(name, _)| name.ends_with(".msd")) {
+        let declared = contents
+            .split(|x| *x == b'\n')
+            .map(|line| String::from_utf8_lossy(line).trim().to_owned())
+            .find_map(|line| line.strip_prefix("DD-ProgName:").map(|x| x.trim().to_owned()));
+
+        let id = declared.unwrap_or_else(|| name.split('.').next().unwrap_or(name).to_owned());
+        if !id.is_empty() {
+            return Some(SaveIds {
+                records: id.clone(),
+                files: id,
+            });
+        }
+    }
+
+    // Anything else runs as a bare jar, which has no id but the one derived
+    // from its contents.
+    let id = content_id(data);
+
+    Some(SaveIds {
+        records: id.clone(),
+        files: id,
+    })
+}
+
 /// Describes an archive without running it, for `nativeInspect`. Only used for
 /// diagnostics, so every failure is reported as text rather than an error.
 pub fn inspect(data: &[u8]) -> String {
@@ -310,7 +383,7 @@ pub fn inspect(data: &[u8]) -> String {
 mod tests {
     use wie_backend::KeyCode;
 
-    use super::{content_id, inspect, key_code};
+    use super::{content_id, extract_zip, inspect, key_code, save_ids};
 
     #[test]
     fn key_indexes_match_the_java_keypad() {
@@ -344,5 +417,49 @@ mod tests {
         let report = inspect(b"not a zip at all");
 
         assert!(report.contains("not a zip"), "{report}");
+    }
+
+    /// The two ids differ, and reading only one of them would miss half of
+    /// what a title has kept.
+    #[test]
+    fn save_ids_come_from_the_descriptor() {
+        for archive in [
+            include_bytes!("../../test_data/helloworld_lgt.zip").as_slice(),
+            include_bytes!("../../test_data/helloworld_ktf.zip").as_slice(),
+        ] {
+            let ids = save_ids(archive).expect("this archive has a descriptor");
+
+            assert!(!ids.records.is_empty(), "no product id");
+            assert!(!ids.files.is_empty(), "no application id");
+            assert!(
+                inspect(archive).contains(&format!("PID:{}", ids.records)),
+                "the product id is not the descriptor's"
+            );
+        }
+    }
+
+    /// A zip with no descriptor runs as a bare jar, whose id is its content
+    /// hash - the same one `build_emulator` would have used.
+    #[test]
+    fn save_ids_fall_back_to_the_content_id() {
+        // A zip that holds nothing a loader recognises.
+        let bare = include_bytes!("../../test_data/helloworld_lgt.zip");
+        let jar = extract_zip(bare)
+            .expect("the archive opens")
+            .remove("00000000.jar")
+            .expect("it holds a jar");
+
+        let ids = save_ids(&jar).expect("a jar still has an id");
+
+        assert_eq!(ids.records, content_id(&jar));
+        assert_eq!(ids.files, ids.records);
+    }
+
+    /// A file that cannot be opened has nowhere to have saved to either, and
+    /// saying so is what lets the export report it rather than write an empty
+    /// zip.
+    #[test]
+    fn save_ids_reject_what_cannot_be_loaded() {
+        assert!(save_ids(b"not a zip at all").is_none());
     }
 }

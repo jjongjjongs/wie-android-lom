@@ -1,8 +1,10 @@
 package com.jjongjjongs.wiemobile;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -13,6 +15,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.util.Log;
@@ -54,6 +57,7 @@ public final class MainActivity extends Activity {
     private static final String TAG = "WIE-Input";
 
     private static final int PICK_GAME = 1001;
+    private static final int REQUEST_WRITE_DOWNLOADS = 1002;
 
     /** How long a single tick may run, and how often ticks are scheduled. */
     private static final int TICK_BUDGET_MS = 20;
@@ -69,14 +73,19 @@ public final class MainActivity extends Activity {
     private static final float GAME_WEIGHT = 2.3f;
     private static final float KEYPAD_WEIGHT = 1f;
 
-    /** Share of the keypad's left half taken by the call and C row. */
-    private static final float KEYPAD_TOP_ROW = 0.26f;
+    /**
+     * Share of the keypad's height taken by the function row. It spans the
+     * whole width, the way the keys under a handset's screen did, which leaves
+     * the halves below it to the pad and the numbers alone.
+     */
+    private static final float KEYPAD_TOP_ROW = 0.19f;
 
     /** How a key is painted. */
     private static final int KEY_PLAIN = 0;
-    private static final int KEY_CALL = 1;
+    private static final int KEY_SAVE = 1;
     private static final int KEY_CLEAR = 2;
     private static final int KEY_DIRECTION = 3;
+    private static final int KEY_SOFT = 4;
 
     private static final int COLOR_BG = Color.rgb(47, 47, 47);
     private static final int COLOR_PANEL = Color.rgb(35, 35, 35);
@@ -93,6 +102,8 @@ public final class MainActivity extends Activity {
     private GameView gameView;
     private TextView playerStatus;
     private String currentGameName;
+    /** Game whose saves are waiting on the storage permission. */
+    private File pendingExport;
 
     private volatile boolean running;
     private volatile boolean foreground = true;
@@ -187,7 +198,7 @@ public final class MainActivity extends Activity {
         header.addView(about);
 
         TextView hint = new TextView(this);
-        hint.setText("게임 실행: 한 번 누르기 · 삭제: 길게 누르기");
+        hint.setText("게임 실행: 한 번 누르기\n세이브 꺼내기 · 삭제: 길게 누르기");
         hint.setTextSize(14f);
         hint.setTextColor(COLOR_SUBTEXT);
         hint.setPadding(0, dp(16), 0, dp(14));
@@ -268,23 +279,94 @@ public final class MainActivity extends Activity {
 
         row.setOnClickListener(v -> showPlayer(game));
         row.setOnLongClickListener(v -> {
-            confirmDelete(game);
+            showGameMenu(game);
             return true;
         });
 
         return row;
     }
 
+    /** What a long press offers: get the saves out, or drop the game. */
+    private void showGameMenu(File game) {
+        new AlertDialog.Builder(this)
+                .setTitle(displayName(game))
+                .setItems(new CharSequence[]{"세이브 파일 꺼내기", "목록에서 삭제"}, (dialog, which) -> {
+                    if (which == 0) {
+                        exportSaves(game);
+                    } else {
+                        confirmDelete(game);
+                    }
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
     private void confirmDelete(File game) {
         new AlertDialog.Builder(this)
                 .setTitle(displayName(game))
-                .setMessage("이 게임을 목록에서 삭제할까요?")
+                .setMessage("이 게임을 목록에서 삭제할까요?\n저장한 내용은 그대로 남습니다.")
                 .setNegativeButton("취소", null)
                 .setPositiveButton("삭제", (dialog, which) -> {
                     game.delete();
                     showLibrary();
                 })
                 .show();
+    }
+
+    // --- saves -----------------------------------------------------------
+
+    /**
+     * Copies a title's saved data into Downloads, so it can be backed up or
+     * moved to another phone. Saves live in the app's private directory, where
+     * nothing else can reach them.
+     */
+    private void exportSaves(File game) {
+        // Before Android 10, Downloads is a plain directory and writing to it
+        // needs asking. From 10 on, the MediaStore insert needs nothing.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            pendingExport = game;
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_DOWNLOADS);
+            return;
+        }
+
+        String title = displayName(game);
+        Toast.makeText(this, "세이브 파일을 꺼내는 중...", Toast.LENGTH_SHORT).show();
+
+        emulatorThread.execute(() -> {
+            try {
+                SaveExporter.Result result = SaveExporter.export(this, game, title);
+
+                runOnUiThread(() -> {
+                    if (result == null) {
+                        Toast.makeText(this, "저장된 내용이 없습니다.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    Toast.makeText(this, "다운로드 폴더에 저장: " + result.name + " (" + result.files + "개)", Toast.LENGTH_LONG).show();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "꺼내기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] granted) {
+        super.onRequestPermissionsResult(requestCode, permissions, granted);
+
+        File game = pendingExport;
+        pendingExport = null;
+
+        if (requestCode != REQUEST_WRITE_DOWNLOADS || game == null) {
+            return;
+        }
+
+        if (granted.length > 0 && granted[0] == PackageManager.PERMISSION_GRANTED) {
+            exportSaves(game);
+        } else {
+            Toast.makeText(this, "저장 공간 권한이 없어 꺼낼 수 없습니다.", Toast.LENGTH_LONG).show();
+        }
     }
 
     /**
@@ -621,8 +703,9 @@ public final class MainActivity extends Activity {
      * a direction held while a number is tapped, and SEED 2's "press 0 and #"
      * are all impossible that way.
      *
-     * <p>Layout is the screen's width split in half: directions on the left,
-     * the number pad on the right.
+     * <p>Layout is a function row across the top - the two soft keys, save and
+     * C - and below it the width split in half: directions on the left, the
+     * number pad on the right.
      */
     private final class KeypadView extends View {
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -642,21 +725,26 @@ public final class MainActivity extends Activity {
             edge.setStyle(Paint.Style.STROKE);
             edge.setStrokeWidth(Math.max(1f, dp(1) * 0.8f));
 
-            keys.add(new Key("통화", "저장", 20, KEY_CALL));
-            keys.add(new Key("C", null, 7, KEY_CLEAR));
+            // The function row, left to right. The two soft keys are the ones
+            // a handset printed nothing on: what they do is whatever the game
+            // draws in the corners of its screen above them.
+            keys.add(new Key("좌 상단", 5, KEY_SOFT));
+            keys.add(new Key("저장", 20, KEY_SAVE));
+            keys.add(new Key("C", 7, KEY_CLEAR));
+            keys.add(new Key("우 상단", 6, KEY_SOFT));
 
-            keys.add(new Key("▲", null, 0, KEY_DIRECTION));
-            keys.add(new Key("◀", null, 2, KEY_DIRECTION));
-            keys.add(new Key("OK", null, 4, KEY_PLAIN));
-            keys.add(new Key("▶", null, 3, KEY_DIRECTION));
-            keys.add(new Key("▼", null, 1, KEY_DIRECTION));
+            keys.add(new Key("▲", 0, KEY_DIRECTION));
+            keys.add(new Key("◀", 2, KEY_DIRECTION));
+            keys.add(new Key("OK", 4, KEY_PLAIN));
+            keys.add(new Key("▶", 3, KEY_DIRECTION));
+            keys.add(new Key("▼", 1, KEY_DIRECTION));
 
             for (int digit = 1; digit <= 9; digit++) {
-                keys.add(new Key(String.valueOf(digit), null, 8 + digit, KEY_PLAIN));
+                keys.add(new Key(String.valueOf(digit), 8 + digit, KEY_PLAIN));
             }
-            keys.add(new Key("✱", null, 18, KEY_PLAIN));
-            keys.add(new Key("0", null, 8, KEY_PLAIN));
-            keys.add(new Key("#", null, 19, KEY_PLAIN));
+            keys.add(new Key("✱", 18, KEY_PLAIN));
+            keys.add(new Key("0", 8, KEY_PLAIN));
+            keys.add(new Key("#", 19, KEY_PLAIN));
         }
 
         @Override
@@ -671,31 +759,34 @@ public final class MainActivity extends Activity {
             float usable = height - 2 * pad;
 
             float topRow = (usable - gap) * KEYPAD_TOP_ROW;
-            float cross = usable - gap - topRow;
+            float below = usable - gap - topRow;
+            float padTop = top + topRow + gap;
 
-            place(0, leftX, top, half / 2 - gap / 2, topRow);
-            place(1, leftX + half / 2 + gap / 2, top, half / 2 - gap / 2, topRow);
+            // Four function keys across the whole width.
+            float functionWidth = (width - 2 * pad - 3 * gap) / 4f;
+            for (int index = 0; index < 4; index++) {
+                place(index, pad + index * (functionWidth + gap), top, functionWidth, topRow);
+            }
 
             // A three by three grid with only the plus filled in, so each
             // direction is its own key and two of them can be held at once.
             float cellWidth = (half - 2 * gap) / 3f;
-            float cellHeight = (cross - 2 * gap) / 3f;
-            float crossTop = top + topRow + gap;
+            float cellHeight = (below - 2 * gap) / 3f;
 
-            place(2, leftX + cellWidth + gap, crossTop, cellWidth, cellHeight);
-            place(3, leftX, crossTop + cellHeight + gap, cellWidth, cellHeight);
-            place(4, leftX + cellWidth + gap, crossTop + cellHeight + gap, cellWidth, cellHeight);
-            place(5, leftX + 2 * (cellWidth + gap), crossTop + cellHeight + gap, cellWidth, cellHeight);
-            place(6, leftX + cellWidth + gap, crossTop + 2 * (cellHeight + gap), cellWidth, cellHeight);
+            place(4, leftX + cellWidth + gap, padTop, cellWidth, cellHeight);
+            place(5, leftX, padTop + cellHeight + gap, cellWidth, cellHeight);
+            place(6, leftX + cellWidth + gap, padTop + cellHeight + gap, cellWidth, cellHeight);
+            place(7, leftX + 2 * (cellWidth + gap), padTop + cellHeight + gap, cellWidth, cellHeight);
+            place(8, leftX + cellWidth + gap, padTop + 2 * (cellHeight + gap), cellWidth, cellHeight);
 
             float numberWidth = (half - 2 * gap) / 3f;
-            float numberHeight = (usable - 3 * gap) / 4f;
+            float numberHeight = (below - 3 * gap) / 4f;
 
             for (int index = 0; index < 12; index++) {
                 float x = rightX + (index % 3) * (numberWidth + gap);
-                float y = top + (index / 3) * (numberHeight + gap);
+                float y = padTop + (index / 3) * (numberHeight + gap);
 
-                place(7 + index, x, y, numberWidth, numberHeight);
+                place(9 + index, x, y, numberWidth, numberHeight);
             }
 
             ink.setTextSize(Math.min(numberHeight * 0.42f, dp(22)));
@@ -727,22 +818,16 @@ public final class MainActivity extends Activity {
 
                 ink.setColor(key.textColor());
 
-                float centerX = key.bounds.centerX();
-                float centerY = key.bounds.centerY();
-
-                if (key.sub == null) {
-                    canvas.drawText(key.label, centerX, centerY + ink.getTextSize() * 0.36f, ink);
-                    continue;
+                // A label wider than its key is shrunk to fit rather than
+                // clipped, so a word can be used where a digit was.
+                float was = ink.getTextSize();
+                float limit = key.bounds.width() * 0.82f;
+                float measured = ink.measureText(key.label);
+                if (measured > limit && measured > 0f) {
+                    ink.setTextSize(was * limit / measured);
                 }
 
-                // Two lines, so "통화 / 저장" fits a key the width of one digit.
-                float line = ink.getTextSize() * 0.62f;
-                float small = ink.getTextSize() * 0.62f;
-                float was = ink.getTextSize();
-
-                ink.setTextSize(small);
-                canvas.drawText(key.label, centerX, centerY - line * 0.1f, ink);
-                canvas.drawText(key.sub, centerX, centerY + line * 0.95f, ink);
+                canvas.drawText(key.label, key.bounds.centerX(), key.bounds.centerY() + ink.getTextSize() * 0.36f, ink);
                 ink.setTextSize(was);
             }
         }
@@ -824,16 +909,14 @@ public final class MainActivity extends Activity {
     /** One key of {@link KeypadView}. */
     private static final class Key {
         final String label;
-        final String sub;
         final int code;
         final int style;
         final RectF bounds = new RectF();
         android.graphics.Shader shader;
         boolean down;
 
-        Key(String label, String sub, int code, int style) {
+        Key(String label, int code, int style) {
             this.label = label;
-            this.sub = sub;
             this.code = code;
             this.style = style;
         }
@@ -847,8 +930,10 @@ public final class MainActivity extends Activity {
 
         private int topColor() {
             switch (style) {
-                case KEY_CALL:
+                case KEY_SAVE:
                     return Color.rgb(63, 143, 82);
+                case KEY_SOFT:
+                    return Color.rgb(133, 133, 133);
                 case KEY_CLEAR:
                     return Color.rgb(154, 64, 64);
                 case KEY_DIRECTION:
@@ -860,8 +945,10 @@ public final class MainActivity extends Activity {
 
         private int bottomColor() {
             switch (style) {
-                case KEY_CALL:
+                case KEY_SAVE:
                     return Color.rgb(44, 107, 59);
+                case KEY_SOFT:
+                    return Color.rgb(104, 104, 104);
                 case KEY_CLEAR:
                     return Color.rgb(122, 47, 47);
                 case KEY_DIRECTION:
@@ -873,8 +960,10 @@ public final class MainActivity extends Activity {
 
         int borderColor() {
             switch (style) {
-                case KEY_CALL:
+                case KEY_SAVE:
                     return Color.rgb(36, 82, 49);
+                case KEY_SOFT:
+                    return Color.rgb(86, 86, 86);
                 case KEY_CLEAR:
                     return Color.rgb(94, 35, 35);
                 case KEY_DIRECTION:
@@ -886,8 +975,10 @@ public final class MainActivity extends Activity {
 
         int pressedColor() {
             switch (style) {
-                case KEY_CALL:
+                case KEY_SAVE:
                     return Color.rgb(92, 180, 112);
+                case KEY_SOFT:
+                    return Color.rgb(168, 168, 168);
                 case KEY_CLEAR:
                     return Color.rgb(190, 90, 90);
                 case KEY_DIRECTION:

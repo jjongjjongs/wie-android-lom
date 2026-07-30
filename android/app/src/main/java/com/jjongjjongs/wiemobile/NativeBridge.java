@@ -64,6 +64,17 @@ final class NativeBridge {
     /** Describes an archive without running it. */
     static native String nativeInspect(byte[] archive);
 
+    /**
+     * Where an archive's saved data sits under the runtime directory. Only the
+     * loader knows how an archive names itself, and the two names differ:
+     * record stores go under the product id, written files under the
+     * application id.
+     *
+     * @return {@code "<record store id>\n<filesystem id>"}, or empty
+     * @see SaveExporter
+     */
+    static native String nativeSaveIds(byte[] archive);
+
     /** Version of the native library. */
     static native String nativeVersion();
 }

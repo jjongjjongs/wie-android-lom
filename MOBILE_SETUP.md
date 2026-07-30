@@ -66,17 +66,39 @@ and to the matching `rustup target add`.
 ## Running a game
 
 Import a `.zip` (or `.jar`/`.apk`) with "APK/ZIP 가져오기"; it is copied into
-app-private storage. Tapping a row starts it, long-pressing deletes it. The
-back key leaves the player.
+app-private storage. Tapping a row starts it; long-pressing offers to get its
+saves out or to drop it from the library. The back key leaves the player.
 
 The format is detected from the archive contents rather than the filename -
 KTF (`__adf__`), LGT (`app_info`), SKT (`*.msd`), then jar - so files renamed
 by a download manager still load.
 
-Save data lives under `getFilesDir()/runtime`, keyed by the app id from the
-archive descriptor. Jars carry no descriptor, so their key is derived from the
-file contents instead: re-importing the same jar keeps its saves, and two
-different jars never share them.
+### The keypad
+
+One `View` draws and handles the whole keypad, because a grid of `Button`s
+cannot take two fingers: the first view to accept a touch owns the gesture, so
+a second finger on another button is delivered to the first one. A direction
+held while a number is tapped, or SEED 2 asking for `0` and `#` together,
+needs the single view.
+
+A function row spans the top - the two soft keys, save, and C - and below it
+the width is split in half, directions on the left and numbers on the right.
+`wie_android/src/runner.rs`'s `key_code` maps each key's index to a `KeyCode`;
+the two have to be changed together.
+
+### Saved data
+
+Save data lives under `getFilesDir()/runtime`: record stores in
+`db/<product id>`, files a game wrote itself in `fs/<application id>`. Both ids
+come from the archive descriptor and are usually different. Jars carry no
+descriptor, so their id is derived from the file contents instead:
+re-importing the same jar keeps its saves, and two different jars never share
+them.
+
+`SaveExporter` zips both directories into Downloads on a long press. It asks
+`NativeBridge.nativeSaveIds` where to look, because only the loader knows how
+an archive names itself - `runner.rs`'s `save_ids` has to keep agreeing with
+what the emulators pass to `System::new`, or an export comes back empty.
 
 ## Logs
 
