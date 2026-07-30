@@ -93,5 +93,7 @@ jobs:
             gh release create "$TAG" --title 'WIE Mobile (development build)' --notes "$notes" --prerelease
           fi
 
-          gh release upload "$TAG" \
-            'android/app/build/outputs/apk/debug/app-debug.apk#wie-mobile-debug.apk' --clobber
+          # The asset takes the file's own name, so it is renamed rather than
+          # uploaded as gradle's `app-debug.apk`.
+          cp android/app/build/outputs/apk/debug/app-debug.apk wie-mobile-debug.apk
+          gh release upload "$TAG" wie-mobile-debug.apk --clobber
