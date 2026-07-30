@@ -23,16 +23,23 @@ const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
 /// Read a WIPI-C string. `length == -1` means NUL-terminated; `length > 0`
 /// reads exactly that many bytes; `length == 0` and other negatives yield
 /// an empty string.
-fn read_wipi_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<Vec<u8>> {
-    if length > 0 {
+///
+/// The bytes are EUC-KR, which is what a Korean handset's toolchain put in the
+/// binary. Reading them as UTF-8 turns every Hangul syllable into U+FFFD, and
+/// the font has no glyph for that, so a title's text silently drew nothing at
+/// all - which is what dialogue boxes with no words in them were.
+fn read_wipi_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<String> {
+    let bytes = if length > 0 {
         let mut buf = vec![0u8; length as usize];
         context.read_bytes(ptr, &mut buf)?;
-        return Ok(buf);
-    }
-    if length == -1 {
-        return read_null_terminated_string_bytes(context, ptr);
-    }
-    Ok(Vec::new())
+        buf
+    } else if length == -1 {
+        read_null_terminated_string_bytes(context, ptr)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(encoding_rs::EUC_KR.decode(&bytes).0.into_owned())
 }
 
 pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWord) -> Result<WIPICIndirectPtr> {
@@ -484,13 +491,9 @@ pub async fn get_font_descent(_: &mut dyn WIPICContext, font: i32) -> Result<i32
 pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_string: WIPICWord, length: i32) -> Result<i32> {
     tracing::debug!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
 
-    let bytes = read_wipi_string(context, ptr_string, length)?;
-    if bytes.is_empty() {
-        return Ok(0);
-    }
-    let s = String::from_utf8_lossy(&bytes);
+    let string = read_wipi_string(context, ptr_string, length)?;
 
-    Ok(string_width(&s, 10.0) as i32)
+    Ok(string_width(&string, 10.0) as i32)
 }
 
 pub async fn draw_string(
@@ -504,15 +507,13 @@ pub async fn draw_string(
 ) -> Result<()> {
     tracing::debug!("MC_grpDrawString({:#x}, {x}, {y}, {ptr_string:#x}, {length}, {pgc:#x})", dst.0);
 
-    let string_bytes = read_wipi_string(context, ptr_string, length)?;
-    if string_bytes.is_empty() {
+    let string = read_wipi_string(context, ptr_string, length)?;
+    if string.is_empty() {
         return Ok(());
     }
 
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
     let gctx: WIPICGraphicsContext = read_generic(context, pgc)?;
-
-    let string = String::from_utf8_lossy(&string_bytes);
 
     let clip = Clip {
         x: 0,
@@ -539,6 +540,32 @@ pub async fn repaint(context: &mut dyn WIPICContext, lcd: i32, x: i32, y: i32, w
     Ok(())
 }
 
+/// Row length in bytes and the stride to advance by, or `None` when the call
+/// asks for nothing that can be delivered.
+///
+/// `ipl` is a destination stride, but a handset asked less of it than the name
+/// suggests: LGT's own runtime checks only that it is positive and then
+/// discards it, writing rows packed at `w * 4`. Titles are written against
+/// that. Zenonia reads single pixels with `w = 1, ipl = 1`, and rejecting
+/// those left it reading uninitialised stack as pixels - which is what its
+/// collision checks were deciding on.
+///
+/// A stride wide enough to be one is still honoured, since nothing says the
+/// other handsets discarded it too; anything smaller falls back to packed.
+fn destination_stride(w: i32, h: i32, ipl: i32) -> Option<(i32, i32)> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    if ipl <= 0 {
+        tracing::warn!("MC_grpGetRGBPixels: invalid ipl {ipl}");
+        return None;
+    }
+
+    let row_bytes = i32::try_from((w as i64).checked_mul(4)?).ok()?;
+
+    Some((row_bytes, ipl.max(row_bytes)))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn get_rgb_pixels(
     context: &mut dyn WIPICContext,
@@ -552,14 +579,9 @@ pub async fn get_rgb_pixels(
 ) -> Result<()> {
     tracing::debug!("MC_grpGetRGBPixels({:#x}, {x}, {y}, {w}, {h}, {pd:#x}, {ipl})", src.0);
 
-    let row_bytes = match (w as i64).checked_mul(4) {
-        Some(n) if w > 0 && h > 0 => n as i32,
-        _ => return Ok(()),
-    };
-    if ipl < row_bytes {
-        tracing::warn!("MC_grpGetRGBPixels: invalid ipl {ipl} (need >= {row_bytes})");
+    let Some((row_bytes, ipl)) = destination_stride(w, h, ipl) else {
         return Ok(());
-    }
+    };
 
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(src)?)?);
     let image = framebuffer.image(context)?;
@@ -787,4 +809,42 @@ pub async fn get_framebuffer_bpp(context: &mut dyn WIPICContext, framebuffer: WI
     let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(framebuffer)?)?;
 
     Ok(framebuffer.bpp as _)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::destination_stride;
+
+    /// A single pixel read into four bytes of stack, which is how a title asks
+    /// whether it has walked into something. LGT's runtime takes `ipl = 1`.
+    #[test]
+    fn a_one_pixel_probe_is_delivered() {
+        assert_eq!(destination_stride(1, 1, 1), Some((4, 4)));
+    }
+
+    #[test]
+    fn a_real_stride_is_honoured() {
+        // Reading 100 pixels into a 240 wide buffer.
+        assert_eq!(destination_stride(100, 50, 960), Some((400, 960)));
+    }
+
+    /// Too small to be a stride, so the rows pack - which is what the handset
+    /// did with any value at all.
+    #[test]
+    fn a_short_stride_packs_instead_of_dropping_the_call() {
+        assert_eq!(destination_stride(8, 4, 3), Some((32, 32)));
+    }
+
+    #[test]
+    fn nothing_to_read_is_dropped() {
+        assert_eq!(destination_stride(0, 4, 16), None);
+        assert_eq!(destination_stride(4, 0, 16), None);
+        assert_eq!(destination_stride(4, 4, 0), None);
+        assert_eq!(destination_stride(4, 4, -1), None);
+    }
+
+    #[test]
+    fn an_unreasonable_width_is_dropped_rather_than_overflowing() {
+        assert_eq!(destination_stride(i32::MAX, 1, i32::MAX), None);
+    }
 }
