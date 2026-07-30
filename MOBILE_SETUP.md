@@ -81,10 +81,10 @@ a second finger on another button is delivered to the first one. A direction
 held while a number is tapped, or SEED 2 asking for `0` and `#` together,
 needs the single view.
 
-A function row spans the top - the two soft keys, save, and C - and below it
-the width is split in half, directions on the left and numbers on the right.
-`wie_android/src/runner.rs`'s `key_code` maps each key's index to a `KeyCode`;
-the two have to be changed together.
+The width is split in half - directions on the left, numbers on the right -
+under a function row that keeps the same split: the two soft keys over the pad,
+save and back over the numbers. `wie_android/src/runner.rs`'s `key_code` maps
+each key's index to a `KeyCode`; the two have to be changed together.
 
 ### Saved data
 
