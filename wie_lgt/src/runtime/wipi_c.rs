@@ -138,6 +138,7 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::UpdateRecord => database::update_record.into_body(),
         WIPICSvcId::SelectRecord => database::select_record.into_body(),
         WIPICSvcId::Unk8 => database::exists_database.into_body(),
+        WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),
         WIPICSvcId::Close => net::close.into_body(),
         WIPICSvcId::SocketClose => net::socket_close.into_body(),
@@ -288,6 +289,23 @@ async fn unk5(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
     // media
 
     Ok(0)
+}
+
+/// `MC_fsAvailable` - free bytes on the storage a title saves to.
+///
+/// The vendor call asks the device for real free space; there is no equivalent
+/// here, and a title only wants to know it has room, so a generous fixed figure
+/// is returned. Zero, which the unimplemented path returned, reads as a full
+/// disk, and a game that will not write to a disk it thinks is full sits
+/// retrying the check.
+async fn fs_available(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    /// 16 MiB, more than a handset title expects and well short of anything
+    /// that would overflow its own arithmetic.
+    const FREE_BYTES: u32 = 16 * 1024 * 1024;
+
+    tracing::debug!("MC_fsAvailable({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x}) -> {FREE_BYTES}");
+
+    Ok(FREE_BYTES)
 }
 
 async fn unk6(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
