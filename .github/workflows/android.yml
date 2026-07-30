@@ -11,6 +11,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Needed only by the release step, which replaces the apk hanging off a fixed
+# tag. Everything else here reads.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -58,3 +63,35 @@ jobs:
         with:
           name: wie-mobile-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      # An artifact can only be downloaded by someone signed in to GitHub, from
+      # a zip, which is awkward on the handset the apk is meant for. A release
+      # asset is a plain link, so the apk also goes to one - always the same
+      # tag, so the link does not change between builds.
+      - name: Publish the APK to the development release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: mobile-dev
+        run: |
+          set -eu
+
+          notes="Development build, replaced by every push.
+
+          | | |
+          |---|---|
+          | Branch | \`${{ github.ref_name }}\` |
+          | Commit | ${{ github.sha }} |
+          | Built | $(date -u '+%Y-%m-%d %H:%M UTC') |
+
+          Debug build, unsigned for release: Android will ask for permission to
+          install it from outside the store."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$notes" --prerelease
+          else
+            gh release create "$TAG" --title 'WIE Mobile (development build)' --notes "$notes" --prerelease
+          fi
+
+          gh release upload "$TAG" \
+            'android/app/build/outputs/apk/debug/app-debug.apk#wie-mobile-debug.apk' --clobber
