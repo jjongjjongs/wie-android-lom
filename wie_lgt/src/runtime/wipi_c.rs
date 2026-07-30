@@ -72,7 +72,7 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::Printk => kernel::printk.into_body(),
         WIPICSvcId::Sprintk => kernel::sprintk.into_body(),
         WIPICSvcId::Unk13 => unk13.into_body(),
-        WIPICSvcId::Unk1 => unk1.into_body(),
+        WIPICSvcId::GetCurProgramId => kernel::get_cur_program_id.into_body(),
         WIPICSvcId::Exit => kernel::exit.into_body(),
         WIPICSvcId::Alloc => kernel::alloc.into_body(),
         WIPICSvcId::Calloc => kernel::calloc.into_body(),
@@ -117,7 +117,7 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::GetStringWidth => graphics::get_string_width.into_body(),
         WIPICSvcId::CreateImage => graphics::create_image.into_body(),
         WIPICSvcId::Unk0 => unk0.into_body(),
-        WIPICSvcId::Unk11 => unk11.into_body(),
+        WIPICSvcId::PostEvent => graphics::post_event.into_body(),
         WIPICSvcId::Unk3 => unk3.into_body(),
         WIPICSvcId::Unk4 => unk4.into_body(),
         WIPICSvcId::Unk7 => unk7.into_body(),
@@ -248,14 +248,6 @@ async fn unk0(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
     tracing::warn!("stub unk0({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     // graphics
-
-    Ok(0)
-}
-
-async fn unk1(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk1({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-
-    // kernel
 
     Ok(0)
 }
@@ -400,12 +392,6 @@ fn civil_from_days(days: i64) -> (i32, i32, i32) {
 
 async fn unk10(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::warn!("stub unk10({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-
-    Ok(0)
-}
-
-async fn unk11(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
