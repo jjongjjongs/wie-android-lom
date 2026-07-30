@@ -281,6 +281,7 @@ pub enum StdlibSvcId {
     Strstr = 0x410,
     Strlen = 0x411,
     Memcpy = 0x414,
+    Memmove = 0x415,
     Memset = 0x418,
     Time = 0x41a,
     Localtime = 0x420,

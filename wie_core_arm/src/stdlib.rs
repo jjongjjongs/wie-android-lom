@@ -17,6 +17,31 @@ pub async fn memcpy(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, 
     Ok(())
 }
 
+/// Like [`memcpy`], but defined when the two ranges overlap.
+///
+/// A game moving a sprite along a row does exactly that, and a forward copy
+/// would smear the leading bytes over the rest of it, so an overlap that runs
+/// the wrong way is copied from the back.
+pub async fn memmove(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
+    // Only a destination inside the source needs the reverse pass; the other
+    // direction, and no overlap at all, are safe to copy forwards.
+    let overlaps_forward = ptr_dst > ptr_src && ptr_dst.wrapping_sub(ptr_src) < len;
+
+    let mut buf = [0u8; COPY_CHUNK];
+    let mut done: u32 = 0;
+    while done < len {
+        let chunk = ((len - done) as usize).min(COPY_CHUNK);
+        let offset = if overlaps_forward { len - done - chunk as u32 } else { done };
+
+        core.read_bytes(ptr_src.wrapping_add(offset), &mut buf[..chunk])?;
+        core.write_bytes(ptr_dst.wrapping_add(offset), &buf[..chunk])?;
+
+        done = done.wrapping_add(chunk as u32);
+    }
+
+    Ok(())
+}
+
 pub async fn memset(core: &mut ArmCore, _: &mut (), ptr_dst: u32, value: u32, len: u32) -> Result<()> {
     let buf = [value as u8; COPY_CHUNK];
     let mut offset: u32 = 0;
