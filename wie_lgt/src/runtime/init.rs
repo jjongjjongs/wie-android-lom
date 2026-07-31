@@ -213,7 +213,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
 
         if function_index == 0x104 {
-            let mut original = [0u8; 16];
+            let mut original = [0u8; 0x80];
             match core.read_bytes(a0, &mut original) {
                 Ok(read) => {
                     tracing::warn!(
@@ -235,6 +235,66 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     tracing::warn!("LGT class meta runtime 0x1401590 read failed: {error}");
                 }
             }
+            let original_word0: u32 = read_generic(core, a0)?;
+            let original_word4: u32 = read_generic(core, a0 + 4)?;
+            let original_word8: u32 = read_generic(core, a0 + 8)?;
+            let original_wordc: u32 = read_generic(core, a0 + 12)?;
+
+            tracing::warn!(
+                "LGT callback original words: object={a0:#x}, \
+                 +0={original_word0:#x}, +4={original_word4:#x}, \
+                 +8={original_word8:#x}, +c={original_wordc:#x}"
+            );
+
+            for (name, pointer) in [
+                ("word0", original_word0),
+                ("word4", original_word4),
+                ("word8", original_word8),
+                ("wordc", original_wordc),
+            ] {
+                if pointer >= 0x1000 {
+                    let address = pointer & !1;
+                    let mut bytes = [0u8; 0x100];
+
+                    match core.read_bytes(address, &mut bytes) {
+                        Ok(read) => tracing::warn!(
+                            "LGT callback linked block {name}: \
+                             pointer={pointer:#x}, address={address:#x}, \
+                             read={read:#x}, bytes={:02x?}",
+                            &bytes[..read]
+                        ),
+                        Err(error) => tracing::warn!(
+                            "LGT callback linked block {name}: \
+                             pointer={pointer:#x}, address={address:#x}, \
+                             read failed: {error}"
+                        ),
+                    }
+                }
+            }
+
+            if original_word8 >= 0x1000 {
+                match read_generic::<u32, _>(core, original_word8 + 8) {
+                    Ok(level2) => {
+                        tracing::warn!(
+                            "LGT callback pointer chain: \
+                             object+8={original_word8:#x}, \
+                             [object+8]+8={level2:#x}"
+                        );
+
+                        if level2 >= 0x1000 {
+                            match read_generic::<u32, _>(core, level2 + 8) {
+                                Ok(level3) => tracing::warn!(
+                                    "LGT callback pointer chain: \
+                                     level2+8={level3:#x}"
+                                ),
+                                Err(error) => tracing::warn!("LGT callback pointer chain level3 failed: {error}"),
+                            }
+                        }
+                    }
+                    Err(error) => tracing::warn!("LGT callback pointer chain level2 failed: {error}"),
+                }
+            }
+
             let original_index_0: u16 = read_generic(core, 0x01500e40 + 0x22)?;
             let original_index_1: u16 = read_generic(core, 0x01500e40 + 0x24)?;
             write_generic(core, 0x01500e40 + 0x22, 0u16)?;
