@@ -33,6 +33,7 @@ use super::{
 type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
 type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
 type ImportFunctionCache = Arc<Mutex<BTreeMap<(u32, u32), u32>>>;
+type UnresolvedImportCallCounts = Arc<Mutex<BTreeMap<(u32, u32), u64>>>;
 
 const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
 const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
@@ -46,6 +47,7 @@ struct InitSvcContext {
     java_class_tables: JavaClassTables,
     java_activated_classes: JavaActivatedClasses,
     import_function_cache: ImportFunctionCache,
+    unresolved_import_call_counts: UnresolvedImportCallCounts,
 }
 
 fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
@@ -60,6 +62,7 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
             java_class_tables: Default::default(),
             java_activated_classes: Default::default(),
             import_function_cache: Default::default(),
+            unresolved_import_call_counts: Default::default(),
         },
     )
 }
@@ -68,7 +71,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
     let wipic_category = &context.wipic_category;
     let stdlib_category = &context.stdlib_category;
     let jvm = &mut context.jvm;
-    let (_, lr) = core.read_pc_lr()?;
+    let (pc, lr) = core.read_pc_lr()?;
 
     if id.0 >= UNRESOLVED_IMPORT_SVC_BASE {
         let encoded = id.0 - UNRESOLVED_IMPORT_SVC_BASE;
@@ -78,9 +81,25 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         let a1 = core.read_param(1)?;
         let a2 = core.read_param(2)?;
         let a3 = core.read_param(3)?;
-        tracing::warn!(
-            "unresolved_lgt_import(table={import_table:#x}, function={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}) -> 0"
-        );
+
+        let key = (import_table, function_index);
+        let count = {
+            let mut counts = context.unresolved_import_call_counts.lock();
+            let count = counts.entry(key).or_insert(0);
+            *count = count.saturating_add(1);
+            *count
+        };
+
+        // Record the first calls in detail, then exponentially sample a hot loop.
+        // This preserves evidence of repeated imports without flooding Android logs.
+        let should_log = count <= 8 || count.is_power_of_two();
+
+        if should_log {
+            tracing::warn!(
+                "unresolved_lgt_import(                 table={import_table:#x},                  function={function_index:#x},                  count={count},                  pc={pc:#x},                  lr={lr:#x},                  r0={a0:#x},                  r1={a1:#x},                  r2={a2:#x},                  r3={a3:#x}                 ) -> 0"
+            );
+        }
+
         0u32.write(core, lr)?;
         return Ok(());
     }
