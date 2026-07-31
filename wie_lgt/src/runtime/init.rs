@@ -32,6 +32,7 @@ use super::{
 
 type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
 type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
+type ImportFunctionCache = Arc<Mutex<BTreeMap<(u32, u32), u32>>>;
 
 const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
 const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
@@ -44,6 +45,7 @@ struct InitSvcContext {
     java_handles: JavaHandleTable,
     java_class_tables: JavaClassTables,
     java_activated_classes: JavaActivatedClasses,
+    import_function_cache: ImportFunctionCache,
 }
 
 fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
@@ -57,6 +59,7 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm) -> Result<()> {
             java_handles: Default::default(),
             java_class_tables: Default::default(),
             java_activated_classes: Default::default(),
+            import_function_cache: Default::default(),
         },
     )
 }
@@ -332,9 +335,16 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
     match InitSvcId::try_from(id)? {
         InitSvcId::GetImportTable => EmulatedFunction::call(&get_import_table, core, &mut ()).await?.write(core, lr),
-        InitSvcId::GetImportFunction => get_import_function(core, *wipic_category, *stdlib_category, core.read_param(0)?, core.read_param(1)?)
-            .await?
-            .write(core, lr),
+        InitSvcId::GetImportFunction => get_import_function(
+            core,
+            *wipic_category,
+            *stdlib_category,
+            &context.import_function_cache,
+            core.read_param(0)?,
+            core.read_param(1)?,
+        )
+        .await?
+        .write(core, lr),
         InitSvcId::Unk0 => EmulatedFunction::call(&unk0, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk7 => EmulatedFunction::call(&java_unk7, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk1 => EmulatedFunction::call(&java_unk1, core, &mut ()).await?.write(core, lr),
@@ -521,35 +531,61 @@ async fn get_import_table(_core: &mut ArmCore, _: &mut (), import_table: u32) ->
     Ok(import_table)
 }
 
-async fn get_import_function(core: &mut ArmCore, wipic_category: u32, stdlib_category: u32, import_table: u32, function_index: u32) -> Result<u32> {
-    tracing::debug!("get_import_function({import_table:#x}, {function_index})");
+async fn get_import_function(
+    core: &mut ArmCore,
+    wipic_category: u32,
+    stdlib_category: u32,
+    cache: &ImportFunctionCache,
+    import_table: u32,
+    function_index: u32,
+) -> Result<u32> {
+    let key = (import_table, function_index);
 
-    if import_table == 0x1fb {
-        return core.make_svc_stub(wipic_category, function_index);
-    } else if import_table == 0x64 {
-        return get_java_interface_method(core, function_index);
-    } else if import_table == 1 {
-        return core.make_svc_stub(stdlib_category, function_index);
+    if let Some(&cached) = cache.lock().get(&key) {
+        tracing::debug!("get_import_function({import_table:#x}, {function_index:#x}) -> cached {cached:#x}");
+        return Ok(cached);
     }
 
-    Ok(match (import_table, function_index) {
-        (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::Unk0)?,
-        (0x1f8, 0x17) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk7)?,
-        (0x1fc, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk1)?,
-        (0x1ff, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk2)?,
-        (0x201, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk3)?,
-        _ => {
-            if import_table > UNRESOLVED_IMPORT_FIELD_MASK || function_index > UNRESOLVED_IMPORT_FIELD_MASK {
-                return Err(WieError::FatalError(format!(
-                    "Unknown import cannot be encoded: table={import_table:#x}, function={function_index:#x}"
-                )));
+    tracing::debug!("get_import_function({import_table:#x}, {function_index:#x})");
+
+    let resolved = if import_table == 0x1fb {
+        core.make_svc_stub(wipic_category, function_index)?
+    } else if import_table == 0x64 {
+        get_java_interface_method(core, function_index)?
+    } else if import_table == 1 {
+        core.make_svc_stub(stdlib_category, function_index)?
+    } else {
+        match (import_table, function_index) {
+            (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::Unk0)?,
+            (0x1f8, 0x17) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk7)?,
+            (0x1fc, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk1)?,
+            (0x1ff, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk2)?,
+            (0x201, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk3)?,
+            _ => {
+                if import_table > UNRESOLVED_IMPORT_FIELD_MASK || function_index > UNRESOLVED_IMPORT_FIELD_MASK {
+                    return Err(WieError::FatalError(format!(
+                        "Unknown import cannot be encoded:                          table={import_table:#x},                          function={function_index:#x}"
+                    )));
+                }
+
+                let diagnostic_id = UNRESOLVED_IMPORT_SVC_BASE | (import_table << 12) | function_index;
+
+                let stub = core.make_svc_stub(SVC_CATEGORY_INIT, diagnostic_id)?;
+
+                tracing::warn!(
+                    "Unknown import function:                      table={import_table:#x},                      function={function_index:#x};                      installed diagnostic stub {stub:#x}"
+                );
+
+                stub
             }
-            let diagnostic_id = UNRESOLVED_IMPORT_SVC_BASE | (import_table << 12) | function_index;
-            let stub = core.make_svc_stub(SVC_CATEGORY_INIT, diagnostic_id)?;
-            tracing::warn!("Unknown import function: table={import_table:#x}, function={function_index:#x}; installed diagnostic stub {stub:#x}");
-            stub
         }
-    })
+    };
+
+    cache.lock().insert(key, resolved);
+
+    tracing::debug!("get_import_function({import_table:#x},          {function_index:#x}) -> resolved {resolved:#x}");
+
+    Ok(resolved)
 }
 
 fn read_u32_le(data: &[u8], offset: usize, what: &str) -> Result<u32> {
