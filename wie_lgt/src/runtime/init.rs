@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, format, sync::Arc};
+use alloc::{collections::BTreeMap, format, sync::Arc, vec};
 use core::mem::size_of;
 
 use elf::{ElfBytes, endian::AnyEndian};
@@ -10,6 +10,11 @@ use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
 use wie_util::{ByteRead, Result, WieError, read_generic, write_generic};
+
+use crate::relocation::{
+    R_ARM_ABS32, R_ARM_CALL, R_ARM_JUMP24, R_ARM_NONE, R_ARM_PC24, R_ARM_RABS32, R_ARM_RBASE, R_ARM_REL32, R_ARM_RPC24, R_ARM_RREL32, R_ARM_THM_CALL,
+    R_ARM_THM_JUMP24, arm_abs32, arm_pc24, arm_rel32, raptor_rabs32, raptor_rpc24, raptor_rrel32, thumb_pc22,
+};
 
 use super::{
     SVC_CATEGORY_INIT, SVC_CATEGORY_STDLIB, SVC_CATEGORY_WIPIC,
@@ -27,6 +32,9 @@ use super::{
 
 type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
 type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
+
+const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
+const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
 
 #[derive(Clone)]
 struct InitSvcContext {
@@ -58,6 +66,21 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
     let stdlib_category = &context.stdlib_category;
     let jvm = &mut context.jvm;
     let (_, lr) = core.read_pc_lr()?;
+
+    if id.0 >= UNRESOLVED_IMPORT_SVC_BASE {
+        let encoded = id.0 - UNRESOLVED_IMPORT_SVC_BASE;
+        let import_table = (encoded >> 12) & UNRESOLVED_IMPORT_FIELD_MASK;
+        let function_index = encoded & UNRESOLVED_IMPORT_FIELD_MASK;
+        let a0 = core.read_param(0)?;
+        let a1 = core.read_param(1)?;
+        let a2 = core.read_param(2)?;
+        let a3 = core.read_param(3)?;
+        tracing::warn!(
+            "unresolved_lgt_import(table={import_table:#x}, function={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}) -> 0"
+        );
+        0u32.write(core, lr)?;
+        return Ok(());
+    }
 
     // Diagnostic fallback for Java-interface indices that do not yet have a
     // semantic implementation. Log the first four ABI parameters and return 0.
@@ -516,11 +539,229 @@ async fn get_import_function(core: &mut ArmCore, wipic_category: u32, stdlib_cat
         (0x1ff, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk2)?,
         (0x201, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk3)?,
         _ => {
-            return Err(WieError::FatalError(format!(
-                "Unknown import function: {import_table:#x}, {function_index:#x}"
-            )));
+            if import_table > UNRESOLVED_IMPORT_FIELD_MASK || function_index > UNRESOLVED_IMPORT_FIELD_MASK {
+                return Err(WieError::FatalError(format!(
+                    "Unknown import cannot be encoded: table={import_table:#x}, function={function_index:#x}"
+                )));
+            }
+            let diagnostic_id = UNRESOLVED_IMPORT_SVC_BASE | (import_table << 12) | function_index;
+            let stub = core.make_svc_stub(SVC_CATEGORY_INIT, diagnostic_id)?;
+            tracing::warn!("Unknown import function: table={import_table:#x}, function={function_index:#x}; installed diagnostic stub {stub:#x}");
+            stub
         }
     })
+}
+
+fn read_u32_le(data: &[u8], offset: usize, what: &str) -> Result<u32> {
+    let bytes = data
+        .get(offset..offset + 4)
+        .ok_or_else(|| WieError::FatalError(format!("truncated {what} at file offset {offset:#x}")))?;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn symbol_value(data: &[u8], symtab_offset: usize, symtab_size: usize, symtab_entsize: usize, symbol_index: usize) -> Result<(u32, u16)> {
+    if symtab_entsize < 16 {
+        return Err(WieError::FatalError(format!("invalid ELF32 symbol entry size: {symtab_entsize}")));
+    }
+    let entry = symtab_offset
+        .checked_add(
+            symbol_index
+                .checked_mul(symtab_entsize)
+                .ok_or_else(|| WieError::FatalError("symbol index overflow".into()))?,
+        )
+        .ok_or_else(|| WieError::FatalError("symbol offset overflow".into()))?;
+    if entry + 16 > symtab_offset + symtab_size || entry + 16 > data.len() {
+        return Err(WieError::FatalError(format!("ELF symbol index {symbol_index} is out of range")));
+    }
+    Ok((
+        read_u32_le(data, entry + 4, "ELF symbol value")?,
+        u16::from_le_bytes([data[entry + 14], data[entry + 15]]),
+    ))
+}
+
+fn section_load_bias(section_headers: &[elf::section::SectionHeader], address: u32) -> Option<i32> {
+    const SHF_ALLOC: u64 = 0x2;
+
+    section_headers.iter().find_map(|section| {
+        if section.sh_flags & SHF_ALLOC == 0 || section.sh_size == 0 {
+            return None;
+        }
+        let start = section.sh_addr as u32;
+        let end = start.checked_add(section.sh_size as u32)?;
+        if (start..end).contains(&address) {
+            // WIE currently maps allocatable sections at their linked virtual
+            // addresses. Keeping this calculation explicit preserves Raptor
+            // ER semantics when rebased section loading is added later.
+            Some(0)
+        } else {
+            None
+        }
+    })
+}
+
+fn apply_relocations(core: &mut ArmCore, data: &[u8], section_headers: &[elf::section::SectionHeader]) -> Result<()> {
+    const SHT_RELA: u32 = 4;
+    const SHT_REL: u32 = 9;
+
+    for (relocation_section_index, shdr) in section_headers.iter().enumerate() {
+        if shdr.sh_type != SHT_REL && shdr.sh_type != SHT_RELA {
+            continue;
+        }
+
+        // Raptor ER private relocation sections may not link a conventional
+        // ELF symbol table. Resolve the table lazily only for standard ARM
+        // relocations.
+        let symtab = section_headers.get(shdr.sh_link as usize);
+        let rel_entsize = if shdr.sh_entsize == 0 {
+            if shdr.sh_type == SHT_RELA { 12 } else { 8 }
+        } else {
+            shdr.sh_entsize as usize
+        };
+        let minimum_entry_size = if shdr.sh_type == SHT_RELA { 12 } else { 8 };
+        if rel_entsize < minimum_entry_size {
+            return Err(WieError::FatalError(format!("invalid relocation entry size: {rel_entsize}")));
+        }
+
+        let rel_offset = shdr.sh_offset as usize;
+        let rel_size = shdr.sh_size as usize;
+        let count = rel_size / rel_entsize;
+        tracing::debug!("Applying {count} relocation(s) from section #{relocation_section_index}");
+
+        // Raptor ER uses private relocation types 252..255. R_ARM_RBASE
+        // records bind a compact segment id (r_sym) to the segment containing
+        // r_offset; following records select that segment id instead of a
+        // normal ELF symbol.
+        let mut raptor_segment_biases = BTreeMap::<usize, i32>::new();
+
+        for index in 0..count {
+            let entry_offset = rel_offset
+                .checked_add(
+                    index
+                        .checked_mul(rel_entsize)
+                        .ok_or_else(|| WieError::FatalError("relocation index overflow".into()))?,
+                )
+                .ok_or_else(|| WieError::FatalError("relocation offset overflow".into()))?;
+            let place = read_u32_le(data, entry_offset, "ELF relocation offset")?;
+            let info = read_u32_le(data, entry_offset + 4, "ELF relocation info")?;
+            let relocation_type = info & 0xff;
+            let symbol_index = (info >> 8) as usize;
+
+            if relocation_type == R_ARM_RBASE {
+                let Some(bias) = section_load_bias(section_headers, place) else {
+                    tracing::warn!(
+                        "Invalid R_ARM_RBASE segment {symbol_index} at relocation #{index}: address {place:#x} is outside allocatable sections"
+                    );
+                    continue;
+                };
+                raptor_segment_biases.insert(symbol_index, bias);
+                tracing::debug!("Registered Raptor ER segment {symbol_index} at {place:#x} with load bias {bias:#x}");
+                continue;
+            }
+
+            if matches!(relocation_type, R_ARM_RABS32 | R_ARM_RPC24 | R_ARM_RREL32) {
+                let Some(&target_bias) = raptor_segment_biases.get(&symbol_index) else {
+                    tracing::warn!(
+                        "Raptor ER relocation type {relocation_type} at {place:#x} references unknown segment {symbol_index}; leaving original value unchanged"
+                    );
+                    continue;
+                };
+                let Some(place_bias) = section_load_bias(section_headers, place) else {
+                    tracing::warn!("Raptor ER relocation place is outside allocatable sections: {place:#x}; leaving original value unchanged");
+                    continue;
+                };
+
+                match relocation_type {
+                    R_ARM_RABS32 => {
+                        let addend = if shdr.sh_type == SHT_RELA {
+                            read_u32_le(data, entry_offset + 8, "Raptor ER RELA addend")?
+                        } else {
+                            read_generic(core, place)?
+                        };
+                        write_generic(core, place, raptor_rabs32(addend, target_bias))?;
+                    }
+                    R_ARM_RREL32 => {
+                        let addend = if shdr.sh_type == SHT_RELA {
+                            read_u32_le(data, entry_offset + 8, "Raptor ER RELA addend")?
+                        } else {
+                            read_generic(core, place)?
+                        };
+                        write_generic(core, place, raptor_rrel32(addend, target_bias, place_bias))?;
+                    }
+                    R_ARM_RPC24 => {
+                        let instruction: u32 = read_generic(core, place)?;
+                        write_generic(core, place, raptor_rpc24(instruction, target_bias, place_bias)?)?;
+                    }
+                    _ => unreachable!(),
+                }
+                continue;
+            }
+
+            let symtab = symtab.ok_or_else(|| {
+                WieError::FatalError(format!(
+                    "relocation section {relocation_section_index} has invalid symtab link {}",
+                    shdr.sh_link
+                ))
+            })?;
+            let symtab_entsize = if symtab.sh_entsize == 0 { 16 } else { symtab.sh_entsize as usize };
+            let (symbol, symbol_section_index) =
+                symbol_value(data, symtab.sh_offset as usize, symtab.sh_size as usize, symtab_entsize, symbol_index)?;
+            if symbol_index != 0 && symbol_section_index == 0 {
+                tracing::warn!(
+                    "Unresolved ELF symbol #{symbol_index} for relocation type {relocation_type} at {place:#x}; leaving original value unchanged"
+                );
+                continue;
+            }
+
+            match relocation_type {
+                R_ARM_NONE => {}
+                R_ARM_ABS32 => {
+                    let addend = if shdr.sh_type == SHT_RELA {
+                        read_u32_le(data, entry_offset + 8, "ELF RELA addend")?
+                    } else {
+                        read_generic(core, place)?
+                    };
+                    write_generic(core, place, arm_abs32(addend, symbol))?;
+                }
+                R_ARM_REL32 => {
+                    let addend = if shdr.sh_type == SHT_RELA {
+                        read_u32_le(data, entry_offset + 8, "ELF RELA addend")?
+                    } else {
+                        read_generic(core, place)?
+                    };
+                    write_generic(core, place, arm_rel32(place, addend, symbol))?;
+                }
+                R_ARM_PC24 | R_ARM_CALL | R_ARM_JUMP24 => {
+                    let instruction: u32 = read_generic(core, place)?;
+                    let addend = if shdr.sh_type == SHT_RELA {
+                        read_u32_le(data, entry_offset + 8, "ELF RELA addend")? as i32
+                    } else {
+                        let imm24 = (instruction & 0x00ff_ffff) as i32;
+                        (imm24 << 8) >> 6
+                    };
+                    write_generic(core, place, arm_pc24(instruction, place, symbol, addend)?)?;
+                }
+                R_ARM_THM_CALL | R_ARM_THM_JUMP24 => {
+                    let upper: u16 = read_generic(core, place)?;
+                    let lower: u16 = read_generic(core, place + 2)?;
+                    let addend = if shdr.sh_type == SHT_RELA {
+                        read_u32_le(data, entry_offset + 8, "ELF RELA addend")? as i32
+                    } else {
+                        let hi = (upper & 0x07ff) as i32;
+                        let lo = (lower & 0x07ff) as i32;
+                        (((hi << 12) | (lo << 1)) << 9) >> 9
+                    };
+                    let (new_upper, new_lower) = thumb_pc22(upper, lower, place, symbol, addend)?;
+                    write_generic(core, place, new_upper)?;
+                    write_generic(core, place + 2, new_lower)?;
+                }
+                unsupported => tracing::warn!(
+                    "Unsupported ARM relocation type {unsupported} at {place:#x} (symbol #{symbol_index}={symbol:#x}); leaving original value unchanged"
+                ),
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<u32> {
@@ -541,8 +782,9 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<u32> {
         .map_err(|x| WieError::FatalError(format!("Failed to read ELF section headers: {x}")))?;
     let shdrs = shdrs_opt.ok_or_else(|| WieError::FatalError("ELF is missing section headers".into()))?;
     let strtab = strtab_opt.ok_or_else(|| WieError::FatalError("ELF is missing section name string table".into()))?;
+    let section_headers: alloc::vec::Vec<_> = shdrs.iter().collect();
 
-    for shdr in shdrs {
+    for shdr in &section_headers {
         let section_name = strtab
             .get(shdr.sh_name as usize)
             .map_err(|x| WieError::FatalError(format!("Invalid ELF section name index {}: {x}", shdr.sh_name)))?;
@@ -550,14 +792,20 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<u32> {
         if shdr.sh_addr != 0 {
             tracing::debug!("Section {section_name} at {:x}", shdr.sh_addr);
 
-            let data = elf
-                .section_data(&shdr)
-                .map_err(|x| WieError::FatalError(format!("Failed to read ELF section {section_name}: {x}")))?
-                .0;
-
-            core.load(data, shdr.sh_addr as u32, shdr.sh_size as usize)?;
+            if shdr.sh_type == 8 {
+                let zeroes = vec![0u8; shdr.sh_size as usize];
+                core.load(&zeroes, shdr.sh_addr as u32, zeroes.len())?;
+            } else {
+                let section_data = elf
+                    .section_data(shdr)
+                    .map_err(|x| WieError::FatalError(format!("Failed to read ELF section {section_name}: {x}")))?
+                    .0;
+                core.load(section_data, shdr.sh_addr as u32, shdr.sh_size as usize)?;
+            }
         }
     }
+
+    apply_relocations(core, data, &section_headers)?;
 
     tracing::debug!("Entrypoint: {:#x}", elf.ehdr.e_entry);
 
