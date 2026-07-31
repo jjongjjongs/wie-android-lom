@@ -675,6 +675,15 @@ fn section_load_bias(section_headers: &[elf::section::SectionHeader], address: u
     })
 }
 
+fn has_raptor_metadata(data: &[u8], section_headers: &[elf::section::SectionHeader]) -> bool {
+    section_headers.iter().any(|section| {
+        let offset = section.sh_offset as usize;
+        let size = section.sh_size as usize;
+
+        size >= 4 && data.get(offset..offset.saturating_add(4)).is_some_and(|magic| magic == b"RAPT")
+    })
+}
+
 fn apply_relocations(core: &mut ArmCore, data: &[u8], section_headers: &[elf::section::SectionHeader]) -> Result<()> {
     const SHT_RELA: u32 = 4;
     const SHT_REL: u32 = 9;
@@ -688,6 +697,15 @@ fn apply_relocations(core: &mut ArmCore, data: &[u8], section_headers: &[elf::se
         // ELF symbol table. Resolve the table lazily only for standard ARM
         // relocations.
         let symtab = section_headers.get(shdr.sh_link as usize);
+        let prelinked_raptor = symtab.is_none() && has_raptor_metadata(data, section_headers);
+
+        if prelinked_raptor {
+            tracing::warn!(
+                "Raptor prelinked relocation section #{relocation_section_index}:                  invalid symtab link {}; preserving linked relocation values",
+                shdr.sh_link
+            );
+        }
+
         let rel_entsize = if shdr.sh_entsize == 0 {
             if shdr.sh_type == SHT_RELA { 12 } else { 8 }
         } else {
@@ -770,6 +788,23 @@ fn apply_relocations(core: &mut ArmCore, data: &[u8], section_headers: &[elf::se
                     _ => unreachable!(),
                 }
                 continue;
+            }
+
+            if prelinked_raptor {
+                match relocation_type {
+                    // These Raptor executable images are linked at their final
+                    // virtual addresses. ABS32 values already point into the
+                    // mapped text/data/bss sections, and PC24 instructions
+                    // already encode their final branch targets.
+                    R_ARM_ABS32 | R_ARM_PC24 | 15 => {
+                        continue;
+                    }
+                    _ => {
+                        return Err(WieError::FatalError(format!(
+                            "Unsupported prelinked Raptor relocation:                              section={relocation_section_index},                              index={index},                              type={relocation_type},                              symbol={symbol_index:#x},                              place={place:#x}"
+                        )));
+                    }
+                }
             }
 
             let symtab = symtab.ok_or_else(|| {
