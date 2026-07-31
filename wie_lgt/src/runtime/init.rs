@@ -295,6 +295,21 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 }
             }
 
+            let method_ref_base = 0x01500e00u32;
+            let mut method_ref_bytes = [0u8; 0x100];
+
+            match core.read_bytes(method_ref_base, &mut method_ref_bytes) {
+                Ok(read) => tracing::warn!(
+                    "Lm method reference block before patch: \
+                     address={method_ref_base:#x}, read={read:#x}, bytes={:02x?}",
+                    &method_ref_bytes[..read]
+                ),
+                Err(error) => tracing::warn!(
+                    "Lm method reference block read failed: \
+                     address={method_ref_base:#x}, error={error}"
+                ),
+            }
+
             let original_index_0: u16 = read_generic(core, 0x01500e40 + 0x22)?;
             let original_index_1: u16 = read_generic(core, 0x01500e40 + 0x24)?;
             write_generic(core, 0x01500e40 + 0x22, 0u16)?;
