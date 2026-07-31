@@ -123,8 +123,15 @@ pub async fn set_timer(
     Ok(())
 }
 
-pub async fn unset_timer(_: &mut dyn WIPICContext, a0: WIPICWord) -> Result<()> {
-    tracing::warn!("stub MC_knlUnsetTimer({a0:#x})");
+pub async fn unset_timer(context: &mut dyn WIPICContext, ptr_timer: WIPICWord) -> Result<()> {
+    tracing::debug!("MC_knlUnsetTimer({ptr_timer:#x})");
+
+    // The backend queue has no cancellation handle, so an already-scheduled
+    // callback still fires; clearing the guest timer's callback pointer at
+    // least stops a title from treating a stopped timer as still armed.
+    if ptr_timer != 0 {
+        write_generic(context, ptr_timer, WIPICTimer { fn_callback: 0 })?;
+    }
 
     Ok(())
 }
@@ -258,15 +265,19 @@ pub async fn sprintk(
 }
 
 pub async fn get_total_memory(_context: &mut dyn WIPICContext) -> Result<i32> {
-    tracing::warn!("stub MC_knlGetTotalMemory()");
+    // A handset reported tens of MiB here; the old 1 MiB made memory-probing
+    // titles believe the heap was already full and refuse to load.
+    const TOTAL_MEMORY: i32 = 32 * 1024 * 1024;
+    tracing::debug!("MC_knlGetTotalMemory() -> {TOTAL_MEMORY:#x}");
 
-    Ok(0x100000) // TODO hardcoded
+    Ok(TOTAL_MEMORY)
 }
 
 pub async fn get_free_memory(_context: &mut dyn WIPICContext) -> Result<i32> {
-    tracing::warn!("stub MC_knlGetFreeMemory()");
+    const FREE_MEMORY: i32 = 24 * 1024 * 1024;
+    tracing::debug!("MC_knlGetFreeMemory() -> {FREE_MEMORY:#x}");
 
-    Ok(0x100000) // TODO hardcoded
+    Ok(FREE_MEMORY)
 }
 
 pub async fn exit(context: &mut dyn WIPICContext, code: i32) -> Result<()> {

@@ -45,6 +45,7 @@ pub(crate) struct ArmCoreInner {
     last_thread_id: ThreadId,
     threads: BTreeMap<ThreadId, ThreadState>,
     svc_handlers: BTreeMap<u32, Arc<Box<dyn RegisteredFunction>>>,
+    svc_stubs: BTreeMap<(u32, u32), u32>,
     next_stub_address: u32,
     profile: Option<ProfileState>,
 }
@@ -99,6 +100,7 @@ impl ArmCore {
             last_thread_id: 0,
             threads: BTreeMap::new(),
             svc_handlers: BTreeMap::new(),
+            svc_stubs: BTreeMap::new(),
             next_stub_address: FUNCTIONS_BASE,
             profile,
         };
@@ -351,6 +353,13 @@ impl ArmCore {
             return Err(WieError::FatalError(format!("Unknown SVC handler category: {category}")));
         }
 
+        // A game that re-resolves the same import - which LGT titles do on
+        // every scene change - would otherwise burn a fresh stub each time and
+        // eventually exhaust the arena. Hand back the one already written.
+        if let Some(&address) = inner.svc_stubs.get(&(category, id)) {
+            return Ok(address);
+        }
+
         let address = inner.next_stub_address;
         if address + SVC_STUB_SIZE > FUNCTIONS_BASE + FUNCTIONS_SIZE as u32 {
             return Err(WieError::FatalError("SVC stub space exhausted".into()));
@@ -376,9 +385,14 @@ impl ArmCore {
         .collect::<Vec<_>>();
         inner.engine.mem_write(address, &stub)?;
 
+        // The Thumb entry has its low bit set; cache that so a repeat lookup
+        // returns an identical, callable pointer.
+        let thumb_address = address + 1;
+        inner.svc_stubs.insert((category, id), thumb_address);
+
         tracing::trace!("Register SVC stub at {address:#x}, category={category}, id={id}");
 
-        Ok(address + 1)
+        Ok(thumb_address)
     }
 
     pub fn map(&mut self, address: u32, size: u32) -> Result<()> {
@@ -702,7 +716,9 @@ mod tests {
 
         core.register_svc_handler(1, test_svc_handler, &None).unwrap();
         let first = core.make_svc_stub(1, 0u32).unwrap();
+        let first_again = core.make_svc_stub(1, 0u32).unwrap();
         let second = core.make_svc_stub(1, 1u32).unwrap();
+        assert_eq!(first, first_again);
         assert_eq!(first, FUNCTIONS_BASE + 1);
         assert_eq!(second, FUNCTIONS_BASE + SVC_STUB_SIZE + 1);
 
