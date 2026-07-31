@@ -15,6 +15,7 @@ use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes
 
 use crate::{WIPICResult, context::WIPICContext, method::MethodBody};
 
+pub use self::sprintf::format as format_varargs;
 use self::sprintf::sprintf;
 
 #[repr(C, packed)]

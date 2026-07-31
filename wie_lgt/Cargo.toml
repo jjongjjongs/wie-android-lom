@@ -13,6 +13,7 @@ tracing = { workspace = true }
 
 chrono = { version = "^0.4", default-features = false, features = ["alloc"] }
 elf = { version = "^0.8" }
+encoding_rs = { version = "^0.8", default-features = false, features = ["alloc"] }
 
 java_class_proto = { workspace = true }
 java_constants = { workspace = true }

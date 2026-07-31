@@ -3574,6 +3574,7 @@ dependencies = [
  "bytemuck",
  "chrono",
  "elf",
+ "encoding_rs",
  "futures",
  "java_class_proto",
  "java_constants",

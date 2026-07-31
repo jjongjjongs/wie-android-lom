@@ -230,6 +230,123 @@ pub async fn fill_arc(
     Ok(())
 }
 
+/// Reads `n` (x, y) vertices from two parallel `M_Int32` arrays, the way the
+/// WIPI polygon calls pass them.
+fn read_polygon_points(context: &mut dyn WIPICContext, x_points: WIPICWord, y_points: WIPICWord, n: usize) -> Result<Vec<(i32, i32)>> {
+    let mut points = Vec::with_capacity(n);
+    for i in 0..n {
+        let offset = (i * size_of::<i32>()) as WIPICWord;
+        let x: i32 = read_generic(context, x_points + offset)?;
+        let y: i32 = read_generic(context, y_points + offset)?;
+        points.push((x, y));
+    }
+    Ok(points)
+}
+
+/// The bounding box of a set of points as `(min_x, min_y, max_x, max_y)`. Used
+/// as the draw clip so a stray vertex cannot paint outside the shape's extent.
+/// `Clip` is neither `Copy` nor `Clone`, so callers rebuild one per draw from
+/// these bounds.
+fn polygon_bounds(points: &[(i32, i32)]) -> (i32, i32, i32, i32) {
+    let min_x = points.iter().map(|p| p.0).min().unwrap_or(0);
+    let min_y = points.iter().map(|p| p.1).min().unwrap_or(0);
+    let max_x = points.iter().map(|p| p.0).max().unwrap_or(0);
+    let max_y = points.iter().map(|p| p.1).max().unwrap_or(0);
+    (min_x, min_y, max_x, max_y)
+}
+
+fn bounds_clip(bounds: (i32, i32, i32, i32)) -> Clip {
+    let (min_x, min_y, max_x, max_y) = bounds;
+    Clip {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x + 1).max(0) as u32,
+        height: (max_y - min_y + 1).max(0) as u32,
+    }
+}
+
+pub async fn draw_polygon(
+    context: &mut dyn WIPICContext,
+    dst: WIPICIndirectPtr,
+    x_points: WIPICWord,
+    y_points: WIPICWord,
+    n_points: i32,
+    p_gctx: WIPICWord,
+) -> Result<()> {
+    tracing::debug!("MC_grpDrawPolygon({:#x}, {x_points:#x}, {y_points:#x}, {n_points}, {p_gctx:#x})", dst.0);
+
+    if n_points < 2 || x_points == 0 || y_points == 0 {
+        return Ok(());
+    }
+
+    let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
+    let gctx: WIPICGraphicsContext = read_generic(context, p_gctx)?;
+    let points = read_polygon_points(context, x_points, y_points, n_points as usize)?;
+
+    let bounds = polygon_bounds(&points);
+    let color = framebuffer.pixel_to_color(gctx.fgpxl);
+    let mut canvas = framebuffer.canvas(context)?;
+
+    // Close the outline back to the first vertex, which is what a polygon is.
+    for i in 0..points.len() {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % points.len()];
+        canvas.draw_line(x1, y1, x2, y2, color, bounds_clip(bounds));
+    }
+    canvas.flush()?;
+
+    Ok(())
+}
+
+pub async fn fill_polygon(
+    context: &mut dyn WIPICContext,
+    dst: WIPICIndirectPtr,
+    x_points: WIPICWord,
+    y_points: WIPICWord,
+    n_points: i32,
+    p_gctx: WIPICWord,
+) -> Result<()> {
+    tracing::debug!("MC_grpFillPolygon({:#x}, {x_points:#x}, {y_points:#x}, {n_points}, {p_gctx:#x})", dst.0);
+
+    if n_points < 3 || x_points == 0 || y_points == 0 {
+        return Ok(());
+    }
+
+    let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
+    let gctx: WIPICGraphicsContext = read_generic(context, p_gctx)?;
+    let points = read_polygon_points(context, x_points, y_points, n_points as usize)?;
+
+    let bounds = polygon_bounds(&points);
+    let color = framebuffer.pixel_to_color(gctx.fgpxl);
+    let (min_y, max_y) = (bounds.1, bounds.3);
+    let mut canvas = framebuffer.canvas(context)?;
+
+    // Even-odd scanline fill: for each row, gather where the edges cross it,
+    // sort, and paint the interior between successive crossing pairs.
+    let mut crossings: Vec<i32> = Vec::with_capacity(points.len());
+    for y in min_y..=max_y {
+        crossings.clear();
+        for i in 0..points.len() {
+            let (x1, y1) = points[i];
+            let (x2, y2) = points[(i + 1) % points.len()];
+            // A half-open edge test counts each vertex once, so a scanline
+            // passing exactly through a vertex is not filled twice.
+            let (lo, hi, xa, xb) = if y1 <= y2 { (y1, y2, x1, x2) } else { (y2, y1, x2, x1) };
+            if y >= lo && y < hi {
+                let x = xa + (xb - xa) * (y - lo) / (hi - lo);
+                crossings.push(x);
+            }
+        }
+        crossings.sort_unstable();
+        for pair in crossings.chunks_exact(2) {
+            canvas.draw_line(pair[0], y, pair[1], y, color, bounds_clip(bounds));
+        }
+    }
+    canvas.flush()?;
+
+    Ok(())
+}
+
 pub async fn create_image(
     context: &mut dyn WIPICContext,
     ptr_image: WIPICWord,

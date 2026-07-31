@@ -6,6 +6,8 @@ use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId, stdlib};
 use wie_util::{ByteWrite, Result, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes};
 
+use wie_wipi_c::api::kernel::format_varargs;
+
 use crate::runtime::{SVC_CATEGORY_STDLIB, svc_ids::StdlibSvcId};
 
 pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System) -> Result<()> {
@@ -14,6 +16,7 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System) -> Resul
 
         match id.0 {
             x if x == StdlibSvcId::Printf as u32 => EmulatedFunction::call(&printf, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Sprintf as u32 => EmulatedFunction::call(&sprintf, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Atoi as u32 => EmulatedFunction::call(&atoi, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strcpy as u32 => EmulatedFunction::call(&stdlib::strcpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strncpy as u32 => EmulatedFunction::call(&strncpy, core, &mut ()).await?.write(core, lr),
@@ -141,6 +144,29 @@ async fn printf(core: &mut ArmCore, _: &mut (), format: u32) -> Result<u32> {
     tracing::debug!("printf({:?})", String::from_utf8_lossy(&bytes));
 
     Ok(bytes.len() as u32)
+}
+
+/// `sprintf(dest, format, ...)`. A title formatting its HUD text this way got
+/// an empty destination while this was an unimplemented import, so the numbers
+/// and labels it built each frame never appeared. Six variadic words cover the
+/// specifiers these titles use; the format engine stops at the last one.
+#[allow(clippy::too_many_arguments)]
+async fn sprintf(core: &mut ArmCore, _: &mut (), dest: u32, format: u32, a0: u32, a1: u32, a2: u32, a3: u32, a4: u32, a5: u32) -> Result<u32> {
+    let format_bytes = read_null_terminated_string_bytes(core, format)?;
+    let format_string = encoding_rs::EUC_KR.decode(&format_bytes).0;
+
+    tracing::debug!("sprintf({dest:#x}, {:?})", format_string);
+
+    let args = [a0, a1, a2, a3, a4, a5];
+    let result = format_varargs(&format_string, &args, &mut |ptr| {
+        let bytes = read_null_terminated_string_bytes(core, ptr)?;
+        Ok(encoding_rs::EUC_KR.decode(&bytes).0.into_owned())
+    })?;
+
+    let result_bytes = encoding_rs::EUC_KR.encode(&result).0;
+    write_null_terminated_string_bytes(core, dest, &result_bytes)?;
+
+    Ok(result.len() as u32)
 }
 
 async fn strncmp(core: &mut ArmCore, _: &mut (), ptr_str1: u32, ptr_str2: u32, size: u32) -> Result<u32> {

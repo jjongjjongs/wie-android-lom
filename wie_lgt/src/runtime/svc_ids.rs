@@ -116,6 +116,8 @@ pub enum WIPICSvcId {
     CreateImage = 0xe9,
     Unk0 = 0xeb,
     PostEvent = 0xee,
+    DrawPolygon = 0xef,
+    FillPolygon = 0xf0,
     Unk3 = 0x12c,
     Unk4 = 0x12d,
     Unk7 = 0x12e,
@@ -220,6 +222,8 @@ impl TryFrom<SvcId> for WIPICSvcId {
             0xe9 => Self::CreateImage,
             0xeb => Self::Unk0,
             0xee => Self::PostEvent,
+            0xef => Self::DrawPolygon,
+            0xf0 => Self::FillPolygon,
             0x12c => Self::Unk3,
             0x12d => Self::Unk4,
             0x12e => Self::Unk7,
@@ -276,6 +280,7 @@ impl From<WIPICSvcId> for u32 {
 #[repr(u32)]
 pub enum StdlibSvcId {
     Printf = 0x3f6,
+    Sprintf = 0x3f7,
     Atoi = 0x3fb,
     Strcpy = 0x405,
     Strncpy = 0x406,
