@@ -550,6 +550,22 @@ async fn get_import_table(_core: &mut ArmCore, _: &mut (), import_table: u32) ->
     Ok(import_table)
 }
 
+fn validate_resolved_import_address(import_table: u32, function_index: u32, address: u32) -> Result<u32> {
+    if address < 0x100 {
+        return Err(WieError::FatalError(format!(
+            "Invalid resolved LGT import address:              table={import_table:#x},              function={function_index:#x},              address={address:#x}"
+        )));
+    }
+
+    if address & 1 == 0 {
+        return Err(WieError::FatalError(format!(
+            "Resolved LGT import is not a Thumb address:              table={import_table:#x},              function={function_index:#x},              address={address:#x}"
+        )));
+    }
+
+    Ok(address)
+}
+
 async fn get_import_function(
     core: &mut ArmCore,
     wipic_category: u32,
@@ -561,7 +577,10 @@ async fn get_import_function(
     let key = (import_table, function_index);
 
     if let Some(&cached) = cache.lock().get(&key) {
-        tracing::debug!("get_import_function({import_table:#x}, {function_index:#x}) -> cached {cached:#x}");
+        let cached = validate_resolved_import_address(import_table, function_index, cached)?;
+
+        tracing::debug!("get_import_function({import_table:#x},              {function_index:#x}) -> cached {cached:#x}");
+
         return Ok(cached);
     }
 
@@ -599,6 +618,8 @@ async fn get_import_function(
             }
         }
     };
+
+    let resolved = validate_resolved_import_address(import_table, function_index, resolved)?;
 
     cache.lock().insert(key, resolved);
 
