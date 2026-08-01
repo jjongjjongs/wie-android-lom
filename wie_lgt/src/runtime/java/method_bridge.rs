@@ -19,7 +19,7 @@
 
 use alloc::{format, string::String, vec::Vec};
 
-use jvm::{JavaValue, Jvm, Result as JvmResult};
+use jvm::{Array, ClassInstanceRef, JavaValue, Jvm, Result as JvmResult};
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
@@ -67,11 +67,37 @@ fn read_arguments(core: &ArmCore, count: usize) -> Result<Vec<u32>> {
     (0..count).map(|index| core.read_param(index)).collect()
 }
 
+struct ByteArrayWriteback {
+    guest_handle: u32,
+    array: ClassInstanceRef<Array<i8>>,
+    length: usize,
+}
+
+async fn write_back_byte_arrays(jvm: &Jvm, handles: &JavaHandles, writebacks: &[ByteArrayWriteback]) -> Result<()> {
+    for writeback in writebacks {
+        let bytes: Vec<i8> = match jvm.load_array(&writeback.array, 0, writeback.length).await {
+            Ok(bytes) => bytes,
+            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+        };
+
+        handles.write_byte_array(writeback.guest_handle, &bytes)?;
+    }
+
+    Ok(())
+}
+
 /// Converts raw argument words into JVM values using the parameter
 /// descriptors.
 /// `first_word` is where the declared parameters start, which is one past
 /// `this` for anything called on an object.
-fn marshal_arguments(core: &ArmCore, handles: &JavaHandles, parameters: &[String], first_word: usize) -> Result<Vec<JavaValue>> {
+async fn marshal_arguments(
+    core: &ArmCore,
+    jvm: &Jvm,
+    handles: &JavaHandles,
+    parameters: &[String],
+    first_word: usize,
+    writebacks: &mut Vec<ByteArrayWriteback>,
+) -> Result<Vec<JavaValue>> {
     let slots: usize = parameters.iter().map(|x| if is_wide(x) { 2 } else { 1 }).sum();
     let words = read_arguments(core, slots + first_word)?;
 
@@ -88,6 +114,39 @@ fn marshal_arguments(core: &ArmCore, handles: &JavaHandles, parameters: &[String
             b'F' => JavaValue::Float(f32::from_bits(words[word])),
             b'J' => JavaValue::Long(((words[word + 1] as u64) << 32 | words[word] as u64) as i64),
             b'D' => JavaValue::Double(f64::from_bits((words[word + 1] as u64) << 32 | words[word] as u64)),
+            // A byte array allocated by the compiled application exists only
+            // in guest memory. Imported JVM methods need a real JVM `[B`, so
+            // copy the guest bytes into a temporary JVM array.
+            b'[' if parameter == "[B" => {
+                let handle = words[word];
+
+                match handles.get(handle) {
+                    Some(instance) => JavaValue::Object(Some(instance)),
+                    None if handle == 0 => JavaValue::Object(None),
+                    None => {
+                        let bytes = handles.read_byte_array(handle)?;
+                        let length = bytes.len();
+
+                        let mut array = match jvm.instantiate_array("B", length).await {
+                            Ok(array) => array,
+                            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+                        };
+
+                        if let Err(error) = jvm.store_array(&mut array, 0, bytes).await {
+                            return Err(JvmSupport::to_wie_err(jvm, error).await);
+                        }
+
+                        writebacks.push(ByteArrayWriteback {
+                            guest_handle: handle,
+                            array: array.clone().into(),
+                            length,
+                        });
+
+                        JavaValue::Object(Some(array.into()))
+                    }
+                }
+            }
+
             // A zero word is a null reference, which is a value. A non-zero
             // one this runtime never handed out is not: passing it on as null
             // reaches a platform method that dereferences it without checking,
@@ -158,7 +217,8 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     // object it names is what the caller goes on to use.
     if name == "<init>" {
         let this = core.read_param(0)?;
-        let arguments = marshal_arguments(core, handles, &parameters, 1)?;
+        let mut writebacks = Vec::new();
+        let arguments = marshal_arguments(core, jvm, handles, &parameters, 1, &mut writebacks).await?;
 
         // An object already bound to an instance is being initialized, not
         // created: this is a subclass running its superclass constructor, and
@@ -173,6 +233,8 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
                 return Err(JvmSupport::to_wie_err(jvm, error).await);
             }
 
+            write_back_byte_arrays(jvm, handles, &writebacks).await?;
+
             return Ok(this);
         }
 
@@ -183,6 +245,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
             Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
         };
 
+        write_back_byte_arrays(jvm, handles, &writebacks).await?;
         handles.bind(this, instance);
 
         return Ok(this);
@@ -200,7 +263,8 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         None => None,
     };
 
-    let arguments = marshal_arguments(core, handles, &parameters, usize::from(receiver.is_some()))?;
+    let mut writebacks = Vec::new();
+    let arguments = marshal_arguments(core, jvm, handles, &parameters, usize::from(receiver.is_some()), &mut writebacks).await?;
 
     let result = if let Some(instance) = receiver {
         tracing::debug!("LGT invoke virtual {class_name}.{name}{descriptor}");
@@ -213,7 +277,10 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     };
 
     match result {
-        Ok(value) => marshal_return(handles, value),
+        Ok(value) => {
+            write_back_byte_arrays(jvm, handles, &writebacks).await?;
+            marshal_return(handles, value)
+        }
         Err(error) => Err(JvmSupport::to_wie_err(jvm, error).await),
     }
 }

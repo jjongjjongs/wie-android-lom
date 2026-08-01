@@ -9,7 +9,7 @@ use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
-use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
+use wie_util::{ByteWrite, Result, WieError, read_generic, write_generic};
 
 use crate::relocation::{
     R_ARM_ABS32, R_ARM_CALL, R_ARM_JUMP24, R_ARM_NONE, R_ARM_PC24, R_ARM_RABS32, R_ARM_RBASE, R_ARM_REL32, R_ARM_RPC24, R_ARM_RREL32, R_ARM_THM_CALL,
@@ -24,9 +24,10 @@ use super::{
         compiled_class, get_java_interface_method,
         handles::JavaHandles,
         interface::{
-            ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE,
-            JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain, java_import_11, java_import_23,
-            java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size, vm_get_constant_string, vm_instantiate_array,
+            ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE,
+            JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain,
+            java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size,
+            vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
     },
@@ -46,10 +47,6 @@ type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
 
 const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
 const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
-
-/// The experimental absolute-address patches are valid only for Legend of
-/// Master's compiled main class.
-const LM_EXPERIMENT_MAIN_CLASS: &str = "Lm";
 
 /// Bytes one `vm_alloc_save_point` entry takes, which is the stride of the
 /// pool the platform hands them out of.
@@ -79,10 +76,9 @@ struct InitSvcContext {
     /// Array classes handed out by `vm_get_array_class`, to the size of one of
     /// their elements.
     array_classes: ArrayClasses,
-    lm_experiment: bool,
 }
 
-fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool, image_ranges: ImageRanges) -> Result<()> {
+fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, image_ranges: ImageRanges) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
     core.register_svc_handler(
@@ -101,7 +97,6 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, lm_experiment: bool,
             import_function_cache: Default::default(),
             unresolved_import_call_counts: Default::default(),
             array_classes: Default::default(),
-            lm_experiment,
         },
     )
 }
@@ -219,7 +214,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let meta: u32 = read_generic(core, root + 8)?;
             write_generic(core, meta + 0x1a, 3u16)?;
 
-            tracing::warn!("LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3");
+            tracing::debug!("LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3");
 
             root.write(core, lr)?;
             return Ok(());
@@ -229,12 +224,18 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let root = a0;
 
             if let Some(&activated) = context.java_activated_classes.lock().get(&root) {
-                tracing::warn!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> cached={activated:#x}");
+                tracing::debug!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> cached={activated:#x}");
                 activated.write(core, lr)?;
                 return Ok(());
             }
 
-            let data = Allocator::alloc(core, 20)?;
+            // The activated-class header occupies the first 20 bytes.
+            // Legend of Master's initializer stores seven additional static
+            // references at offsets 0x14 through 0x2c.
+            let data_size = if root == 0x0140_6140 { 0x30 } else { 20 };
+            let data = Allocator::alloc(core, data_size)?;
+            core.write_bytes(data, &vec![0; data_size as usize])?;
+
             write_generic(core, data, 0u16)?;
             write_generic(core, data + 2, 0u16)?;
             write_generic(core, data + 4, 0u32)?;
@@ -252,236 +253,25 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             context.java_activated_classes.lock().insert(root, activated);
 
-            tracing::warn!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, vtable={vtable:#x}");
+            tracing::debug!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, vtable={vtable:#x}");
 
             activated.write(core, lr)?;
             return Ok(());
         }
         if function_index == 0x0d {
-            tracing::warn!("LGT import 0x0d regs: a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}");
-            let root: u32 = match lr {
-                0x0000e6b8 => 0x014015dc,
-                0x000e98a8 => 0x01406274,
-                0x000f1ea0 => 0x0140649c,
-                _ => {
-                    tracing::warn!("LGT import 0x0d unknown call site: lr={lr:#x}");
-                    a0.write(core, lr)?;
-                    return Ok(());
-                }
-            };
-
-            let meta_ptr: u32 = read_generic(core, root + 8)?;
-            let init_state: u16 = read_generic(core, meta_ptr + 0x10)?;
-            let guard_state: u16 = read_generic(core, meta_ptr + 0x1a)?;
-
-            let mut meta_bytes = [0u8; 0x40];
-
-            match core.read_bytes(meta_ptr, &mut meta_bytes) {
-                Ok(read) => {
-                    tracing::warn!(
-                        "LGT import 0x0d meta bytes: root={root:#x}, meta={meta_ptr:#x}, read={read:#x}, bytes={:02x?}",
-                        &meta_bytes[..read]
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!("LGT import 0x0d meta bytes failed: root={root:#x}, meta={meta_ptr:#x}, error={error}");
-                }
-            }
-
-            tracing::warn!(
-                "LGT import 0x0d class: lr={lr:#x}, root={root:#x}, meta={meta_ptr:#x}, \
-     init_state={init_state:#x}, guard_state={guard_state:#x}, callback={a1:#x}"
-            );
-
             let activated_data: u32 = read_generic(core, a0 + 8)?;
-            let state_before: u16 = read_generic(core, activated_data + 0x10)?;
+
+            // Mark initialization in progress before entering guest code so a
+            // recursive class lookup does not start the initializer again.
             write_generic(core, activated_data + 0x10, 5u16)?;
-            let state_after: u16 = read_generic(core, activated_data + 0x10)?;
 
-            tracing::warn!(
-                "LGT vm_initialize_class(handle={a0:#x}, data={activated_data:#x}, callback={a1:#x}) \
-                 state {state_before:#x} -> {state_after:#x}"
-            );
+            if a1 != 0 {
+                let _: u32 = core.run_function(a1, &[a0]).await?;
+            }
+
+            tracing::debug!("LGT vm_initialize_class(handle={a0:#x}, data={activated_data:#x}, callback={a1:#x})");
 
             a0.write(core, lr)?;
-            return Ok(());
-        }
-
-        if function_index == 0x104 {
-            let mut original = [0u8; 0x80];
-            match core.read_bytes(a0, &mut original) {
-                Ok(read) => {
-                    tracing::warn!(
-                        "LGT callback object before 0x104: object={a0:#x}, read={read:#x}, bytes={:02x?}",
-                        &original[..read]
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!("LGT callback object before 0x104: object={a0:#x}, read failed: {error}");
-                }
-            }
-            let mut class_meta = [0u8; 0x40];
-
-            match core.read_bytes(0x01401590, &mut class_meta) {
-                Ok(read) => {
-                    tracing::warn!("LGT class meta runtime 0x1401590: read={read:#x}, bytes={:02x?}", &class_meta[..read]);
-                }
-                Err(error) => {
-                    tracing::warn!("LGT class meta runtime 0x1401590 read failed: {error}");
-                }
-            }
-            let original_word0: u32 = read_generic(core, a0)?;
-            let original_word4: u32 = read_generic(core, a0 + 4)?;
-            let original_word8: u32 = read_generic(core, a0 + 8)?;
-            let original_wordc: u32 = read_generic(core, a0 + 12)?;
-
-            tracing::warn!(
-                "LGT callback original words: object={a0:#x}, \
-                 +0={original_word0:#x}, +4={original_word4:#x}, \
-                 +8={original_word8:#x}, +c={original_wordc:#x}"
-            );
-
-            for (name, pointer) in [
-                ("word0", original_word0),
-                ("word4", original_word4),
-                ("word8", original_word8),
-                ("wordc", original_wordc),
-            ] {
-                if pointer >= 0x1000 {
-                    let address = pointer & !1;
-                    let mut bytes = [0u8; 0x100];
-
-                    match core.read_bytes(address, &mut bytes) {
-                        Ok(read) => tracing::warn!(
-                            "LGT callback linked block {name}: \
-                             pointer={pointer:#x}, address={address:#x}, \
-                             read={read:#x}, bytes={:02x?}",
-                            &bytes[..read]
-                        ),
-                        Err(error) => tracing::warn!(
-                            "LGT callback linked block {name}: \
-                             pointer={pointer:#x}, address={address:#x}, \
-                             read failed: {error}"
-                        ),
-                    }
-                }
-            }
-
-            if original_word8 >= 0x1000 {
-                match read_generic::<u32, _>(core, original_word8 + 8) {
-                    Ok(level2) => {
-                        tracing::warn!(
-                            "LGT callback pointer chain: \
-                             object+8={original_word8:#x}, \
-                             [object+8]+8={level2:#x}"
-                        );
-
-                        if level2 >= 0x1000 {
-                            match read_generic::<u32, _>(core, level2 + 8) {
-                                Ok(level3) => tracing::warn!(
-                                    "LGT callback pointer chain: \
-                                     level2+8={level3:#x}"
-                                ),
-                                Err(error) => tracing::warn!("LGT callback pointer chain level3 failed: {error}"),
-                            }
-                        }
-                    }
-                    Err(error) => tracing::warn!("LGT callback pointer chain level2 failed: {error}"),
-                }
-            }
-
-            let method_ref_base = 0x01500e00u32;
-            let mut method_ref_bytes = [0u8; 0x100];
-
-            match core.read_bytes(method_ref_base, &mut method_ref_bytes) {
-                Ok(read) => tracing::warn!(
-                    "Lm method reference block before patch: \
-                     address={method_ref_base:#x}, read={read:#x}, bytes={:02x?}",
-                    &method_ref_bytes[..read]
-                ),
-                Err(error) => tracing::warn!(
-                    "Lm method reference block read failed: \
-                     address={method_ref_base:#x}, error={error}"
-                ),
-            }
-
-            let original_index_0: u16 = read_generic(core, 0x01500e40 + 0x22)?;
-            let original_index_1: u16 = read_generic(core, 0x01500e40 + 0x24)?;
-            write_generic(core, 0x01500e40 + 0x22, 0u16)?;
-            write_generic(core, 0x01500e40 + 0x24, 1u16)?;
-            tracing::warn!("Lm original method indexes before patch: +0x22={original_index_0}, +0x24={original_index_1}");
-
-            let vtable = Allocator::alloc(core, 12)?;
-            let method_stub_0 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x105)?;
-            let method_stub_1 = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + 0x106)?;
-
-            write_generic(core, vtable, 0u32)?;
-            write_generic(core, vtable + 4, method_stub_0)?;
-            write_generic(core, vtable + 8, method_stub_1)?;
-            write_generic(core, a0, vtable)?;
-
-            // startApp가 사용하는 두 virtual-method offset을 서로 다른 슬롯으로 분리한다.
-            // +0x22: index 17 -> vtable slot 0
-            // +0x24: index 18 -> vtable slot 1
-            let object_word: u32 = read_generic(core, a0)?;
-            let vtable_word0: u32 = read_generic(core, vtable)?;
-            let vtable_word1: u32 = read_generic(core, vtable + 4)?;
-            let vtable_word2: u32 = read_generic(core, vtable + 8)?;
-
-            tracing::warn!(
-                "Lm runtime object readback: object[0]={object_word:#x}, \
-     vtable[0]={vtable_word0:#x}, vtable[1]={vtable_word1:#x}, \
-     vtable[2]={vtable_word2:#x}"
-            );
-
-            tracing::warn!(
-                "Lm runtime object initialized: object={a0:#x}, \
-         vtable={vtable:#x}, method0={method_stub_0:#x}, method1={method_stub_1:#x}"
-            );
-
-            a0.write(core, lr)?;
-            return Ok(());
-        }
-
-        if function_index == 0x105 {
-            tracing::warn!("Lm virtual method stub 0(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
-
-            let mut argument_object = [0u8; 16];
-            match core.read_bytes(a1, &mut argument_object) {
-                Ok(read) => tracing::warn!(
-                    "Lm stub 0 argument object: object={a1:#x}, read={read:#x}, bytes={:02x?}",
-                    &argument_object[..read]
-                ),
-                Err(error) => tracing::warn!("Lm stub 0 argument object: object={a1:#x}, read failed: {error}"),
-            }
-
-            match read_generic::<u32, _>(core, a1 + 8) {
-                Ok(class_root) => {
-                    let mut class_bytes = [0u8; 0x40];
-                    match core.read_bytes(class_root, &mut class_bytes) {
-                        Ok(read) => tracing::warn!(
-                            "Lm stub 0 argument class: root={class_root:#x}, read={read:#x}, bytes={:02x?}",
-                            &class_bytes[..read]
-                        ),
-                        Err(error) => tracing::warn!("Lm stub 0 argument class: root={class_root:#x}, read failed: {error}"),
-                    }
-                }
-                Err(error) => tracing::warn!("Lm stub 0 argument class root read failed at {:#x}: {error}", a1 + 8),
-            }
-
-            a0.write(core, lr)?;
-            return Ok(());
-        }
-
-        if function_index == 0x106 {
-            tracing::warn!("Lm virtual method stub 1(a0={a0:#x})");
-            a0.write(core, lr)?;
-            return Ok(());
-        }
-        if function_index == 0xfc {
-            let lm_class_handle = 0x014015dcu32;
-            tracing::warn!("Lm class getter(a0={a0:#x}) -> {lm_class_handle:#x}");
-            lm_class_handle.write(core, lr)?;
             return Ok(());
         }
 
@@ -489,6 +279,33 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // row handed back, and the result is the object the constructor is
         // then called on, so it has to carry that class's dispatch table in
         // its first word.
+        // Java-interface imports 0xfa and 0x61 store an object reference
+        // into a guest reference array. Legend of Master uses 0xfa while
+        // initializing the class-selection arrays.
+        if function_index == 0xfa || function_index == 0x61 {
+            let array = a0;
+            let index = a1;
+            let value = a2;
+
+            if array == 0 {
+                return Err(WieError::FatalError("LGT reference-array store received a null array".into()));
+            }
+
+            let data: u32 = read_generic(core, array + 8)?;
+            let length: u32 = read_generic(core, data)?;
+
+            if index >= length {
+                return Err(WieError::FatalError(format!(
+                    "LGT reference-array store index {index} is outside length {length}"
+                )));
+            }
+
+            write_generic(core, data + 4 + index * REFERENCE_SIZE, value)?;
+
+            0u32.write(core, lr)?;
+            return Ok(());
+        }
+
         if function_index == 0x0f {
             let instance = instantiate(core, context, a0).await?;
 
@@ -640,6 +457,21 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
+        InitSvcId::JavaImportE1 => {
+            let class = imported_class_token(context, "java/lang/String")
+                .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
+
+            tracing::debug!("vm_get_string_class() -> {class:#x}");
+            class.write(core, lr)
+        }
+        InitSvcId::JavaImportE2 => {
+            let string_class = imported_class_token(context, "java/lang/String")
+                .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
+
+            let class = get_array_class(core, context, 1, string_class, 0)?;
+            tracing::debug!("vm_get_string_array_class() -> {class:#x}");
+            class.write(core, lr)
+        }
     }
 }
 /// Handles a call the compiled code made through `static_method_offsets`.
@@ -760,6 +592,14 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
 
 /// The table of the nearest platform class an application class extends, or
 /// the fallback when the chain does not reach one.
+fn imported_class_token(context: &InitSvcContext, name: &str) -> Option<u32> {
+    let imported = context.imported_classes.lock();
+    let table = imported.as_ref()?;
+
+    let index = table.classes.iter().position(|class| class.name == name)?;
+    table.class_objects.get(index).copied()
+}
+
 fn platform_superclass_dispatch_table(context: &InitSvcContext, root: u32) -> u32 {
     let app_classes = context.app_classes.lock();
     let mut superclass = app_classes.iter().find(|x| x.root == root).and_then(|x| x.superclass.clone());
@@ -814,7 +654,7 @@ fn get_array_class(core: &mut ArmCore, context: &InitSvcContext, dimensions: u32
         .array_classes
         .lock()
         .iter()
-        .find(|(_, size)| **size == element_size)
+        .find(|(_, info)| info.dimensions == dimensions && info.element_class == element_class && info.atype == atype)
         .map(|(class, _)| *class);
 
     if let Some(class) = existing {
@@ -825,7 +665,15 @@ fn get_array_class(core: &mut ArmCore, context: &InitSvcContext, dimensions: u32
     write_generic(core, class, element_size)?;
     write_generic(core, class + 4, dimensions)?;
 
-    context.array_classes.lock().insert(class, element_size);
+    context.array_classes.lock().insert(
+        class,
+        ArrayClassInfo {
+            dimensions,
+            element_class,
+            atype,
+            element_size,
+        },
+    );
 
     tracing::debug!("vm_get_array_class({dimensions}, {element_class:#x}, {atype}) -> {class:#x}, {element_size} bytes an element");
 
@@ -897,6 +745,7 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
     // `vm_check_stack_overflow`, the object was never allocated, and
     // allocating it is the whole job.
     let vtable: u32 = read_generic(core, handle)?;
+
     let object = context.java_handles.allocate_instance(vtable)?;
 
     context.java_handles.bind(object, instance);
@@ -992,6 +841,11 @@ const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
     // application registers lists only the ones it imports, so the two agree
     // on where a class's methods start and not on the order within.
     ("java/lang/StringBuffer", 18, "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
+    // Legend of Master reaches append(int) through platform dispatch slot 23.
+    ("java/lang/StringBuffer", 23, "append", "(I)Ljava/lang/StringBuffer;"),
+    ("java/lang/Class", 16, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;"),
+    ("java/io/ByteArrayInputStream", 12, "read", "([BII)I"),
+    ("java/io/ByteArrayInputStream", 15, "close", "()V"),
 ];
 
 /// Slots 1 to 9 of every dispatch table, which the platform fills in for the
@@ -1045,14 +899,19 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
         return Ok(0);
     }
 
-    let class = context
+    let imported_class = context
         .imported_classes
         .lock()
         .as_ref()
-        .and_then(|table| table.classes.get(class_index as usize).map(|x| x.name.clone()));
+        .and_then(|table| table.classes.get(class_index as usize).map(|class| class.name.clone()));
+
+    // Objects retained by JavaHandles may use the shared fallback table when
+    // their JVM class was not present in the compiled application's import
+    // table. Recover their actual runtime class before giving up.
+    let class = imported_class.or_else(|| context.java_handles.get(this).map(|instance| instance.class_definition().name()));
 
     let Some(class) = class else {
-        tracing::warn!("LGT undeclared dispatch slot {slot} called on {this:#x}");
+        tracing::warn!("LGT undeclared dispatch slot {slot} called on {this:#x}, class_index={class_index}");
         return Ok(0);
     };
 
@@ -1097,16 +956,11 @@ async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContex
     method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await
 }
 
-pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], main_class_name: Option<&str>) -> Result<()> {
-    let lm_experiment = main_class_name == Some(LM_EXPERIMENT_MAIN_CLASS);
-    if lm_experiment {
-        tracing::warn!("Enabling experimental {LM_EXPERIMENT_MAIN_CLASS} runtime patches; these are specific to that binary.mod");
-    }
-
+pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], _main_class_name: Option<&str>) -> Result<()> {
     let (entrypoint, image_ranges) = load_executable(core, data)?;
     register_wipic_svc_handler(core, system, jvm)?;
     register_stdlib_svc_handler(core, system)?;
-    register_init_svc_handler(core, jvm, lm_experiment, Arc::new(image_ranges))?;
+    register_init_svc_handler(core, jvm, Arc::new(image_ranges))?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
     let ptr_init_param_2 = Allocator::alloc(core, size_of::<InitParam2>() as u32)?;

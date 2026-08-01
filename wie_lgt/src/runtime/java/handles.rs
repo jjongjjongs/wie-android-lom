@@ -5,14 +5,14 @@
 //! given a small guest allocation whose address is the handle, and the
 //! instance is retained here under that address.
 
-use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use jvm::ClassInstance;
 use spin::Mutex;
 
 use wie_core_arm::{Allocator, ArmCore};
-use wie_util::{ByteWrite, Result, write_generic};
+use wie_util::{ByteRead, ByteWrite, Result, read_generic, write_generic};
 
 /// Instance header the compiled code relies on:
 ///
@@ -120,6 +120,45 @@ impl JavaHandles {
         write_generic(&mut core, instance + INSTANCE_FIELDS_OFFSET, data)?;
 
         Ok(instance)
+    }
+
+    /// Copies a guest-side byte array into host memory.
+    ///
+    /// LGT arrays are ordinary guest instances whose +0x08 word points to:
+    ///
+    /// ```text
+    /// +0x00 element count
+    /// +0x04 elements
+    /// ```
+    ///
+    /// This currently treats the first `length` bytes as byte-array data.
+    /// It is intended for imported methods whose descriptor explicitly says
+    /// `[B`, so the descriptor supplies the element type the handle lacks.
+    pub fn read_byte_array(&self, handle: u32) -> Result<Vec<i8>> {
+        let mut core = self.core.clone();
+
+        let data: u32 = read_generic(&mut core, handle + INSTANCE_FIELDS_OFFSET)?;
+        let length: u32 = read_generic(&mut core, data)?;
+
+        let mut bytes = vec![0u8; length as usize];
+        core.read_bytes(data + ARRAY_HEADER_SIZE, &mut bytes)?;
+
+        Ok(bytes.into_iter().map(|value| value as i8).collect())
+    }
+
+    /// Copies JVM byte-array contents back into a guest-side byte array.
+    pub fn write_byte_array(&self, handle: u32, bytes: &[i8]) -> Result<()> {
+        let mut core = self.core.clone();
+
+        let data: u32 = read_generic(&mut core, handle + INSTANCE_FIELDS_OFFSET)?;
+        let length: u32 = read_generic(&mut core, data)?;
+        let count = bytes.len().min(length as usize);
+
+        let bytes: Vec<u8> = bytes[..count].iter().map(|value| *value as u8).collect();
+
+        core.write_bytes(data + ARRAY_HEADER_SIZE, &bytes)?;
+
+        Ok(())
     }
 
     /// The table to give an object whose class declares none.

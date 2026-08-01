@@ -60,7 +60,7 @@ pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x3000;
 pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x1000;
 
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
-    Ok(match function_index {
+    let method = match function_index {
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk0)?,
         0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk12)?,
         0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk5)?,
@@ -72,11 +72,15 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x13 | 0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk9)?,
         0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk11)?,
+        0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE1)?,
+        0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE2)?,
         _ => {
-            tracing::warn!("Unimplemented LGT Java import {function_index:#x}; installing diagnostic zero-return stub");
+            tracing::warn!("Unimplemented LGT Java import {function_index:#x};                  installing diagnostic zero-return stub");
             core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + function_index)?
         }
-    })
+    };
+
+    Ok(method)
 }
 
 pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
@@ -300,6 +304,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
     for row in 0..capacity {
         write_generic(core, table.outputs.field_offsets + row * 2, row as u16)?;
     }
+
     handles.set_field_slots(capacity);
 
     tracing::debug!("LGT field slots: {capacity} rows, identity mapped");
@@ -518,10 +523,19 @@ pub async fn vm_get_constant_string(core: &mut ArmCore, handles: &JavaHandles, j
     Ok(handle)
 }
 
-/// Array classes handed out by `vm_get_array_class`, mapped to the size of
-/// one of their elements. The class is a token this runtime invents, so the
-/// size it stands for has to be remembered alongside it.
-pub type ArrayClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
+/// The shape represented by one array-class token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArrayClassInfo {
+    pub dimensions: u32,
+    pub element_class: u32,
+    pub atype: u32,
+    pub element_size: u32,
+}
+
+/// Array classes handed out by `vm_get_array_class`, mapped to their complete
+/// shape. Different array types can have the same element width and must not
+/// therefore share a token.
+pub type ArrayClasses = Arc<Mutex<BTreeMap<u32, ArrayClassInfo>>>;
 
 /// Bytes a reference takes, which is also what an element of an array of
 /// arrays takes.
@@ -534,6 +548,11 @@ pub const REFERENCE_SIZE: u32 = 4;
 /// 5 `char`, 6 `float`, 7 `double`, 8 `byte`, 9 `short`, 10 `int`, 11 `long`.
 pub fn primitive_element_size(atype: u32) -> Option<u32> {
     Some(match atype {
+        // Standard JVM primitive array tags.
+        //
+        // LGT tag 1 is not a byte primitive in Legend of Master: it is also
+        // used for arrays whose elements are object references. Leaving it
+        // unresolved makes `vm_get_array_class` use REFERENCE_SIZE.
         4 | 8 => 1,
         5 | 9 => 2,
         6 | 10 => 4,
@@ -550,7 +569,7 @@ pub fn primitive_element_size(atype: u32) -> Option<u32> {
 /// else the application never declared.
 pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClasses, class: u32, length: u32) -> Result<u32> {
     let element_size = match array_class.lock().get(&class).copied() {
-        Some(size) => size,
+        Some(info) => info.element_size,
         None => {
             tracing::warn!("vm_instantiate_array({class:#x}, {length}) names no array class; assuming references");
 
