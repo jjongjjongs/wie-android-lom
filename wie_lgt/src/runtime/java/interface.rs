@@ -14,7 +14,6 @@ use crate::runtime::{
         class_table::{ClassTable, OutputArrays},
         compiled_class::{self, CompiledContext},
         handles::JavaHandles,
-        platform_slots::platform_slot,
     },
     svc_ids::InitSvcId,
 };
@@ -35,13 +34,10 @@ pub const JAVA_STATIC_METHOD_SVC_BASE: u32 = 0x2000;
 
 /// One SVC id per row of the virtual method table. The stub sits in a class's
 /// dispatch table, so the receiver arrives in the first word.
-pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x6000;
+pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x4000;
 
 /// Slots every dispatch table has room for, declared or not.
-///
-/// `dt_org_kwis_msp_media_Clip` is the longest in `liblgt_system.so` at 80,
-/// and a table shorter than the slot a call names sends the call off the end.
-pub const DISPATCH_TABLE_SLOTS: u32 = 96;
+pub const DISPATCH_TABLE_SLOTS: u32 = 64;
 
 /// Where a class's own virtual methods start in its dispatch table. Slot 0 is
 /// the class's `<init>` and slots 1 to 9 are `java/lang/Object`'s, in every
@@ -53,20 +49,18 @@ pub const FIRST_CLASS_SLOT: u32 = 10;
 pub const MAX_DISPATCH_CLASSES: u32 = 63;
 
 /// One SVC id per (class, slot) pair a dispatch table does not account for.
-/// This band has to hold `MAX_DISPATCH_CLASSES * DISPATCH_TABLE_SLOTS`, so it
-/// is last and twice the size of the others.
-pub const JAVA_UNKNOWN_SLOT_SVC_BASE: u32 = 0x8000;
+pub const JAVA_UNKNOWN_SLOT_SVC_BASE: u32 = 0x5000;
 
 /// One SVC id per row of the static method table that carries no descriptor.
 /// The compiled code calls these too, so they cannot be left null.
-pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x4000;
+pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x3000;
 
 /// Upper bound on rows, so a table that fails to parse cannot run off the end
 /// of its SVC range.
-pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x2000;
+pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x1000;
 
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
-    Ok(match function_index {
+    let method = match function_index {
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk0)?,
         0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk12)?,
         0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk5)?,
@@ -75,14 +69,18 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport10)?,
         0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport11)?,
         0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport23)?,
-        0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
+        0x13 | 0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk9)?,
         0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk11)?,
+        0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE1)?,
+        0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE2)?,
         _ => {
-            tracing::warn!("Unimplemented LGT Java import {function_index:#x}; installing diagnostic zero-return stub");
+            tracing::warn!("Unimplemented LGT Java import {function_index:#x};                  installing diagnostic zero-return stub");
             core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + function_index)?
         }
-    })
+    };
+
+    Ok(method)
 }
 
 pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
@@ -160,7 +158,7 @@ pub async fn java_load_classes(
 ///
 /// so the table needs a leading word before its entries, and every instance
 /// needs to point at one.
-fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable, slots: &[Option<u32>]) -> Result<()> {
+fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
     if table.classes.len() as u32 > MAX_DISPATCH_CLASSES {
         return Err(wie_util::WieError::FatalError(alloc::format!(
             "LGT class table has {} classes, more than the {MAX_DISPATCH_CLASSES} with reserved dispatch slots",
@@ -174,7 +172,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
             (class.virtual_method_start, class.virtual_method_count)
         };
 
-        let vtable = build_dispatch_table(core, index, start, count, slots)?;
+        let vtable = build_dispatch_table(core, index, start, count)?;
 
         // Eight bytes is the smallest allocation that reads back distinctly;
         // nothing inspects the contents, the address is the identity.
@@ -195,7 +193,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 
     // Objects of a class the application never declared still get called on,
     // so they need a table too.
-    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0, slots)?;
+    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0)?;
     handles.set_fallback_dispatch_table(fallback);
 
     tracing::debug!("LGT fallback dispatch table at {fallback:#x}");
@@ -219,17 +217,15 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 /// short table leaves that slot zero and the branch goes to address zero, so
 /// the slots a class does not declare are filled with stubs that report what
 /// was called instead.
-fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32, slots: &[Option<u32>]) -> Result<u32> {
+fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32) -> Result<u32> {
     let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
     write_generic(core, vtable, 0u32)?;
 
     for slot in 0..DISPATCH_TABLE_SLOTS {
-        // The row this class put in this slot, which is the inverse of what
-        // `assign_virtual_slots` worked out.
-        let row = (start..start + count).find(|row| slots.get(*row as usize).copied().flatten() == Some(slot));
+        let declared = slot.checked_sub(FIRST_CLASS_SLOT).filter(|index| *index < count);
 
-        let svc = if let Some(row) = row {
-            JAVA_VIRTUAL_METHOD_SVC_BASE + row
+        let svc = if let Some(index) = declared {
+            JAVA_VIRTUAL_METHOD_SVC_BASE + start + index
         } else {
             JAVA_UNKNOWN_SLOT_SVC_BASE + class_index * DISPATCH_TABLE_SLOTS + slot
         };
@@ -239,30 +235,6 @@ fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count:
     }
 
     Ok(vtable)
-}
-
-/// The dispatch table slot each row of the virtual method table occupies.
-///
-/// A class's own methods start at [`FIRST_CLASS_SLOT`], and which of them
-/// lands where is the platform's decision, taken over the class's whole method
-/// table. The table an application registers lists only the methods it
-/// imports, so numbering those in order is right only for a class the
-/// application uses completely - and Legend of Master reaches
-/// `java/lang/String` slot 16 while importing none of `String`'s virtual
-/// methods at all.
-///
-/// So the layout is looked up where it is known, and the imported order is
-/// what is left when it is not.
-fn assign_virtual_slots(table: &ClassTable) -> Vec<Option<u32>> {
-    (0..table.virtual_methods.len() as u32)
-        .map(|row| {
-            let member = table.virtual_methods[row as usize].as_ref()?;
-            let class = table.class_name(member.class_index);
-            let index = table.virtual_slot(row)?;
-
-            Some(platform_slot(class, &member.name, &member.descriptor).unwrap_or(FIRST_CLASS_SLOT + index))
-        })
-        .collect()
 }
 
 /// Publishes the table into the arrays the compiled code reads.
@@ -302,8 +274,6 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         tracing::trace!("LGT static method[{index}] {description} -> {stub:#x}");
     }
 
-    let slots = assign_virtual_slots(table);
-
     // Virtual methods are dispatched through the receiver, so the array holds
     // the slot to index its vtable with rather than an address. The compiled
     // code reads it with `ldrsh`, so the entries are signed halfwords.
@@ -311,14 +281,15 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         let Some(member) = table.virtual_methods[index as usize].as_ref() else {
             continue;
         };
-        let Some(slot) = slots[index as usize] else { continue };
+        let Some(slot) = table.virtual_slot(index) else { continue };
+        let slot = slot + FIRST_CLASS_SLOT;
 
         write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
 
         tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
     }
 
-    build_dispatch_tables(core, handles, table, &slots)?;
+    build_dispatch_tables(core, handles, table)?;
 
     // A field access is `fields[field_offsets[row]]`, where `fields` is the
     // word array an instance points at. The rows are not the platform's own
@@ -333,6 +304,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
     for row in 0..capacity {
         write_generic(core, table.outputs.field_offsets + row * 2, row as u16)?;
     }
+
     handles.set_field_slots(capacity);
 
     tracing::debug!("LGT field slots: {capacity} rows, identity mapped");
@@ -551,17 +523,23 @@ pub async fn vm_get_constant_string(core: &mut ArmCore, handles: &JavaHandles, j
     Ok(handle)
 }
 
-/// Array classes handed out by `vm_get_array_class`, mapped to the size of
-/// one of their elements. The class is a token this runtime invents, so the
-/// size it stands for has to be remembered alongside it.
-pub type ArrayClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
+/// The shape represented by one array-class token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArrayClassInfo {
+    pub dimensions: u32,
+    pub element_class: u32,
+    pub atype: u32,
+    pub element_size: u32,
+}
+
+/// Array classes handed out by `vm_get_array_class`, mapped to their complete
+/// shape. Different array types can have the same element width and must not
+/// therefore share a token.
+pub type ArrayClasses = Arc<Mutex<BTreeMap<u32, ArrayClassInfo>>>;
 
 /// Bytes a reference takes, which is also what an element of an array of
 /// arrays takes.
 pub const REFERENCE_SIZE: u32 = 4;
-
-/// Bytes an array's block spends on its length before the elements start.
-const ARRAY_HEADER_SIZE: u32 = 4;
 
 /// Bytes one element of a primitive array takes.
 ///
@@ -570,75 +548,16 @@ const ARRAY_HEADER_SIZE: u32 = 4;
 /// 5 `char`, 6 `float`, 7 `double`, 8 `byte`, 9 `short`, 10 `int`, 11 `long`.
 pub fn primitive_element_size(atype: u32) -> Option<u32> {
     Some(match atype {
+        // Standard JVM primitive array tags.
+        //
+        // LGT tag 1 is not a byte primitive in Legend of Master: it is also
+        // used for arrays whose elements are object references. Leaving it
+        // unresolved makes `vm_get_array_class` use REFERENCE_SIZE.
         4 | 8 => 1,
         5 | 9 => 2,
         6 | 10 => 4,
         7 | 11 => 8,
         _ => return None,
-    })
-}
-
-/// The array element helpers, `vm_iaload_impl` through `vm_sastore_impl`.
-///
-/// The compiled code calls one of these instead of emitting the access
-/// inline; each takes the array, an index, and for a store the value. They
-/// were returning zero, so an object array was never filled in and read back
-/// empty however carefully it had been built.
-///
-/// `(import, element size, stores)`, in the order the cldc table has them.
-pub const ARRAY_ELEMENT_ACCESSORS: &[(u32, u32, bool)] = &[
-    (0x5a, 4, false), // vm_iaload_impl
-    (0x5b, 8, false), // vm_laload_impl
-    (0x5c, 1, false), // vm_baload_impl
-    (0x5d, 2, false), // vm_caload_impl
-    (0x5e, 2, false), // vm_saload_impl
-    (0x5f, 4, true),  // vm_iastore_impl
-    (0x60, 8, true),  // vm_lastore_impl
-    (0x61, 4, true),  // vm_aastore_impl
-    (0x62, 1, true),  // vm_bastore_impl
-    (0x63, 2, true),  // vm_sastore_impl
-];
-
-/// Reads or writes one element, returning what belongs in `r0`.
-///
-/// An out of range index is reported and left alone rather than throwing: the
-/// application checks its own bounds before every one of these calls, so an
-/// index that arrives out of range means this runtime built the array wrong,
-/// and faulting on it would hide that.
-pub fn array_element(core: &mut ArmCore, import: u32, element_size: u32, stores: bool, array: u32, index: u32, value: u32) -> Result<u32> {
-    if array == 0 {
-        tracing::warn!("LGT array access {import:#x} on a null array");
-
-        return Ok(0);
-    }
-
-    let data: u32 = read_generic(core, array + 8)?;
-    let length: u32 = read_generic(core, data)?;
-
-    if index >= length {
-        tracing::warn!("LGT array access {import:#x} at {index} of {length}");
-
-        return Ok(0);
-    }
-
-    let element = data + ARRAY_HEADER_SIZE + index * element_size;
-
-    if stores {
-        match element_size {
-            1 => write_generic(core, element, value as u8)?,
-            2 => write_generic(core, element, value as u16)?,
-            // The high word of a wide value is the next argument, which this
-            // does not take; nothing has been seen storing one.
-            _ => write_generic(core, element, value)?,
-        }
-
-        return Ok(0);
-    }
-
-    Ok(match element_size {
-        1 => i32::from(read_generic::<u8, _>(core, element)? as i8) as u32,
-        2 => i32::from(read_generic::<u16, _>(core, element)? as i16) as u32,
-        _ => read_generic(core, element)?,
     })
 }
 
@@ -650,7 +569,7 @@ pub fn array_element(core: &mut ArmCore, import: u32, element_size: u32, stores:
 /// else the application never declared.
 pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClasses, class: u32, length: u32) -> Result<u32> {
     let element_size = match array_class.lock().get(&class).copied() {
-        Some(size) => size,
+        Some(info) => info.element_size,
         None => {
             tracing::warn!("vm_instantiate_array({class:#x}, {length}) names no array class; assuming references");
 

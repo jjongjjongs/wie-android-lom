@@ -7,7 +7,7 @@ use jvm::runtime::{JavaIoInputStream, JavaLangClassLoader};
 use wie_backend::{Emulator, Event, Options, Platform, System, TaskRunner, extract_zip};
 use wie_core_arm::{Allocator, ArmCore};
 use wie_jvm_support::{JvmSupport, RustJavaJvmImplementation};
-use wie_util::{Result, WieError, descriptor_value};
+use wie_util::{Result, WieError};
 
 use crate::runtime::init::load_native;
 
@@ -192,39 +192,16 @@ impl LgtAppInfo {
         let mut lines = data.split(|x| *x == b'\n');
 
         for line in &mut lines {
-            if let Some(value) = line.strip_prefix(b"AID:") {
-                aid = descriptor_value(value);
-            } else if let Some(value) = line.strip_prefix(b"PID:") {
-                pid = descriptor_value(value);
-            } else if let Some(value) = line.strip_prefix(b"MClass:") {
-                mclass = descriptor_value(value);
+            if line.starts_with(b"AID:") {
+                aid = String::from_utf8_lossy(&line[4..]).into();
+            } else if line.starts_with(b"PID:") {
+                pid = String::from_utf8_lossy(&line[4..]).into();
+            } else if line.starts_with(b"MClass:") {
+                mclass = String::from_utf8_lossy(&line[7..]).into();
             }
             // TODO load name, it's in euc-kr..
         }
 
         Self { aid, pid, mclass }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::LgtAppInfo;
-
-    #[test]
-    fn parse_app_info() {
-        let app_info = LgtAppInfo::parse(b"PID:PD127080\nAID:0002A4B1\nVer:01.00.01\nMClass:Lm\n");
-
-        assert_eq!(app_info.aid, "0002A4B1");
-        assert_eq!(app_info.pid, "PD127080");
-        assert_eq!(app_info.mclass, "Lm");
-    }
-
-    #[test]
-    fn parse_app_info_crlf() {
-        let app_info = LgtAppInfo::parse(b"PID:PD127080\r\nAID:0002A4B1\r\nMClass:Lm\r\n");
-
-        assert_eq!(app_info.aid, "0002A4B1");
-        assert_eq!(app_info.pid, "PD127080");
-        assert_eq!(app_info.mclass, "Lm");
     }
 }

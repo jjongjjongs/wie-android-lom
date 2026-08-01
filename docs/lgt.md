@@ -436,50 +436,26 @@ allocates for the class itself as their fields - so a class wrote its instance
 fields over its own statics, and any field past the fifth landed in whatever
 allocation followed. Legend of Master's `f` has 409 fields.
 
-#### Where the slot numbers come from
-
-A platform class's slots are numbered over **all** of its virtual methods, and
-the table an application registers lists only the ones it imports, so counting
-the imported ones in order is right only for a class an application uses
-completely. Legend of Master reaches `java/lang/String` slot 16 while
-importing none of `String`'s virtual methods at all.
-
-`platform_slots.rs` holds the layouts, read out of `liblgt_system.so`'s `dt_`
-symbols with the descriptors from each class's method table. It answers both
-directions:
-
-- **name to slot**, for numbering the methods an application does import.
-- **slot to name**, for a call on an object of a class the application never
-  mentioned. `getClass().getResourceAsStream(name)` is one of those: it lands
-  on `java/lang/Class` slot 16, and nothing the application registers says
-  what `java/lang/Class` is. Legend of Master loads every one of its resources
-  that way.
-
-A slot that resolves to a method `wie_wipi_java` does not implement -
-`org/kwis/msp/media/Clip.free` is one - is reported and returns zero, the way
-an unimplemented platform function always has. Naming a slot should not be
-able to make a title worse than not knowing it.
-
-#### Arrays crossing to the platform
-
-The compiled code builds arrays in guest memory with no instance on the JVM
-side, which is fine until one is passed to a platform method:
-`String.<init>([BII)` takes one, and so does every `read` an application loads
-a resource with. `method_bridge` builds a JVM array holding what the guest
-array holds, passes that, and writes back what the callee put in it.
-
-That is the last piece Legend of Master needed. It reads its resources as
-`getClass().getResourceAsStream(...)` into a `byte[]`, and until the array
-crossed, every one of them came back empty.
-
 #### Where it stops
 
-All twelve archives in the batch run, none faults, and Legend of Master draws
-its notice screen - red text on white, the same screen a handset shows.
+No title in the batch of twelve fails any more. Nine render; three run without
+faulting and paint one colour, Legend of Master among them.
 
-Three titles still paint one colour. `screen_capture` writes the busiest frame
-of each as a PPM when `WIE_CAPTURE_DIR` is set, which is the quickest way to
-see which.
+Legend of Master's `startApp` runs to completion, `f.<init>` builds 69 arrays
+and opens `/res/gData.dat` and `/res/dat/tri.dat`, `f.paint` runs on every
+redraw and `f.keyNotify` on every key, and `Card.getWidth` and
+`Card.getHeight` resolve through slots 12 and 13.
+
+`paint` calls `System.currentTimeMillis()`, `Graphics.translate`,
+`Graphics.setColor` and `Graphics.fillRect`, then dispatches on a state field
+through a 22 entry jump table. The state is zero, whose case does nothing.
+`f` implements `java/lang/Runnable` and the last thing `f.<init>` does is
+`new Thread(this).start()` through slot 10; it still does not reach that,
+though another title now does, and its `run()` loop calls `currentTimeMillis`
+and `Thread.yield` the way a game loop should.
+
+One slot is still asked for and unanswered: 16, on an object whose class chain
+does not reach a platform class.
 
 #### Clets, by contrast, render
 

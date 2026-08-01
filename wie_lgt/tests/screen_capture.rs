@@ -7,12 +7,7 @@ use std::{
 };
 
 use test_utils::{TestPlatform, TestPlatformEvent};
-use wie_backend::{
-    AudioSink, DatabaseRepository, Emulator, Event, Filesystem, Instant, KeyCode, Options, Platform, Screen, canvas::Image, extract_zip,
-};
-
-/// Ticks between one key press and the next.
-const KEY_PERIOD: u32 = 200;
+use wie_backend::{AudioSink, DatabaseRepository, Emulator, Event, Filesystem, Instant, Options, Platform, Screen, canvas::Image, extract_zip};
 use wie_util::Result;
 
 #[derive(Default)]
@@ -22,61 +17,7 @@ struct Captured {
     width: u32,
     height: u32,
     colors: BTreeMap<u32, u32>,
-    /// The busiest frame's pixels, kept only when somewhere to write them was
-    /// asked for.
-    pixels: Vec<u8>,
-    /// The last frame's, which is where the title got to rather than the best
-    /// it managed.
-    last_pixels: Vec<u8>,
-}
-
-/// Counts what an application asks the audio sink for.
-///
-/// A `.mmf` carries both PCM waves and a MIDI-like sequence, and only the
-/// waves reach a device: `AndroidAudioSink` drops every MIDI event because
-/// there is no synth on the other side. So which of the two a title's music
-/// is decides whether it makes a sound at all.
-#[derive(Default)]
-struct AudioTally {
-    waves: u32,
-    wave_samples: u64,
-    notes: u32,
-    other_midi: u32,
-}
-
-#[derive(Default, Clone)]
-struct CaptureAudio {
-    tally: Arc<Mutex<AudioTally>>,
-}
-
-impl AudioSink for CaptureAudio {
-    fn play_wave(&self, _channel: u8, _sampling_rate: u32, wave_data: &[i16]) {
-        let mut tally = self.tally.lock().unwrap();
-        tally.waves += 1;
-        tally.wave_samples += wave_data.len() as u64;
-    }
-
-    fn midi_note_on(&self, _channel: u8, _note: u8, _velocity: u8) {
-        self.tally.lock().unwrap().notes += 1;
-    }
-
-    fn midi_note_off(&self, _channel: u8, _note: u8, _velocity: u8) {}
-
-    fn midi_program_change(&self, _channel: u8, _program: u8) {
-        self.tally.lock().unwrap().other_midi += 1;
-    }
-
-    fn midi_control_change(&self, _channel: u8, _control: u8, _value: u8) {
-        self.tally.lock().unwrap().other_midi += 1;
-    }
-
-    fn midi_pitch_bend(&self, _channel: u8, _value: u16) {
-        self.tally.lock().unwrap().other_midi += 1;
-    }
-
-    fn midi_sysex(&self, _data: &[u8]) {
-        self.tally.lock().unwrap().other_midi += 1;
-    }
+    best_pixels: Vec<u8>,
 }
 
 #[derive(Default, Clone)]
@@ -96,25 +37,28 @@ impl Screen for CaptureScreen {
         captured.width = image.width();
         captured.height = image.height();
 
+        let frame_number = captured.frames;
+        let width = image.width();
+        let height = image.height();
+
         let mut colors = BTreeMap::new();
+        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+
         for color in image.colors() {
             let packed = ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32;
             *colors.entry(packed).or_default() += 1;
+
+            pixels.push(color.r);
+            pixels.push(color.g);
+            pixels.push(color.b);
         }
 
-        // Keep the busiest frame, not the last: a title that draws and then
-        // clears would otherwise look like it never drew.
+        // Keep the busiest frame, not the last: a screen that draws and then
+        // clears would otherwise look like it never rendered.
         if colors.len() >= captured.colors.len() {
             captured.colors = colors;
-            captured.best_frame = captured.frames;
-
-            if std::env::var_os("WIE_CAPTURE_DIR").is_some() {
-                captured.pixels = image.colors().into_iter().flat_map(|color| [color.r, color.g, color.b]).collect();
-            }
-        }
-
-        if std::env::var_os("WIE_CAPTURE_DIR").is_some() {
-            captured.last_pixels = image.colors().into_iter().flat_map(|color| [color.r, color.g, color.b]).collect();
+            captured.best_frame = frame_number;
+            captured.best_pixels = pixels;
         }
     }
 
@@ -130,7 +74,6 @@ impl Screen for CaptureScreen {
 struct CapturePlatform {
     inner: TestPlatform,
     screen: CaptureScreen,
-    audio: CaptureAudio,
     clock: Arc<AtomicU64>,
 }
 
@@ -160,7 +103,7 @@ impl Platform for CapturePlatform {
         self.inner.filesystem()
     }
     fn audio_sink(&self) -> Box<dyn AudioSink> {
-        Box::new(self.audio.clone())
+        self.inner.audio_sink()
     }
     fn write_stdout(&self, buf: &[u8]) {
         self.inner.write_stdout(buf)
@@ -188,7 +131,6 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
     let exited = Arc::new(AtomicBool::new(false));
     let exited_clone = exited.clone();
     let screen = CaptureScreen::default();
-    let audio = CaptureAudio::default();
 
     let platform = Box::new(CapturePlatform {
         inner: TestPlatform::with_event_handler(move |event| match event {
@@ -196,7 +138,6 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             TestPlatformEvent::Exit => exited_clone.store(true, Ordering::SeqCst),
         }),
         screen: screen.clone(),
-        audio: audio.clone(),
         clock: Arc::new(AtomicU64::new(0)),
     });
 
@@ -230,30 +171,58 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         }
     };
 
-    let keys = match std::env::var("WIE_KEYS") {
-        Ok(names) => names.split(',').filter(|x| !x.is_empty()).map(KeyCode::parse).collect::<Vec<_>>(),
-        Err(_) => vec![KeyCode::OK, KeyCode::NUM1, KeyCode::LEFT_SOFT_KEY, KeyCode::NUM5],
-    };
-
     let mut ticks = 0;
     while !exited.load(Ordering::SeqCst) && ticks < ticks_limit {
         if ticks % 40 == 0 {
             emulator.handle_event(Event::Redraw);
         }
-        // Titles wait on input, and not always the same key: Legend of Master's
-        // first screen ends with "press any key", and SEED 2 opens on a consent
-        // screen that wants `1`. Nothing here knows which, so they take turns.
-        //
-        // `$WIE_KEYS` narrows it to one when a title is being looked at on its
-        // own: `WIE_KEYS=NUM1` answers a consent screen and nothing else.
-        let key = keys[(ticks / KEY_PERIOD) as usize % keys.len()];
+        // Press OK once after the initial notice has had time to render.
+        if ticks == 300 {
+            eprintln!("[{label}] pressing OK at tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks == 320 {
+            eprintln!("[{label}] releasing OK at tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
 
-        if ticks % KEY_PERIOD == KEY_PERIOD / 2 {
-            emulator.handle_event(Event::Keydown(key));
+        // Advance past the title screen after it has fully appeared.
+        if ticks == 8000 {
+            eprintln!("[{label}] pressing OK at title tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
         }
-        if ticks % KEY_PERIOD == KEY_PERIOD / 2 + 20 {
-            emulator.handle_event(Event::Keyup(key));
+        if ticks == 8020 {
+            eprintln!("[{label}] releasing OK at title tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
         }
+
+        if ticks == 9500 {
+            eprintln!("[{label}] pressing OK at menu tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks == 9520 {
+            eprintln!("[{label}] releasing OK at menu tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
+
+        if ticks == 17000 {
+            eprintln!("[{label}] pressing OK at slot tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks == 17020 {
+            eprintln!("[{label}] releasing OK at slot tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
+
+        if ticks == 22000 {
+            eprintln!("[{label}] pressing RIGHT at class tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::RIGHT));
+        }
+        if ticks == 22020 {
+            eprintln!("[{label}] releasing RIGHT at class tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::RIGHT));
+        }
+
         if let Err(error) = emulator.tick() {
             eprintln!("[{label}] stopped after {ticks} ticks: {error}");
             break;
@@ -271,38 +240,26 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         captured.colors.len()
     );
 
-    // A histogram says a title draws; only the picture says what it drew, and
-    // only the last frame says whether it got anywhere.
-    if let Some(directory) = std::env::var_os("WIE_CAPTURE_DIR") {
-        for (suffix, pixels) in [("", &captured.pixels), ("-final", &captured.last_pixels)] {
-            if pixels.is_empty() {
-                continue;
-            }
-
-            let path = std::path::Path::new(&directory).join(format!("{label}{suffix}.ppm"));
-            let header = format!("P6\n{} {}\n255\n", captured.width, captured.height);
-
-            let mut file = header.into_bytes();
-            file.extend_from_slice(pixels);
-
-            match std::fs::write(&path, file) {
-                Ok(()) => eprintln!("[{label}] wrote {}", path.display()),
-                Err(error) => eprintln!("[{label}] could not write {}: {error}", path.display()),
-            }
-        }
-    }
-
-    let tally = audio.tally.lock().unwrap();
-    eprintln!(
-        "[{label}] audio: {} waves ({} samples), {} notes, {} other midi",
-        tally.waves, tally.wave_samples, tally.notes, tally.other_midi
-    );
-    drop(tally);
-
     let mut top: Vec<_> = captured.colors.iter().collect();
     top.sort_by_key(|(_, count)| core::cmp::Reverse(**count));
     for (color, count) in top.into_iter().take(6) {
         eprintln!("[{label}]   #{color:06x} x{count}");
+    }
+
+    if let Ok(path) = std::env::var("LOM_CAPTURE_PATH") {
+        if !captured.best_pixels.is_empty() {
+            let mut ppm = format!("P6\n{} {}\n255\n", captured.width, captured.height).into_bytes();
+            ppm.extend_from_slice(&captured.best_pixels);
+
+            match std::fs::write(&path, ppm) {
+                Ok(()) => eprintln!("[{label}] wrote busiest frame {} to {path}", captured.best_frame),
+                Err(error) => {
+                    eprintln!("[{label}] failed to write busiest frame to {path}: {error}")
+                }
+            }
+        } else {
+            eprintln!("[{label}] no captured pixels to write");
+        }
     }
 }
 
@@ -313,7 +270,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
 #[test]
 #[ignore = "diagnostic"]
 fn capture_legend_of_master() {
-    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 2000);
+    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 32000);
 }
 
 /// Runs every archive under `$WIE_ARCHIVES`, which can be a directory or a

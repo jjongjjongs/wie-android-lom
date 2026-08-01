@@ -388,6 +388,12 @@ impl Graphics {
     ) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::drawString({this:?}, {string:?}, {x}, {y}, {anchor})");
 
+        // Some legacy WIPI applications use null for an absent optional label.
+        // Treat it as an empty draw request rather than forwarding null to MIDP.
+        if string.is_null() {
+            return Ok(());
+        }
+
         let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
         jvm.invoke_virtual(&midp_graphics, "drawString", "(Ljava/lang/String;III)V", (string, x, y, anchor))
