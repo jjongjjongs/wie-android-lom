@@ -253,6 +253,25 @@ impl ArmCore {
     {
         // we don't need to save r0-r3, but to make it simple, we save all registers
         let previous_context = self.save_context();
+
+        // A guest that calls through a function pointer it never populated - a
+        // timer whose callback field is still zero, an import slot the resolver
+        // left empty - would branch to a null or near-null address and fault
+        // the whole title. That pointer is always a bug in whatever was meant
+        // to fill it, never code to run, so record where the call came from and
+        // hand back a benign zero, the way an unimplemented import already does.
+        if (address & !1) < 0x1000 {
+            let (pc, lr) = self.read_pc_lr().unwrap_or((0, 0));
+            tracing::warn!("run_function: refusing branch to invalid target {address:#x} (caller pc={pc:#x}, lr={lr:#x})");
+            {
+                let mut inner = self.inner.lock();
+                inner.engine.reg_write(ArmRegister::R0, 0);
+            }
+            let result = R::get(self);
+            self.restore_context(&previous_context);
+            return Ok(result);
+        }
+
         {
             let mut inner = self.inner.lock();
 
