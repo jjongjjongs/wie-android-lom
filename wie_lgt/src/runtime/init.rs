@@ -843,6 +843,8 @@ const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
     ("java/lang/StringBuffer", 18, "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
     // Legend of Master reaches append(int) through platform dispatch slot 23.
     ("java/lang/StringBuffer", 23, "append", "(I)Ljava/lang/StringBuffer;"),
+    // `dt_java_lang_String` maps slot 33 to String.trim().
+    ("java/lang/String", 33, "trim", "()Ljava/lang/String;"),
     ("java/lang/Class", 16, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;"),
     ("java/io/ByteArrayInputStream", 12, "read", "([BII)I"),
     ("java/io/ByteArrayInputStream", 15, "close", "()V"),
