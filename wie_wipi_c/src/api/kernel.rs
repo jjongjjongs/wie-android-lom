@@ -119,6 +119,7 @@ pub async fn set_timer(
     let timer: WIPICTimer = read_generic(context, ptr_timer)?;
 
     context.set_timer(
+        ptr_timer,
         now + timeout,
         Box::new(TimerCallback {
             ptr_timer,
@@ -130,8 +131,10 @@ pub async fn set_timer(
     Ok(())
 }
 
-pub async fn unset_timer(_: &mut dyn WIPICContext, a0: WIPICWord) -> Result<()> {
-    tracing::warn!("stub MC_knlUnsetTimer({a0:#x})");
+pub async fn unset_timer(context: &mut dyn WIPICContext, ptr_timer: WIPICWord) -> Result<()> {
+    tracing::debug!("MC_knlUnsetTimer({ptr_timer:#x})");
+
+    context.unset_timer(ptr_timer);
 
     Ok(())
 }

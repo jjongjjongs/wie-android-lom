@@ -6,7 +6,7 @@ use jvm::{
 };
 use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 
-use wie_backend::{AsyncCallable, Event, Instant, System};
+use wie_backend::{AsyncCallable, Instant, System};
 use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
 use wie_wipi_c::{WIPICContext, WIPICMethodBody};
@@ -117,17 +117,21 @@ impl WIPICContext for LgtWIPICContext {
         Ok(data)
     }
 
-    fn set_timer(&mut self, due: Instant, callback: WIPICMethodBody) {
+    fn set_timer(&mut self, id: WIPICWord, due: Instant, callback: WIPICMethodBody) {
         let context = self.clone();
 
-        self.system().event_queue().push(Event::timer(due, move || {
+        self.system().event_queue().push_timer(id, due, move || {
             let mut context = context.clone();
 
             async move {
                 callback.call(&mut context, Box::new([])).await?;
                 Ok(())
             }
-        }))
+        })
+    }
+
+    fn unset_timer(&mut self, id: WIPICWord) {
+        self.system().event_queue().cancel_timer(id);
     }
 }
 
