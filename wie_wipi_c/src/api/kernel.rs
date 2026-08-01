@@ -39,6 +39,7 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "RSSILEVEL" => "30",
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
+        "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
         "PHONENUMBER" => "", // putting this cause some game to fail authentication
         "MIN" => "01000000000",
         "ANNUN_CALL" => "0",
