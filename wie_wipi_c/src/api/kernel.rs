@@ -108,7 +108,13 @@ pub async fn set_timer(
     }
 
     let now = context.system().platform().now();
-    let timeout = (((timeout_high as u64) << 32) | (timeout_low as u64)) as _;
+
+    // Raptor represents the delay as a signed 64-bit value split into two
+    // words. Legacy runtimes schedule a negative delay on the next scheduler
+    // tick instead of interpreting it as a very large unsigned duration.
+    let raw_timeout = ((timeout_high as u64) << 32) | timeout_low as u64;
+    let timeout = if (raw_timeout as i64) < 0 { 1 } else { raw_timeout };
+
     let timer: WIPICTimer = read_generic(context, ptr_timer)?;
 
     context.set_timer(
