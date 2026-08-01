@@ -17,6 +17,7 @@ struct Captured {
     width: u32,
     height: u32,
     colors: BTreeMap<u32, u32>,
+    best_pixels: Vec<u8>,
 }
 
 #[derive(Default, Clone)]
@@ -36,17 +37,28 @@ impl Screen for CaptureScreen {
         captured.width = image.width();
         captured.height = image.height();
 
+        let frame_number = captured.frames;
+        let width = image.width();
+        let height = image.height();
+
         let mut colors = BTreeMap::new();
+        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+
         for color in image.colors() {
             let packed = ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32;
             *colors.entry(packed).or_default() += 1;
+
+            pixels.push(color.r);
+            pixels.push(color.g);
+            pixels.push(color.b);
         }
 
-        // Keep the busiest frame, not the last: a title that draws and then
-        // clears would otherwise look like it never drew.
+        // Keep the busiest frame, not the last: a screen that draws and then
+        // clears would otherwise look like it never rendered.
         if colors.len() >= captured.colors.len() {
             captured.colors = colors;
-            captured.best_frame = captured.frames;
+            captured.best_frame = frame_number;
+            captured.best_pixels = pixels;
         }
     }
 
@@ -164,14 +176,53 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         if ticks % 40 == 0 {
             emulator.handle_event(Event::Redraw);
         }
-        // Titles wait on input: Legend of Master's first screen ends with
-        // "press any key".
-        if ticks % 200 == 100 {
+        // Press OK once after the initial notice has had time to render.
+        if ticks == 300 {
+            eprintln!("[{label}] pressing OK at tick {ticks}");
             emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
         }
-        if ticks % 200 == 120 {
+        if ticks == 320 {
+            eprintln!("[{label}] releasing OK at tick {ticks}");
             emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
         }
+
+        // Advance past the title screen after it has fully appeared.
+        if ticks == 8000 {
+            eprintln!("[{label}] pressing OK at title tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks == 8020 {
+            eprintln!("[{label}] releasing OK at title tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
+
+        if ticks == 9500 {
+            eprintln!("[{label}] pressing OK at menu tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks == 9520 {
+            eprintln!("[{label}] releasing OK at menu tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
+
+        if ticks == 17000 {
+            eprintln!("[{label}] pressing OK at slot tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks == 17020 {
+            eprintln!("[{label}] releasing OK at slot tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
+
+        if ticks == 22000 {
+            eprintln!("[{label}] pressing RIGHT at class tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::RIGHT));
+        }
+        if ticks == 22020 {
+            eprintln!("[{label}] releasing RIGHT at class tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::RIGHT));
+        }
+
         if let Err(error) = emulator.tick() {
             eprintln!("[{label}] stopped after {ticks} ticks: {error}");
             break;
@@ -194,6 +245,22 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
     for (color, count) in top.into_iter().take(6) {
         eprintln!("[{label}]   #{color:06x} x{count}");
     }
+
+    if let Ok(path) = std::env::var("LOM_CAPTURE_PATH") {
+        if !captured.best_pixels.is_empty() {
+            let mut ppm = format!("P6\n{} {}\n255\n", captured.width, captured.height).into_bytes();
+            ppm.extend_from_slice(&captured.best_pixels);
+
+            match std::fs::write(&path, ppm) {
+                Ok(()) => eprintln!("[{label}] wrote busiest frame {} to {path}", captured.best_frame),
+                Err(error) => {
+                    eprintln!("[{label}] failed to write busiest frame to {path}: {error}")
+                }
+            }
+        } else {
+            eprintln!("[{label}] no captured pixels to write");
+        }
+    }
 }
 
 /// Reports what an application actually puts on screen, which is not
@@ -203,7 +270,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
 #[test]
 #[ignore = "diagnostic"]
 fn capture_legend_of_master() {
-    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 2000);
+    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 32000);
 }
 
 /// Runs every archive under `$WIE_ARCHIVES`, which can be a directory or a
