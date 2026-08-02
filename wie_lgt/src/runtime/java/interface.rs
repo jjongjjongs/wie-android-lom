@@ -375,6 +375,18 @@ pub async fn java_unk11(
     Ok(0)
 }
 
+/// Adds a class discovered outside the initially registered table to the
+/// shared LGT class registry. A class may be reached through several child
+/// chains, but the vendor registry keeps one definition per class name.
+fn register_discovered_class(classes: &mut Vec<AppClass>, class: AppClass) -> bool {
+    if classes.iter().any(|known| known.name == class.name) {
+        return false;
+    }
+
+    classes.push(class);
+    true
+}
+
 /// Registers a JVM stand-in for an application class and everything it
 /// inherits from.
 ///
@@ -402,8 +414,11 @@ pub async fn bridge_class_chain(
         // The definition is built while the lock is held, and the lock is let
         // go before the JVM runs: registering re-enters the runtime.
         //
-        // The main class is usually absent from the registered table, so fall
-        // back to finding it by shape in the image.
+        // The main class and some of its parents may be absent from the table
+        // registered through the Java import. The vendor runtime discovers
+        // those classes in the loaded image and adds them to its class
+        // registry before activation, so do the same here instead of treating
+        // a discovered class as a one-use proto.
         let described = {
             let app_classes = app_classes.lock();
 
@@ -412,17 +427,45 @@ pub async fn bridge_class_chain(
                 .find(|x| x.name == class_name)
                 .map(|class| (class.superclass.clone(), compiled_class::as_proto(class)))
         };
+
         let described = match described {
             Some(described) => Some(described),
-            None => {
-                app_classes::find_class(core, image_ranges, &class_name).map(|class| (class.superclass.clone(), compiled_class::as_proto(&class)))
-            }
+            None => match app_classes::find_class(core, image_ranges, &class_name) {
+                Some(class) => {
+                    let superclass = class.superclass.clone();
+                    let proto = compiled_class::as_proto(&class);
+
+                    tracing::debug!(
+                        "Discovered unregistered LGT application class {} at {:#x}; adding it to the class registry",
+                        class.name,
+                        class.root
+                    );
+
+                    let inserted = {
+                        let mut app_classes = app_classes.lock();
+                        register_discovered_class(&mut app_classes, class)
+                    };
+
+                    if !inserted {
+                        tracing::debug!("LGT application class {class_name} was registered concurrently");
+                    }
+
+                    Some((superclass, proto))
+                }
+                None => None,
+            },
         };
 
-        // Not one of the application's classes, so it is a platform class the
-        // JVM already knows and the chain ends here.
+        // A name absent from the LGT image is a valid boundary only when the
+        // JVM actually provides it as a platform class. Otherwise registering
+        // the child would leave its proto referring to a nonexistent parent.
         let Some((superclass, proto)) = described else {
-            break;
+            if jvm.resolve_class(&class_name).await.is_ok() {
+                break;
+            }
+
+            tracing::error!("Application class chain for {name} requires unresolved superclass {class_name}");
+            return false;
         };
 
         chain.push((class_name, proto));
@@ -592,4 +635,50 @@ pub async fn java_import_11(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a
 pub async fn java_import_23(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::warn!("java_import_23(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{vec, vec::Vec};
+
+    use super::register_discovered_class;
+    use crate::runtime::java::app_classes::AppClass;
+
+    fn class(name: &str, root: u32) -> AppClass {
+        AppClass {
+            root,
+            name: name.into(),
+            superclass: None,
+            interfaces: Vec::new(),
+            members: Vec::new(),
+            declared_members: 0,
+        }
+    }
+
+    #[test]
+    fn discovered_classes_are_persisted_in_the_registry() {
+        let mut classes = Vec::new();
+
+        assert!(register_discovered_class(&mut classes, class("r", 0x1000)));
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "r");
+        assert_eq!(classes[0].root, 0x1000);
+    }
+
+    #[test]
+    fn discovered_classes_are_not_registered_twice() {
+        let mut classes = vec![class("r", 0x1000)];
+
+        assert!(!register_discovered_class(&mut classes, class("r", 0x2000)));
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].root, 0x1000);
+    }
+
+    #[test]
+    fn different_discovered_classes_are_kept() {
+        let mut classes = vec![class("r", 0x1000)];
+
+        assert!(register_discovered_class(&mut classes, class("Lm", 0x2000)));
+        assert_eq!(classes.len(), 2);
+    }
 }
