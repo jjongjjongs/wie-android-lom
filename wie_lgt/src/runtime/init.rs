@@ -835,6 +835,10 @@ fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u
 /// immediately after constructing it from a `Runnable`, which is `start`, and
 /// nothing else a game does with a fresh thread fits.
 const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
+    // `dt_org_kwis_msp_lcdui_Card` maps slot 0 to its canonical
+    // no-argument constructor. Unused ARM argument registers may still
+    // contain arbitrary values at this call site.
+    ("org/kwis/msp/lcdui/Card", 0, "<init>", "()V"),
     ("java/lang/Thread", 10, "start", "()V"),
     // `dt_java_lang_StringBuffer` names this one. A platform class's slots
     // are numbered over *all* its virtual methods, and the table the
