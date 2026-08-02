@@ -100,6 +100,7 @@ public final class MainActivity extends Activity {
     private AndroidAudioOutput audioOutput;
     private File gamesDir;
     private GameView gameView;
+    private KeypadView keypad;
     private TextView playerStatus;
     private String currentGameName;
     /** What is waiting on the storage permission, if anything. */
@@ -135,7 +136,31 @@ public final class MainActivity extends Activity {
     @Override
     protected void onPause() {
         foreground = false;
+        // Leaving the foreground while a key is held would otherwise leave it
+        // stuck down: the finger's ACTION_UP is delivered to whatever takes
+        // over the screen, never to us. Release everything now so the game
+        // does not read a key as held across the interruption.
+        releaseKeypad();
         super.onPause();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // A notification shade or dialog can take focus without pausing us,
+        // and swallows the touch release the same way. Drop held keys as soon
+        // as focus is lost.
+        if (!hasFocus) {
+            releaseKeypad();
+        }
+    }
+
+    /** Releases every key the keypad currently holds, if a keypad is shown. */
+    private void releaseKeypad() {
+        KeypadView view = keypad;
+        if (view != null) {
+            view.releaseAll();
+        }
     }
 
     @Override
@@ -165,6 +190,7 @@ public final class MainActivity extends Activity {
     private void showLibrary() {
         running = false;
         playerVisible = false;
+        keypad = null;
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -597,7 +623,8 @@ public final class MainActivity extends Activity {
         gameView = new GameView(this);
         root.addView(gameView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, GAME_WEIGHT));
 
-        root.addView(new KeypadView(this), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, KEYPAD_WEIGHT));
+        keypad = new KeypadView(this);
+        root.addView(keypad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, KEYPAD_WEIGHT));
 
         applyStatusBarInset(root);
         setContentView(root);
@@ -942,6 +969,19 @@ public final class MainActivity extends Activity {
                 }
             }
             return null;
+        }
+
+        /**
+         * Forgets every finger and sends the resulting key-ups, for when the
+         * player is interrupted mid-press and the real ACTION_UP will never
+         * arrive.
+         */
+        void releaseAll() {
+            if (underFinger.size() == 0) {
+                return;
+            }
+            underFinger.clear();
+            settle();
         }
 
         /**
