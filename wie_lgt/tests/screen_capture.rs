@@ -223,6 +223,15 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             emulator.handle_event(Event::Keyup(wie_backend::KeyCode::RIGHT));
         }
 
+        if ticks == 24000 {
+            eprintln!("[{label}] pressing OK at class confirm tick {ticks}");
+            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        }
+        if ticks == 24020 {
+            eprintln!("[{label}] releasing OK at class confirm tick {ticks}");
+            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        }
+
         if let Err(error) = emulator.tick() {
             eprintln!("[{label}] stopped after {ticks} ticks: {error}");
             break;
@@ -270,7 +279,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
 #[test]
 #[ignore = "diagnostic"]
 fn capture_legend_of_master() {
-    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 32000);
+    run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 48000);
 }
 
 /// Runs every archive under `$WIE_ARCHIVES`, which can be a directory or a

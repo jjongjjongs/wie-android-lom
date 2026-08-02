@@ -835,6 +835,10 @@ fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u
 /// immediately after constructing it from a `Runnable`, which is `start`, and
 /// nothing else a game does with a fresh thread fits.
 const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
+    // `dt_org_kwis_msp_lcdui_Card` maps slot 0 to its canonical
+    // no-argument constructor. Unused ARM argument registers may still
+    // contain arbitrary values at this call site.
+    ("org/kwis/msp/lcdui/Card", 0, "<init>", "()V"),
     ("java/lang/Thread", 10, "start", "()V"),
     // `dt_java_lang_StringBuffer` names this one. A platform class's slots
     // are numbered over *all* its virtual methods, and the table the
@@ -843,6 +847,8 @@ const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
     ("java/lang/StringBuffer", 18, "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
     // Legend of Master reaches append(int) through platform dispatch slot 23.
     ("java/lang/StringBuffer", 23, "append", "(I)Ljava/lang/StringBuffer;"),
+    // `dt_java_lang_String` maps slot 33 to String.trim().
+    ("java/lang/String", 33, "trim", "()Ljava/lang/String;"),
     ("java/lang/Class", 16, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;"),
     ("java/io/ByteArrayInputStream", 12, "read", "([BII)I"),
     ("java/io/ByteArrayInputStream", 15, "close", "()V"),

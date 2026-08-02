@@ -40,6 +40,7 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "RSSILEVEL" => "30",
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
+        "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
         "PHONENUMBER" => "", // putting this cause some game to fail authentication
         "MIN" => "01000000000",
         "ANNUN_CALL" => "0",
@@ -109,10 +110,17 @@ pub async fn set_timer(
     }
 
     let now = context.system().platform().now();
-    let timeout = (((timeout_high as u64) << 32) | (timeout_low as u64)) as _;
+
+    // Raptor represents the delay as a signed 64-bit value split into two
+    // words. Legacy runtimes schedule a negative delay on the next scheduler
+    // tick instead of interpreting it as a very large unsigned duration.
+    let raw_timeout = ((timeout_high as u64) << 32) | timeout_low as u64;
+    let timeout = if (raw_timeout as i64) < 0 { 1 } else { raw_timeout };
+
     let timer: WIPICTimer = read_generic(context, ptr_timer)?;
 
     context.set_timer(
+        ptr_timer,
         now + timeout,
         Box::new(TimerCallback {
             ptr_timer,
@@ -127,12 +135,7 @@ pub async fn set_timer(
 pub async fn unset_timer(context: &mut dyn WIPICContext, ptr_timer: WIPICWord) -> Result<()> {
     tracing::debug!("MC_knlUnsetTimer({ptr_timer:#x})");
 
-    // The backend queue has no cancellation handle, so an already-scheduled
-    // callback still fires; clearing the guest timer's callback pointer at
-    // least stops a title from treating a stopped timer as still armed.
-    if ptr_timer != 0 {
-        write_generic(context, ptr_timer, WIPICTimer { fn_callback: 0 })?;
-    }
+    context.unset_timer(ptr_timer);
 
     Ok(())
 }
