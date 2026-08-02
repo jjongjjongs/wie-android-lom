@@ -1011,7 +1011,23 @@ async fn get_import_table(_core: &mut ArmCore, _: &mut (), import_table: u32) ->
     Ok(import_table)
 }
 
+/// `liblgt_system.so`'s kernel export table contains explicit reserved
+/// entries whose function pointer is null. They must remain null: replacing
+/// one with a diagnostic SVC stub turns an unavailable optional export into a
+/// callable function and lets compiled code enter paths the vendor runtime
+/// would have skipped.
+///
+/// WipiPlayer_plus.apk's `_export_table_kernel` identifies 0x32 and 0x33 as
+/// `{ id, 0, 0 }`.
+fn is_reserved_null_import(import_table: u32, function_index: u32) -> bool {
+    import_table == 1 && matches!(function_index, 0x32 | 0x33)
+}
+
 fn validate_resolved_import_address(import_table: u32, function_index: u32, address: u32) -> Result<u32> {
+    if address == 0 && is_reserved_null_import(import_table, function_index) {
+        return Ok(0);
+    }
+
     if address < 0x100 {
         return Err(WieError::FatalError(format!(
             "Invalid resolved LGT import address:              table={import_table:#x},              function={function_index:#x},              address={address:#x}"
@@ -1052,7 +1068,12 @@ async fn get_import_function(
     } else if import_table == 0x64 {
         get_java_interface_method(core, function_index)?
     } else if import_table == 1 {
-        core.make_svc_stub(stdlib_category, function_index)?
+        if is_reserved_null_import(import_table, function_index) {
+            tracing::debug!("get_import_function({import_table:#x}, {function_index:#x}) -> reserved null export");
+            0
+        } else {
+            core.make_svc_stub(stdlib_category, function_index)?
+        }
     } else {
         match (import_table, function_index) {
             (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::Unk0)?,
@@ -1420,4 +1441,31 @@ async fn java_unk7(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -
     tracing::warn!("java_unk7({a0:#x}, {a1:#x}, {a2:#x})");
 
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_resolved_import_address;
+
+    #[test]
+    fn accepts_reserved_kernel_null_exports() {
+        assert_eq!(validate_resolved_import_address(1, 0x32, 0).unwrap(), 0);
+        assert_eq!(validate_resolved_import_address(1, 0x33, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn rejects_other_null_import_addresses() {
+        assert!(validate_resolved_import_address(1, 0x34, 0).is_err());
+        assert!(validate_resolved_import_address(0x1fb, 0x32, 0).is_err());
+    }
+
+    #[test]
+    fn preserves_normal_thumb_import_addresses() {
+        assert_eq!(validate_resolved_import_address(1, 0x414, 0x1001).unwrap(), 0x1001);
+    }
+
+    #[test]
+    fn rejects_non_thumb_import_addresses() {
+        assert!(validate_resolved_import_address(1, 0x414, 0x1000).is_err());
+    }
 }
