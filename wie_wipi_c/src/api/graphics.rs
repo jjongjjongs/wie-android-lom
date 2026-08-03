@@ -395,7 +395,11 @@ pub async fn draw_image(
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
     let image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
 
-    let src_image = FrameBuffer(image.img).image(context)?;
+    // The img plane is a 16bpp colour buffer for titles that read image memory
+    // directly; compositing goes through the full-colour mask plane so per-pixel
+    // alpha survives. Older images without a mask still composite from img.
+    let source = if image.mask.buf.0 != 0 { image.mask } else { image.img };
+    let src_image = FrameBuffer(source).image(context)?;
     let mut canvas = framebuffer.canvas(context)?;
 
     let clip = Clip {
