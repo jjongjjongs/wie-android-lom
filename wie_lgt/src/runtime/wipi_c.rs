@@ -121,10 +121,10 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::CreateImage => graphics::create_image.into_body(),
         WIPICSvcId::Unk0 => unk0.into_body(),
         WIPICSvcId::PostEvent => graphics::post_event.into_body(),
-        WIPICSvcId::Unk3 => unk3.into_body(),
-        WIPICSvcId::Unk4 => unk4.into_body(),
-        WIPICSvcId::Unk7 => unk7.into_body(),
-        WIPICSvcId::Unk6 => unk6.into_body(),
+        WIPICSvcId::ImGetSupportModeCount => im_get_support_mode_count.into_body(),
+        WIPICSvcId::ImGetSupportedModes => im_get_supported_modes.into_body(),
+        WIPICSvcId::ImSetCurrentMode => im_set_current_mode.into_body(),
+        WIPICSvcId::ImGetCurrentMode => im_get_current_mode.into_body(),
         WIPICSvcId::TimeNow => time_now.into_body(),
         WIPICSvcId::TimeComponent => time_component.into_body(),
         WIPICSvcId::TimeConvert => time_convert.into_body(),
@@ -266,14 +266,19 @@ async fn unk2(context: &mut dyn WIPICContext) -> Result<u32> {
     Ok(result)
 }
 
-async fn unk3(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk3({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imGetSurpportModeCount` (vendor export 300). No input-method engine is
+/// emulated, so no modes are offered; a title reads zero as "the handset has
+/// no IME" and uses its own on-screen entry instead of asking to switch modes.
+async fn im_get_support_mode_count(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imGetSurpportModeCount({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
 
-async fn unk4(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk4({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imGetSupportedModes` (vendor export 301). Nothing to enumerate while no
+/// modes are supported.
+async fn im_get_supported_modes(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imGetSupportedModes({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
@@ -303,14 +308,22 @@ async fn fs_available(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32
     Ok(FREE_BYTES)
 }
 
-async fn unk6(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk6({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imGetCurrentMode` (vendor export 303). No mode is ever set, so there is
+/// none to report.
+async fn im_get_current_mode(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imGetCurrentMode({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
 
-async fn unk7(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk7({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imSetCurrentMode` (vendor export 302). Returns failure because no mode
+/// is supported. The vendor runtime crashes here when an out-of-range mode
+/// index reaches `dime_set_mode`, which reads a NULL mode name through
+/// `strcmp` - the failure WipiPlayer patches in. There is no equivalent path
+/// to fault here: the request is rejected before anything is dereferenced, so
+/// the null-mode crash cannot happen.
+async fn im_set_current_mode(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imSetCurrentMode({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
