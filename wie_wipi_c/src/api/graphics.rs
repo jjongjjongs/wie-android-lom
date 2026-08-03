@@ -920,12 +920,20 @@ pub async fn get_framebuffer_bpl(context: &mut dyn WIPICContext, framebuffer: WI
     Ok(framebuffer.bpl as _)
 }
 
-pub async fn get_framebuffer_bpp(context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {
+pub async fn get_framebuffer_bpp(_context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {
     tracing::debug!("MC_GRP_GET_FRAME_BUFFER_BPP({:#x})", framebuffer.0);
 
-    let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(framebuffer)?)?;
-
-    Ok(framebuffer.bpp as _)
+    // The vendor `wipic_get_frame_bpp` ignores its argument and returns the
+    // display's depth from a global. Titles rely on that: their direct-blit
+    // inner loop calls this with whatever register happens to be live - the
+    // frame pointer, the width - not a framebuffer handle, then uses the result
+    // as the pixel stride. Dereferencing that argument as a handle here read a
+    // garbage struct and returned a garbage depth, so a title's glyph and
+    // sprite writes landed at the wrong offset and never appeared while its
+    // `MC_grpFillRect` panels, which never touch this call, drew fine. Every
+    // framebuffer this runtime hands out is `FRAMEBUFFER_DEPTH`, so report it
+    // directly and ignore the argument, as the vendor does.
+    Ok(FRAMEBUFFER_DEPTH as _)
 }
 
 #[cfg(test)]
