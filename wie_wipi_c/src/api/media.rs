@@ -228,6 +228,20 @@ pub async fn clip_alloc_player(context: &mut dyn WIPICContext, clip: WIPICWord, 
     }
     write_generic(context, clip, clip_data)?;
 
+    // With a null second argument, the vendor `MC_mdaClipAllocPlayer` does not
+    // just allocate - it starts the clip, routing through the very function
+    // `MC_mdaPlay` ends on. Gamevil titles (ZENONIA 1-3, HYBRID 1/2, ADVENA)
+    // rely on that: they set a clip up once and never resolve `MC_mdaPlay`, so
+    // allocating the player is the only thing that would ever make a sound.
+    // Allocating without starting left them silent. A non-zero argument selects
+    // a different, named allocation mode, so only the default path plays.
+    if param == 0 {
+        let system = context.system();
+        if let Err(x) = system.audio().play(system, clip_data.handle, false) {
+            tracing::error!("Failed to start audio on player alloc: {x:?}");
+        }
+    }
+
     Ok(clip)
 }
 
