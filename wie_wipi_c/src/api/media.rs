@@ -166,27 +166,14 @@ pub async fn clip_set_position(_context: &mut dyn WIPICContext, clip: WIPICWord,
     Ok(0)
 }
 
-pub async fn clip_get_volume(context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
-    tracing::debug!("MC_mdaClipGetVolume({clip:#x})");
+pub async fn clip_get_volume(_context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
+    tracing::warn!("stub MC_mdaClipGetVolume({clip:#x})");
 
-    if clip == 0 {
-        return Ok(0);
-    }
-
-    let clip_data: MdaClip = read_generic(context, clip)?;
-    Ok(clip_data.original_volume.clamp(0, 100) as WIPICWord)
+    Ok(0)
 }
 
-pub async fn clip_set_volume(context: &mut dyn WIPICContext, clip: WIPICWord, volume: WIPICWord) -> Result<WIPICWord> {
-    tracing::debug!("MC_mdaClipSetVolume({clip:#x}, {volume:#x})");
-
-    if clip == 0 {
-        return Ok(0);
-    }
-
-    let mut clip_data: MdaClip = read_generic(context, clip)?;
-    clip_data.original_volume = (volume as i32).clamp(0, 100);
-    write_generic(context, clip, clip_data)?;
+pub async fn clip_set_volume(_context: &mut dyn WIPICContext, clip: WIPICWord, volume: WIPICWord) -> Result<WIPICWord> {
+    tracing::warn!("stub MC_mdaClipSetVolume({clip:#x}, {volume:#x})");
 
     Ok(0)
 }
@@ -259,42 +246,14 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
     Ok(0)
 }
 
-pub async fn clip_alloc_player(context: &mut dyn WIPICContext, clip: WIPICWord, param: WIPICWord) -> Result<WIPICWord> {
-    tracing::debug!("MC_mdaClipAllocPlayer({clip:#x}, {param:#x})");
+pub async fn clip_alloc_player(_context: &mut dyn WIPICContext, clip: WIPICWord, param: WIPICWord) -> Result<WIPICWord> {
+    tracing::warn!("stub MC_mdaClipAllocPlayer({clip:#x}, {param:#x})");
 
-    if clip == 0 {
-        return Ok(0);
-    }
-
-    // Callers treat the return as an opaque player handle and later call it
-    // back with that value; a stubbed zero is read as "no player" and the game
-    // stalls at load. The clip already owns the backend audio handle, so the
-    // guest clip pointer itself is a stable non-null handle to hand back.
-    let mut clip_data: MdaClip = read_generic(context, clip)?;
-    clip_data.in_use = 1;
-    if clip_data.original_volume == 0 {
-        clip_data.original_volume = 80;
-    }
-    write_generic(context, clip, clip_data)?;
-
-    // Allocation only hands back the player handle; it does not begin playback.
-    // Gamevil titles (ZENONIA 1-3, HYBRID 1/2, ADVENA) drive the actual sound
-    // through a following `MC_mdaPlay`, whose completion callback sequences the
-    // logo jingle into the looping background music. Starting a playback here as
-    // well only competes with that path and restarts the jingle, so the clip is
-    // left silent until `MC_mdaPlay` runs.
-
-    Ok(clip)
+    Ok(0)
 }
 
-pub async fn clip_free_player(context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
-    tracing::debug!("MC_mdaClipFreePlayer({clip:#x})");
-
-    if clip != 0 {
-        let mut clip_data: MdaClip = read_generic(context, clip)?;
-        clip_data.in_use = 0;
-        write_generic(context, clip, clip_data)?;
-    }
+pub async fn clip_free_player(_context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
+    tracing::warn!("stub MC_mdaClipFreePlayer({clip:#x})");
 
     Ok(0)
 }
