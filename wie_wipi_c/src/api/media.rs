@@ -230,37 +230,21 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
 
         #[async_trait::async_trait]
         impl MethodBody<WieError> for PlaybackCompletedCallback {
-            async fn call(
-                &self,
-                context: &mut dyn WIPICContext,
-                _: Box<[WIPICWord]>,
-            ) -> Result<WIPICResult> {
-                while !self.completed.load(Ordering::Acquire)
-                    && !self.stopped.load(Ordering::Acquire)
-                {
+            async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
+                while !self.completed.load(Ordering::Acquire) && !self.stopped.load(Ordering::Acquire) {
                     context.system().sleep(1).await;
                 }
 
                 if self.stopped.load(Ordering::Acquire) {
-                    tracing::debug!(
-                        "MC_mdaPlay completion callback cancelled for stopped clip {:#x}",
-                        self.clip
-                    );
+                    tracing::debug!("MC_mdaPlay completion callback cancelled for stopped clip {:#x}", self.clip);
 
-                    return Ok(WIPICResult {
-                        results: Vec::new(),
-                    });
+                    return Ok(WIPICResult { results: Vec::new() });
                 }
 
-                tracing::debug!(
-                    "MC_mdaPlay completion callback({:#x}, event=3)",
-                    self.callback
-                );
+                tracing::debug!("MC_mdaPlay completion callback({:#x}, event=3)", self.callback);
                 context.call_function(self.callback, &[self.clip, 3]).await?;
 
-                Ok(WIPICResult {
-                    results: Vec::new(),
-                })
+                Ok(WIPICResult { results: Vec::new() })
             }
         }
 
@@ -293,24 +277,12 @@ pub async fn clip_alloc_player(context: &mut dyn WIPICContext, clip: WIPICWord, 
     }
     write_generic(context, clip, clip_data)?;
 
-    // A null second argument is the default player, which the vendor starts as
-    // it allocates - the same start `MC_mdaPlay` performs. Gamevil titles
-    // (ZENONIA 1-3, HYBRID 1/2, ADVENA) lean on this: they set one clip up,
-    // allocate its player, and never call `MC_mdaPlay`, so this is the only
-    // thing that would ever make them play. It plays once - the clip is a jingle
-    // like a startup logo, not a loop - but the playback is protected so the
-    // `MC_mdaStop` these titles issue constantly does not cut it short (see
-    // `Audio::protect`). A title that means to drive playback itself, like
-    // MapleStory, calls `MC_mdaPlay` next, which simply restarts.
-    if param == 0 {
-        let system = context.system();
-        let mut audio = system.audio();
-        if let Err(x) = audio.play(system, clip_data.handle, false) {
-            tracing::error!("Failed to start audio on player alloc: {x:?}");
-        } else {
-            audio.protect(clip_data.handle);
-        }
-    }
+    // Allocation only hands back the player handle; it does not begin playback.
+    // Gamevil titles (ZENONIA 1-3, HYBRID 1/2, ADVENA) drive the actual sound
+    // through a following `MC_mdaPlay`, whose completion callback sequences the
+    // logo jingle into the looping background music. Starting a playback here as
+    // well only competes with that path and restarts the jingle, so the clip is
+    // left silent until `MC_mdaPlay` runs.
 
     Ok(clip)
 }
@@ -366,7 +338,7 @@ pub async fn stop(context: &mut dyn WIPICContext, ptr_clip: WIPICWord) -> Result
 
     let system = context.system();
 
-    system.audio().stop_soft(clip.handle);
+    system.audio().stop(clip.handle);
 
     Ok(0)
 }
