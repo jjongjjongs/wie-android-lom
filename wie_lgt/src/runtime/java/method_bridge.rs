@@ -23,7 +23,7 @@ use jvm::{Array, ClassInstanceRef, JavaValue, Jvm, Result as JvmResult};
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
-use wie_util::{Result, WieError};
+use wie_util::{Result, WieError, read_generic};
 
 use super::{
     class_table::{ClassTable, is_wide, split_descriptor},
@@ -156,10 +156,17 @@ async fn marshal_arguments(
                 Some(instance) => JavaValue::Object(Some(instance)),
                 None if words[word] == 0 => JavaValue::Object(None),
                 None => {
+                    let handle = words[word];
+                    let vtable = read_generic::<u32, _>(core, handle).unwrap_or(0);
+                    let root = if vtable != 0 {
+                        read_generic::<u32, _>(core, vtable).unwrap_or(0)
+                    } else {
+                        0
+                    };
+
                     return Err(WieError::FatalError(format!(
-                        "Argument {word} of {} is {:#x}, which names no object this runtime handed out",
-                        parameters.join(""),
-                        words[word]
+                        "Argument {word} of {} is {handle:#x}, which names no object this runtime handed out; vtable={vtable:#x}, class_root={root:#x}",
+                        parameters.join("")
                     )));
                 }
             },
@@ -263,8 +270,10 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         None => None,
     };
 
+    let first_word = usize::from(receiver.is_some());
+
     let mut writebacks = Vec::new();
-    let arguments = marshal_arguments(core, jvm, handles, &parameters, usize::from(receiver.is_some()), &mut writebacks).await?;
+    let arguments = marshal_arguments(core, jvm, handles, &parameters, first_word, &mut writebacks).await?;
 
     let result = if let Some(instance) = receiver {
         tracing::debug!("LGT invoke virtual {class_name}.{name}{descriptor}");

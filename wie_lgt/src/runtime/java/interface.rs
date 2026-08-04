@@ -125,7 +125,10 @@ pub async fn java_load_classes(
     )?;
 
     tracing::debug!(
-        "java_load_classes: {} classes, {} static methods, {} virtual methods; outputs at \
+        "java_load_classes: {} classes, {} static methods, {} virtual methods; inputs at \
+         classes={classes:#x}, fields={fields:#x}, static_fields={static_fields:#x}, \
+         virtual_methods={virtual_methods:#x}, interface_methods={interface_methods:#x}, \
+         static_methods={static_methods:#x}; outputs at \
          static_method_offsets={:#x}, virtual_method_offsets={:#x}, field_offsets={:#x}, \
          static_field_offsets={:#x}, interface_method_offsets={:#x}",
         table.classes.len(),
@@ -172,7 +175,12 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
             (class.virtual_method_start, class.virtual_method_count)
         };
 
-        let vtable = build_dispatch_table(core, index, start, count)?;
+        let first_slot = if table.classes[index as usize].name == "org/kwis/msp/media/Clip" {
+            FIRST_CLASS_SLOT + 3
+        } else {
+            FIRST_CLASS_SLOT
+        };
+        let vtable = build_dispatch_table(core, index, start, count, first_slot)?;
 
         // Eight bytes is the smallest allocation that reads back distinctly;
         // nothing inspects the contents, the address is the identity.
@@ -193,7 +201,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 
     // Objects of a class the application never declared still get called on,
     // so they need a table too.
-    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0)?;
+    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0, FIRST_CLASS_SLOT)?;
     handles.set_fallback_dispatch_table(fallback);
 
     tracing::debug!("LGT fallback dispatch table at {fallback:#x}");
@@ -217,12 +225,18 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 /// short table leaves that slot zero and the branch goes to address zero, so
 /// the slots a class does not declare are filled with stubs that report what
 /// was called instead.
-fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32) -> Result<u32> {
+fn build_dispatch_table(
+    core: &mut ArmCore,
+    class_index: u32,
+    start: u32,
+    count: u32,
+    first_slot: u32,
+) -> Result<u32> {
     let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
     write_generic(core, vtable, 0u32)?;
 
     for slot in 0..DISPATCH_TABLE_SLOTS {
-        let declared = slot.checked_sub(FIRST_CLASS_SLOT).filter(|index| *index < count);
+        let declared = slot.checked_sub(first_slot).filter(|index| *index < count);
 
         let svc = if let Some(index) = declared {
             JAVA_VIRTUAL_METHOD_SVC_BASE + start + index
@@ -282,11 +296,23 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
             continue;
         };
         let Some(slot) = table.virtual_slot(index) else { continue };
-        let slot = slot + FIRST_CLASS_SLOT;
+        let class_name = table.class_name(member.class_index);
+
+        // Clip extends BaseClip. Object occupies slots 1..9 and BaseClip
+        // occupies slots 10..12, so Clip's own methods begin at slot 13.
+        let first_slot = if class_name == "org/kwis/msp/media/Clip" {
+            FIRST_CLASS_SLOT + 3
+        } else {
+            FIRST_CLASS_SLOT
+        };
+        let slot = slot + first_slot;
 
         write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
 
-        tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
+        tracing::trace!(
+            "LGT virtual method[{index}] {} -> slot {slot}",
+            table.describe(member)
+        );
     }
 
     build_dispatch_tables(core, handles, table)?;

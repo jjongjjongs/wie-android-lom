@@ -64,6 +64,7 @@ const MAX_SUPERCLASS_DEPTH: usize = 32;
 struct InitSvcContext {
     wipic_category: u32,
     stdlib_category: u32,
+    system: System,
     jvm: Jvm,
     java_handles: JavaHandles,
     imported_classes: ImportedClasses,
@@ -78,7 +79,12 @@ struct InitSvcContext {
     array_classes: ArrayClasses,
 }
 
-fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, image_ranges: ImageRanges) -> Result<()> {
+fn register_init_svc_handler(
+    core: &mut ArmCore,
+    system: &System,
+    jvm: &Jvm,
+    image_ranges: ImageRanges,
+) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
     core.register_svc_handler(
@@ -87,6 +93,7 @@ fn register_init_svc_handler(core: &mut ArmCore, jvm: &Jvm, image_ranges: ImageR
         &InitSvcContext {
             wipic_category: SVC_CATEGORY_WIPIC,
             stdlib_category: SVC_CATEGORY_STDLIB,
+            system: system.clone(),
             jvm: jvm.clone(),
             java_handles,
             imported_classes: Default::default(),
@@ -176,7 +183,10 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         let a1 = core.read_param(1)?;
         let a2 = core.read_param(2)?;
         let a3 = core.read_param(3)?;
-        tracing::warn!("lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+
+        tracing::warn!(
+            "lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})"
+        );
         // `vm_check_stack_overflow(words)`, which the compiled code calls at
         // the head of every method with the frame it is about to use. It was
         // read as an allocator, which meant a heap allocation per call whose
@@ -184,6 +194,32 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // and it has room.
         if function_index == 0x54 {
             tracing::trace!("vm_check_stack_overflow({a0})");
+            0u32.write(core, lr)?;
+            return Ok(());
+        }
+
+        if function_index == 0x55 {
+            tracing::trace!("vm_thread_reschedule()");
+            context.system.yield_now().await;
+            0u32.write(core, lr)?;
+            return Ok(());
+        }
+
+        // `vm_monitor_enter(object)`. Seed1 calls this immediately before
+        // java/lang/Object.wait(JI)V; without acquiring the JVM monitor,
+        // Object.wait fails with IllegalMonitorStateException.
+        if function_index == 0x56 {
+            let Some(instance) = context.java_handles.get(a0) else {
+                return Err(WieError::FatalError(format!(
+                    "vm_monitor_enter({a0:#x}) names no JVM instance"
+                )));
+            };
+
+            tracing::trace!("vm_monitor_enter({a0:#x})");
+            if let Err(error) = context.jvm.monitor_enter(&instance).await {
+                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+            }
+
             0u32.write(core, lr)?;
             return Ok(());
         }
@@ -244,16 +280,23 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             write_generic(core, data + 16, 4u16)?;
             write_generic(core, data + 18, 0u16)?;
 
-            let vtable = activate_dispatch_table(core, context, root)?;
+            let instance_vtable = activate_dispatch_table(core, context, root)?;
+            let class_vtable = context.java_handles.fallback_dispatch_table();
+
+            // Keep the activated java/lang/Class-like object distinct from
+            // instances of the application class. The original runtime gives
+            // the activated handle java/lang/Class's table and reaches the
+            // application instance table through the class metadata.
+            write_generic(core, data + 12, instance_vtable)?;
 
             let activated = Allocator::alloc(core, 12)?;
-            write_generic(core, activated, vtable)?;
+            write_generic(core, activated, class_vtable)?;
             write_generic(core, activated + 4, 0u32)?;
             write_generic(core, activated + 8, data)?;
 
             context.java_activated_classes.lock().insert(root, activated);
 
-            tracing::debug!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, vtable={vtable:#x}");
+            tracing::debug!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, class_vtable={class_vtable:#x}, instance_vtable={instance_vtable:#x}");
 
             activated.write(core, lr)?;
             return Ok(());
@@ -309,7 +352,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         if function_index == 0x0f {
             let instance = instantiate(core, context, a0).await?;
 
-            tracing::debug!("LGT vm_instantiate({a0:#x}) -> {instance:#x}");
+            tracing::debug!("LGT vm_instantiate({a0:#x}, lr={lr:#x}) -> {instance:#x}");
 
             instance.write(core, lr)?;
             return Ok(());
@@ -551,6 +594,47 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
     if vtable == 0 {
         let inherited = platform_superclass_dispatch_table(context, root);
 
+        // Seed1's `o` declares a 30-slot instance table but leaves the
+        // prebuilt table pointer null. Its compiler-emitted virtual-method
+        // row 28 names o.a(II)V, which is the ninth instance method and
+        // therefore occupies dispatch slot 18 after the ten reserved slots.
+        //
+        // Keep this narrowly scoped as a diagnostic until the generic
+        // application-vtable synthesis rule is established.
+        if root == 0x0140_14d8 && slots == 30 {
+            const SEED1_O_A_II_ENTRY: u32 = 0x0001_6ca0;
+            const SEED1_O_A_II_SLOT: u32 = 18;
+            const SEED1_O_A_II_ROW: u32 = 28;
+
+            let installed = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
+            write_generic(core, installed, root)?;
+
+            for slot in 0..DISPATCH_TABLE_SLOTS {
+                let entry: u32 = read_generic(core, inherited + 4 + slot * 4)?;
+                write_generic(core, installed + 4 + slot * 4, entry)?;
+            }
+
+            write_generic(
+                core,
+                installed + 4 + SEED1_O_A_II_SLOT * 4,
+                SEED1_O_A_II_ENTRY,
+            )?;
+
+            if let Some(table) = context.imported_classes.lock().as_ref() {
+                write_generic(
+                    core,
+                    table.outputs.virtual_method_offsets + SEED1_O_A_II_ROW * 2,
+                    SEED1_O_A_II_SLOT as u16,
+                )?;
+            }
+
+            tracing::debug!(
+                "Seed1 vtable compatibility: root={root:#x}, installed={installed:#x}, virtual_method[28] -> slot 18 -> {SEED1_O_A_II_ENTRY:#x}"
+            );
+
+            return Ok(installed);
+        }
+
         tracing::debug!(
             "LGT class at {root:#x} carries no dispatch table; using {}",
             if inherited == fallback { "the fallback" } else { "its superclass's" }
@@ -688,7 +772,7 @@ async fn instantiate(core: &mut ArmCore, context: &mut InitSvcContext, token: u3
         .is_some_and(|table| table.class_of_object(token).is_some());
 
     if known_platform_class {
-        return instantiate_imported_class(core, context, token);
+        return instantiate_imported_class(core, context, token).await;
     }
 
     instantiate_app_class(core, context, token).await
@@ -744,7 +828,8 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
     // `vm_instantiate`, so `vm_instantiate` had nothing left to do. It is
     // `vm_check_stack_overflow`, the object was never allocated, and
     // allocating it is the whole job.
-    let vtable: u32 = read_generic(core, handle)?;
+    let activated_data: u32 = read_generic(core, handle + 8)?;
+    let vtable: u32 = read_generic(core, activated_data + 12)?;
 
     let object = context.java_handles.allocate_instance(vtable)?;
 
@@ -757,7 +842,11 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
 
 /// Allocates an instance of the class a token names, with its dispatch table
 /// installed.
-fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcContext, class_object: u32) -> Result<u32> {
+async fn instantiate_imported_class(
+    _core: &mut ArmCore,
+    context: &mut InitSvcContext,
+    class_object: u32,
+) -> Result<u32> {
     let imported_classes = context.imported_classes.clone();
     let table = imported_classes.lock();
 
@@ -765,7 +854,11 @@ fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcContext,
         let index = table.class_of_object(class_object)?;
         let class = table.classes.get(index as usize)?;
 
-        Some((class.name.clone(), *table.vtables.get(index as usize)?, class.field_count))
+        Some((
+            class.name.clone(),
+            *table.vtables.get(index as usize)?,
+            class.field_count,
+        ))
     });
 
     let Some((name, vtable, field_count)) = layout else {
@@ -777,11 +870,23 @@ fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcContext,
 
     let _ = field_count;
 
-    let instance = context.java_handles.allocate_instance(vtable)?;
+    let object = context.java_handles.allocate_instance(vtable)?;
 
-    tracing::debug!("LGT new {name} instance at {instance:#x}, dispatch table {vtable:#x}");
+    match context.jvm.instantiate_class(&name).await {
+        Ok(instance) => {
+            context.java_handles.bind(object, instance);
+            tracing::debug!(
+                "LGT new {name} instance at {object:#x}, dispatch table {vtable:#x}, JVM instance bound"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                "LGT could not create uninitialized JVM instance for {name} at {object:#x}: {error:?}"
+            );
+        }
+    }
 
-    Ok(instance)
+    Ok(object)
 }
 
 /// Reports a call through one of the reserved rows at the head of a class's
@@ -847,11 +952,18 @@ const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
     ("java/lang/StringBuffer", 18, "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
     // Legend of Master reaches append(int) through platform dispatch slot 23.
     ("java/lang/StringBuffer", 23, "append", "(I)Ljava/lang/StringBuffer;"),
-    // `dt_java_lang_String` maps slot 33 to String.trim().
+    // `dt_java_lang_String` maps slot 10 to String.length() and
+    // slot 33 to String.trim().
+    ("java/lang/String", 10, "length", "()I"),
+    ("java/lang/String", 11, "charAt", "(I)C"),
     ("java/lang/String", 33, "trim", "()Ljava/lang/String;"),
     ("java/lang/Class", 16, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;"),
+    ("java/io/ByteArrayInputStream", 11, "read", "([B)I"),
     ("java/io/ByteArrayInputStream", 12, "read", "([BII)I"),
+    ("java/io/ByteArrayInputStream", 14, "available", "()I"),
     ("java/io/ByteArrayInputStream", 15, "close", "()V"),
+    // Clip inherits BaseClip's virtual methods after Object slots 1..9.
+    ("org/kwis/msp/media/Clip", 12, "availableDataSize", "()I"),
 ];
 
 /// Slots 1 to 9 of every dispatch table, which the platform fills in for the
@@ -868,9 +980,9 @@ const OBJECT_DISPATCH_SLOTS: &[(&str, &str)] = &[
     ("toString", "()Ljava/lang/String;"),
     ("notify", "()V"),
     ("notifyAll", "()V"),
-    ("wait", "()V"),
     ("wait", "(J)V"),
     ("wait", "(JI)V"),
+    ("wait", "()V"),
 ];
 
 /// Reports a call through a dispatch table slot the class does not declare.
@@ -966,7 +1078,7 @@ pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, dat
     let (entrypoint, image_ranges) = load_executable(core, data)?;
     register_wipic_svc_handler(core, system, jvm)?;
     register_stdlib_svc_handler(core, system)?;
-    register_init_svc_handler(core, jvm, Arc::new(image_ranges))?;
+    register_init_svc_handler(core, system, jvm, Arc::new(image_ranges))?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
     let ptr_init_param_2 = Allocator::alloc(core, size_of::<InitParam2>() as u32)?;
