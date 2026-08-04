@@ -225,13 +225,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 /// short table leaves that slot zero and the branch goes to address zero, so
 /// the slots a class does not declare are filled with stubs that report what
 /// was called instead.
-fn build_dispatch_table(
-    core: &mut ArmCore,
-    class_index: u32,
-    start: u32,
-    count: u32,
-    first_slot: u32,
-) -> Result<u32> {
+fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32, first_slot: u32) -> Result<u32> {
     let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
     write_generic(core, vtable, 0u32)?;
 
@@ -309,10 +303,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
 
         write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
 
-        tracing::trace!(
-            "LGT virtual method[{index}] {} -> slot {slot}",
-            table.describe(member)
-        );
+        tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
     }
 
     build_dispatch_tables(core, handles, table)?;

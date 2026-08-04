@@ -79,12 +79,7 @@ struct InitSvcContext {
     array_classes: ArrayClasses,
 }
 
-fn register_init_svc_handler(
-    core: &mut ArmCore,
-    system: &System,
-    jvm: &Jvm,
-    image_ranges: ImageRanges,
-) -> Result<()> {
+fn register_init_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm, image_ranges: ImageRanges) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
     core.register_svc_handler(
@@ -184,9 +179,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         let a2 = core.read_param(2)?;
         let a3 = core.read_param(3)?;
 
-        tracing::warn!(
-            "lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})"
-        );
+        tracing::warn!("lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
         // `vm_check_stack_overflow(words)`, which the compiled code calls at
         // the head of every method with the frame it is about to use. It was
         // read as an allocator, which meant a heap allocation per call whose
@@ -210,9 +203,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // Object.wait fails with IllegalMonitorStateException.
         if function_index == 0x56 {
             let Some(instance) = context.java_handles.get(a0) else {
-                return Err(WieError::FatalError(format!(
-                    "vm_monitor_enter({a0:#x}) names no JVM instance"
-                )));
+                return Err(WieError::FatalError(format!("vm_monitor_enter({a0:#x}) names no JVM instance")));
             };
 
             tracing::trace!("vm_monitor_enter({a0:#x})");
@@ -296,7 +287,9 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             context.java_activated_classes.lock().insert(root, activated);
 
-            tracing::debug!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, class_vtable={class_vtable:#x}, instance_vtable={instance_vtable:#x}");
+            tracing::debug!(
+                "LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, class_vtable={class_vtable:#x}, instance_vtable={instance_vtable:#x}"
+            );
 
             activated.write(core, lr)?;
             return Ok(());
@@ -614,11 +607,7 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
                 write_generic(core, installed + 4 + slot * 4, entry)?;
             }
 
-            write_generic(
-                core,
-                installed + 4 + SEED1_O_A_II_SLOT * 4,
-                SEED1_O_A_II_ENTRY,
-            )?;
+            write_generic(core, installed + 4 + SEED1_O_A_II_SLOT * 4, SEED1_O_A_II_ENTRY)?;
 
             if let Some(table) = context.imported_classes.lock().as_ref() {
                 write_generic(
@@ -842,11 +831,7 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
 
 /// Allocates an instance of the class a token names, with its dispatch table
 /// installed.
-async fn instantiate_imported_class(
-    _core: &mut ArmCore,
-    context: &mut InitSvcContext,
-    class_object: u32,
-) -> Result<u32> {
+async fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcContext, class_object: u32) -> Result<u32> {
     let imported_classes = context.imported_classes.clone();
     let table = imported_classes.lock();
 
@@ -854,11 +839,7 @@ async fn instantiate_imported_class(
         let index = table.class_of_object(class_object)?;
         let class = table.classes.get(index as usize)?;
 
-        Some((
-            class.name.clone(),
-            *table.vtables.get(index as usize)?,
-            class.field_count,
-        ))
+        Some((class.name.clone(), *table.vtables.get(index as usize)?, class.field_count))
     });
 
     let Some((name, vtable, field_count)) = layout else {
@@ -875,14 +856,10 @@ async fn instantiate_imported_class(
     match context.jvm.instantiate_class(&name).await {
         Ok(instance) => {
             context.java_handles.bind(object, instance);
-            tracing::debug!(
-                "LGT new {name} instance at {object:#x}, dispatch table {vtable:#x}, JVM instance bound"
-            );
+            tracing::debug!("LGT new {name} instance at {object:#x}, dispatch table {vtable:#x}, JVM instance bound");
         }
         Err(error) => {
-            tracing::warn!(
-                "LGT could not create uninitialized JVM instance for {name} at {object:#x}: {error:?}"
-            );
+            tracing::warn!("LGT could not create uninitialized JVM instance for {name} at {object:#x}: {error:?}");
         }
     }
 

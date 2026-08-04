@@ -194,9 +194,7 @@ pub fn as_proto(class: &AppClass) -> JavaClassProto<CompiledContext> {
     // Seed1's Runnable implementation `p` has no external method table,
     // although its prebuilt dispatch table contains run()V at 0x175fc.
     // Add the minimum bridge needed to let java.lang.Thread invoke it.
-    if class.name == "p"
-        && methods.iter().all(|method| method.name != "run" || method.descriptor != "()V")
-    {
+    if class.name == "p" && methods.iter().all(|method| method.name != "run" || method.descriptor != "()V") {
         let body = CompiledMethod {
             class_name: class.name.clone(),
             name: "run".to_owned(),
@@ -219,9 +217,7 @@ pub fn as_proto(class: &AppClass) -> JavaClassProto<CompiledContext> {
 
     // Seed1 stores p's Runnable interface in an alternate metadata slot
     // that the current generic parser does not yet recognise.
-    if class.name == "p"
-        && !interface_names.iter().any(|interface| interface == "java/lang/Runnable")
-    {
+    if class.name == "p" && !interface_names.iter().any(|interface| interface == "java/lang/Runnable") {
         interface_names.push("java/lang/Runnable".to_owned());
     }
 
