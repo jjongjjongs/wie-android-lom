@@ -232,14 +232,18 @@ pub async fn clip_alloc_player(context: &mut dyn WIPICContext, clip: WIPICWord, 
     // it allocates - the same start `MC_mdaPlay` performs. Gamevil titles
     // (ZENONIA 1-3, HYBRID 1/2, ADVENA) lean on this: they set one clip up,
     // allocate its player, and never call `MC_mdaPlay`, so this is the only
-    // thing that would ever make them play. It loops, as background music does,
-    // and a looping playback survives the `MC_mdaStop` these titles issue
-    // constantly (see `Audio::stop_soft`). A title that means to drive playback
-    // itself, like MapleStory, calls `MC_mdaPlay` next, which simply restarts.
+    // thing that would ever make them play. It plays once - the clip is a jingle
+    // like a startup logo, not a loop - but the playback is protected so the
+    // `MC_mdaStop` these titles issue constantly does not cut it short (see
+    // `Audio::protect`). A title that means to drive playback itself, like
+    // MapleStory, calls `MC_mdaPlay` next, which simply restarts.
     if param == 0 {
         let system = context.system();
-        if let Err(x) = system.audio().play(system, clip_data.handle, true) {
+        let mut audio = system.audio();
+        if let Err(x) = audio.play(system, clip_data.handle, false) {
             tracing::error!("Failed to start audio on player alloc: {x:?}");
+        } else {
+            audio.protect(clip_data.handle);
         }
     }
 
