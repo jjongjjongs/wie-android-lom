@@ -25,6 +25,13 @@ pub struct Audio {
     sink: Arc<Box<dyn AudioSink>>,
     files: BTreeMap<AudioHandle, AudioFile>,
     playing: BTreeMap<AudioHandle, Arc<AtomicBool>>,
+    // Handles whose current playback loops. A looping playback is background
+    // music, and `stop_soft` - the stop a title reaches through `MC_mdaStop` -
+    // leaves it be. Only replacing it with another `play`, or freeing the clip,
+    // ends it. Gamevil titles set one clip looping and then stop it on nearly
+    // every frame; on the handset that stop does not silence the music, and
+    // honouring it here left them mute.
+    looping: BTreeSet<AudioHandle>,
     last_audio_handle: AudioHandle,
 }
 
@@ -34,6 +41,7 @@ impl Audio {
             sink: Arc::new(sink),
             files: BTreeMap::new(),
             playing: BTreeMap::new(),
+            looping: BTreeSet::new(),
             last_audio_handle: 0,
         }
     }
@@ -61,6 +69,11 @@ impl Audio {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_clone = stop_flag.clone();
         self.playing.insert(audio_handle, stop_flag);
+        if repeat {
+            self.looping.insert(audio_handle);
+        } else {
+            self.looping.remove(&audio_handle);
+        }
 
         // TODO use dedicated audio player task
         system.spawn(async move || {
@@ -73,9 +86,21 @@ impl Audio {
     }
 
     pub fn stop(&mut self, audio_handle: AudioHandle) {
+        self.looping.remove(&audio_handle);
         if let Some(stop_flag) = self.playing.remove(&audio_handle) {
             stop_flag.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// The stop a title asks for through `MC_mdaStop`. It ends a one-shot but
+    /// spares looping background music, which titles routinely "stop" without
+    /// meaning to silence. Freeing the clip or starting a new `play` still ends
+    /// it - those go through [`stop`].
+    pub fn stop_soft(&mut self, audio_handle: AudioHandle) {
+        if self.looping.contains(&audio_handle) {
+            return;
+        }
+        self.stop(audio_handle);
     }
 
     pub fn close(&mut self, audio_handle: AudioHandle) -> Result<(), AudioError> {
