@@ -8,7 +8,7 @@ use alloc::{string::String, vec, vec::Vec};
 
 use wie_backend::{
     Event,
-    canvas::{Clip, Color, PixelType, Rgb8Pixel, Rgb565Pixel, TextAlignment, string_width},
+    canvas::{Canvas, Clip, Color, Image, PixelType, Rgb8Pixel, Rgb565Pixel, TextAlignment, string_width},
 };
 use wie_util::{Result, read_generic, read_null_terminated_string_bytes, write_generic};
 
@@ -395,10 +395,12 @@ pub async fn draw_image(
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
     let image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
 
-    // The img plane is a 16bpp colour buffer for titles that read image memory
-    // directly; compositing goes through the full-colour mask plane so per-pixel
-    // alpha survives. Older images without a mask still composite from img.
-    let source = if image.mask.buf.0 != 0 { image.mask } else { image.img };
+    // An image that carries alpha keeps the full colour in the mask plane, and
+    // its per-pixel alpha composites straight. One without a mask is a 16bpp
+    // colour plane whose transparency is the magenta key instead, so it is
+    // keyed rather than blended.
+    let keyed = image.mask.buf.0 == 0;
+    let source = if keyed { image.img } else { image.mask };
     let src_image = FrameBuffer(source).image(context)?;
     let mut canvas = framebuffer.canvas(context)?;
 
@@ -409,7 +411,11 @@ pub async fn draw_image(
         height: h as _,
     };
 
-    canvas.draw(dx as _, dy as _, w as _, h as _, &*src_image, sx as _, sy as _, clip);
+    if keyed {
+        blit_magenta_keyed(&mut **canvas, dx, dy, w, h, &*src_image, sx, sy);
+    } else {
+        canvas.draw(dx as _, dy as _, w as _, h as _, &*src_image, sx as _, sy as _, clip);
+    }
     canvas.flush()?;
 
     Ok(())
@@ -572,45 +578,49 @@ pub async fn copy_frame_buffer(
     let src_image = src_framebuffer.image(context)?;
     let mut dst_canvas = dst_framebuffer.canvas(context)?;
 
-    let clip = Clip {
-        x: dx as _,
-        y: dy as _,
-        width: w as _,
-        height: h as _,
-    };
+    blit_magenta_keyed(&mut **dst_canvas, dx, dy, w, h, &*src_image, sx, sy);
+    dst_canvas.flush()?;
 
-    let src_w = src_image.width() as i64;
-    let src_h = src_image.height() as i64;
-    let dst_w = dst_canvas.image().width() as i64;
-    let dst_h = dst_canvas.image().height() as i64;
+    Ok(())
+}
+
+/// Whether a colour is the magenta (RGB565 `0xF81F`) that feature-phone titles
+/// reserve as a transparent colour key. The top five red and blue bits and no
+/// green survive the round trip through a 16bpp buffer as exactly `255, 0, 255`.
+fn is_transparent_key(color: Color) -> bool {
+    color.r >= 0xf8 && color.g <= 0x07 && color.b >= 0xf8
+}
+
+/// Copies `src` onto `canvas`, skipping magenta source pixels. A title draws a
+/// layer over a magenta fill and blits it expecting the magenta keyed out; the
+/// graphics context carries no transparent pixel for these blits, so the
+/// convention is honoured here rather than read from it.
+fn blit_magenta_keyed(canvas: &mut dyn Canvas, dx: i32, dy: i32, w: i32, h: i32, src: &dyn Image, sx: i32, sy: i32) {
+    let src_w = src.width() as i64;
+    let src_h = src.height() as i64;
+    let dst_w = canvas.image().width() as i64;
+    let dst_h = canvas.image().height() as i64;
 
     for row in 0..h as i64 {
         let sy_px = sy as i64 + row;
         let dy_px = dy as i64 + row;
-        if sy_px < 0 || sy_px >= src_h || dy_px < clip.y as i64 || dy_px >= dst_h {
+        if sy_px < 0 || sy_px >= src_h || dy_px < 0 || dy_px >= dst_h {
             continue;
         }
         for col in 0..w as i64 {
             let sx_px = sx as i64 + col;
             let dx_px = dx as i64 + col;
-            if sx_px < 0 || sx_px >= src_w || dx_px < clip.x as i64 || dx_px >= dst_w {
+            if sx_px < 0 || sx_px >= src_w || dx_px < 0 || dx_px >= dst_w {
                 continue;
             }
 
-            let color = src_image.get_pixel(sx_px as i32, sy_px as i32);
-            // Feature-phone titles reserve magenta (RGB565 0xF81F) as the
-            // transparent colour of an offscreen layer, then copy the layer over
-            // the screen expecting it keyed out. The graphics context carries no
-            // transparent pixel for these copies, so honour the convention here.
-            if color.r >= 0xf8 && color.g <= 0x07 && color.b >= 0xf8 {
+            let color = src.get_pixel(sx_px as i32, sy_px as i32);
+            if is_transparent_key(color) {
                 continue;
             }
-            dst_canvas.put_pixel(dx_px as i32, dy_px as i32, color);
+            canvas.put_pixel(dx_px as i32, dy_px as i32, color);
         }
     }
-    dst_canvas.flush()?;
-
-    Ok(())
 }
 
 pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32) -> Result<i32> {
