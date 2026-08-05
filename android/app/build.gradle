@@ -1,6 +1,4 @@
-plugins {
-    id 'com.android.application'
-}
+apply plugin: 'com.android.application'
 
 // The emulator core is Rust. `cargo ndk` cross-compiles the workspace's
 // `wie_android` crate and drops one .so per ABI into `jniLibsDir`, which is
@@ -13,7 +11,8 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.jjongjjongs.wiemobile'
+        applicationId providers.gradleProperty('applicationId')
+                .getOrElse('com.jjongjjongs.wiemobile')
         minSdk 24
         targetSdk 35
         versionCode 1
@@ -22,6 +21,14 @@ android {
         ndk {
             //noinspection ChromeOsAbiSupport
             abiFilters.addAll(abis)
+        }
+
+        if (!project.hasProperty('skipCmake')) {
+            externalNativeBuild {
+                cmake {
+                    arguments '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                }
+            }
         }
     }
 
@@ -40,6 +47,18 @@ android {
     sourceSets {
         main {
             jniLibs.srcDirs = [jniLibsDir]
+            if (project.hasProperty('precompiledJava')) {
+                java.srcDirs = []
+            }
+        }
+    }
+
+    if (!project.hasProperty('skipCmake')) {
+        externalNativeBuild {
+            cmake {
+                path file('src/main/cpp/CMakeLists.txt')
+                version '3.22.1'
+            }
         }
     }
 
@@ -48,6 +67,10 @@ android {
             // The library is loaded straight from the apk; nothing unpacks it.
             useLegacyPackaging false
         }
+    }
+
+    androidResources {
+        noCompress += ['wav', 'mp3']
     }
 }
 
@@ -69,12 +92,43 @@ tasks.register('cargoBuild', Exec) {
     def profile = 'release'
     def args = ['cargo', 'ndk', '-o', jniLibsDir.absolutePath]
     abis.each { args += ['-t', it] }
-    args += ['build', "--${profile}", '-p', 'wie_android']
+    args += ['build', "--${profile}", '-p', 'wie_android', '-p', 'wie_midi']
 
     commandLine args
 
     doFirst {
+        def soundFont = rootProject.projectDir.parentFile.toPath().resolve('wie_midi/soundfont.sf2').toFile()
+        if (!soundFont.isFile()) {
+            throw new GradleException('Missing local wie_midi/soundfont.sf2')
+        }
         jniLibsDir.mkdirs()
+    }
+}
+
+dependencies {
+    if (project.hasProperty('precompiledJava')) {
+        implementation files('precompiled-validation.jar')
+    }
+}
+
+tasks.register('verifyLocalAudio') {
+    description = 'Checks private audio inputs required for the tested Zenonia build'
+    group = 'verification'
+
+    doLast {
+        def root = rootProject.projectDir.parentFile
+        def required = [zenonia1: 51, zenonia2: 16, zenonia3: 17]
+        required.each { name, count ->
+            def directory = new File(project.projectDir, "src/main/assets/${name}")
+            def files = directory.isDirectory() ? directory.listFiles()?.findAll { it.isFile() } : []
+            if (files == null || files.size() != count) {
+                throw new GradleException("Missing local ${name} audio: expected ${count} files in ${directory}")
+            }
+        }
+        def soundFont = new File(root, 'wie_midi/soundfont.sf2')
+        if (!soundFont.isFile()) {
+            throw new GradleException("Missing local MIDI soundfont: ${soundFont}")
+        }
     }
 }
 
@@ -82,5 +136,8 @@ tasks.configureEach { task ->
     // `preBuild` is the last point before AGP starts collecting jniLibs.
     if (task.name == 'preBuild' && !project.hasProperty('skipCargo')) {
         task.dependsOn tasks.named('cargoBuild')
+    }
+    if (task.name == 'preBuild') {
+        task.dependsOn tasks.named('verifyLocalAudio')
     }
 }

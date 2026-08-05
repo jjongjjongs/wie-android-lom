@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, format};
-use core::{array, cell::RefCell};
+use core::array;
 
 use arm32_cpu::{Cpu, Memory, Mode, reg};
 
@@ -20,8 +20,9 @@ impl Arm32CpuEngine {
         }
     }
 
-    fn is_svc_exception(&self) -> bool {
-        self.cpu.reg_get(Mode::User, reg::PC) == 0x08 && (self.cpu.reg_get(Mode::User, reg::CPSR) & 0x1f) == 0x13
+    #[inline(always)]
+    fn is_svc_exception(&self, pc: u32) -> bool {
+        pc == 0x08 && (self.cpu.reg_get(Mode::User, reg::CPSR) & 0x1f) == 0x13
     }
 
     fn read_svc_result(&mut self) -> Result<EngineRunResult> {
@@ -47,7 +48,7 @@ impl ArmEngine for Arm32CpuEngine {
         loop {
             let pc = self.cpu.reg_get(Mode::User, reg::PC);
 
-            if self.is_svc_exception() {
+            if self.is_svc_exception(pc) {
                 return self.read_svc_result();
             }
 
@@ -224,21 +225,23 @@ impl EmulatedMemory {
 
 struct Arm32CpuMemory<'a> {
     emulated_memory: &'a mut EmulatedMemory,
-    memory_error: RefCell<Option<u32>>,
+    memory_error: Option<u32>,
 }
 
 impl<'a> Arm32CpuMemory<'a> {
     fn new(emulated_memory: &'a mut EmulatedMemory) -> Self {
         Self {
             emulated_memory,
-            memory_error: RefCell::new(None),
+            memory_error: None,
         }
     }
 
+    #[inline(always)]
     fn memory_error(&self) -> Option<u32> {
-        *self.memory_error.borrow()
+        self.memory_error
     }
 
+    #[inline(always)]
     fn get_page(&mut self, addr: u32) -> Option<&mut [u8; PAGE_SIZE]> {
         let page_address = addr & !PAGE_MASK;
         let page_data = self.emulated_memory.pages[page_address as usize / PAGE_SIZE].as_mut();
@@ -246,13 +249,14 @@ impl<'a> Arm32CpuMemory<'a> {
         if let Some(x) = page_data {
             Some(x)
         } else {
-            *self.memory_error.borrow_mut() = Some(addr);
+            self.memory_error = Some(addr);
             None
         }
     }
 }
 
 impl Memory for Arm32CpuMemory<'_> {
+    #[inline(always)]
     fn r8(&mut self, addr: u32) -> u8 {
         let offset = addr & PAGE_MASK;
 
@@ -266,6 +270,7 @@ impl Memory for Arm32CpuMemory<'_> {
         data[offset as usize]
     }
 
+    #[inline(always)]
     fn r16(&mut self, addr: u32) -> u16 {
         let offset = addr & PAGE_MASK;
 
@@ -279,6 +284,7 @@ impl Memory for Arm32CpuMemory<'_> {
         (data[offset as usize] as u16) | ((data[offset as usize + 1] as u16) << 8)
     }
 
+    #[inline(always)]
     fn r32(&mut self, addr: u32) -> u32 {
         let offset = addr & PAGE_MASK;
 
@@ -294,6 +300,7 @@ impl Memory for Arm32CpuMemory<'_> {
             | ((data[offset as usize + 3] as u32) << 24)
     }
 
+    #[inline(always)]
     fn w8(&mut self, addr: u32, val: u8) {
         let offset = addr & PAGE_MASK;
 
@@ -307,6 +314,7 @@ impl Memory for Arm32CpuMemory<'_> {
         data[offset as usize] = val;
     }
 
+    #[inline(always)]
     fn w16(&mut self, addr: u32, val: u16) {
         let offset = addr & PAGE_MASK;
 
@@ -321,6 +329,7 @@ impl Memory for Arm32CpuMemory<'_> {
         data[offset as usize + 1] = (val >> 8) as u8;
     }
 
+    #[inline(always)]
     fn w32(&mut self, addr: u32, val: u32) {
         let offset = addr & PAGE_MASK;
 

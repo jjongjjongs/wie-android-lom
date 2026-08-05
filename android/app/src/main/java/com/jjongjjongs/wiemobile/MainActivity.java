@@ -671,7 +671,9 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        PerformanceTuner.beforeNativeTick();
         String status = NativeBridge.nativeTick(TICK_BUDGET_MS);
+        PerformanceTuner.afterNativeTick();
 
         for (int i = 0; i < MAX_AUDIO_PER_TICK; i++) {
             byte[] command = NativeBridge.nativePollOutput();

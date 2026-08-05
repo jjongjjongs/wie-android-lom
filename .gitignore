@@ -1,9 +1,23 @@
 /target
 .vscode
-.cargo
+/.cargo/*
+!/.cargo/config.toml
 
 # Android
 /android/.gradle
 /android/build
 /android/app/build
+/android/app/.cxx
+/android/app/precompiled-validation-classes/
+/android/app/precompiled-validation.jar
 /android/local.properties
+
+# Local Cargo checkout marker; the vendored source itself is tracked.
+/third_party/arm32_cpu/.cargo-ok
+
+# Optional proprietary game-audio replacements. Keep these local; use audio
+# from copies of the games owned by the user.
+/android/app/src/main/assets/zenonia1/
+/android/app/src/main/assets/zenonia2/
+/android/app/src/main/assets/zenonia3/
+/wie_midi/soundfont.sf2

@@ -3,3 +3,11 @@
 -keepclasseswithmembernames class com.jjongjjongs.wiemobile.NativeBridge {
     native <methods>;
 }
+
+-keepclasseswithmembernames class com.jjongjjongs.wiemobile.NativeWaveBridge {
+    native <methods>;
+}
+
+-keepclasseswithmembernames class com.jjongjjongs.wiemobile.MidiSynthBridge {
+    native <methods>;
+}

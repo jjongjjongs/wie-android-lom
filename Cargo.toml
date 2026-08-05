@@ -15,6 +15,7 @@ members = [
     "wie_ktf_dump",
     "wie_lgt",
     "wie_skt",
+    "wie_midi",
 ]
 
 default-members = ["wie_cli"]

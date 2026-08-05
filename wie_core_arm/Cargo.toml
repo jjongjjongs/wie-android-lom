@@ -13,7 +13,7 @@ spin = { workspace = true }
 toml = { version = "^1", default-features = false, features = ["parse", "serde"] }
 tracing = { workspace = true }
 
-arm32_cpu = { git = "https://github.com/dlunch/arm32_cpu.git" }
+arm32_cpu = { path = "../third_party/arm32_cpu" }
 
 wie_backend = { workspace = true }
 wie_util = { workspace = true }

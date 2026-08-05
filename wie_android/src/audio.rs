@@ -24,6 +24,10 @@ use crate::{
     ma3::{CHANNELS, SAMPLE_RATE},
     platform::Shared,
 };
+use std::{
+    ffi::c_void,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
 const OPCODE_PLAY_WAVE: u8 = 1;
 const OPCODE_STREAM: u8 = 2;
@@ -32,6 +36,29 @@ const OPCODE_VIBRATE: u8 = 8;
 /// Header length shared by both commands; `AndroidAudioOutput` rejects
 /// anything shorter.
 const HEADER_LEN: usize = 10;
+
+type WaveCallback = unsafe extern "C" fn(u8, u32, *const i16, usize) -> u8;
+
+static WAVE_CALLBACK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Installs an optional host-side low-latency wave handler.
+///
+/// The stable symbol lets the Android audio helper register without patching
+/// a build-specific instruction address inside this library.
+#[unsafe(no_mangle)]
+pub extern "C" fn wie_set_wave_callback(callback: *mut c_void) {
+    WAVE_CALLBACK.store(callback, Ordering::Release);
+}
+
+fn wave_callback_consumed(channel: u8, sampling_rate: u32, wave_data: &[i16]) -> bool {
+    let callback = WAVE_CALLBACK.load(Ordering::Acquire);
+    if callback.is_null() {
+        return false;
+    }
+
+    let callback: WaveCallback = unsafe { std::mem::transmute(callback) };
+    unsafe { callback(channel, sampling_rate, wave_data.as_ptr(), wave_data.len()) != 0 }
+}
 
 pub fn vibrate_command(duration_ms: u64, intensity: u8) -> Vec<u8> {
     let mut command = Vec::with_capacity(HEADER_LEN);
@@ -85,6 +112,10 @@ impl AndroidAudioSink {
 impl wie_backend::AudioSink for AndroidAudioSink {
     fn play_wave(&self, channel: u8, sampling_rate: u32, wave_data: &[i16]) {
         if wave_data.is_empty() {
+            return;
+        }
+
+        if wave_callback_consumed(channel, sampling_rate, wave_data) {
             return;
         }
 

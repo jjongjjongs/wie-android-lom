@@ -12,6 +12,9 @@ import android.os.Vibrator;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Decodes the byte commands produced by the native audio sink.
@@ -46,13 +49,22 @@ final class AndroidAudioOutput {
 
     private final List<AudioTrack> tracks = new ArrayList<>();
     private final Vibrator vibrator;
+    private final ScheduledExecutorService midiThread;
 
     private AudioTrack stream;
     private int streamRate;
     private int streamChannels;
+    private boolean midiEnabled = true;
 
     AndroidAudioOutput(Context context) {
         this.vibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
+        ZenoniaAudioOverride.initialize(context);
+        midiThread = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "WIE MIDI pump");
+            thread.setDaemon(true);
+            return thread;
+        });
+        midiThread.scheduleAtFixedRate(this::pumpMidi, 0, 20, TimeUnit.MILLISECONDS);
     }
 
     synchronized void handle(byte[] command) {
@@ -62,12 +74,31 @@ final class AndroidAudioOutput {
 
         cleanupFinished();
 
+        int override = ZenoniaAudioOverride.handle(command);
+        if (override != 0) {
+            if (override == 2) {
+                MidiSynthBridge.reset();
+            }
+            return;
+        }
+
         switch (command[0] & 0xFF) {
             case OPCODE_PLAY_WAVE:
                 playWave(command);
                 break;
             case OPCODE_STREAM:
-                writeStream(command);
+                if (command.length >= HEADER_LEN) {
+                    writeStream(command);
+                } else {
+                    MidiSynthBridge.handle(command);
+                }
+                break;
+            case 3:
+            case 4:
+            case 5:
+            case 6:
+            case 7:
+                MidiSynthBridge.handle(command);
                 break;
             case OPCODE_VIBRATE:
                 vibrate(command);
@@ -78,6 +109,9 @@ final class AndroidAudioOutput {
     }
 
     synchronized void pause() {
+        ZenoniaAudioOverride.pause();
+        PcmStreamWriter.pause();
+        midiEnabled = false;
         if (stream != null && stream.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
             try {
                 stream.pause();
@@ -96,6 +130,9 @@ final class AndroidAudioOutput {
     }
 
     synchronized void resume() {
+        ZenoniaAudioOverride.resume();
+        PcmStreamWriter.resume();
+        midiEnabled = true;
         if (stream != null && stream.getState() == AudioTrack.STATE_INITIALIZED
                 && stream.getPlayState() == AudioTrack.PLAYSTATE_PAUSED) {
             try {
@@ -116,6 +153,8 @@ final class AndroidAudioOutput {
     }
 
     synchronized void release() {
+        ZenoniaAudioOverride.release();
+        PcmStreamWriter.release();
         if (stream != null) {
             try {
                 stream.stop();
@@ -135,6 +174,7 @@ final class AndroidAudioOutput {
             track.release();
         }
         tracks.clear();
+        MidiSynthBridge.reset();
     }
 
     /**
@@ -206,41 +246,16 @@ final class AndroidAudioOutput {
      * stalling the thread that is also running the game.
      */
     private void writeStream(byte[] command) {
-        if (command.length < HEADER_LEN) {
+        PcmStreamWriter.enqueue(command);
+    }
+
+    synchronized void pumpMidi() {
+        if (!midiEnabled) {
             return;
         }
-
-        int channels = command[1] & 0xFF;
-        int sampleRate = readInt(command, 2);
-        int byteCount = Math.min(readInt(command, 6) * 2, command.length - HEADER_LEN);
-
-        if (channels < 1 || channels > 2 || sampleRate < MIN_SAMPLE_RATE || sampleRate > MAX_SAMPLE_RATE || byteCount <= 0) {
-            return;
-        }
-
-        if (stream != null && (streamRate != sampleRate || streamChannels != channels)) {
-            stream.release();
-            stream = null;
-        }
-
-        if (stream == null) {
-            stream = openStream(sampleRate, channels);
-            if (stream == null) {
-                return;
-            }
-            streamRate = sampleRate;
-            streamChannels = channels;
-        }
-
-        try {
-            stream.write(command, HEADER_LEN, byteCount, AudioTrack.WRITE_NON_BLOCKING);
-
-            if (stream.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-                stream.play();
-            }
-        } catch (IllegalStateException e) {
-            stream.release();
-            stream = null;
+        byte[] command = MidiSynthBridge.render(20);
+        if (command != null) {
+            writeStream(command);
         }
     }
 
