@@ -8,7 +8,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use wie_backend::{AudioSink, DatabaseRepository, Filesystem, Instant, Platform, Screen, canvas::{Image, PixelType, Rgb565Pixel}};
+use wie_backend::{
+    AudioSink, DatabaseRepository, Filesystem, Instant, Platform, Screen,
+    canvas::{Image, PixelType, Rgb565Pixel},
+};
 use wie_util::Result;
 
 use crate::{audio::AndroidAudioSink, database::AndroidDatabaseRepository, filesystem::AndroidFilesystem, ma3::Synth};

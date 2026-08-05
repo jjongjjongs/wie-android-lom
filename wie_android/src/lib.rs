@@ -172,13 +172,8 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeFrame(
-    env: JNIEnv,
-    _class: JClass,
-) -> jshortArray {
-    let frame = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-        with_runner(|runner| runner.take_frame())
-    })) {
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeFrame(env: JNIEnv, _class: JClass) -> jshortArray {
+    let frame = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_frame()))) {
         Ok(Some(frame)) => frame,
         Ok(None) => return std::ptr::null_mut(),
         Err(_) => {

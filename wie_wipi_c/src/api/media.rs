@@ -76,6 +76,9 @@ struct MdaClip {
 
     // not in sdk, for internal usage
     handle: u32,
+    play_generation: u32,
+    playing: u8,
+    _padding5: [u8; 3],
 }
 
 pub async fn clip_create(context: &mut dyn WIPICContext, ptr_type: WIPICWord, buf_size: WIPICWord, callback: WIPICWord) -> Result<WIPICWord> {
@@ -204,7 +207,7 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
         return Ok(0);
     }
 
-    let clip: MdaClip = read_generic(context, ptr_clip)?;
+    let mut clip: MdaClip = read_generic(context, ptr_clip)?;
     let callback = clip.h_proc as WIPICWord;
 
     let completed = {
@@ -220,47 +223,51 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
         }
     };
 
+    clip.play_generation = clip.play_generation.wrapping_add(1);
+    clip.playing = 1;
+    let generation = clip.play_generation;
+    write_generic(context, ptr_clip, clip)?;
+
     if callback != 0 && repeat == 0 {
         struct PlaybackCompletedCallback {
             completed: Arc<AtomicBool>,
             stopped: Arc<AtomicBool>,
             callback: WIPICWord,
             clip: WIPICWord,
+            generation: u32,
         }
 
         #[async_trait::async_trait]
         impl MethodBody<WieError> for PlaybackCompletedCallback {
-            async fn call(
-                &self,
-                context: &mut dyn WIPICContext,
-                _: Box<[WIPICWord]>,
-            ) -> Result<WIPICResult> {
-                while !self.completed.load(Ordering::Acquire)
-                    && !self.stopped.load(Ordering::Acquire)
-                {
+            async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
+                while !self.completed.load(Ordering::Acquire) && !self.stopped.load(Ordering::Acquire) {
                     context.system().sleep(1).await;
                 }
 
                 if self.stopped.load(Ordering::Acquire) {
-                    tracing::debug!(
-                        "MC_mdaPlay completion callback cancelled for stopped clip {:#x}",
-                        self.clip
-                    );
+                    tracing::debug!("MC_mdaPlay completion callback cancelled for stopped clip {:#x}", self.clip);
 
-                    return Ok(WIPICResult {
-                        results: Vec::new(),
-                    });
+                    return Ok(WIPICResult { results: Vec::new() });
                 }
 
-                tracing::debug!(
-                    "MC_mdaPlay completion callback({:#x}, event=3)",
-                    self.callback
-                );
+                let mut clip: MdaClip = read_generic(context, self.clip)?;
+                if clip.playing == 0 || clip.play_generation != self.generation {
+                    tracing::debug!(
+                        "MC_mdaPlay ignored stale completion for clip {:#x}, generation={}",
+                        self.clip,
+                        self.generation
+                    );
+
+                    return Ok(WIPICResult { results: Vec::new() });
+                }
+
+                clip.playing = 0;
+                write_generic(context, self.clip, clip)?;
+
+                tracing::debug!("MC_mdaPlay completion callback({:#x}, event=3)", self.callback);
                 context.call_function(self.callback, &[self.clip, 3]).await?;
 
-                Ok(WIPICResult {
-                    results: Vec::new(),
-                })
+                Ok(WIPICResult { results: Vec::new() })
             }
         }
 
@@ -269,6 +276,7 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
             stopped,
             callback,
             clip: ptr_clip,
+            generation,
         }))?;
     }
 
@@ -343,11 +351,22 @@ pub async fn stop(context: &mut dyn WIPICContext, ptr_clip: WIPICWord) -> Result
         return Ok(0);
     }
 
-    let clip: MdaClip = read_generic(context, ptr_clip)?;
+    let mut clip: MdaClip = read_generic(context, ptr_clip)?;
+    let was_playing = clip.playing != 0;
+    let callback = clip.h_proc as WIPICWord;
 
-    let system = context.system();
+    if was_playing {
+        clip.playing = 0;
+        clip.play_generation = clip.play_generation.wrapping_add(1);
+        write_generic(context, ptr_clip, clip)?;
+    }
 
-    system.audio().stop(clip.handle);
+    context.system().audio().stop(clip.handle);
+
+    if was_playing && callback != 0 {
+        tracing::debug!("MC_mdaStop callback({callback:#x}, clip={ptr_clip:#x}, event=-1)");
+        context.call_function(callback, &[ptr_clip, (-1i32) as WIPICWord]).await?;
+    }
 
     Ok(0)
 }
