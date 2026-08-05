@@ -103,9 +103,23 @@ struct Slot {
     right_q15: i32,
 }
 
+/// One PCM clip playing through the mix. A file's own recorded sounds - the
+/// combat and impact effects this game keeps as ADPCM rather than as a score -
+/// arrive as [`AudioSink::play_wave`] and are resampled to the stream rate once
+/// here, then advanced a frame at a time in [`Synth::render`]. Folding them into
+/// the stream the FM voices already share means one output path carries both,
+/// rather than a per-clip track that has to open and mix on its own.
+struct SamplePlayback {
+    /// Interleaved stereo at [`SAMPLE_RATE`].
+    frames: Vec<i16>,
+    /// Next frame to emit, in frames (so `pos * CHANNELS` indexes `frames`).
+    pos: usize,
+}
+
 pub struct Synth {
     channels: [Channel; MIDI_CHANNELS],
     voices: Vec<Slot>,
+    samples: Vec<SamplePlayback>,
     bank: Bank,
     /// Voices the running file has defined, so a title playing on stand ins
     /// rather than its own instruments is visible in the log.
@@ -123,9 +137,40 @@ impl Synth {
         Self {
             channels: [Channel::default(); MIDI_CHANNELS],
             voices: Vec::with_capacity(MAX_VOICES),
+            samples: Vec::new(),
             bank: Bank::new(),
             reported_voices: 0,
         }
+    }
+
+    /// Queues a mono PCM clip, resampling it to the stream rate so [`render`]
+    /// can mix it a frame at a time. Empty clips and impossible rates are
+    /// dropped rather than played as a click.
+    ///
+    /// [`render`]: Self::render
+    pub fn queue_wave(&mut self, sampling_rate: u32, mono: &[i16]) {
+        if mono.is_empty() || sampling_rate == 0 {
+            return;
+        }
+
+        // Linear resample to SAMPLE_RATE, duplicated to stereo. These clips are
+        // short, so resampling the whole thing up front keeps render cheap.
+        let out_len = (mono.len() as u64 * SAMPLE_RATE as u64 / sampling_rate as u64) as usize;
+        let mut frames = Vec::with_capacity(out_len * CHANNELS);
+        for i in 0..out_len {
+            let source = i as u64 * sampling_rate as u64;
+            let index = (source / SAMPLE_RATE as u64) as usize;
+            let frac = (source % SAMPLE_RATE as u64) as i32;
+
+            let a = mono[index] as i32;
+            let b = mono[(index + 1).min(mono.len() - 1)] as i32;
+            let sample = (a + (b - a) * frac / SAMPLE_RATE as i32) as i16;
+
+            frames.push(sample);
+            frames.push(sample);
+        }
+
+        self.samples.push(SamplePlayback { frames, pos: 0 });
     }
 
     pub fn note_on(&mut self, channel: u8, note: u8, velocity: u8) {
@@ -265,17 +310,18 @@ impl Synth {
 
     pub fn silence(&mut self) {
         self.voices.clear();
+        self.samples.clear();
         self.channels = [Channel::default(); MIDI_CHANNELS];
         self.bank.clear();
         self.reported_voices = 0;
     }
 
     pub fn sounding(&self) -> bool {
-        !self.voices.is_empty()
+        !self.voices.is_empty() || !self.samples.is_empty()
     }
 
     /// Renders `frames` frames of interleaved stereo, or nothing at all when
-    /// no voice is sounding: silence is better left unqueued than pushed as
+    /// nothing is sounding: silence is better left unqueued than pushed as
     /// zeroes.
     pub fn render(&mut self, frames: usize) -> Option<Vec<i16>> {
         if !self.sounding() {
@@ -299,9 +345,22 @@ impl Synth {
             // percussion ends.
             self.voices.retain(|x| x.voice.audible());
 
+            // The file's own PCM effects sit on top of the FM mix at their
+            // recorded level, sharing the same clamp.
+            for clip in &mut self.samples {
+                if clip.pos * CHANNELS < clip.frames.len() {
+                    left += clip.frames[clip.pos * CHANNELS] as i32;
+                    right += clip.frames[clip.pos * CHANNELS + 1] as i32;
+                    clip.pos += 1;
+                }
+            }
+
             frame[0] = clamp_i16(left as i64) as i16;
             frame[1] = clamp_i16(right as i64) as i16;
         }
+
+        // A clip that has played out gives its slot back, the same as a voice.
+        self.samples.retain(|clip| clip.pos * CHANNELS < clip.frames.len());
 
         Some(output)
     }
@@ -428,6 +487,42 @@ mod tests {
         let mut synth = Synth::new();
 
         assert!(synth.render(256).is_none());
+    }
+
+    #[test]
+    fn a_queued_wave_makes_a_sound() {
+        let mut synth = Synth::new();
+        // A short mono clip at half the stream rate, so it also exercises the
+        // resampler. Full-scale samples so the mix is unmistakably non-zero.
+        let clip = vec![i16::MAX; 200];
+        synth.queue_wave(SAMPLE_RATE / 2, &clip);
+
+        assert!(synth.sounding());
+        let rendered = run(&mut synth, 20);
+        let peak = rendered.iter().map(|s| (*s as i32).abs()).max().unwrap_or(0);
+        assert!(peak > 0, "queued wave should mix into the stream");
+    }
+
+    #[test]
+    fn a_queued_wave_ends_and_frees_its_slot() {
+        let mut synth = Synth::new();
+        let clip = vec![i16::MAX; 100];
+        synth.queue_wave(SAMPLE_RATE, &clip);
+
+        // Render well past the clip's length; it should play out and stop
+        // sounding rather than repeat or read past its end.
+        let _ = run(&mut synth, 50);
+        assert!(!synth.sounding());
+        assert!(synth.render(256).is_none());
+    }
+
+    #[test]
+    fn an_empty_wave_is_dropped() {
+        let mut synth = Synth::new();
+        synth.queue_wave(SAMPLE_RATE, &[]);
+        synth.queue_wave(0, &[1, 2, 3]);
+
+        assert!(!synth.sounding());
     }
 
     #[test]

@@ -6,11 +6,9 @@
 //!
 //! | opcode | layout                                                              |
 //! |--------|---------------------------------------------------------------------|
-//! | 1      | `channel:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]` |
 //! | 2      | `channels:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]` |
 //! | 8      | `intensity:u8`, `duration_ms:u64`                                   |
 //!
-//! Opcode 1 is a clip, always mono: Java fires one track at it and forgets it.
 //! Opcode 2 is the synthesiser's continuous output, which needs a track that
 //! stays open between chunks or every seam would be a click; its samples are
 //! interleaved across however many channels the header names, and its count is
@@ -18,14 +16,14 @@
 //!
 //! MIDI never reaches Java. Android has no synthesiser that takes live MIDI
 //! events, so [`crate::ma3`] renders the sequence here and it leaves as
-//! opcode 2.
+//! opcode 2. A file's own recorded PCM effects are mixed into that same stream
+//! (see [`AndroidAudioSink::play_wave`]) rather than sent as a separate clip.
 
 use crate::{
     ma3::{CHANNELS, SAMPLE_RATE},
     platform::Shared,
 };
 
-const OPCODE_PLAY_WAVE: u8 = 1;
 const OPCODE_STREAM: u8 = 2;
 const OPCODE_VIBRATE: u8 = 8;
 
@@ -39,20 +37,6 @@ pub fn vibrate_command(duration_ms: u64, intensity: u8) -> Vec<u8> {
     command.push(OPCODE_VIBRATE);
     command.push(intensity);
     command.extend_from_slice(&duration_ms.to_le_bytes());
-
-    command
-}
-
-fn play_wave_command(channel: u8, sampling_rate: u32, wave_data: &[i16]) -> Vec<u8> {
-    let mut command = Vec::with_capacity(HEADER_LEN + wave_data.len() * 2);
-
-    command.push(OPCODE_PLAY_WAVE);
-    command.push(channel);
-    command.extend_from_slice(&sampling_rate.to_le_bytes());
-    command.extend_from_slice(&(wave_data.len() as u32).to_le_bytes());
-    for sample in wave_data {
-        command.extend_from_slice(&sample.to_le_bytes());
-    }
 
     command
 }
@@ -83,12 +67,16 @@ impl AndroidAudioSink {
 }
 
 impl wie_backend::AudioSink for AndroidAudioSink {
-    fn play_wave(&self, channel: u8, sampling_rate: u32, wave_data: &[i16]) {
+    fn play_wave(&self, _channel: u8, sampling_rate: u32, wave_data: &[i16]) {
         if wave_data.is_empty() {
             return;
         }
 
-        self.shared.push_audio(play_wave_command(channel, sampling_rate, wave_data));
+        // A file's recorded effects are mixed into the synthesiser's stream
+        // rather than sent as their own clip: the stream is the one output path
+        // already proven on the device, so folding them in plays them where a
+        // per-clip track stayed silent.
+        self.shared.synth().queue_wave(sampling_rate, wave_data);
     }
 
     fn midi_note_on(&self, channel_id: u8, note: u8, velocity: u8) {
@@ -121,20 +109,7 @@ impl wie_backend::AudioSink for AndroidAudioSink {
 
 #[cfg(test)]
 mod tests {
-    use super::{HEADER_LEN, play_wave_command, vibrate_command};
-
-    #[test]
-    fn play_wave_layout_matches_java_decoder() {
-        let command = play_wave_command(1, 22050, &[-2, 1]);
-
-        assert_eq!(command[0], 1);
-        assert_eq!(command[1], 1);
-        assert_eq!(u32::from_le_bytes(command[2..6].try_into().unwrap()), 22050);
-        // Java multiplies this by two to get the byte count of the PCM body.
-        assert_eq!(u32::from_le_bytes(command[6..10].try_into().unwrap()), 2);
-        assert_eq!(command.len(), HEADER_LEN + 4);
-        assert_eq!(i16::from_le_bytes(command[10..12].try_into().unwrap()), -2);
-    }
+    use super::{HEADER_LEN, vibrate_command};
 
     #[test]
     fn vibrate_layout_matches_java_decoder() {
