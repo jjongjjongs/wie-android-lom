@@ -21,8 +21,8 @@ use std::{panic::AssertUnwindSafe, path::PathBuf, time::Duration};
 
 use jni::{
     JNIEnv,
-    objects::{JByteArray, JClass, JIntArray, JString},
-    sys::{jbyteArray, jint, jintArray, jstring},
+    objects::{JByteArray, JClass, JShortArray, JString},
+    sys::{jbyteArray, jint, jshortArray, jstring},
 };
 
 use crate::runner::with_runner;
@@ -164,16 +164,21 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     guard(|| with_runner(|runner| runner.key(index, pressed != 0)));
 }
 
-/// `nativeFrame() -> int[]`
+/// `nativeFrame() -> short[]`
 ///
 /// Returns `null` when nothing new has been painted, otherwise
-/// `{width, height, ARGB_8888 pixels...}`.
+/// `{width, height, RGB565 pixels...}`.
 ///
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeFrame(env: JNIEnv, _class: JClass) -> jintArray {
-    let frame = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_frame()))) {
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeFrame(
+    env: JNIEnv,
+    _class: JClass,
+) -> jshortArray {
+    let frame = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        with_runner(|runner| runner.take_frame())
+    })) {
         Ok(Some(frame)) => frame,
         Ok(None) => return std::ptr::null_mut(),
         Err(_) => {
@@ -183,25 +188,26 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     };
 
     let length = frame.pixels.len() + 2;
-    let array = match env.new_int_array(length as jint) {
+    let array = match env.new_short_array(length as jint) {
         Ok(array) => array,
         Err(error) => {
-            tracing::error!("Failed to allocate a {length} int frame: {error}");
+            tracing::error!("Failed to allocate a {length} short frame: {error}");
             return std::ptr::null_mut();
         }
     };
 
-    let header = [frame.width as jint, frame.height as jint];
-    if let Err(error) = env.set_int_array_region(&array, 0, &header) {
+    let header = [frame.width as i16, frame.height as i16];
+    if let Err(error) = env.set_short_array_region(&array, 0, &header) {
         tracing::error!("Failed to write the frame header: {error}");
         return std::ptr::null_mut();
     }
-    if let Err(error) = env.set_int_array_region(&array, 2, &frame.pixels) {
-        tracing::error!("Failed to write frame pixels: {error}");
+
+    if let Err(error) = env.set_short_array_region(&array, 2, &frame.pixels) {
+        tracing::error!("Failed to write RGB565 frame pixels: {error}");
         return std::ptr::null_mut();
     }
 
-    JIntArray::into_raw(array)
+    JShortArray::into_raw(array)
 }
 
 /// `nativePollOutput() -> byte[]`

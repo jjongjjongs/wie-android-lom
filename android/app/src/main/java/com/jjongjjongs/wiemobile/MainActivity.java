@@ -44,6 +44,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.nio.ShortBuffer;
 
 /**
  * Library of imported games plus the player that runs one.
@@ -654,7 +655,7 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        int[] frame = NativeBridge.nativeFrame();
+        short[] frame = NativeBridge.nativeFrame();
         if (frame != null && frame.length > 2 && gameView != null) {
             runOnUiThread(() -> {
                 gameView.setFrame(frame);
@@ -723,20 +724,20 @@ public final class MainActivity extends Activity {
             setBackgroundColor(Color.WHITE);
         }
 
-        /** @param frame {@code {width, height, ARGB_8888 pixels...}} */
-        void setFrame(int[] frame) {
-            int width = frame[0];
-            int height = frame[1];
+        /** @param frame {@code {width, height, RGB565 pixels...}} */
+        void setFrame(short[] frame) {
+            int width = frame[0] & 0xFFFF;
+            int height = frame[1] & 0xFFFF;
 
             if (width <= 0 || height <= 0 || frame.length != width * height + 2) {
                 return;
             }
 
             if (bitmap == null || bitmap.getWidth() != width || bitmap.getHeight() != height) {
-                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
             }
 
-            bitmap.setPixels(frame, 2, width, 0, 0, width, height);
+            bitmap.copyPixelsFromBuffer(ShortBuffer.wrap(frame, 2, width * height));
             invalidate();
         }
 
