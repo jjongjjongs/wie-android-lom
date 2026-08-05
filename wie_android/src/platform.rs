@@ -77,7 +77,22 @@ impl Shared {
         let frames = (crate::ma3::SAMPLE_RATE as usize * millis as usize) / 1000;
 
         if let Some(samples) = self.synth().render(frames) {
+            let n = samples.len();
             self.push_audio(crate::audio::stream_command(&samples));
+
+            use std::sync::atomic::AtomicUsize;
+            static PUSHES: AtomicUsize = AtomicUsize::new(0);
+            let c = PUSHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if c.is_multiple_of(30) {
+                tracing::info!("AUDIO_DIAG render_synth push#{c} frames={frames} samples={n}");
+            }
+        } else {
+            use std::sync::atomic::AtomicUsize;
+            static SILENT: AtomicUsize = AtomicUsize::new(0);
+            let c = SILENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if c.is_multiple_of(120) {
+                tracing::info!("AUDIO_DIAG render_synth silent (no voices sounding) #{c}");
+            }
         }
     }
 

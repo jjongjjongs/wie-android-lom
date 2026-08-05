@@ -151,6 +151,8 @@ pub async fn clip_put_data(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, 
     clip.handle = handle;
     write_generic(context, ptr_clip, clip)?;
 
+    tracing::info!("AUDIO_DIAG PutData clip={ptr_clip:#x} handle={handle} bytes={buf_size}");
+
     Ok(buf_size as _)
 }
 
@@ -193,6 +195,11 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
 
     let clip: MdaClip = read_generic(context, ptr_clip)?;
     let callback = clip.h_proc as WIPICWord;
+
+    tracing::info!(
+        "AUDIO_DIAG Play clip={ptr_clip:#x} repeat={repeat} handle={} cb={callback:#x}",
+        clip.handle
+    );
 
     let completed = {
         let system = context.system();
@@ -294,6 +301,8 @@ pub async fn stop(context: &mut dyn WIPICContext, ptr_clip: WIPICWord) -> Result
     }
 
     let clip: MdaClip = read_generic(context, ptr_clip)?;
+
+    tracing::info!("AUDIO_DIAG Stop clip={ptr_clip:#x} handle={}", clip.handle);
 
     let system = context.system();
 

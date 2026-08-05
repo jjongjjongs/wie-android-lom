@@ -64,6 +64,22 @@ impl Audio {
             None => return Err(AudioError::InvalidHandle),
         };
 
+        {
+            let mut waves = 0usize;
+            let mut midi = 0usize;
+            for (_, ev) in &player.events {
+                match ev {
+                    SmafEvent::Wave { .. } => waves += 1,
+                    SmafEvent::End => {}
+                    _ => midi += 1,
+                }
+            }
+            tracing::info!(
+                "AUDIO_DIAG SmafStart handle={audio_handle} repeat={repeat} events={} waves={waves} midi={midi}",
+                player.events.len()
+            );
+        }
+
         self.stop(audio_handle);
 
         let mut system_clone = system.clone();
