@@ -90,6 +90,10 @@ impl Audio {
         Ok((completed, stop_flag))
     }
 
+    pub fn is_playing(&self, audio_handle: AudioHandle) -> bool {
+        self.playing.contains_key(&audio_handle)
+    }
+
     pub fn stop(&mut self, audio_handle: AudioHandle) {
         if let Some(stop_flag) = self.playing.remove(&audio_handle) {
             stop_flag.store(true, Ordering::Relaxed);
