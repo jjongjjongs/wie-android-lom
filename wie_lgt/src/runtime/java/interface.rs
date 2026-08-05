@@ -392,13 +392,78 @@ pub async fn java_unk11(
     Ok(0)
 }
 
+/// Collects the application classes `name` depends on, each listed after the
+/// classes it needs, so registering `order` front to back never defines a
+/// class before its parent or an interface it implements.
+///
+/// `visited` is marked on entry, both to skip work already done and to keep a
+/// cyclic metadata reference from recursing forever; `order` is filled in
+/// post-order, so a class lands after its superclass and interfaces. A name
+/// the image does not carry is a platform class the JVM already knows and ends
+/// that branch.
+fn collect_app_class_dependencies(
+    core: &ArmCore,
+    app_classes: &Mutex<Vec<AppClass>>,
+    image_ranges: &[(u32, u32)],
+    name: &str,
+    visited: &mut Vec<String>,
+    order: &mut Vec<String>,
+    depth: usize,
+) -> bool {
+    if visited.iter().any(|x| x == name) {
+        return true;
+    }
+    if depth >= MAX_CLASS_DEPTH {
+        tracing::warn!("Application class {name} sits deeper than {MAX_CLASS_DEPTH} in the dependency graph; giving up");
+        return false;
+    }
+    visited.push(name.to_owned());
+
+    // The dependencies that must exist before this class can be defined: its
+    // superclass and every interface it implements.
+    let dependencies = {
+        let app_classes = app_classes.lock();
+        app_classes.iter().find(|x| x.name == name).map(|class| {
+            let mut dependencies = class.interfaces.clone();
+            if let Some(superclass) = &class.superclass {
+                dependencies.push(superclass.clone());
+            }
+            dependencies
+        })
+    };
+    let dependencies = match dependencies {
+        Some(dependencies) => dependencies,
+        None => match app_classes::find_class(core, image_ranges, name) {
+            Some(class) => {
+                let mut dependencies = class.interfaces;
+                if let Some(superclass) = class.superclass {
+                    dependencies.push(superclass);
+                }
+                dependencies
+            }
+            // A platform class the JVM already knows; nothing to register.
+            None => return true,
+        },
+    };
+
+    for dependency in dependencies {
+        if !collect_app_class_dependencies(core, app_classes, image_ranges, &dependency, visited, order, depth + 1) {
+            return false;
+        }
+    }
+
+    order.push(name.to_owned());
+    true
+}
+
 /// Registers a JVM stand-in for an application class and everything it
-/// inherits from.
+/// inherits from or implements.
 ///
 /// An application class can extend another one - Battle Monster's `Game`
-/// extends `a`, which extends `org/kwis/msp/lcdui/Jlet` - so the chain is
-/// walked to the first platform class and registered from the top down. A
-/// class cannot be registered before its parent.
+/// extends `a`, which extends `org/kwis/msp/lcdui/Jlet` - and it can implement
+/// application interfaces too - Legend of Master's `f` implements `k` - so the
+/// whole dependency graph is walked and registered from the leaves in. A class
+/// cannot be registered before its parent or its interfaces.
 pub async fn bridge_class_chain(
     jvm: &Jvm,
     core: &ArmCore,
@@ -407,46 +472,13 @@ pub async fn bridge_class_chain(
     image_ranges: &[(u32, u32)],
     name: &str,
 ) -> bool {
-    let mut chain = Vec::new();
-    let mut next = Some(name.to_owned());
-
-    while let Some(class_name) = next {
-        if chain.len() >= MAX_CLASS_DEPTH {
-            tracing::warn!("Application class {name} inherits more than {MAX_CLASS_DEPTH} deep; giving up");
-            return false;
-        }
-
-        // The definition is built while the lock is held, and the lock is let
-        // go before the JVM runs: registering re-enters the runtime.
-        //
-        // The main class is usually absent from the registered table, so fall
-        // back to finding it by shape in the image.
-        let described = {
-            let app_classes = app_classes.lock();
-
-            app_classes
-                .iter()
-                .find(|x| x.name == class_name)
-                .map(|class| (class.superclass.clone(), compiled_class::as_proto(class)))
-        };
-        let described = match described {
-            Some(described) => Some(described),
-            None => {
-                app_classes::find_class(core, image_ranges, &class_name).map(|class| (class.superclass.clone(), compiled_class::as_proto(&class)))
-            }
-        };
-
-        // Not one of the application's classes, so it is a platform class the
-        // JVM already knows and the chain ends here.
-        let Some((superclass, proto)) = described else {
-            break;
-        };
-
-        chain.push((class_name, proto));
-        next = superclass;
+    let mut visited = Vec::new();
+    let mut order = Vec::new();
+    if !collect_app_class_dependencies(core, app_classes, image_ranges, name, &mut visited, &mut order, 0) {
+        return false;
     }
 
-    if chain.is_empty() {
+    if order.is_empty() {
         tracing::error!("Application class {name} is nowhere in the image; cannot bridge it");
         return false;
     }
@@ -456,7 +488,24 @@ pub async fn bridge_class_chain(
         handles: handles.clone(),
     };
 
-    for (class_name, proto) in chain.into_iter().rev() {
+    // The proto is built with the lock held and registered with it released:
+    // registering re-enters the runtime. The main class is usually absent from
+    // the registered table, so fall back to finding it by shape in the image.
+    for class_name in order {
+        let proto = {
+            let app_classes_guard = app_classes.lock();
+            let described = app_classes_guard.iter().find(|x| x.name == class_name).map(compiled_class::as_proto);
+            drop(app_classes_guard);
+
+            match described {
+                Some(proto) => proto,
+                None => match app_classes::find_class(core, image_ranges, &class_name) {
+                    Some(class) => compiled_class::as_proto(&class),
+                    None => continue,
+                },
+            }
+        };
+
         if !compiled_class::register(jvm, &context, &class_name, proto).await {
             return false;
         }
