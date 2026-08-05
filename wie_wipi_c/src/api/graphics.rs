@@ -579,7 +579,35 @@ pub async fn copy_frame_buffer(
         height: h as _,
     };
 
-    dst_canvas.draw(dx as _, dy as _, w as _, h as _, &*src_image, sx as _, sy as _, clip);
+    let src_w = src_image.width() as i64;
+    let src_h = src_image.height() as i64;
+    let dst_w = dst_canvas.image().width() as i64;
+    let dst_h = dst_canvas.image().height() as i64;
+
+    for row in 0..h as i64 {
+        let sy_px = sy as i64 + row;
+        let dy_px = dy as i64 + row;
+        if sy_px < 0 || sy_px >= src_h || dy_px < clip.y as i64 || dy_px >= dst_h {
+            continue;
+        }
+        for col in 0..w as i64 {
+            let sx_px = sx as i64 + col;
+            let dx_px = dx as i64 + col;
+            if sx_px < 0 || sx_px >= src_w || dx_px < clip.x as i64 || dx_px >= dst_w {
+                continue;
+            }
+
+            let color = src_image.get_pixel(sx_px as i32, sy_px as i32);
+            // Feature-phone titles reserve magenta (RGB565 0xF81F) as the
+            // transparent colour of an offscreen layer, then copy the layer over
+            // the screen expecting it keyed out. The graphics context carries no
+            // transparent pixel for these copies, so honour the convention here.
+            if color.r >= 0xf8 && color.g <= 0x07 && color.b >= 0xf8 {
+                continue;
+            }
+            dst_canvas.put_pixel(dx_px as i32, dy_px as i32, color);
+        }
+    }
     dst_canvas.flush()?;
 
     Ok(())
