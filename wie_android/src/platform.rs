@@ -8,7 +8,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use wie_backend::{AudioSink, DatabaseRepository, Filesystem, Instant, Platform, Screen, canvas::Image};
+use wie_backend::{
+    AudioSink, DatabaseRepository, Filesystem, Instant, Platform, Screen,
+    canvas::{Image, PixelType, Rgb565Pixel},
+};
 use wie_util::Result;
 
 use crate::{audio::AndroidAudioSink, database::AndroidDatabaseRepository, filesystem::AndroidFilesystem, ma3::Synth};
@@ -17,8 +20,8 @@ use crate::{audio::AndroidAudioSink, database::AndroidDatabaseRepository, filesy
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    /// ARGB_8888, the layout `Bitmap.setPixels` expects.
-    pub pixels: Vec<i32>,
+    /// Native-endian RGB565 values consumed by an Android RGB_565 Bitmap.
+    pub pixels: Vec<i16>,
 }
 
 /// Everything the JNI layer reads out of a running emulator. The emulator
@@ -77,22 +80,7 @@ impl Shared {
         let frames = (crate::ma3::SAMPLE_RATE as usize * millis as usize) / 1000;
 
         if let Some(samples) = self.synth().render(frames) {
-            let n = samples.len();
             self.push_audio(crate::audio::stream_command(&samples));
-
-            use std::sync::atomic::AtomicUsize;
-            static PUSHES: AtomicUsize = AtomicUsize::new(0);
-            let c = PUSHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if c.is_multiple_of(30) {
-                tracing::info!("AUDIO_DIAG render_synth push#{c} frames={frames} samples={n}");
-            }
-        } else {
-            use std::sync::atomic::AtomicUsize;
-            static SILENT: AtomicUsize = AtomicUsize::new(0);
-            let c = SILENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if c.is_multiple_of(120) {
-                tracing::info!("AUDIO_DIAG render_synth silent (no voices sounding) #{c}");
-            }
         }
     }
 
@@ -200,11 +188,19 @@ impl Screen for AndroidScreen {
     }
 
     fn paint(&self, image: &dyn Image) {
-        let pixels = image
-            .colors()
-            .iter()
-            .map(|x| (((x.a as u32) << 24) | ((x.r as u32) << 16) | ((x.g as u32) << 8) | (x.b as u32)) as i32)
-            .collect::<Vec<_>>();
+        let pixels = if image.bytes_per_pixel() == 2 {
+            image
+                .raw()
+                .chunks_exact(2)
+                .map(|bytes| i16::from_ne_bytes([bytes[0], bytes[1]]))
+                .collect::<Vec<_>>()
+        } else {
+            image
+                .colors()
+                .into_iter()
+                .map(|color| Rgb565Pixel::from_color(color) as i16)
+                .collect::<Vec<_>>()
+        };
 
         let frame = Frame {
             width: image.width(),

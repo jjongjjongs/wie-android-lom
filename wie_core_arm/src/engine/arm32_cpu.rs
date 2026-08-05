@@ -47,18 +47,6 @@ impl ArmEngine for Arm32CpuEngine {
         loop {
             let pc = self.cpu.reg_get(Mode::User, reg::PC);
 
-            // AUDIO_DIAG: trace this title's sound state machine to see whether
-            // it runs in-game and, if so, which event it branches on. The clip
-            // callback (h_proc) is 0xa919, so 0xa918 is its entry; 0xa890 is the
-            // state machine it feeds, and 0x5d364 the OO dispatch it reaches.
-            if pc == 0x0000a918 || pc == 0x0000a890 || pc == 0x0005d364 {
-                let r0 = self.cpu.reg_get(Mode::User, 0);
-                let r1 = self.cpu.reg_get(Mode::User, 1);
-                let r2 = self.cpu.reg_get(Mode::User, 2);
-
-                tracing::info!("AUDIO_DIAG sndsm pc={pc:#x} r0={r0:#x} r1={r1:#x} r2={r2:#x}");
-            }
-
             if self.is_svc_exception() {
                 return self.read_svc_result();
             }

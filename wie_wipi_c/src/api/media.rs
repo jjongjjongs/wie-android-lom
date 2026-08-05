@@ -76,6 +76,9 @@ struct MdaClip {
 
     // not in sdk, for internal usage
     handle: u32,
+    play_generation: u32,
+    playing: u8,
+    _padding5: [u8; 3],
 }
 
 pub async fn clip_create(context: &mut dyn WIPICContext, ptr_type: WIPICWord, buf_size: WIPICWord, callback: WIPICWord) -> Result<WIPICWord> {
@@ -151,8 +154,6 @@ pub async fn clip_put_data(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, 
     clip.handle = handle;
     write_generic(context, ptr_clip, clip)?;
 
-    tracing::info!("AUDIO_DIAG PutData clip={ptr_clip:#x} handle={handle} bytes={buf_size}");
-
     Ok(buf_size as _)
 }
 
@@ -168,14 +169,27 @@ pub async fn clip_set_position(_context: &mut dyn WIPICContext, clip: WIPICWord,
     Ok(0)
 }
 
-pub async fn clip_get_volume(_context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
-    tracing::warn!("stub MC_mdaClipGetVolume({clip:#x})");
+pub async fn clip_get_volume(context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
+    tracing::debug!("MC_mdaClipGetVolume({clip:#x})");
 
-    Ok(0)
+    if clip == 0 {
+        return Ok(0);
+    }
+
+    let clip_data: MdaClip = read_generic(context, clip)?;
+    Ok(clip_data.original_volume.clamp(0, 100) as WIPICWord)
 }
 
-pub async fn clip_set_volume(_context: &mut dyn WIPICContext, clip: WIPICWord, volume: WIPICWord) -> Result<WIPICWord> {
-    tracing::warn!("stub MC_mdaClipSetVolume({clip:#x}, {volume:#x})");
+pub async fn clip_set_volume(context: &mut dyn WIPICContext, clip: WIPICWord, volume: WIPICWord) -> Result<WIPICWord> {
+    tracing::debug!("MC_mdaClipSetVolume({clip:#x}, {volume:#x})");
+
+    if clip == 0 {
+        return Ok(0);
+    }
+
+    let mut clip_data: MdaClip = read_generic(context, clip)?;
+    clip_data.original_volume = (volume as i32).clamp(0, 100);
+    write_generic(context, clip, clip_data)?;
 
     Ok(0)
 }
@@ -193,13 +207,8 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
         return Ok(0);
     }
 
-    let clip: MdaClip = read_generic(context, ptr_clip)?;
+    let mut clip: MdaClip = read_generic(context, ptr_clip)?;
     let callback = clip.h_proc as WIPICWord;
-
-    tracing::info!(
-        "AUDIO_DIAG Play clip={ptr_clip:#x} repeat={repeat} handle={} cb={callback:#x}",
-        clip.handle
-    );
 
     let completed = {
         let system = context.system();
@@ -214,12 +223,18 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
         }
     };
 
+    clip.play_generation = clip.play_generation.wrapping_add(1);
+    clip.playing = 1;
+    let generation = clip.play_generation;
+    write_generic(context, ptr_clip, clip)?;
+
     if callback != 0 && repeat == 0 {
         struct PlaybackCompletedCallback {
             completed: Arc<AtomicBool>,
             stopped: Arc<AtomicBool>,
             callback: WIPICWord,
             clip: WIPICWord,
+            generation: u32,
         }
 
         #[async_trait::async_trait]
@@ -235,6 +250,20 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
                     return Ok(WIPICResult { results: Vec::new() });
                 }
 
+                let mut clip: MdaClip = read_generic(context, self.clip)?;
+                if clip.playing == 0 || clip.play_generation != self.generation {
+                    tracing::debug!(
+                        "MC_mdaPlay ignored stale completion for clip {:#x}, generation={}",
+                        self.clip,
+                        self.generation
+                    );
+
+                    return Ok(WIPICResult { results: Vec::new() });
+                }
+
+                clip.playing = 0;
+                write_generic(context, self.clip, clip)?;
+
                 tracing::debug!("MC_mdaPlay completion callback({:#x}, event=3)", self.callback);
                 context.call_function(self.callback, &[self.clip, 3]).await?;
 
@@ -247,20 +276,42 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
             stopped,
             callback,
             clip: ptr_clip,
+            generation,
         }))?;
     }
 
     Ok(0)
 }
 
-pub async fn clip_alloc_player(_context: &mut dyn WIPICContext, clip: WIPICWord, param: WIPICWord) -> Result<WIPICWord> {
-    tracing::warn!("stub MC_mdaClipAllocPlayer({clip:#x}, {param:#x})");
+pub async fn clip_alloc_player(context: &mut dyn WIPICContext, clip: WIPICWord, param: WIPICWord) -> Result<WIPICWord> {
+    tracing::debug!("MC_mdaClipAllocPlayer({clip:#x}, {param:#x})");
 
-    Ok(0)
+    if clip == 0 {
+        return Ok(0);
+    }
+
+    // Callers treat the return as an opaque player handle and later call it
+    // back with that value; a stubbed zero is read as "no player" and the game
+    // stalls at load. The clip already owns the backend audio handle, so the
+    // guest clip pointer itself is a stable non-null handle to hand back.
+    let mut clip_data: MdaClip = read_generic(context, clip)?;
+    clip_data.in_use = 1;
+    if clip_data.original_volume == 0 {
+        clip_data.original_volume = 80;
+    }
+    write_generic(context, clip, clip_data)?;
+
+    Ok(clip)
 }
 
-pub async fn clip_free_player(_context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
-    tracing::warn!("stub MC_mdaClipFreePlayer({clip:#x})");
+pub async fn clip_free_player(context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
+    tracing::debug!("MC_mdaClipFreePlayer({clip:#x})");
+
+    if clip != 0 {
+        let mut clip_data: MdaClip = read_generic(context, clip)?;
+        clip_data.in_use = 0;
+        write_generic(context, clip, clip_data)?;
+    }
 
     Ok(0)
 }
@@ -300,13 +351,22 @@ pub async fn stop(context: &mut dyn WIPICContext, ptr_clip: WIPICWord) -> Result
         return Ok(0);
     }
 
-    let clip: MdaClip = read_generic(context, ptr_clip)?;
+    let mut clip: MdaClip = read_generic(context, ptr_clip)?;
+    let was_playing = clip.playing != 0;
+    let callback = clip.h_proc as WIPICWord;
 
-    tracing::info!("AUDIO_DIAG Stop clip={ptr_clip:#x} handle={}", clip.handle);
+    if was_playing {
+        clip.playing = 0;
+        clip.play_generation = clip.play_generation.wrapping_add(1);
+        write_generic(context, ptr_clip, clip)?;
+    }
 
-    let system = context.system();
+    context.system().audio().stop(clip.handle);
 
-    system.audio().stop(clip.handle);
+    if was_playing && callback != 0 {
+        tracing::debug!("MC_mdaStop callback({callback:#x}, clip={ptr_clip:#x}, event=-1)");
+        context.call_function(callback, &[ptr_clip, (-1i32) as WIPICWord]).await?;
+    }
 
     Ok(0)
 }

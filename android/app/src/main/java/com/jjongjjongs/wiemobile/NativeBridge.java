@@ -51,9 +51,9 @@ final class NativeBridge {
 
     /**
      * @return {@code null} when nothing new was painted, otherwise
-     *         {@code {width, height, ARGB_8888 pixels...}}
+     *         {@code {width, height, RGB565 pixels...}}
      */
-    static native int[] nativeFrame();
+    static native short[] nativeFrame();
 
     /**
      * @return the next queued audio or vibration command, or {@code null}
