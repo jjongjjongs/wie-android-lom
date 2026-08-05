@@ -77,6 +77,44 @@ final class AndroidAudioOutput {
         }
     }
 
+    synchronized void pause() {
+        if (stream != null && stream.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
+            try {
+                stream.pause();
+            } catch (IllegalStateException ignored) {
+            }
+        }
+
+        for (AudioTrack track : tracks) {
+            if (track.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
+                try {
+                    track.pause();
+                } catch (IllegalStateException ignored) {
+                }
+            }
+        }
+    }
+
+    synchronized void resume() {
+        if (stream != null && stream.getState() == AudioTrack.STATE_INITIALIZED
+                && stream.getPlayState() == AudioTrack.PLAYSTATE_PAUSED) {
+            try {
+                stream.play();
+            } catch (IllegalStateException ignored) {
+            }
+        }
+
+        for (AudioTrack track : tracks) {
+            if (track.getState() == AudioTrack.STATE_INITIALIZED
+                    && track.getPlayState() == AudioTrack.PLAYSTATE_PAUSED) {
+                try {
+                    track.play();
+                } catch (IllegalStateException ignored) {
+                }
+            }
+        }
+    }
+
     synchronized void release() {
         if (stream != null) {
             try {

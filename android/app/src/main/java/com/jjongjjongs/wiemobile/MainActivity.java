@@ -131,6 +131,9 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         foreground = true;
+        // The AudioTracks are paused, not released, when we leave the
+        // foreground, so playback picks up where it left off on return.
+        audioOutput.resume();
     }
 
     @Override
@@ -141,6 +144,9 @@ public final class MainActivity extends Activity {
         // over the screen, never to us. Release everything now so the game
         // does not read a key as held across the interruption.
         releaseKeypad();
+        // Silence the tracks while backgrounded rather than letting the game's
+        // BGM and effects bleed on over whatever the player switched to.
+        audioOutput.pause();
         super.onPause();
     }
 
