@@ -67,7 +67,10 @@ impl ArmEngine for Arm32CpuEngine {
             let mut arm32cpu_memory = self.mem.as_arm32cpu_memory();
 
             if !(self.cpu.step(&mut arm32cpu_memory)) {
-                return Err(WieError::FatalError("Undefined instruction".into()));
+                let mut bytes = [0u8; 4];
+                let _ = self.mem.read_range(pc, 4, &mut bytes);
+                let opcode = u32::from_le_bytes(bytes);
+                return Err(WieError::FatalError(format!("Undefined instruction at {pc:#x}: opcode {opcode:#010x}")));
             }
             count -= 1;
 

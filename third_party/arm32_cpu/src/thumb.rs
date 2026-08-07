@@ -28,10 +28,11 @@ enum Instruction {
     SoftwareInt,
     Branch,
     LongBranch,
+    Hint,
     Undefined,
 }
 
-const INST_MATCH_ORDER: [Instruction; 20] = [
+const INST_MATCH_ORDER: [Instruction; 21] = [
     Instruction::Branch,
     Instruction::AddSub,
     Instruction::AluOp,
@@ -51,6 +52,7 @@ const INST_MATCH_ORDER: [Instruction; 20] = [
     Instruction::SoftwareInt,
     Instruction::CondBranch,
     Instruction::LongBranch,
+    Instruction::Hint,
     Instruction::Undefined,
 ];
 
@@ -79,6 +81,9 @@ impl Instruction {
             SoftwareInt => (0xff00, 0xdf00),
             Branch      => (0xf800, 0xe000),
             LongBranch  => (0xf000, 0xf000),
+            // NOP and the hint space (NOP/YIELD/WFE/WFI/SEV) and IT blocks all
+            // share the 0xbfxx high byte; the handler tells them apart.
+            Hint        => (0xff00, 0xbf00),
             Undefined   => (0x0000, 0x0000),
         }
     }
@@ -112,6 +117,7 @@ const fn decode_thumb_const(inst: u16) -> Instruction {
             Instruction::SoftwareInt => (0xff00, 0xdf00),
             Instruction::Branch => (0xf800, 0xe000),
             Instruction::LongBranch => (0xf000, 0xf000),
+            Instruction::Hint => (0xff00, 0xbf00),
             Instruction::Undefined => (0x0000, 0x0000),
         };
         if inst & mask == test {
@@ -557,7 +563,42 @@ impl Cpu {
 
                     let mask = 1 << cpsr::T;
                     self.reg[reg::CPSR] &= !mask;
+                } else if inst2.mask_match(0xd000, 0x9000) {
+                    // B.W (Thumb-2 T4), unconditional wide branch. Second
+                    // halfword bits {15,14,12} = 1,0,1; J1/J2 combine with S.
+                    let s = inst.get_bit(10);
+                    let imm10 = inst.extract(0, 10);
+                    let j1 = inst2.get_bit(13);
+                    let j2 = inst2.get_bit(11);
+                    let imm11 = inst2.extract(0, 11);
+                    let i1 = 1 ^ (j1 ^ s);
+                    let i2 = 1 ^ (j2 ^ s);
+                    let imm = (s << 24) | (i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1);
+                    self.reg[reg::PC] = pc.wrapping_add(4).wrapping_add(imm.sign_extend(25));
+                } else if inst2.mask_match(0xd000, 0x8000) {
+                    // B.W (Thumb-2 T3), conditional wide branch. cond is in the
+                    // first halfword; J1/J2 are not inverted for T3.
+                    let cond = inst.extract(6, 4);
+                    if cond_met(cond, cpsr) {
+                        let s = inst.get_bit(10);
+                        let imm6 = inst.extract(0, 6);
+                        let j1 = inst2.get_bit(13);
+                        let j2 = inst2.get_bit(11);
+                        let imm11 = inst2.extract(0, 11);
+                        let imm = (s << 20) | (j2 << 19) | (j1 << 18) | (imm6 << 12) | (imm11 << 1);
+                        self.reg[reg::PC] = pc.wrapping_add(4).wrapping_add(imm.sign_extend(21));
+                    }
                 } else {
+                    return false;
+                }
+            }
+            Hint => {
+                // NOP and the hint space (low nibble 0: NOP/YIELD/WFE/WFI/SEV)
+                // have no architectural effect here, so execute them as no-ops.
+                // IT blocks (0xbfxx with a non-zero mask) are not implemented;
+                // surface them as undefined so they are noticed rather than
+                // silently mis-executed.
+                if inst & 0x000f != 0 {
                     return false;
                 }
             }
