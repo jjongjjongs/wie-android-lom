@@ -1,13 +1,13 @@
 use alloc::{format, vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use java_constants::{ClassAccessFlags, MethodAccessFlags};
+use java_constants::MethodAccessFlags;
 use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::lcdui::Canvas;
 
-use crate::classes::org::kwis::msp::lcdui::Display;
+use crate::classes::org::kwis::msp::lcdui::{Display, Graphics};
 
 // abstract class org.kwis.msp.lcdui.Card
 pub struct Card;
@@ -50,7 +50,11 @@ impl Card {
                 JavaMethodProto::new("serviceRepaints", "()V", Self::service_repaints, Default::default()),
                 JavaMethodProto::new("showNotify", "(Z)V", Self::show_notify, Default::default()),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
-                JavaMethodProto::new_abstract("paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", Default::default()),
+                // Not abstract: some LGT clets (Maple 2007, Sudden Attack Pocket)
+                // instantiate org.kwis.msp.lcdui.Card directly and drive drawing
+                // themselves, so the platform Card must be concrete. Subclasses
+                // that draw still override this; the base is a no-op.
+                JavaMethodProto::new("paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", Self::paint, Default::default()),
                 // wie private
                 JavaMethodProto::new("setCanvas", "(Ljavax/microedition/lcdui/Canvas;)V", Self::set_canvas, Default::default()),
             ],
@@ -63,8 +67,14 @@ impl Card {
                 JavaFieldProto::new("h", "I", Default::default()),
                 JavaFieldProto::new("transparent", "Z", Default::default()),
             ],
-            access_flags: ClassAccessFlags::ABSTRACT,
+            access_flags: Default::default(),
         }
+    }
+
+    async fn paint(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Card>, graphics: ClassInstanceRef<Graphics>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Card::paint({this:?}, {graphics:?})");
+
+        Ok(())
     }
 
     async fn init(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Card>) -> JvmResult<()> {
