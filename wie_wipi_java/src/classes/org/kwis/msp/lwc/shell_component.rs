@@ -176,6 +176,12 @@ impl ShellComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "layout",
+                    "()V",
+                    Self::layout,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "processEvent",
                     "(IIII)Z",
                     Self::process_event,
@@ -1135,6 +1141,386 @@ impl ShellComponent {
         }
 
         Ok(result)
+    }
+
+    async fn layout(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<()> {
+        let shell_state: bool =
+            jvm.get_field(&this, "shellState", "Z").await?;
+
+        let use_frame: bool =
+            jvm.get_field(&this, "useFrame", "Z").await?;
+
+        let width: i32 = jvm.get_field(&this, "w", "I").await?;
+        let height: i32 = jvm.get_field(&this, "h", "I").await?;
+
+        let (inset_top, inset_bottom, inset_left, inset_right) =
+            if use_frame {
+                (
+                    i32::from(jvm.get_field::<i16>(&this, "insetTop", "S").await?),
+                    i32::from(jvm.get_field::<i16>(&this, "insetBottom", "S").await?),
+                    i32::from(jvm.get_field::<i16>(&this, "insetLeft", "S").await?),
+                    i32::from(jvm.get_field::<i16>(&this, "insetRight", "S").await?),
+                )
+            } else {
+                (0, 0, 0, 0)
+            };
+
+        let title: ClassInstanceRef<Component> = jvm
+            .get_field(
+                &this,
+                "title",
+                "Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
+        let work: ClassInstanceRef<Component> = jvm
+            .get_field(
+                &this,
+                "work",
+                "Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
+        let command: ClassInstanceRef<Component> = jvm
+            .get_field(
+                &this,
+                "command",
+                "Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
+        if !shell_state {
+            // Fixed-size shell:
+            // title at top, command at bottom, work fills the remainder.
+            let x = inset_left;
+            let mut y = inset_top;
+            let content_width = width - inset_left - inset_right;
+            let mut remaining_height =
+                height - inset_top - inset_bottom;
+
+            if !command.is_null() {
+                let command_height: i32 = jvm
+                    .invoke_virtual(
+                        &command,
+                        "getPreferredHeight",
+                        "(I)I",
+                        (content_width,),
+                    )
+                    .await?;
+
+                let command_y =
+                    y + remaining_height - command_height;
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &command,
+                        "configure",
+                        "(IIIII)V",
+                        (
+                            x,
+                            command_y,
+                            content_width,
+                            command_height,
+                            3,
+                        ),
+                    )
+                    .await?;
+
+                remaining_height -= command_height;
+            }
+
+            if !title.is_null() {
+                let title_height: i32 = jvm
+                    .invoke_virtual(
+                        &title,
+                        "getPreferredHeight",
+                        "(I)I",
+                        (content_width,),
+                    )
+                    .await?;
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &title,
+                        "configure",
+                        "(IIIII)V",
+                        (
+                            x,
+                            y,
+                            content_width,
+                            title_height,
+                            3,
+                        ),
+                    )
+                    .await?;
+
+                y += title_height;
+                remaining_height -= title_height;
+            }
+
+            if !work.is_null() {
+                // Native calls getPreferredHeight(width) here, but the
+                // returned value is discarded. Preserve the virtual call
+                // because subclasses may update preferred-size state.
+                let _: i32 = jvm
+                    .invoke_virtual(
+                        &work,
+                        "getPreferredHeight",
+                        "(I)I",
+                        (content_width,),
+                    )
+                    .await?;
+
+                if remaining_height < 1 {
+                    remaining_height = 1;
+                }
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &work,
+                        "configure",
+                        "(IIIII)V",
+                        (
+                            x,
+                            y,
+                            content_width,
+                            remaining_height,
+                            3,
+                        ),
+                    )
+                    .await?;
+            }
+
+            return Ok(());
+        }
+
+        // Auto-sized shell.
+        let display: ClassInstanceRef<Display> = jvm
+            .get_field(
+                &this,
+                "display",
+                "Lorg/kwis/msp/lcdui/Display;",
+            )
+            .await?;
+
+        if display.is_null() {
+            return Err(
+                jvm.exception(
+                    "java/lang/NullPointerException",
+                    "display is null",
+                )
+                .await,
+            );
+        }
+
+        let mut content_width =
+            width - inset_left - inset_right;
+
+        if !title.is_null() {
+            let preferred: i32 = jvm
+                .invoke_virtual(
+                    &title,
+                    "getPreferredWidth",
+                    "()I",
+                    (),
+                )
+                .await?;
+
+            if preferred > content_width {
+                content_width = preferred;
+            }
+        }
+
+        if !command.is_null() {
+            let preferred: i32 = jvm
+                .invoke_virtual(
+                    &command,
+                    "getPreferredWidth",
+                    "()I",
+                    (),
+                )
+                .await?;
+
+            if preferred > content_width {
+                content_width = preferred;
+            }
+        }
+
+        if !work.is_null() {
+            let preferred: i32 = jvm
+                .invoke_virtual(
+                    &work,
+                    "getPreferredWidth",
+                    "()I",
+                    (),
+                )
+                .await?;
+
+            if preferred > content_width {
+                content_width = preferred;
+            }
+        }
+
+        let display_width: i32 =
+            jvm.invoke_virtual(&display, "getWidth", "()I", ()).await?;
+
+        let display_height: i32 =
+            jvm.invoke_virtual(&display, "getHeight", "()I", ()).await?;
+
+        let max_content_width =
+            display_width - inset_left - inset_right;
+
+        if content_width >= max_content_width {
+            content_width = max_content_width;
+        }
+
+        let mut remaining_height =
+            display_height - inset_top - inset_bottom;
+
+        let x = inset_left;
+        let mut y = inset_top;
+
+        if !title.is_null() {
+            let title_height: i32 = jvm
+                .invoke_virtual(
+                    &title,
+                    "getPreferredHeight",
+                    "(I)I",
+                    (content_width,),
+                )
+                .await?;
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &title,
+                    "configure",
+                    "(IIIII)V",
+                    (
+                        x,
+                        y,
+                        content_width,
+                        title_height,
+                        3,
+                    ),
+                )
+                .await?;
+
+            y += title_height;
+            remaining_height -= title_height;
+        }
+
+        if !command.is_null() {
+            let command_height: i32 = jvm
+                .invoke_virtual(
+                    &command,
+                    "getPreferredHeight",
+                    "(I)I",
+                    (content_width,),
+                )
+                .await?;
+
+            remaining_height -= command_height;
+        }
+
+        if !work.is_null() {
+            let preferred_height: i32 = jvm
+                .invoke_virtual(
+                    &work,
+                    "getPreferredHeight",
+                    "(I)I",
+                    (content_width,),
+                )
+                .await?;
+
+            let mut work_height =
+                if preferred_height > remaining_height {
+                    remaining_height
+                } else {
+                    preferred_height
+                };
+
+            if work_height <= 0 {
+                work_height = 1;
+            }
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &work,
+                    "configure",
+                    "(IIIII)V",
+                    (
+                        x,
+                        y,
+                        content_width,
+                        work_height,
+                        3,
+                    ),
+                )
+                .await?;
+
+            y += work_height;
+        }
+
+        if !command.is_null() {
+            let command_height: i32 = jvm
+                .invoke_virtual(
+                    &command,
+                    "getPreferredHeight",
+                    "(I)I",
+                    (content_width,),
+                )
+                .await?;
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &command,
+                    "configure",
+                    "(IIIII)V",
+                    (
+                        x,
+                        y,
+                        content_width,
+                        command_height,
+                        3,
+                    ),
+                )
+                .await?;
+
+            y += command_height;
+        }
+
+        let total_width = if use_frame {
+            content_width + inset_left + inset_right
+        } else {
+            content_width
+        };
+
+        let total_height = if use_frame {
+            y + inset_bottom
+        } else {
+            y
+        };
+
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "configure",
+                "(IIIII)V",
+                (
+                    0,
+                    0,
+                    total_width,
+                    total_height,
+                    2,
+                ),
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn configure(
