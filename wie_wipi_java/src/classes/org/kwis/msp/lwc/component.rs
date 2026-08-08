@@ -170,14 +170,46 @@ impl Component {
         y: i32,
         w: i32,
         h: i32,
-        layout: i32,
+        flags: i32,
     ) -> JvmResult<()> {
-        tracing::debug!("org.kwis.msp.lwc.Component::configure({this:?}, {x}, {y}, {w}, {h}, {layout})");
+        // Native WipiPlayer Plus Component.configure(IIIII)V:
+        // bit 0 updates position, bit 1 updates size.
+        //
+        // Position change:
+        //   repaint old area -> store x/y -> repaint new area
+        //
+        // Size change:
+        //   repaint old area -> store w/h -> invalidate -> repaint new area
+        //
+        // Native storage truncates each coordinate/dimension to signed 16-bit.
+        if flags & 0x1 != 0 {
+            let old_x: i32 = jvm.get_field(&this, "x", "I").await?;
+            let old_y: i32 = jvm.get_field(&this, "y", "I").await?;
 
-        jvm.put_field(&mut this, "x", "I", x).await?;
-        jvm.put_field(&mut this, "y", "I", y).await?;
-        jvm.put_field(&mut this, "w", "I", w).await?;
-        jvm.put_field(&mut this, "h", "I", h).await?;
+            if old_x != x || old_y != y {
+                let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
+
+                jvm.put_field(&mut this, "x", "I", x as i16 as i32).await?;
+                jvm.put_field(&mut this, "y", "I", y as i16 as i32).await?;
+
+                let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
+            }
+        }
+
+        if flags & 0x2 != 0 {
+            let old_w: i32 = jvm.get_field(&this, "w", "I").await?;
+            let old_h: i32 = jvm.get_field(&this, "h", "I").await?;
+
+            if old_w != w || old_h != h {
+                let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
+
+                jvm.put_field(&mut this, "w", "I", w as i16 as i32).await?;
+                jvm.put_field(&mut this, "h", "I", h as i16 as i32).await?;
+
+                let _: () = jvm.invoke_virtual(&this, "invalidate", "()V", ()).await?;
+                let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
+            }
+        }
 
         Ok(())
     }
