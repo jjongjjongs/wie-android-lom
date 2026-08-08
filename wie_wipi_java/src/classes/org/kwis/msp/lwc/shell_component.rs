@@ -164,6 +164,12 @@ impl ShellComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "showNotify",
+                    "(Z)V",
+                    Self::show_notify,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "processEvent",
                     "(IIII)Z",
                     Self::process_event,
@@ -1123,6 +1129,51 @@ impl ShellComponent {
         }
 
         Ok(result)
+    }
+
+    async fn show_notify(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        shown: bool,
+    ) -> JvmResult<()> {
+        if !shown {
+            return Ok(());
+        }
+
+        let focus: ClassInstanceRef<Component> = jvm
+            .get_field(
+                &this,
+                "focusComponent",
+                "Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
+        if !focus.is_null() {
+            return Ok(());
+        }
+
+        let target: ClassInstanceRef<Component> = jvm
+            .invoke_virtual(
+                &this,
+                "getNextTraversalComponent",
+                "()Lorg/kwis/msp/lwc/Component;",
+                (),
+            )
+            .await?;
+
+        if !target.is_null() {
+            let _: () = jvm
+                .invoke_virtual(
+                    &target,
+                    "setFocus",
+                    "()V",
+                    (),
+                )
+                .await?;
+        }
+
+        Ok(())
     }
 
     async fn pointer_notify(
