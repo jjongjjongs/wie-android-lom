@@ -66,6 +66,12 @@ impl LabelComponent {
                     Self::set_label,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "setLayout",
+                    "(I)V",
+                    Self::set_layout,
+                    Default::default(),
+                ),
             ],
             fields: vec![
                 JavaFieldProto::new("layout", "I", Default::default()),
@@ -301,4 +307,43 @@ impl LabelComponent {
 
         Ok(())
     }
+    async fn set_layout(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        layout: i32,
+    ) -> JvmResult<()> {
+        // WipiPlayer Plus LabelComponent.setLayout(int):
+        // reject conflicting horizontal/vertical layout bit combinations.
+        if (layout & 3) == 3
+            || layout > 36
+            || (layout & 5) == 5
+            || (layout & 6) == 6
+            || (layout & 48) == 48
+            || (layout & 40) == 40
+            || (layout & 24) == 24
+        {
+            return Err(
+                jvm.exception("java/lang/IllegalArgumentException", "")
+                    .await,
+            );
+        }
+
+        jvm.put_field(&mut this, "layout", "I", layout).await?;
+
+        let width: i32 = jvm.get_field(&this, "w", "I").await?;
+        let height: i32 = jvm.get_field(&this, "h", "I").await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "repaint",
+                "(IIII)V",
+                (0, 0, width, height),
+            )
+            .await?;
+
+        Ok(())
+    }
+
 }
