@@ -94,6 +94,18 @@ impl ShellComponent {
                     Self::get_card,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "getX",
+                    "()I",
+                    Self::get_x,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "getY",
+                    "()I",
+                    Self::get_y,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("isShown", "()Z", Self::is_shown, Default::default()),
                 JavaMethodProto::new("show", "()V", Self::show, Default::default()),
                 JavaMethodProto::new("hide", "()V", Self::hide, Default::default()),
@@ -2004,6 +2016,58 @@ impl ShellComponent {
             "Lorg/kwis/msp/lwc/ProxyCard;",
         )
         .await
+    }
+
+    async fn get_x(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        let proxy: ClassInstanceRef<ProxyCard> = jvm
+            .get_field(
+                &this,
+                "proxyCard",
+                "Lorg/kwis/msp/lwc/ProxyCard;",
+            )
+            .await?;
+
+        if proxy.is_null() {
+            return Err(
+                jvm.exception(
+                    "java/lang/NullPointerException",
+                    "proxyCard is null",
+                )
+                .await,
+            );
+        }
+
+        jvm.invoke_virtual(&proxy, "getX", "()I", ()).await
+    }
+
+    async fn get_y(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        let proxy: ClassInstanceRef<ProxyCard> = jvm
+            .get_field(
+                &this,
+                "proxyCard",
+                "Lorg/kwis/msp/lwc/ProxyCard;",
+            )
+            .await?;
+
+        if proxy.is_null() {
+            return Err(
+                jvm.exception(
+                    "java/lang/NullPointerException",
+                    "proxyCard is null",
+                )
+                .await,
+            );
+        }
+
+        jvm.invoke_virtual(&proxy, "getY", "()I", ()).await
     }
 
     async fn is_shown(
