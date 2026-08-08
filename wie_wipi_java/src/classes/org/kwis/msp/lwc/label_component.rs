@@ -84,6 +84,12 @@ impl LabelComponent {
                     Self::calc_preferred_size,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "paintContent",
+                    "(Lorg/kwis/msp/lcdui/Graphics;)V",
+                    Self::paint_content,
+                    Default::default(),
+                ),
             ],
             fields: vec![
                 JavaFieldProto::new("layout", "I", Default::default()),
@@ -762,6 +768,561 @@ impl LabelComponent {
         }
 
         Ok(())
+    }
+
+    async fn paint_content(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        graphics: ClassInstanceRef<()>,
+    ) -> JvmResult<()> {
+        if graphics.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let font: ClassInstanceRef<Font> = jvm
+            .get_field(
+                &this,
+                "font",
+                "Lorg/kwis/msp/lcdui/Font;",
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &graphics,
+                "setFont",
+                "(Lorg/kwis/msp/lcdui/Font;)V",
+                (font.clone(),),
+            )
+            .await?;
+
+        // Native calls Component.paintContent(Graphics) directly.
+        let _: () = jvm
+            .invoke_special(
+                &this,
+                "org/kwis/msp/lwc/Component",
+                "paintContent",
+                "(Lorg/kwis/msp/lcdui/Graphics;)V",
+                (graphics.clone(),),
+            )
+            .await?;
+
+        if font.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let font_height: i32 = jvm
+            .invoke_virtual(
+                &font,
+                "getHeight",
+                "()I",
+                (),
+            )
+            .await?;
+
+        let line_height = font_height + 1;
+
+        let mask: i32 =
+            jvm.get_field(&this, "mask", "I").await?;
+        let width: i32 =
+            jvm.get_field(&this, "w", "I").await?;
+        let height: i32 =
+            jvm.get_field(&this, "h", "I").await?;
+
+        // Native selected/focused background:
+        // Decorator static +0x58 = RGB(160,160,200).
+        if mask & 6 == 6 {
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "setColor",
+                    "(I)V",
+                    (0x00a0a0c8i32,),
+                )
+                .await?;
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "fillRect",
+                    "(IIII)V",
+                    (0, 0, width, height),
+                )
+                .await?;
+        } else {
+            let background: i32 =
+                jvm.get_field(&this, "bg", "I").await?;
+
+            if background >= 0 {
+                let _: () = jvm
+                    .invoke_virtual(
+                        &graphics,
+                        "setColor",
+                        "(I)V",
+                        (background,),
+                    )
+                    .await?;
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &graphics,
+                        "fillRect",
+                        "(IIII)V",
+                        (0, 0, width, height),
+                    )
+                    .await?;
+            }
+        }
+
+        // Native uses the explicit foreground whenever fg >= 0.
+        // Only the default-color path depends on the selected/focused state:
+        //
+        //   selected: Decorator +0x54 = RGB(0,0,0)
+        //   normal:   Decorator +0x48 = RGB(0,0,64)
+        let configured_foreground: i32 =
+            jvm.get_field(&this, "fg", "I").await?;
+
+        let foreground = if configured_foreground >= 0 {
+            configured_foreground
+        } else if mask & 6 == 6 {
+            0x00000000i32
+        } else {
+            0x00000040i32
+        };
+
+        let _: () = jvm
+            .invoke_virtual(
+                &graphics,
+                "setColor",
+                "(I)V",
+                (foreground,),
+            )
+            .await?;
+
+        let offset: i32 = jvm
+            .invoke_virtual(
+                &this,
+                "getOffset",
+                "()I",
+                (),
+            )
+            .await?;
+
+        let formatted_height =
+            Self::get_formatted_height_for_width(
+                jvm,
+                &this,
+                width,
+            )
+            .await?;
+
+        let layout: i32 =
+            jvm.get_field(&this, "layout", "I").await?;
+
+        let label: ClassInstanceRef<String> = jvm
+            .get_field(
+                &this,
+                "label",
+                "Ljava/lang/String;",
+            )
+            .await?;
+
+        let label_width = if !label.is_null() {
+            jvm.invoke_virtual(
+                &font,
+                "stringWidth",
+                "(Ljava/lang/String;)I",
+                (label.clone(),),
+            )
+            .await?
+        } else {
+            0
+        };
+
+        let image: ClassInstanceRef<Image> = jvm
+            .get_field(
+                &this,
+                "image",
+                "Lorg/kwis/msp/lcdui/Image;",
+            )
+            .await?;
+
+        let mut x = offset;
+        let mut y = 2;
+
+        // Width occupied by an image beside the current text lines.
+        let mut reserved_image_width = 0;
+
+        // Remaining vertical image area that prevents text from using the
+        // image's horizontal region.
+        let mut remaining_image_height = 0;
+
+        if !image.is_null() {
+            let image_width: i32 = jvm
+                .invoke_virtual(
+                    &image,
+                    "getWidth",
+                    "()I",
+                    (),
+                )
+                .await?;
+
+            let image_height: i32 = jvm
+                .invoke_virtual(
+                    &image,
+                    "getHeight",
+                    "()I",
+                    (),
+                )
+                .await?;
+
+            let spacing =
+                if label_width != 0 { 4 } else { 0 };
+            let combined_width =
+                image_width + label_width + spacing;
+
+            // Horizontal image placement.
+            if layout & 1 != 0 {
+                x = offset;
+            } else if layout & 2 != 0 {
+                if combined_width <= width {
+                    x = width - combined_width;
+                } else {
+                    x = offset;
+                }
+            } else if layout & 4 != 0 {
+                if combined_width <= width {
+                    x = (width - combined_width) / 2;
+                } else {
+                    x = offset;
+                }
+            } else {
+                x = offset;
+            }
+
+            // Vertical image placement.
+            if layout & 8 == 0 && formatted_height < height {
+                if layout & 16 != 0 {
+                    y = height - formatted_height;
+                } else if layout & 32 != 0 {
+                    y = (height - formatted_height) / 2;
+                }
+            }
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "drawImage",
+                    "(Lorg/kwis/msp/lcdui/Image;III)V",
+                    (image.clone(), x, y, 4),
+                )
+                .await?;
+
+            // If there is horizontal room to the right of the image,
+            // text initially flows beside it. Otherwise text starts below it.
+            if width - x > image_width {
+                x += 4;
+                reserved_image_width = image_width;
+                remaining_image_height = image_height;
+            } else {
+                y += image_height;
+            }
+        }
+
+        if label.is_null() {
+            return Ok(());
+        }
+
+        let length: i32 = jvm
+            .invoke_virtual(
+                &label,
+                "length",
+                "()I",
+                (),
+            )
+            .await?;
+
+        if reserved_image_width > 0 {
+            x += reserved_image_width;
+        } else {
+            // Initial text alignment when no image occupies the text line.
+            if layout & 1 == 0 && width - x > label_width {
+                if layout & 4 != 0 {
+                    x = (reserved_image_width + width - label_width) / 2;
+                } else if layout & 2 != 0 {
+                    x = width - label_width;
+                }
+            }
+
+            // Native 0x225594..0x2255bc uses the label width (r4) in
+            // this no-image/no-reservation vertical-alignment branch.
+            // It also tests 0x02 for the centering case.
+            if layout & 8 == 0 && formatted_height < height {
+                if layout & 16 != 0 {
+                    y = height - label_width;
+                } else if layout & 2 != 0 {
+                    y = (height - label_width) / 2;
+                }
+            }
+        }
+
+        if length <= 0 {
+            return Ok(());
+        }
+
+        // Native string wrapping state:
+        //
+        // position:
+        //   1-based current character position.
+        //
+        // start:
+        //   zero-based substring start for the current line.
+        //
+        // last_fit:
+        //   1-based position of the last character accepted on the line.
+        //
+        // current_width:
+        //   accumulated width of the current line.
+        let mut position = 1;
+        let mut start = 0;
+        let mut last_fit = 0;
+        let mut current_width = 0;
+
+        loop {
+            let index = position - 1;
+
+            let ch: JavaChar = jvm
+                .invoke_virtual(
+                    &label,
+                    "charAt",
+                    "(I)C",
+                    (index,),
+                )
+                .await?;
+
+            let char_width: i32 = jvm
+                .invoke_virtual(
+                    &font,
+                    "charWidth",
+                    "(C)I",
+                    (ch,),
+                )
+                .await?;
+
+            let next_width = current_width + char_width;
+            let available_width = width - x;
+            let newline = u16::from(ch) == 10;
+
+            if next_width <= available_width && !newline {
+                current_width = next_width;
+                last_fit = position;
+
+                if position == length {
+                    // Draw the final accumulated line.
+                    if position > start {
+                        let line_len = position - start;
+                        let mut line_x = x;
+
+                        if layout & 1 == 0 {
+                            let line_width: i32 = jvm
+                                .invoke_virtual(
+                                    &font,
+                                    "substringWidth",
+                                    "(Ljava/lang/String;II)I",
+                                    (
+                                        label.clone(),
+                                        start,
+                                        line_len,
+                                    ),
+                                )
+                                .await?;
+
+                            if width - x > line_width {
+                                if layout & 4 != 0 {
+                                    line_x =
+                                        (
+                                            reserved_image_width
+                                                + width
+                                                - line_width
+                                        ) / 2;
+                                } else if layout & 2 != 0 {
+                                    line_x = width - line_width;
+                                }
+                            }
+                        }
+
+                        let _: () = jvm
+                            .invoke_virtual(
+                                &graphics,
+                                "drawSubstring",
+                                "(Ljava/lang/String;IIIII)V",
+                                (
+                                    label.clone(),
+                                    start,
+                                    line_len,
+                                    line_x,
+                                    y,
+                                    4,
+                                ),
+                            )
+                            .await?;
+                    }
+
+                    return Ok(());
+                }
+
+                position += 1;
+                continue;
+            }
+
+            // A wrap or newline terminates the previously accepted part
+            // of the current line.
+            if last_fit > start {
+                let line_len = last_fit - start;
+                let mut line_x = x;
+
+                if layout & 1 == 0 {
+                    let line_width: i32 = jvm
+                        .invoke_virtual(
+                            &font,
+                            "substringWidth",
+                            "(Ljava/lang/String;II)I",
+                            (
+                                label.clone(),
+                                start,
+                                line_len,
+                            ),
+                        )
+                        .await?;
+
+                    if width - x > line_width {
+                        if layout & 4 != 0 {
+                            line_x =
+                                (
+                                    reserved_image_width
+                                        + width
+                                        - line_width
+                                ) / 2;
+                        } else if layout & 2 != 0 {
+                            line_x = width - line_width;
+                        }
+                    }
+                }
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &graphics,
+                        "drawSubstring",
+                        "(Ljava/lang/String;IIIII)V",
+                        (
+                            label.clone(),
+                            start,
+                            line_len,
+                            line_x,
+                            y,
+                            4,
+                        ),
+                    )
+                    .await?;
+            }
+
+            let next_y = y + line_height;
+            let next_remaining =
+                remaining_image_height - line_height;
+
+            if next_remaining > 0 {
+                remaining_image_height = next_remaining;
+            } else if reserved_image_width > 0 {
+                x -= reserved_image_width;
+                reserved_image_width = 0;
+                remaining_image_height = 0;
+            } else {
+                x = jvm
+                    .invoke_virtual(
+                        &this,
+                        "getOffset",
+                        "()I",
+                        (),
+                    )
+                    .await?;
+            }
+
+            y = next_y;
+
+            if newline {
+                current_width = 0;
+                start = position;
+            } else {
+                current_width = char_width;
+                start = index;
+            }
+
+            // Native updates this to the current 1-based position before
+            // testing whether the current character was the final one.
+            last_fit = position;
+
+            if position == length {
+                if position > start {
+                    let line_len = position - start;
+                    let mut line_x = x;
+
+                    if layout & 1 == 0 {
+                        let line_width: i32 = jvm
+                            .invoke_virtual(
+                                &font,
+                                "substringWidth",
+                                "(Ljava/lang/String;II)I",
+                                (
+                                    label.clone(),
+                                    start,
+                                    line_len,
+                                ),
+                            )
+                            .await?;
+
+                        if width - x > line_width {
+                            if layout & 4 != 0 {
+                                line_x =
+                                    (
+                                        reserved_image_width
+                                            + width
+                                            - line_width
+                                    ) / 2;
+                            } else if layout & 2 != 0 {
+                                line_x = width - line_width;
+                            }
+                        }
+                    }
+
+                    let _: () = jvm
+                        .invoke_virtual(
+                            &graphics,
+                            "drawSubstring",
+                            "(Ljava/lang/String;IIIII)V",
+                            (
+                                label.clone(),
+                                start,
+                                line_len,
+                                line_x,
+                                y,
+                                4,
+                            ),
+                        )
+                        .await?;
+                }
+
+                return Ok(());
+            }
+
+            position += 1;
+        }
     }
 
 }
