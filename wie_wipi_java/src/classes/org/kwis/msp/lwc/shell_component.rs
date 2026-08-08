@@ -1,12 +1,13 @@
 use alloc::vec;
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
+use java_runtime::classes::java::lang::String;
 use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 use crate::classes::org::kwis::msp::{
     lcdui::Display,
-    lwc::{Component, ProxyCard},
+    lwc::{Component, LabelComponent, ProxyCard},
 };
 
 // class org.kwis.msp.lwc.ShellComponent
@@ -121,6 +122,12 @@ impl ShellComponent {
                 JavaMethodProto::new("isShown", "()Z", Self::is_shown, Default::default()),
                 JavaMethodProto::new("show", "()V", Self::show, Default::default()),
                 JavaMethodProto::new("hide", "()V", Self::hide, Default::default()),
+                JavaMethodProto::new(
+                    "setTitle",
+                    "(Ljava/lang/String;)V",
+                    Self::set_title_string,
+                    Default::default(),
+                ),
                 JavaMethodProto::new(
                     "setTitle",
                     "(Lorg/kwis/msp/lwc/Component;)V",
@@ -741,6 +748,58 @@ impl ShellComponent {
         let mut mask: i32 = jvm.get_field(&this, "mask", "I").await?;
         mask |= i32::MIN;
         jvm.put_field(&mut this, "mask", "I", mask).await?;
+
+        Ok(())
+    }
+
+    async fn set_title_string(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        title: ClassInstanceRef<String>,
+    ) -> JvmResult<()> {
+        // WipiPlayer Plus ShellComponent.setTitle(String):
+        //
+        // LabelComponent label = new LabelComponent(title);
+        // label.setBackground(RGB(100,100,210));
+        // label.setForeground(RGB(0,0,64));
+        // setTitle((Component) label);
+
+        let label: ClassInstanceRef<LabelComponent> = jvm
+            .new_class(
+                "org/kwis/msp/lwc/LabelComponent",
+                "(Ljava/lang/String;)V",
+                (title,),
+            )
+            .await?
+            .into();
+
+        let _: () = jvm
+            .invoke_virtual(
+                &label,
+                "setBackground",
+                "(I)V",
+                (0x006464d2i32,),
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &label,
+                "setForeground",
+                "(I)V",
+                (0x00000040i32,),
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "setTitle",
+                "(Lorg/kwis/msp/lwc/Component;)V",
+                (label,),
+            )
+            .await?;
 
         Ok(())
     }
