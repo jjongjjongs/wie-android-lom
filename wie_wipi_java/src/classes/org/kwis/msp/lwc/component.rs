@@ -118,6 +118,10 @@ impl Component {
         let mut this = this;
         jvm.put_field(&mut this, "w", "I", 1).await?;
         jvm.put_field(&mut this, "h", "I", 1).await?;
+        jvm.put_field(&mut this, "bg", "I", -1).await?;
+        jvm.put_field(&mut this, "fg", "I", -1).await?;
+        jvm.put_field(&mut this, "prefW", "I", -1).await?;
+        jvm.put_field(&mut this, "prefH", "I", -1).await?;
         jvm.put_field(&mut this, "mask", "I", 0).await?;
 
         Ok(())
