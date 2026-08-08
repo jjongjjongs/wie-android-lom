@@ -19,6 +19,30 @@ impl Component {
                 JavaMethodProto::new("<init>", "()V", Self::init, MethodAccessFlags::PROTECTED),
                 JavaMethodProto::new("getWidth", "()I", Self::get_width, Default::default()),
                 JavaMethodProto::new("getHeight", "()I", Self::get_height, Default::default()),
+                JavaMethodProto::new(
+                    "getPreferredWidth",
+                    "()I",
+                    Self::get_preferred_width,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "getPreferredHeight",
+                    "(I)I",
+                    Self::get_preferred_height_with_width,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "getPreferredHeight",
+                    "()I",
+                    Self::get_preferred_height,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "calcPreferredSize",
+                    "(I)V",
+                    Self::calc_preferred_size,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("canHandleInput", "()Z", Self::can_handle_input, Default::default()),
                 JavaMethodProto::new("hasFocus", "()Z", Self::has_focus, Default::default()),
                 JavaMethodProto::new("setBackground", "(I)V", Self::set_background, Default::default()),
@@ -346,6 +370,85 @@ impl Component {
             (),
         )
         .await
+    }
+
+    async fn get_preferred_width(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        let pref_w: i32 = jvm.get_field(&this, "prefW", "I").await?;
+
+        if pref_w < 0 {
+            let _: () = jvm
+                .invoke_virtual(
+                    &this,
+                    "calcPreferredSize",
+                    "(I)V",
+                    (-1,),
+                )
+                .await?;
+        }
+
+        jvm.get_field(&this, "prefW", "I").await
+    }
+
+    async fn get_preferred_height_with_width(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        width: i32,
+    ) -> JvmResult<i32> {
+        let pref_h: i32 = jvm.get_field(&this, "prefH", "I").await?;
+        let pref_w: i32 = jvm.get_field(&this, "prefW", "I").await?;
+
+        if pref_h < 0 || pref_w != width {
+            let _: () = jvm
+                .invoke_virtual(
+                    &this,
+                    "calcPreferredSize",
+                    "(I)V",
+                    (width,),
+                )
+                .await?;
+        }
+
+        jvm.get_field(&this, "prefH", "I").await
+    }
+
+    async fn get_preferred_height(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        let pref_h: i32 = jvm.get_field(&this, "prefH", "I").await?;
+
+        if pref_h < 0 {
+            let _: () = jvm
+                .invoke_virtual(
+                    &this,
+                    "calcPreferredSize",
+                    "(I)V",
+                    (-1,),
+                )
+                .await?;
+        }
+
+        jvm.get_field(&this, "prefH", "I").await
+    }
+
+    async fn calc_preferred_size(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        width: i32,
+    ) -> JvmResult<()> {
+        let height: i32 = jvm.get_field(&this, "h", "I").await?;
+
+        jvm.put_field(&mut this, "prefW", "I", width).await?;
+        jvm.put_field(&mut this, "prefH", "I", height).await?;
+
+        Ok(())
     }
 
     async fn get_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
