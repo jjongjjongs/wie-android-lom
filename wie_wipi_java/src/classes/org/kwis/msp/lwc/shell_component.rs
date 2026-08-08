@@ -158,6 +158,12 @@ impl ShellComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "pointerNotify",
+                    "(III)Z",
+                    Self::pointer_notify,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "processEvent",
                     "(IIII)Z",
                     Self::process_event,
@@ -1117,6 +1123,27 @@ impl ShellComponent {
         }
 
         Ok(result)
+    }
+
+    async fn pointer_notify(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        event_type: i32,
+        x: i32,
+        y: i32,
+    ) -> JvmResult<bool> {
+        let _: bool = jvm
+            .invoke_special(
+                &this,
+                "org/kwis/msp/lwc/Component",
+                "pointerNotify",
+                "(III)Z",
+                (event_type, x, y),
+            )
+            .await?;
+
+        Ok(true)
     }
 
     async fn key_notify(
