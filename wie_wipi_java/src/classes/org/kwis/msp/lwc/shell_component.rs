@@ -77,6 +77,18 @@ impl ShellComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "removeComponent",
+                    "(Lorg/kwis/msp/lwc/Component;)V",
+                    Self::remove_component,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "removeAllComponents",
+                    "()V",
+                    Self::remove_all_components,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "setWorkComponent",
                     "(Lorg/kwis/msp/lwc/Component;)V",
                     Self::set_work_component,
@@ -1933,6 +1945,144 @@ impl ShellComponent {
                 (actual_index, component),
             )
             .await?;
+
+        Ok(())
+    }
+
+    async fn remove_component(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        component: ClassInstanceRef<Component>,
+    ) -> JvmResult<()> {
+        // Native ShellComponent.removeComponent(Component) first calls
+        // ContainerComponent.removeComponent(Component) directly.
+        let _: () = jvm
+            .invoke_special(
+                &this,
+                "org/kwis/msp/lwc/ContainerComponent",
+                "removeComponent",
+                "(Lorg/kwis/msp/lwc/Component;)V",
+                (component.clone(),),
+            )
+            .await?;
+
+        let title: ClassInstanceRef<Component> = jvm
+            .get_field(
+                &this,
+                "title",
+                "Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
+        if !title.is_null()
+            && title.identity() == component.identity()
+        {
+            let mut this = this;
+            jvm.put_field(
+                &mut this,
+                "title",
+                "Lorg/kwis/msp/lwc/Component;",
+                ClassInstanceRef::<Component>::new(None),
+            )
+            .await?;
+
+            return Ok(());
+        }
+
+        let work: ClassInstanceRef<Component> = jvm
+            .get_field(
+                &this,
+                "work",
+                "Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
+        if !work.is_null()
+            && work.identity() == component.identity()
+        {
+            let mut this = this;
+            jvm.put_field(
+                &mut this,
+                "work",
+                "Lorg/kwis/msp/lwc/Component;",
+                ClassInstanceRef::<Component>::new(None),
+            )
+            .await?;
+
+            return Ok(());
+        }
+
+        let command: ClassInstanceRef<Component> = jvm
+            .get_field(
+                &this,
+                "command",
+                "Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
+        if !command.is_null()
+            && command.identity() == component.identity()
+        {
+            let mut this = this;
+            jvm.put_field(
+                &mut this,
+                "command",
+                "Lorg/kwis/msp/lwc/Component;",
+                ClassInstanceRef::<Component>::new(None),
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn remove_all_components(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<()> {
+        // Native ShellComponent.removeAllComponents() calls the
+        // ContainerComponent implementation directly, then clears
+        // the Shell-specific child slots.
+        let _: () = jvm
+            .invoke_special(
+                &this,
+                "org/kwis/msp/lwc/ContainerComponent",
+                "removeAllComponents",
+                "()V",
+                (),
+            )
+            .await?;
+
+        let null_component =
+            ClassInstanceRef::<Component>::new(None);
+
+        let mut this = this;
+
+        jvm.put_field(
+            &mut this,
+            "command",
+            "Lorg/kwis/msp/lwc/Component;",
+            null_component.clone(),
+        )
+        .await?;
+
+        jvm.put_field(
+            &mut this,
+            "title",
+            "Lorg/kwis/msp/lwc/Component;",
+            null_component.clone(),
+        )
+        .await?;
+
+        jvm.put_field(
+            &mut this,
+            "work",
+            "Lorg/kwis/msp/lwc/Component;",
+            null_component,
+        )
+        .await?;
 
         Ok(())
     }
