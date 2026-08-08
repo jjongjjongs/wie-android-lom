@@ -170,6 +170,12 @@ impl ShellComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "configure",
+                    "(IIIII)V",
+                    Self::configure,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "processEvent",
                     "(IIII)Z",
                     Self::process_event,
@@ -1129,6 +1135,107 @@ impl ShellComponent {
         }
 
         Ok(result)
+    }
+
+    async fn configure(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        flags: i32,
+    ) -> JvmResult<()> {
+        // WipiPlayer Plus ShellComponent.configure(IIIII)V.
+        if flags & 0x3 != 0 {
+            let mask: i32 = jvm.get_field(&this, "mask", "I").await?;
+            jvm.put_field(
+                &mut this,
+                "mask",
+                "I",
+                mask | i32::MIN,
+            )
+            .await?;
+        }
+
+        if flags & 0x1 != 0 {
+            let proxy: ClassInstanceRef<ProxyCard> = jvm
+                .get_field(
+                    &this,
+                    "proxyCard",
+                    "Lorg/kwis/msp/lwc/ProxyCard;",
+                )
+                .await?;
+
+            if proxy.is_null() {
+                return Err(
+                    jvm.exception(
+                        "java/lang/NullPointerException",
+                        "proxyCard is null",
+                    )
+                    .await,
+                );
+            }
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &proxy,
+                    "move",
+                    "(II)V",
+                    (x, y),
+                )
+                .await?;
+        }
+
+        if flags & 0x2 != 0 {
+            let _: () = jvm
+                .invoke_special(
+                    &this,
+                    "org/kwis/msp/lwc/Component",
+                    "configure",
+                    "(IIIII)V",
+                    (0, 0, w, h, 2),
+                )
+                .await?;
+
+            let proxy: ClassInstanceRef<ProxyCard> = jvm
+                .get_field(
+                    &this,
+                    "proxyCard",
+                    "Lorg/kwis/msp/lwc/ProxyCard;",
+                )
+                .await?;
+
+            if proxy.is_null() {
+                return Err(
+                    jvm.exception(
+                        "java/lang/NullPointerException",
+                        "proxyCard is null",
+                    )
+                    .await,
+                );
+            }
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &proxy,
+                    "resize",
+                    "(II)V",
+                    (w, h),
+                )
+                .await?;
+
+            let shell_state: bool =
+                jvm.get_field(&this, "shellState", "Z").await?;
+
+            if !shell_state {
+                let _: () =
+                    jvm.invoke_virtual(&this, "invalidate", "()V", ()).await?;
+            }
+        }
+
+        Ok(())
     }
 
     async fn show_notify(
