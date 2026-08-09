@@ -683,7 +683,7 @@ pub async fn draw_string(
 
     let mut canvas = framebuffer.canvas(context)?;
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.draw_text(&string, x, y, TextAlignment::Left, color, clip);
+    canvas.draw_text(&string, x, y, 40.0 / 3.0, 10.0, TextAlignment::Left, color, clip);
     canvas.flush()?;
 
     Ok(())

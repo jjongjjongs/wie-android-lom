@@ -52,7 +52,17 @@ pub trait Canvas: Send {
     fn copy_area(&mut self, dx: i32, dy: i32, sx: i32, sy: i32, w: u32, h: u32, clip: Clip);
     fn draw(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip);
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color, clip: Clip);
-    fn draw_text(&mut self, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip);
+    fn draw_text(
+        &mut self,
+        string: &str,
+        x: i32,
+        y: i32,
+        font_height: f32,
+        font_baseline: f32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+    );
     fn draw_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color, clip: Clip);
     fn draw_arc(&mut self, x: i32, y: i32, w: u32, h: u32, start_angle: i32, arc_angle: i32, color: Color, clip: Clip);
     fn draw_round_rect(&mut self, x: i32, y: i32, w: u32, h: u32, arc_width: u32, arc_height: u32, color: Color, clip: Clip);
@@ -583,9 +593,18 @@ where
         }
     }
 
-    fn draw_text(&mut self, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip) {
-        let size = 10.0; // TODO
-        let font = FONT.as_scaled(FONT.pt_to_px_scale(size).unwrap());
+    fn draw_text(
+        &mut self,
+        string: &str,
+        x: i32,
+        y: i32,
+        font_height: f32,
+        font_baseline: f32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+    ) {
+        let font = FONT.as_scaled(font_height);
 
         let total_width = string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>();
         let x = match text_alignment {
@@ -607,7 +626,7 @@ where
                 outlined_glyph.draw(|glyph_x: u32, glyph_y, c| {
                     let bounds = outlined_glyph.px_bounds();
                     let px = x + (glyph_x as f32 + bounds.min.x + position) as i32;
-                    let py = y + (glyph_y as f32 + bounds.min.y + size) as i32;
+                    let py = y + (glyph_y as f32 + bounds.min.y + font_baseline) as i32;
                     if px < clip.x || px >= clip.x + clip.width as i32 || py < clip.y || py >= clip.y + clip.height as i32 {
                         return;
                     }
@@ -1249,11 +1268,11 @@ mod tests {
             height: 0,
         };
         let mut canvas = ImageBufferCanvas::new(VecImageBuffer::<ArgbPixel>::new(30, 20));
-        canvas.draw_text("A", 2, 2, TextAlignment::Left, WHITE, empty_clip);
+        canvas.draw_text("A", 2, 2, 40.0 / 3.0, 10.0, TextAlignment::Left, WHITE, empty_clip);
         let clipped = canvas.into_inner();
 
         let mut canvas = ImageBufferCanvas::new(VecImageBuffer::<ArgbPixel>::new(30, 20));
-        canvas.draw_text("A", 2, 2, TextAlignment::Left, WHITE, full_clip(30));
+        canvas.draw_text("A", 2, 2, 40.0 / 3.0, 10.0, TextAlignment::Left, WHITE, full_clip(30));
         let unclipped = canvas.into_inner();
 
         let count_set = |image: &VecImageBuffer<ArgbPixel>| {

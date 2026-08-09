@@ -110,10 +110,20 @@ impl Font {
         jvm.invoke_virtual(&midp_font, "getHeight", "()I", ()).await
     }
 
-    async fn get_baseline_position(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Font::getBaselinePosition({this:?})");
+    async fn get_baseline_position(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.lcdui.Font::getBaselinePosition({this:?})");
 
-        Ok(0)
+        let size: i32 = jvm.get_field(&this, "size", "I").await?;
+        Ok(match size {
+            8 => 8,
+            0 => 9,
+            16 => 10,
+            4096 => 12,
+            8192 => 14,
+            16384 => 15,
+            32768 => 17,
+            _ => 9,
+        })
     }
 
     async fn get_face(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
@@ -275,7 +285,7 @@ mod test {
             assert!(jvm.invoke_virtual::<_, bool>(&font, "isItalic", "()Z", ()).await?);
             assert!(jvm.invoke_virtual::<_, bool>(&font, "isUnderlined", "()Z", ()).await?);
             assert!(!jvm.invoke_virtual::<_, bool>(&font, "isPlain", "()Z", ()).await?);
-            assert_eq!(jvm.invoke_virtual::<_, i32>(&font, "getBaselinePosition", "()I", ()).await?, 0);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&font, "getBaselinePosition", "()I", ()).await?, 10);
 
             Ok(())
         })

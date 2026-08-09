@@ -57,16 +57,29 @@ impl Font {
         }
     }
 
-    fn pixel_height(size: i32) -> i32 {
+    pub(crate) fn pixel_height(size: i32) -> i32 {
         match size {
             8 => 10,      // SIZE_SMALL
             0 => 12,      // SIZE_MEDIUM
             16 => 14,     // SIZE_LARGE
             4096 => 16,
-            8192 => 18,
-            16384 => 19,
-            32768 => 22,
+            8192 => 20,
+            16384 => 22,
+            32768 => 24,
             _ => 12,
+        }
+    }
+
+    pub(crate) fn baseline(size: i32) -> i32 {
+        match size {
+            8 => 8,       // SIZE_SMALL
+            0 => 9,       // SIZE_MEDIUM
+            16 => 10,     // SIZE_LARGE
+            4096 => 12,
+            8192 => 14,
+            16384 => 15,
+            32768 => 17,
+            _ => 9,
         }
     }
 

@@ -115,6 +115,7 @@ impl Graphics {
                 JavaFieldProto::new("translateY", "I", Default::default()),
                 JavaFieldProto::new("color", "I", Default::default()),
                 JavaFieldProto::new("xorMode", "Z", Default::default()),
+                JavaFieldProto::new("font", "Ljavax/microedition/lcdui/Font;", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -153,15 +154,30 @@ impl Graphics {
         jvm.put_field(&mut this, "color", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
 
+        let font: ClassInstanceRef<Font> = jvm
+            .invoke_static(
+                "javax/microedition/lcdui/Font",
+                "getDefaultFont",
+                "()Ljavax/microedition/lcdui/Font;",
+                (),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "font",
+            "Ljavax/microedition/lcdui/Font;",
+            font,
+        )
+        .await?;
+
         Ok(())
     }
 
     async fn get_font(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Graphics>) -> JvmResult<ClassInstanceRef<Font>> {
-        tracing::warn!("stub javax.microedition.lcdui.Graphics::getFont({this:?})");
+        tracing::debug!("javax.microedition.lcdui.Graphics::getFont({this:?})");
 
-        let instance = jvm.new_class("javax/microedition/lcdui/Font", "()V", []).await?;
-
-        Ok(instance.into())
+        jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await
     }
 
     async fn set_color(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, rgb: i32) -> JvmResult<()> {
@@ -190,8 +206,16 @@ impl Graphics {
         Ok(())
     }
 
-    async fn set_font(_jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Graphics>, font: ClassInstanceRef<Font>) -> JvmResult<()> {
-        tracing::warn!("stub javax.microedition.lcdui.Graphics::setFont({this:?}, {font:?})");
+    async fn set_font(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Graphics>, font: ClassInstanceRef<Font>) -> JvmResult<()> {
+        tracing::debug!("javax.microedition.lcdui.Graphics::setFont({this:?}, {font:?})");
+
+        jvm.put_field(
+            &mut this,
+            "font",
+            "Ljavax/microedition/lcdui/Font;",
+            font,
+        )
+        .await?;
 
         Ok(())
     }
@@ -408,6 +432,11 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> =
+            jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
 
@@ -415,6 +444,8 @@ impl Graphics {
             &string,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
@@ -445,6 +476,11 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> =
+            jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
 
@@ -452,6 +488,8 @@ impl Graphics {
             &string,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
@@ -482,6 +520,11 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> =
+            jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
 
@@ -489,6 +532,8 @@ impl Graphics {
             &string,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
@@ -518,6 +563,11 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> =
+            jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
 
@@ -525,6 +575,8 @@ impl Graphics {
             &substring,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
