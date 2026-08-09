@@ -414,8 +414,8 @@ impl Image {
 
     #[allow(clippy::too_many_arguments)]
     async fn create_sub_image(
-        _: &Jvm,
-        _: &mut WieJvmContext,
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
         this: ClassInstanceRef<Image>,
         x: i32,
         y: i32,
@@ -423,9 +423,58 @@ impl Image {
         height: i32,
         mutable: bool,
     ) -> JvmResult<ClassInstanceRef<Image>> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Image::createSubImage({this:?}, {x}, {y}, {width}, {height}, {mutable})");
+        tracing::debug!("org.kwis.msp.lcdui.Image::createSubImage({this:?}, {x}, {y}, {width}, {height}, {mutable})");
 
-        Ok(None.into())
+        let source_width: i32 = jvm.invoke_virtual(&this, "getWidth", "()I", ()).await?;
+        let source_height: i32 = jvm.invoke_virtual(&this, "getHeight", "()I", ()).await?;
+
+        if x < 0
+            || y < 0
+            || width < 0
+            || height < 0
+            || x + width > source_width
+            || y + height > source_height
+        {
+            return Err(jvm
+                .exception("java/lang/IllegalArgumentException", "")
+                .await);
+        }
+
+        let animated: bool = jvm.invoke_virtual(&this, "isAnimated", "()Z", ()).await?;
+        if animated {
+            return Err(jvm
+                .exception(
+                    "java/lang/IllegalArgumentException",
+                    "Animation image cannot be editable",
+                )
+                .await);
+        }
+
+        let mut result = Self::create_image(jvm, context, width, height).await?;
+
+        let graphics: ClassInstanceRef<Graphics> = jvm
+            .invoke_virtual(
+                &result,
+                "getGraphics",
+                "()Lorg/kwis/msp/lcdui/Graphics;",
+                (),
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &graphics,
+                "drawImage",
+                "(Lorg/kwis/msp/lcdui/Image;III)V",
+                (this, -x, -y, 4),
+            )
+            .await?;
+
+        if !mutable {
+            jvm.put_field(&mut result, "mutable", "Z", false).await?;
+        }
+
+        Ok(result)
     }
 
     async fn set_transparent_color(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>, rgb: i32) -> JvmResult<()> {
@@ -474,6 +523,28 @@ mod test {
                 .await?;
             assert!(jvm.invoke_virtual::<_, bool>(&clone, "isMutable", "()Z", ()).await?);
             assert!(!jvm.invoke_virtual::<_, bool>(&source, "isAnimated", "()Z", ()).await?);
+
+            let mutable_sub: ClassInstanceRef<Image> = jvm
+                .invoke_virtual(
+                    &source,
+                    "createSubImage",
+                    "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
+                    (0, 0, 1, 1, true),
+                )
+                .await?;
+            assert!(jvm.invoke_virtual::<_, bool>(&mutable_sub, "isMutable", "()Z", ()).await?);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&mutable_sub, "getWidth", "()I", ()).await?, 1);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&mutable_sub, "getHeight", "()I", ()).await?, 1);
+
+            let immutable_sub: ClassInstanceRef<Image> = jvm
+                .invoke_virtual(
+                    &source,
+                    "createSubImage",
+                    "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
+                    (0, 0, 1, 1, false),
+                )
+                .await?;
+            assert!(!jvm.invoke_virtual::<_, bool>(&immutable_sub, "isMutable", "()Z", ()).await?);
 
             let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&source, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
             let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (0xff0000,)).await?;
