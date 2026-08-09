@@ -176,6 +176,50 @@ impl Image {
             return Ok(instance.into());
         }
 
+        if let Some(file_name) = resource_name.strip_prefix("file://") {
+            let file_name = JavaLangString::from_rust_string(jvm, file_name).await?;
+            let file = jvm
+                .new_class(
+                    "org/kwis/msp/io/File",
+                    "(Ljava/lang/String;I)V",
+                    (file_name, 1),
+                )
+                .await?;
+
+            let size: i32 = jvm.invoke_virtual(&file, "sizeOf", "()I", ()).await?;
+            let data_array = jvm.instantiate_array("B", size as usize).await?;
+            let read: i32 = jvm
+                .invoke_virtual(
+                    &file,
+                    "read",
+                    "([BII)I",
+                    (data_array.clone(), 0, size),
+                )
+                .await?;
+
+            let _: () = jvm.invoke_virtual(&file, "close", "()V", ()).await?;
+
+            let image_length = if read < 0 { 0 } else { read };
+            let midp_image: ClassInstanceRef<MidpImage> = jvm
+                .invoke_static(
+                    "javax/microedition/lcdui/Image",
+                    "createImage",
+                    "([BII)Ljavax/microedition/lcdui/Image;",
+                    (data_array, 0, image_length),
+                )
+                .await?;
+
+            let instance = jvm
+                .new_class(
+                    "org/kwis/msp/lcdui/Image",
+                    "(Ljavax/microedition/lcdui/Image;)V",
+                    (midp_image,),
+                )
+                .await?;
+
+            return Ok(instance.into());
+        }
+
         let midp_image: ClassInstanceRef<MidpImage> = jvm
             .invoke_static(
                 "javax/microedition/lcdui/Image",
