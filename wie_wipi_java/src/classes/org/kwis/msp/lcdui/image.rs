@@ -261,24 +261,41 @@ impl Image {
         Ok(instance.into())
     }
 
-    async fn create_image_from_image(jvm: &Jvm, _: &mut WieJvmContext, image: ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<Image>> {
+    async fn create_image_from_image(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        image: ClassInstanceRef<Image>,
+    ) -> JvmResult<ClassInstanceRef<Image>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::createImage({image:?})");
 
-        let midp_image: ClassInstanceRef<MidpImage> = jvm.get_field(&image, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
-        let midp_image_clone: ClassInstanceRef<MidpImage> = jvm
-            .invoke_static(
-                "javax/microedition/lcdui/Image",
-                "createImage",
-                "(Ljavax/microedition/lcdui/Image;)Ljavax/microedition/lcdui/Image;",
-                (midp_image,),
+        if image.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "image is null").await);
+        }
+
+        let width: i32 = jvm.invoke_virtual(&image, "getWidth", "()I", ()).await?;
+        let height: i32 = jvm.invoke_virtual(&image, "getHeight", "()I", ()).await?;
+
+        let instance = Self::create_image(jvm, context, width, height).await?;
+
+        let graphics: ClassInstanceRef<Graphics> = jvm
+            .invoke_virtual(
+                &instance,
+                "getGraphics",
+                "()Lorg/kwis/msp/lcdui/Graphics;",
+                (),
             )
             .await?;
 
-        let instance = jvm
-            .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image_clone,))
+        let _: () = jvm
+            .invoke_virtual(
+                &graphics,
+                "drawImage",
+                "(Lorg/kwis/msp/lcdui/Image;III)V",
+                (image, 0, 0, 4),
+            )
             .await?;
 
-        Ok(instance.into())
+        Ok(instance)
     }
 
     async fn get_graphics(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<Graphics>> {
