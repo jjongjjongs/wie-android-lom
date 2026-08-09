@@ -861,6 +861,12 @@ pub fn string_width(string: &str, pt_size: f32) -> f32 {
     string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>()
 }
 
+pub fn string_width_px(string: &str, px_height: f32) -> f32 {
+    let font = FONT.as_scaled(px_height);
+
+    string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>()
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;

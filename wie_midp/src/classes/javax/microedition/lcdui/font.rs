@@ -39,6 +39,9 @@ impl Font {
                 ),
             ],
             fields: vec![
+                JavaFieldProto::new("face", "I", Default::default()),
+                JavaFieldProto::new("style", "I", Default::default()),
+                JavaFieldProto::new("size", "I", Default::default()),
                 JavaFieldProto::new("FACE_SYSTEM", "I", FieldAccessFlags::STATIC),
                 JavaFieldProto::new("FACE_MONOSPACE", "I", FieldAccessFlags::STATIC),
                 JavaFieldProto::new("FACE_PROPORTIONAL", "I", FieldAccessFlags::STATIC),
@@ -51,6 +54,19 @@ impl Font {
                 JavaFieldProto::new("SIZE_LARGE", "I", FieldAccessFlags::STATIC),
             ],
             access_flags: Default::default(),
+        }
+    }
+
+    fn pixel_height(size: i32) -> i32 {
+        match size {
+            8 => 10,      // SIZE_SMALL
+            0 => 12,      // SIZE_MEDIUM
+            16 => 14,     // SIZE_LARGE
+            4096 => 16,
+            8192 => 18,
+            16384 => 19,
+            32768 => 22,
+            _ => 12,
         }
     }
 
@@ -72,16 +88,21 @@ impl Font {
         Ok(())
     }
 
-    async fn init(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Font>) -> JvmResult<()> {
-        tracing::warn!("stub javax.microedition.lcdui.Font::<init>({this:?})");
+    async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Font>) -> JvmResult<()> {
+        tracing::debug!("javax.microedition.lcdui.Font::<init>({this:?})");
+
+        jvm.put_field(&mut this, "face", "I", 0).await?;
+        jvm.put_field(&mut this, "style", "I", 0).await?;
+        jvm.put_field(&mut this, "size", "I", 0).await?;
 
         Ok(())
     }
 
-    async fn get_height(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {
-        tracing::warn!("stub javax.microedition.lcdui.Font::getHeight");
+    async fn get_height(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("javax.microedition.lcdui.Font::getHeight({this:?})");
 
-        Ok(12) // TODO: hardcoded
+        let size: i32 = jvm.get_field(&this, "size", "I").await?;
+        Ok(Self::pixel_height(size))
     }
 
     async fn get_default_font(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<ClassInstanceRef<Self>> {
@@ -93,35 +114,42 @@ impl Font {
     }
 
     async fn get_font(jvm: &Jvm, _: &mut WieJvmContext, face: i32, style: i32, size: i32) -> JvmResult<ClassInstanceRef<Font>> {
-        tracing::warn!("stub javax.microedition.lcdui.Font::getFont({face:?}, {style:?}, {size:?})");
+        tracing::debug!("javax.microedition.lcdui.Font::getFont({face:?}, {style:?}, {size:?})");
 
-        let instance = jvm.new_class("javax/microedition/lcdui/Font", "()V", []).await?;
+        let mut instance: ClassInstanceRef<Font> =
+            jvm.new_class("javax/microedition/lcdui/Font", "()V", []).await?.into();
 
-        Ok(instance.into())
+        jvm.put_field(&mut instance, "face", "I", face).await?;
+        jvm.put_field(&mut instance, "style", "I", style).await?;
+        jvm.put_field(&mut instance, "size", "I", size).await?;
+
+        Ok(instance)
     }
 
-    async fn string_width(jvm: &Jvm, _: &mut WieJvmContext, _: ClassInstanceRef<Self>, string: ClassInstanceRef<String>) -> JvmResult<i32> {
-        tracing::warn!("stub javax.microedition.lcdui.Font::stringWidth({string:?})");
+    async fn string_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, string: ClassInstanceRef<String>) -> JvmResult<i32> {
+        tracing::debug!("javax.microedition.lcdui.Font::stringWidth({string:?})");
 
         let string = JavaLangString::to_rust_string(jvm, &string).await?;
+        let size: i32 = jvm.get_field(&this, "size", "I").await?;
 
-        Ok(canvas::string_width(&string, 10.0) as _)
+        Ok(canvas::string_width_px(&string, Self::pixel_height(size) as f32) as _)
     }
 
     async fn substring_width(
         jvm: &Jvm,
         _: &mut WieJvmContext,
-        _: ClassInstanceRef<Self>,
+        this: ClassInstanceRef<Self>,
         string: ClassInstanceRef<String>,
         offset: i32,
         len: i32,
     ) -> JvmResult<i32> {
-        tracing::warn!("stub javax.microedition.lcdui.Font::substringWidth({string:?}, {offset:?}, {len:?})");
+        tracing::debug!("javax.microedition.lcdui.Font::substringWidth({string:?}, {offset:?}, {len:?})");
 
         let string = JavaLangString::to_rust_string(jvm, &string).await?;
         let substring = string.chars().skip(offset as usize).take(len as usize).collect::<RustString>();
+        let size: i32 = jvm.get_field(&this, "size", "I").await?;
 
-        Ok(canvas::string_width(&substring, 10.0) as _)
+        Ok(canvas::string_width_px(&substring, Self::pixel_height(size) as f32) as _)
     }
 
     async fn char_width(_: &Jvm, _: &mut WieJvmContext, _: ClassInstanceRef<Self>, char: JavaChar) -> JvmResult<i32> {
@@ -135,16 +163,17 @@ impl Font {
     async fn chars_width(
         jvm: &Jvm,
         _: &mut WieJvmContext,
-        _: ClassInstanceRef<Self>,
+        this: ClassInstanceRef<Self>,
         chars: ClassInstanceRef<Array<JavaChar>>,
         offset: i32,
         len: i32,
     ) -> JvmResult<i32> {
-        tracing::warn!("stub javax.microedition.lcdui.Font::charsWidth({chars:?}, {offset:?}, {len:?})");
+        tracing::debug!("javax.microedition.lcdui.Font::charsWidth({chars:?}, {offset:?}, {len:?})");
 
         let chars = jvm.load_array(&chars, offset as _, len as _).await?;
         let string = RustString::from_utf16(&chars).unwrap();
+        let size: i32 = jvm.get_field(&this, "size", "I").await?;
 
-        Ok(canvas::string_width(&string, 10.0) as _)
+        Ok(canvas::string_width_px(&string, Self::pixel_height(size) as f32) as _)
     }
 }
