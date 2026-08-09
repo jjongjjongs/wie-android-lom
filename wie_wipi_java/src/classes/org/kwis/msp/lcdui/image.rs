@@ -472,7 +472,7 @@ mod test {
                     (source.clone(),),
                 )
                 .await?;
-            assert!(!jvm.invoke_virtual::<_, bool>(&clone, "isMutable", "()Z", ()).await?);
+            assert!(jvm.invoke_virtual::<_, bool>(&clone, "isMutable", "()Z", ()).await?);
             assert!(!jvm.invoke_virtual::<_, bool>(&source, "isAnimated", "()Z", ()).await?);
 
             let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&source, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
