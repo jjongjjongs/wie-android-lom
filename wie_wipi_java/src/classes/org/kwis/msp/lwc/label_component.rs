@@ -31,6 +31,12 @@ impl LabelComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "<init>",
+                    "(Ljava/lang/String;Ljava/lang/String;)V",
+                    Self::init_label_resource,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "getFont",
                     "()Lorg/kwis/msp/lcdui/Font;",
                     Self::get_font,
@@ -193,6 +199,45 @@ impl LabelComponent {
             image,
         )
         .await?;
+
+        Ok(())
+    }
+
+    async fn init_label_resource(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        label: ClassInstanceRef<String>,
+        resource: ClassInstanceRef<String>,
+    ) -> JvmResult<()> {
+        Self::init(jvm, context, this.clone()).await?;
+
+        jvm.put_field(
+            &mut this,
+            "label",
+            "Ljava/lang/String;",
+            label,
+        )
+        .await?;
+
+        if !resource.is_null() {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "(Ljava/lang/String;)Lorg/kwis/msp/lcdui/Image;",
+                    (resource,),
+                )
+                .await?;
+
+            jvm.put_field(
+                &mut this,
+                "image",
+                "Lorg/kwis/msp/lcdui/Image;",
+                image,
+            )
+            .await?;
+        }
 
         Ok(())
     }
