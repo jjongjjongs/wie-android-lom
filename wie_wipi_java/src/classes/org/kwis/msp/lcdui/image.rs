@@ -284,6 +284,11 @@ impl Image {
     async fn get_graphics(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<Graphics>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::getGraphics({this:?})");
 
+        let mutable: bool = jvm.get_field(&this, "mutable", "Z").await?;
+        if !mutable {
+            return Ok(None.into());
+        }
+
         let midp_image: ClassInstanceRef<MidpImage> = jvm.get_field(&this, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
 
         let midp_graphics: ClassInstanceRef<MidpGraphics> = jvm
