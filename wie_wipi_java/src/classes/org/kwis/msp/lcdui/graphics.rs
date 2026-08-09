@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use alloc::vec;
 
 use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
@@ -333,13 +334,73 @@ impl Graphics {
     }
 
     async fn draw_polygon(
-        _: &Jvm,
+        jvm: &Jvm,
         _: &mut WieJvmContext,
         this: ClassInstanceRef<Self>,
         x_points: ClassInstanceRef<Array<i32>>,
         y_points: ClassInstanceRef<Array<i32>>,
     ) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Graphics::drawPolygon({this:?}, {x_points:?}, {y_points:?})");
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::drawPolygon({this:?}, {x_points:?}, {y_points:?})");
+
+        if x_points.is_null() {
+            return Err(jvm
+                .exception("java/lang/NullPointerException", "x is null.")
+                .await);
+        }
+        if y_points.is_null() {
+            return Err(jvm
+                .exception("java/lang/NullPointerException", "y is null.")
+                .await);
+        }
+
+        let x_len = jvm.array_length(&x_points).await?;
+        let y_len = jvm.array_length(&y_points).await?;
+        if x_len != y_len {
+            return Err(jvm
+                .exception(
+                    "java/lang/IllegalArgumentException",
+                    "x.length != y.length",
+                )
+                .await);
+        }
+
+        // The native implementation ultimately performs:
+        //   point[i] -> point[i + 1]
+        // and then closes the polygon with last -> first.
+        //
+        // Avoid dereferencing an empty Java array here. The original native
+        // routine has no explicit zero-length guard before accessing point 0.
+        if x_len == 0 {
+            return Ok(());
+        }
+
+        let xs: Vec<i32> = jvm.load_array(&x_points, 0, x_len).await?;
+        let ys: Vec<i32> = jvm.load_array(&y_points, 0, y_len).await?;
+
+        let midp_graphics =
+            jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;")
+                .await?;
+
+        for i in 1..x_len {
+            let _: () = jvm
+                .invoke_virtual(
+                    &midp_graphics,
+                    "drawLine",
+                    "(IIII)V",
+                    (xs[i - 1], ys[i - 1], xs[i], ys[i]),
+                )
+                .await?;
+        }
+
+        let last = x_len - 1;
+        let _: () = jvm
+            .invoke_virtual(
+                &midp_graphics,
+                "drawLine",
+                "(IIII)V",
+                (xs[last], ys[last], xs[0], ys[0]),
+            )
+            .await?;
 
         Ok(())
     }
