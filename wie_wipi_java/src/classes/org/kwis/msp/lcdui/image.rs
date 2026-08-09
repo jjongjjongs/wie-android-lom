@@ -3,7 +3,7 @@ use alloc::vec;
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_constants::MethodAccessFlags;
 use java_runtime::classes::java::lang::String;
-use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult};
+use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult, runtime::{JavaIoInputStream, JavaLangString}};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::lcdui::{Graphics as MidpGraphics, Image as MidpImage};
@@ -134,6 +134,47 @@ impl Image {
 
     async fn create_image_from_name(jvm: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<ClassInstanceRef<Image>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::createImage({name:?})");
+
+        let mut resource_name = JavaLangString::to_rust_string(jvm, &name).await?;
+
+        if !resource_name.contains(':') {
+            if !resource_name.starts_with('/') {
+                resource_name.insert(0, '/');
+            }
+
+            let resource_name = JavaLangString::from_rust_string(jvm, &resource_name).await?;
+            let image = jvm.new_class("org/kwis/msp/lcdui/Image", "()V", ()).await?;
+            let class = jvm.invoke_virtual(&image, "getClass", "()Ljava/lang/Class;", ()).await?;
+            let resource_stream = jvm
+                .invoke_virtual(
+                    &class,
+                    "getResourceAsStream",
+                    "(Ljava/lang/String;)Ljava/io/InputStream;",
+                    (resource_name,),
+                )
+                .await?;
+
+            let data = JavaIoInputStream::read_until_end(jvm, &resource_stream).await?;
+            let data_len = data.len();
+            let mut data_array = jvm.instantiate_array("B", data_len).await?;
+            jvm.store_array(&mut data_array, 0, data.into_iter().map(|x| x as i8).collect::<alloc::vec::Vec<_>>())
+                .await?;
+
+            let midp_image: ClassInstanceRef<MidpImage> = jvm
+                .invoke_static(
+                    "javax/microedition/lcdui/Image",
+                    "createImage",
+                    "([BII)Ljavax/microedition/lcdui/Image;",
+                    (data_array, 0, data_len as i32),
+                )
+                .await?;
+
+            let instance = jvm
+                .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
+                .await?;
+
+            return Ok(instance.into());
+        }
 
         let midp_image: ClassInstanceRef<MidpImage> = jvm
             .invoke_static(
