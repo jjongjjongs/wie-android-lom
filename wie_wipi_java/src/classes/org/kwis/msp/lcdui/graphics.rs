@@ -1235,18 +1235,150 @@ impl Graphics {
     }
 
     async fn get_rgb_pixels(
-        _jvm: &Jvm,
+        jvm: &Jvm,
         _context: &mut WieJvmContext,
         this: ClassInstanceRef<Self>,
         x: i32,
         y: i32,
         width: i32,
         height: i32,
-        pixels: ClassInstanceRef<Array<i32>>,
+        mut pixels: ClassInstanceRef<Array<i32>>,
         offset: i32,
         bpl: i32,
     ) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Graphics::getRGBPixels({this:?}, {x}, {y}, {width}, {height}, {pixels:?}, {offset}, {bpl})");
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::getRGBPixels({this:?}, {x}, {y}, {width}, {height}, {pixels:?}, {offset}, {bpl})");
+
+        if pixels.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "pixels is null.")
+                    .await,
+            );
+        }
+
+        let array_length = jvm.array_length(&pixels).await? as i32;
+        let required_length = height.wrapping_mul(bpl);
+
+        if array_length < required_length {
+            return Err(
+                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                    .await,
+            );
+        }
+
+        // Native get_rgb_data() returns M_E_OUTOFBOUND for negative x/y.
+        // The Java bridge ignores that return value.
+        if width <= 0 || height <= 0 || x < 0 || y < 0 {
+            return Ok(());
+        }
+
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> =
+            jvm.get_field(
+                &this,
+                "midpGraphics",
+                "Ljavax/microedition/lcdui/Graphics;",
+            )
+            .await?;
+
+        let graphics_width: i32 =
+            jvm.get_field(&midp_graphics, "width", "I").await?;
+        let graphics_height: i32 =
+            jvm.get_field(&midp_graphics, "height", "I").await?;
+
+        if x >= graphics_width || y >= graphics_height {
+            return Ok(());
+        }
+
+        let right = x.saturating_add(width).min(graphics_width);
+        let bottom = y.saturating_add(height).min(graphics_height);
+
+        if right <= x || bottom <= y {
+            return Ok(());
+        }
+
+        let copied_width = (right - x) as usize;
+        let copied_height = (bottom - y) as usize;
+        let row_stride = width as usize;
+
+        // For int[] the native bridge's offset<<2 is the normal four-byte
+        // element addressing, so offset is an ordinary Java int[] index.
+        let destination_offset = match usize::try_from(offset) {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(
+                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                        .await,
+                );
+            }
+        };
+
+        let touched_elements = match copied_height
+            .checked_sub(1)
+            .and_then(|rows| rows.checked_mul(row_stride))
+            .and_then(|prefix| prefix.checked_add(copied_width))
+        {
+            Some(value) => value,
+            None => {
+                return Err(
+                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                        .await,
+                );
+            }
+        };
+
+        // The reference bridge does not perform this second range check.
+        // Keep normal native behavior while preventing an unsafe JVM-array
+        // access for malformed arguments.
+        if destination_offset
+            .checked_add(touched_elements)
+            .is_none_or(|end| end > array_length as usize)
+        {
+            return Err(
+                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                    .await,
+            );
+        }
+
+        let mut data: Vec<i32> =
+            jvm.load_array(&pixels, destination_offset, touched_elements)
+                .await?;
+
+        let base_translate_x: i32 =
+            jvm.get_field(&this, "baseTranslateX", "I").await?;
+        let base_translate_y: i32 =
+            jvm.get_field(&this, "baseTranslateY", "I").await?;
+
+        let image = MidpGraphics::image(jvm, &mut midp_graphics).await?;
+        let backend_image = MidpImage::image(jvm, &image).await?;
+
+        for row in 0..copied_height {
+            let source_y = base_translate_y + y + row as i32;
+            let destination_row = row * row_stride;
+
+            for column in 0..copied_width {
+                let source_x = base_translate_x + x + column as i32;
+
+                if source_x < 0
+                    || source_y < 0
+                    || source_x as u32 >= backend_image.width()
+                    || source_y as u32 >= backend_image.height()
+                {
+                    continue;
+                }
+
+                let pixel = backend_image.get_pixel(source_x, source_y);
+
+                // Native reads RGB565 and expands without bit replication:
+                // R5 << 19, G6 << 10, B5 << 3. Alpha remains zero.
+                let r = (pixel.r & 0xf8) as i32;
+                let g = (pixel.g & 0xfc) as i32;
+                let b = (pixel.b & 0xf8) as i32;
+
+                data[destination_row + column] =
+                    (r << 16) | (g << 8) | b;
+            }
+        }
+
+        jvm.store_array(&mut pixels, destination_offset, data).await?;
 
         Ok(())
     }
@@ -1644,6 +1776,87 @@ mod test {
             assert_eq!((p1.r, p1.g, p1.b), (0x00, 0x00, 0x00));
             assert_eq!((p2.r, p2.g, p2.b), (0x00, 0xff, 0x00));
             assert_eq!((p3.r, p3.g, p3.b), (0x00, 0x00, 0xff));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_get_rgb_pixels_offset_base_origin_crop_and_negative_noop() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "(II)Lorg/kwis/msp/lcdui/Image;",
+                    (3, 1),
+                )
+                .await?;
+
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .invoke_virtual(
+                    &image,
+                    "getGraphics",
+                    "()Lorg/kwis/msp/lcdui/Graphics;",
+                    (),
+                )
+                .await?;
+
+            // These colors exercise native RGB565 truncation/expansion.
+            for (x, color) in [
+                (0, 0x12_34_56),
+                (1, 0xff_00_00),
+                (2, 0x00_ff_00),
+            ] {
+                let _: () = jvm
+                    .invoke_virtual(&graphics, "setColor", "(I)V", (color,))
+                    .await?;
+                let _: () = jvm
+                    .invoke_virtual(&graphics, "setPixel", "(II)V", (x, 0))
+                    .await?;
+            }
+
+            // Later translation must not affect raw getRGBPixels source coordinates.
+            let _: () = jvm
+                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
+                .await?;
+
+            let mut pixels = jvm.instantiate_array("I", 8).await?;
+            jvm.store_array(&mut pixels, 0, [0x5555_5555i32; 8]).await?;
+
+            // Request width 3 starting at x=1. Only source x=1..2 exists,
+            // so the third destination element must remain untouched.
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "getRGBPixels",
+                    "(IIII[III)V",
+                    (1, 0, 3, 1, pixels.clone(), 2, 3),
+                )
+                .await?;
+
+            let out: alloc::vec::Vec<i32> = jvm.load_array(&pixels, 0, 8).await?;
+
+            assert_eq!(&out[0..2], &[0x5555_5555i32; 2]);
+            assert_eq!(out[2], 0x00f8_0000);
+            assert_eq!(out[3], 0x0000_fc00);
+            assert_eq!(out[4], 0x5555_5555);
+            assert_eq!(&out[5..], &[0x5555_5555i32; 3]);
+
+            // Negative x is rejected by native get_rgb_data(). The Java
+            // bridge ignores the native error code, leaving the array intact.
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "getRGBPixels",
+                    "(IIII[III)V",
+                    (-1, 0, 1, 1, pixels.clone(), 0, 1),
+                )
+                .await?;
+
+            let after_negative: alloc::vec::Vec<i32> =
+                jvm.load_array(&pixels, 0, 8).await?;
+            assert_eq!(after_negative, out);
 
             Ok(())
         })
