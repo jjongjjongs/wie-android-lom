@@ -1,7 +1,7 @@
 use alloc::{boxed::Box, vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto, MethodBody};
-use java_constants::MethodAccessFlags;
+use java_constants::{FieldAccessFlags, MethodAccessFlags};
 use java_runtime::classes::java::lang::String;
 use jvm::{
     Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult,
@@ -91,6 +91,17 @@ impl Image {
                 JavaFieldProto::new("animationDelays", "[I", Default::default()),
                 JavaFieldProto::new("frameCount", "I", Default::default()),
                 JavaFieldProto::new("currentFrame", "I", Default::default()),
+                JavaFieldProto::new("animationGeneration", "I", Default::default()),
+                JavaFieldProto::new(
+                    "animationObserver",
+                    "Lorg/kwis/msp/lcdui/ImageObserver;",
+                    Default::default(),
+                ),
+                JavaFieldProto::new(
+                    "activeAnimations",
+                    "Ljava/util/Vector;",
+                    FieldAccessFlags::STATIC,
+                ),
             ],
             access_flags: Default::default(),
         }
@@ -113,7 +124,16 @@ impl Image {
         .await?;
         jvm.put_field(&mut this, "animationDelays", "[I", None).await?;
         jvm.put_field(&mut this, "frameCount", "I", 0).await?;
-        jvm.put_field(&mut this, "currentFrame", "I", 0).await
+        jvm.put_field(&mut this, "currentFrame", "I", 0).await?;
+        jvm.put_field(&mut this, "animationGeneration", "I", 0)
+            .await?;
+        jvm.put_field(
+            &mut this,
+            "animationObserver",
+            "Lorg/kwis/msp/lcdui/ImageObserver;",
+            None,
+        )
+        .await
     }
 
     async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Image>, image: ClassInstanceRef<MidpImage>) -> JvmResult<()> {
@@ -134,6 +154,15 @@ impl Image {
         jvm.put_field(&mut this, "animationDelays", "[I", None).await?;
         jvm.put_field(&mut this, "frameCount", "I", 0).await?;
         jvm.put_field(&mut this, "currentFrame", "I", 0).await?;
+        jvm.put_field(&mut this, "animationGeneration", "I", 0)
+            .await?;
+        jvm.put_field(
+            &mut this,
+            "animationObserver",
+            "Lorg/kwis/msp/lcdui/ImageObserver;",
+            None,
+        )
+        .await?;
 
         Ok(())
     }
@@ -586,20 +615,255 @@ impl Image {
         Ok(frame_count > 1)
     }
 
-    async fn play(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>, observer: ClassInstanceRef<ImageObserver>) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Image::play({this:?}, {observer:?})");
+    async fn active_animations(jvm: &Jvm) -> JvmResult<ClassInstanceRef<()>> {
+        let active: ClassInstanceRef<()> = jvm
+            .get_static_field(
+                "org/kwis/msp/lcdui/Image",
+                "activeAnimations",
+                "Ljava/util/Vector;",
+            )
+            .await?;
+
+        if !active.is_null() {
+            return Ok(active);
+        }
+
+        let active: ClassInstanceRef<()> =
+            jvm.new_class("java/util/Vector", "()V", ()).await?.into();
+
+        jvm.put_static_field(
+            "org/kwis/msp/lcdui/Image",
+            "activeAnimations",
+            "Ljava/util/Vector;",
+            active.clone(),
+        )
+        .await?;
+
+        Ok(active)
+    }
+
+    async fn add_active_animation(
+        jvm: &Jvm,
+        image: &ClassInstanceRef<Image>,
+    ) -> JvmResult<()> {
+        let active = Self::active_animations(jvm).await?;
+        let size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+
+        for index in 0..size {
+            let current: ClassInstanceRef<Image> = jvm
+                .invoke_virtual(
+                    &active,
+                    "elementAt",
+                    "(I)Ljava/lang/Object;",
+                    (index,),
+                )
+                .await?;
+
+            if !current.is_null() && current.identity() == image.identity() {
+                return Ok(());
+            }
+        }
+
+        let _: () = jvm
+            .invoke_virtual(
+                &active,
+                "addElement",
+                "(Ljava/lang/Object;)V",
+                (image.clone(),),
+            )
+            .await?;
 
         Ok(())
     }
 
-    async fn stop(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Image::stop({this:?})");
+    async fn remove_active_animation(
+        jvm: &Jvm,
+        image: &ClassInstanceRef<Image>,
+    ) -> JvmResult<()> {
+        let active = Self::active_animations(jvm).await?;
+        let size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+
+        for index in 0..size {
+            let current: ClassInstanceRef<Image> = jvm
+                .invoke_virtual(
+                    &active,
+                    "elementAt",
+                    "(I)Ljava/lang/Object;",
+                    (index,),
+                )
+                .await?;
+
+            if !current.is_null() && current.identity() == image.identity() {
+                let _: bool = jvm
+                    .invoke_virtual(
+                        &active,
+                        "removeElement",
+                        "(Ljava/lang/Object;)Z",
+                        (current,),
+                    )
+                    .await?;
+                break;
+            }
+        }
 
         Ok(())
     }
 
-    async fn stop_image(_: &Jvm, _: &mut WieJvmContext, observer: ClassInstanceRef<ImageObserver>) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Image::stopImage({observer:?})");
+    async fn play(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        this: ClassInstanceRef<Image>,
+        observer: ClassInstanceRef<ImageObserver>,
+    ) -> JvmResult<()> {
+        let frame_count: i32 = jvm.get_field(&this, "frameCount", "I").await?;
+        if frame_count <= 1 {
+            return Ok(());
+        }
+
+        // Native Image.play removes an existing ImageElement for this Image
+        // before adding a new one. A generation token gives the same effect
+        // for already sleeping runner tasks.
+        let generation: i32 = jvm
+            .get_field::<i32>(&this, "animationGeneration", "I")
+            .await?
+            .wrapping_add(1);
+
+        let mut image = this.clone();
+        jvm.put_field(
+            &mut image,
+            "animationGeneration",
+            "I",
+            generation,
+        )
+        .await?;
+        jvm.put_field(
+            &mut image,
+            "animationObserver",
+            "Lorg/kwis/msp/lcdui/ImageObserver;",
+            observer.clone(),
+        )
+        .await?;
+
+        Self::add_active_animation(jvm, &image).await?;
+
+        context.spawn(
+            jvm,
+            Box::new(ImageAnimationRunner {
+                image,
+                observer,
+                generation,
+            }),
+        )?;
+
+        Ok(())
+    }
+
+    async fn stop(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Image>,
+    ) -> JvmResult<()> {
+        let frame_count: i32 = jvm.get_field(&this, "frameCount", "I").await?;
+        if frame_count <= 1 {
+            return Ok(());
+        }
+
+        let generation: i32 = jvm
+            .get_field::<i32>(&this, "animationGeneration", "I")
+            .await?
+            .wrapping_add(1);
+
+        let mut image = this.clone();
+        jvm.put_field(
+            &mut image,
+            "animationGeneration",
+            "I",
+            generation,
+        )
+        .await?;
+        jvm.put_field(
+            &mut image,
+            "animationObserver",
+            "Lorg/kwis/msp/lcdui/ImageObserver;",
+            None,
+        )
+        .await?;
+
+        Self::remove_active_animation(jvm, &image).await
+    }
+
+    async fn stop_image(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        observer: ClassInstanceRef<ImageObserver>,
+    ) -> JvmResult<()> {
+        let active = Self::active_animations(jvm).await?;
+        let size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+
+        // Iterate backwards because matching entries are removed in place.
+        for index in (0..size).rev() {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_virtual(
+                    &active,
+                    "elementAt",
+                    "(I)Ljava/lang/Object;",
+                    (index,),
+                )
+                .await?;
+
+            if image.is_null() {
+                continue;
+            }
+
+            let current_observer: ClassInstanceRef<ImageObserver> = jvm
+                .get_field(
+                    &image,
+                    "animationObserver",
+                    "Lorg/kwis/msp/lcdui/ImageObserver;",
+                )
+                .await?;
+
+            let matches = if observer.is_null() {
+                current_observer.is_null()
+            } else {
+                !current_observer.is_null()
+                    && current_observer.identity() == observer.identity()
+            };
+
+            if !matches {
+                continue;
+            }
+
+            let generation: i32 = jvm
+                .get_field::<i32>(&image, "animationGeneration", "I")
+                .await?
+                .wrapping_add(1);
+
+            let mut image_mut = image.clone();
+            jvm.put_field(
+                &mut image_mut,
+                "animationGeneration",
+                "I",
+                generation,
+            )
+            .await?;
+            jvm.put_field(
+                &mut image_mut,
+                "animationObserver",
+                "Lorg/kwis/msp/lcdui/ImageObserver;",
+                None,
+            )
+            .await?;
+
+            let _: ClassInstanceRef<()> = jvm
+                .invoke_virtual(
+                    &active,
+                    "remove",
+                    "(I)Ljava/lang/Object;",
+                    (index,),
+                )
+                .await?;
+        }
 
         Ok(())
     }
@@ -759,6 +1023,153 @@ impl Image {
     }
 }
 
+
+struct ImageAnimationRunner {
+    image: ClassInstanceRef<Image>,
+    observer: ClassInstanceRef<ImageObserver>,
+    generation: i32,
+}
+
+#[async_trait::async_trait]
+impl MethodBody<JavaError, WieJvmContext> for ImageAnimationRunner {
+    async fn call(
+        &self,
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        _args: Box<[JavaValue]>,
+    ) -> Result<JavaValue, JavaError> {
+        const FRAME_END: i32 = 0;
+        const IMAGE_END: i32 = 1;
+
+        jvm.attach_thread(None).await?;
+
+        loop {
+            let active_generation: i32 = jvm
+                .get_field(&self.image, "animationGeneration", "I")
+                .await?;
+            if active_generation != self.generation {
+                break;
+            }
+
+            let frame_count: i32 =
+                jvm.get_field(&self.image, "frameCount", "I").await?;
+            if frame_count <= 1 {
+                break;
+            }
+
+            let cursor: i32 =
+                jvm.get_field(&self.image, "currentFrame", "I").await?;
+
+            let delay_index = if cursor <= 0 {
+                0usize
+            } else {
+                ((cursor - 1) % frame_count) as usize
+            };
+
+            let delays: ClassInstanceRef<Array<i32>> = jvm
+                .get_field(&self.image, "animationDelays", "[I")
+                .await?;
+
+            if delays.is_null() {
+                break;
+            }
+
+            let delay_values: alloc::vec::Vec<i32> =
+                jvm.load_array(&delays, delay_index, 1).await?;
+            let delay = delay_values[0].max(0) as u64;
+
+            if delay != 0 {
+                context.system().sleep(delay).await;
+            }
+
+            // stop(), stopImage(), or a later play() may have invalidated
+            // this runner while it was sleeping.
+            let active_generation: i32 = jvm
+                .get_field(&self.image, "animationGeneration", "I")
+                .await?;
+            if active_generation != self.generation {
+                break;
+            }
+
+            // Native decodeNextFrame:
+            //   cursor = (cursor % frameCount) + 1
+            //   decodeFrame(cursor)
+            let next_cursor = cursor.rem_euclid(frame_count) + 1;
+            let frame_index = (next_cursor - 1) as usize;
+
+            let frames: ClassInstanceRef<Array<ClassInstanceRef<MidpImage>>> = jvm
+                .get_field(
+                    &self.image,
+                    "animationFrames",
+                    "[Ljavax/microedition/lcdui/Image;",
+                )
+                .await?;
+
+            if frames.is_null() {
+                break;
+            }
+
+            let frame_values: alloc::vec::Vec<ClassInstanceRef<MidpImage>> =
+                jvm.load_array(&frames, frame_index, 1).await?;
+            let frame = frame_values[0].clone();
+
+            let mut image = self.image.clone();
+            jvm.put_field(
+                &mut image,
+                "midpImage",
+                "Ljavax/microedition/lcdui/Image;",
+                frame,
+            )
+            .await?;
+            jvm.put_field(
+                &mut image,
+                "currentFrame",
+                "I",
+                next_cursor,
+            )
+            .await?;
+
+            let status = if next_cursor == frame_count {
+                IMAGE_END
+            } else {
+                FRAME_END
+            };
+
+            if !self.observer.is_null() {
+                let _: () = jvm
+                    .invoke_virtual(
+                        &self.observer,
+                        "notify",
+                        "(Lorg/kwis/msp/lcdui/Image;I)V",
+                        (self.image.clone(), status),
+                    )
+                    .await?;
+            }
+
+            if status == IMAGE_END {
+                Image::remove_active_animation(jvm, &self.image).await?;
+
+                let active_generation: i32 = jvm
+                    .get_field(&self.image, "animationGeneration", "I")
+                    .await?;
+                if active_generation == self.generation {
+                    let mut image = self.image.clone();
+                    jvm.put_field(
+                        &mut image,
+                        "animationObserver",
+                        "Lorg/kwis/msp/lcdui/ImageObserver;",
+                        None,
+                    )
+                    .await?;
+                }
+
+                break;
+            }
+        }
+
+        Ok(JavaValue::Void)
+    }
+}
 
 struct ImageLoadRunner {
     image: ClassInstanceRef<Image>,
@@ -1000,7 +1411,7 @@ mod test {
     }
 
     use crate::{
-        classes::org::kwis::msp::lcdui::{Graphics, Image},
+        classes::org::kwis::msp::lcdui::{Graphics, Image, ImageObserver},
         get_protos,
     };
 
@@ -1086,6 +1497,168 @@ mod test {
                     jvm.load_array(&delays, 0, 2).await?;
 
                 assert_eq!(delay_values, [20, 40]);
+
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn test_animated_gif_play_and_stop_lifecycle() -> Result<()> {
+        run_jvm_test(
+            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
+            |jvm| async move {
+                // Two-frame 1x1 GIF89a.
+                // Frame 0: red, 20 ms
+                // Frame 1: green, 40 ms
+                let gif: &[u8] = &[
+                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x80, 0x00, 0x00,
+                    0xff, 0x00, 0x00,
+                    0x00, 0xff, 0x00,
+
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x02, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x44, 0x01, 0x00,
+
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x04, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x4c, 0x01, 0x00,
+
+                    0x3b,
+                ];
+
+                let mut data = jvm.instantiate_array("B", gif.len()).await?;
+                jvm.store_array(
+                    &mut data,
+                    0,
+                    gif.iter()
+                        .map(|&value| value as i8)
+                        .collect::<alloc::vec::Vec<_>>(),
+                )
+                .await?;
+
+                let image: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "([BII)Lorg/kwis/msp/lcdui/Image;",
+                        (data, 0, gif.len() as i32),
+                    )
+                    .await?;
+
+                let observer: ClassInstanceRef<ImageObserver> =
+                    ClassInstanceRef::new(None);
+
+                let initial_cursor: i32 =
+                    jvm.get_field(&image, "currentFrame", "I").await?;
+                assert_eq!(initial_cursor, 0);
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &image,
+                        "play",
+                        "(Lorg/kwis/msp/lcdui/ImageObserver;)V",
+                        (observer.clone(),),
+                    )
+                    .await?;
+
+                // Keep the test task alive while the spawned animation runner
+                // advances through both native-style frame delays.
+                let _: () = jvm
+                    .invoke_static(
+                        "java/lang/Thread",
+                        "sleep",
+                        "(J)V",
+                        (120i64,),
+                    )
+                    .await?;
+
+                // TestPlatform uses one global synthetic clock across parallel
+                // tests. Give spawned animation work explicit scheduling turns
+                // after the sleep deadline instead of assuming one wakeup is
+                // enough for the runner to be polled.
+                for _ in 0..4 {
+                    let _: () = jvm
+                        .invoke_static("java/lang/Thread", "yield", "()V", ())
+                        .await?;
+                }
+
+                let completed_cursor: i32 =
+                    jvm.get_field(&image, "currentFrame", "I").await?;
+                assert_eq!(completed_cursor, 2);
+
+                let active: ClassInstanceRef<()> = jvm
+                    .get_static_field(
+                        "org/kwis/msp/lcdui/Image",
+                        "activeAnimations",
+                        "Ljava/util/Vector;",
+                    )
+                    .await?;
+                assert!(!active.is_null());
+
+                let active_size: i32 =
+                    jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+                assert_eq!(active_size, 0);
+
+                // A new play() starts another generation. stop() immediately
+                // invalidates that generation before its sleeping runner can
+                // change the frame cursor.
+                let _: () = jvm
+                    .invoke_virtual(
+                        &image,
+                        "play",
+                        "(Lorg/kwis/msp/lcdui/ImageObserver;)V",
+                        (observer,),
+                    )
+                    .await?;
+
+                let cursor_before_stop: i32 =
+                    jvm.get_field(&image, "currentFrame", "I").await?;
+
+                let _: () =
+                    jvm.invoke_virtual(&image, "stop", "()V", ()).await?;
+
+                let generation_after_stop: i32 =
+                    jvm.get_field(&image, "animationGeneration", "I").await?;
+
+                let _: () = jvm
+                    .invoke_static(
+                        "java/lang/Thread",
+                        "sleep",
+                        "(J)V",
+                        (120i64,),
+                    )
+                    .await?;
+
+                for _ in 0..4 {
+                    let _: () = jvm
+                        .invoke_static("java/lang/Thread", "yield", "()V", ())
+                        .await?;
+                }
+
+                let cursor_after_wait: i32 =
+                    jvm.get_field(&image, "currentFrame", "I").await?;
+                assert_eq!(cursor_after_wait, cursor_before_stop);
+
+                let generation_final: i32 =
+                    jvm.get_field(&image, "animationGeneration", "I").await?;
+                assert_eq!(generation_final, generation_after_stop);
+
+                let active_size: i32 =
+                    jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+                assert_eq!(active_size, 0);
 
                 Ok(())
             },
