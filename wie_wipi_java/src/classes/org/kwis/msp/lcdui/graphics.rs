@@ -80,6 +80,8 @@ impl Graphics {
             ],
             fields: vec![
                 JavaFieldProto::new("midpGraphics", "Ljavax/microedition/lcdui/Graphics;", Default::default()),
+                JavaFieldProto::new("baseTranslateX", "I", Default::default()),
+                JavaFieldProto::new("baseTranslateY", "I", Default::default()),
                 JavaFieldProto::new("alpha", "I", Default::default()),
                 JavaFieldProto::new("strokeStyle", "I", Default::default()),
                 JavaFieldProto::new("xorMode", "Z", Default::default()),
@@ -100,8 +102,17 @@ impl Graphics {
             )
             .await?;
 
+        let base_translate_x: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
+            .await?;
+        let base_translate_y: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
+            .await?;
+
         jvm.put_field(&mut this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;", midp_graphics)
             .await?;
+        jvm.put_field(&mut this, "baseTranslateX", "I", base_translate_x).await?;
+        jvm.put_field(&mut this, "baseTranslateY", "I", base_translate_y).await?;
         jvm.put_field(&mut this, "alpha", "I", 255).await?;
         jvm.put_field(&mut this, "strokeStyle", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
@@ -117,8 +128,17 @@ impl Graphics {
     ) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::<init>({this:?})");
 
+        let base_translate_x: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
+            .await?;
+        let base_translate_y: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
+            .await?;
+
         jvm.put_field(&mut this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;", midp_graphics)
             .await?;
+        jvm.put_field(&mut this, "baseTranslateX", "I", base_translate_x).await?;
+        jvm.put_field(&mut this, "baseTranslateY", "I", base_translate_y).await?;
         jvm.put_field(&mut this, "alpha", "I", 255).await?;
         jvm.put_field(&mut this, "strokeStyle", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
@@ -829,18 +849,17 @@ impl Graphics {
             return Ok(-2022);
         }
 
-        let translate_x: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
-            .await?;
-        let translate_y: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
-            .await?;
+        // Native dgraphics_get_pixel() addresses pixels from the Graphics
+        // base origin (+0x3c/+0x40), not the current translated origin
+        // (+0x34/+0x38).
+        let base_translate_x: i32 = jvm.get_field(&this, "baseTranslateX", "I").await?;
+        let base_translate_y: i32 = jvm.get_field(&this, "baseTranslateY", "I").await?;
 
         let image = MidpGraphics::image(jvm, &mut midp_graphics).await?;
         let backend_image = MidpImage::image(jvm, &image).await?;
 
-        let absolute_x = x + translate_x;
-        let absolute_y = y + translate_y;
+        let absolute_x = x + base_translate_x;
+        let absolute_y = y + base_translate_y;
 
         // Avoid an out-of-bounds backend access. Native Graphics objects
         // normally keep their translated origin inside the backing image.
@@ -1087,7 +1106,7 @@ mod test {
     }
 
     #[test]
-    fn test_get_pixel_rgb565_translation_and_bounds() -> Result<()> {
+    fn test_get_pixel_rgb565_base_origin_and_bounds() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
                 .invoke_static(
@@ -1122,12 +1141,13 @@ mod test {
                 .await?;
             assert_eq!(pixel, 0x10_34_50);
 
-            // Translation is applied when locating the backing pixel.
+            // Native getPixel uses the Graphics base origin, so a later
+            // translate() does not move the raw pixel lookup.
             let _: () = jvm
                 .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
                 .await?;
             let translated: i32 = jvm
-                .invoke_virtual(&graphics, "getPixel", "(II)I", (1, 1))
+                .invoke_virtual(&graphics, "getPixel", "(II)I", (2, 1))
                 .await?;
             assert_eq!(translated, 0x10_34_50);
 
@@ -1147,6 +1167,66 @@ mod test {
                 .invoke_virtual(&graphics, "getPixel", "(II)I", (0, 4))
                 .await?;
             assert_eq!(bottom, -2022);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_get_pixel_preserves_wrapped_midp_base_origin() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let midp_image: ClassInstanceRef<MidpImage> = jvm
+                .invoke_static(
+                    "javax/microedition/lcdui/Image",
+                    "createImage",
+                    "(II)Ljavax/microedition/lcdui/Image;",
+                    (4, 4),
+                )
+                .await?;
+
+            let midp_graphics: ClassInstanceRef<
+                wie_midp::classes::javax::microedition::lcdui::Graphics,
+            > = jvm
+                .invoke_virtual(
+                    &midp_image,
+                    "getGraphics",
+                    "()Ljavax/microedition/lcdui/Graphics;",
+                    (),
+                )
+                .await?;
+
+            let _: () = jvm
+                .invoke_virtual(&midp_graphics, "translate", "(II)V", (1, 1))
+                .await?;
+
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .new_class(
+                    "org/kwis/msp/lcdui/Graphics",
+                    "(Ljavax/microedition/lcdui/Graphics;)V",
+                    (midp_graphics,),
+                )
+                .await?
+                .into();
+
+            // The wrapped MIDP Graphics already has base translation (1, 1),
+            // so setPixel(1, 1) writes backing coordinate (2, 2).
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setColor", "(I)V", (0x20_40_60,))
+                .await?;
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setPixel", "(II)V", (1, 1))
+                .await?;
+
+            // Add a current translation after wrapping. Native getPixel still
+            // uses the base origin captured at construction.
+            let _: () = jvm
+                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
+                .await?;
+
+            let pixel: i32 = jvm
+                .invoke_virtual(&graphics, "getPixel", "(II)I", (1, 1))
+                .await?;
+            assert_eq!(pixel, 0x20_40_60);
 
             Ok(())
         })
