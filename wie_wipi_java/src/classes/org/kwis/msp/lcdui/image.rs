@@ -223,7 +223,7 @@ impl Image {
             jvm.store_array(
                 &mut data_array,
                 0,
-                data.into_iter()
+                data.iter().copied()
                     .map(|x| x as i8)
                     .collect::<alloc::vec::Vec<_>>(),
             )
@@ -238,7 +238,7 @@ impl Image {
                 )
                 .await?;
 
-            let image: ClassInstanceRef<Image> = jvm
+            let mut image: ClassInstanceRef<Image> = jvm
                 .new_class(
                     "org/kwis/msp/lcdui/Image",
                     "(Ljavax/microedition/lcdui/Image;)V",
@@ -247,7 +247,9 @@ impl Image {
                 .await?
                 .into();
 
-            return Ok(Some(image));
+            Self::attach_gif_animation(jvm, &mut image, &data).await?;
+
+        return Ok(Some(image));
         }
 
         match Self::create_image_from_name(jvm, context, name).await {
@@ -302,7 +304,7 @@ impl Image {
             let data = JavaIoInputStream::read_until_end(jvm, &resource_stream).await?;
             let data_len = data.len();
             let mut data_array = jvm.instantiate_array("B", data_len).await?;
-            jvm.store_array(&mut data_array, 0, data.into_iter().map(|x| x as i8).collect::<alloc::vec::Vec<_>>())
+            jvm.store_array(&mut data_array, 0, data.iter().copied().map(|x| x as i8).collect::<alloc::vec::Vec<_>>())
                 .await?;
 
             let midp_image: ClassInstanceRef<MidpImage> = jvm
@@ -314,11 +316,14 @@ impl Image {
                 )
                 .await?;
 
-            let instance = jvm
+            let mut instance: ClassInstanceRef<Image> = jvm
                 .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
-                .await?;
+                .await?
+                .into();
 
-            return Ok(instance.into());
+            Self::attach_gif_animation(jvm, &mut instance, &data).await?;
+
+            return Ok(instance);
         }
 
         if let Some(file_name) = resource_name.strip_prefix("file://") {
@@ -345,6 +350,11 @@ impl Image {
             let _: () = jvm.invoke_virtual(&file, "close", "()V", ()).await?;
 
             let image_length = if read < 0 { 0 } else { read };
+
+            let raw_data: alloc::vec::Vec<i8> =
+                jvm.load_array(&data_array, 0, image_length as usize).await?;
+            let raw_data: alloc::vec::Vec<u8> =
+                raw_data.into_iter().map(|value| value as u8).collect();
             let midp_image: ClassInstanceRef<MidpImage> = jvm
                 .invoke_static(
                     "javax/microedition/lcdui/Image",
@@ -354,15 +364,18 @@ impl Image {
                 )
                 .await?;
 
-            let instance = jvm
+            let mut instance: ClassInstanceRef<Image> = jvm
                 .new_class(
                     "org/kwis/msp/lcdui/Image",
                     "(Ljavax/microedition/lcdui/Image;)V",
                     (midp_image,),
                 )
-                .await?;
+                .await?
+                .into();
 
-            return Ok(instance.into());
+            Self::attach_gif_animation(jvm, &mut instance, &raw_data).await?;
+
+            return Ok(instance);
         }
 
         let midp_image: ClassInstanceRef<MidpImage> = jvm
