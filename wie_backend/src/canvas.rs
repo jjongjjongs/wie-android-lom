@@ -849,6 +849,72 @@ impl Clip {
     }
 }
 
+
+pub struct AnimationFrame {
+    pub image: Box<dyn Image>,
+    pub delay_ms: u32,
+}
+
+pub struct AnimatedImage {
+    pub frames: Vec<AnimationFrame>,
+}
+
+/// Decode a GIF animation without changing the ordinary single-image decoder.
+///
+/// `None` means that the input is not a GIF or that it contains fewer than
+/// two frames.  WIPI treats an image as animated only when it has more than
+/// one decoded frame.
+pub fn decode_gif_animation(data: &[u8]) -> Result<Option<AnimatedImage>> {
+    extern crate std; // XXX
+
+    use image::{AnimationDecoder, codecs::gif::GifDecoder};
+    use std::{io::Cursor, time::Duration};
+
+    if !(data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")) {
+        return Ok(None);
+    }
+
+    let decoder =
+        GifDecoder::new(Cursor::new(data)).map_err(|x| WieError::FatalError(x.to_string()))?;
+    let frames = decoder
+        .into_frames()
+        .collect_frames()
+        .map_err(|x| WieError::FatalError(x.to_string()))?;
+
+    if frames.len() <= 1 {
+        return Ok(None);
+    }
+
+    let mut decoded_frames = Vec::with_capacity(frames.len());
+
+    for frame in frames {
+        let delay = Duration::from(frame.delay());
+        let delay_ms = delay.as_millis().min(u128::from(u32::MAX)) as u32;
+
+        let rgba = frame.into_buffer();
+        let width = rgba.width();
+        let height = rgba.height();
+
+        // Keep the same byte layout used by decode_image().
+        let data = rgba
+            .pixels()
+            .flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]])
+            .collect::<Vec<_>>();
+
+        let image = Box::new(VecImageBuffer::<ArgbPixel>::from_raw(
+            width,
+            height,
+            pod_collect_to_vec(&data),
+        )) as Box<dyn Image>;
+
+        decoded_frames.push(AnimationFrame { image, delay_ms });
+    }
+
+    Ok(Some(AnimatedImage {
+        frames: decoded_frames,
+    }))
+}
+
 pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
     extern crate std; // XXX
 
@@ -895,6 +961,67 @@ mod tests {
     use crate::canvas::{Clip, Image, ImageBufferCanvas};
 
     use super::{ArgbPixel, Canvas, Color, Rgb332Pixel, TextAlignment, VecImageBuffer};
+
+
+    #[test]
+    fn test_decode_gif_animation_frames_and_delay() -> Result<()> {
+        extern crate std;
+
+        use alloc::{string::ToString, vec::Vec};
+        use image::{
+            Delay,
+            Frame,
+            Rgba,
+            RgbaImage,
+            codecs::gif::GifEncoder,
+        };
+        use std::io::Cursor;
+
+        use crate::canvas::decode_gif_animation;
+        use wie_util::WieError;
+
+        let mut bytes = Vec::new();
+
+        {
+            let mut encoder = GifEncoder::new(Cursor::new(&mut bytes));
+
+            let frame1 = Frame::from_parts(
+                RgbaImage::from_pixel(2, 1, Rgba([255, 0, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(20, 1),
+            );
+            let frame2 = Frame::from_parts(
+                RgbaImage::from_pixel(2, 1, Rgba([0, 255, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(40, 1),
+            );
+
+            encoder
+                .encode_frames([frame1, frame2].into_iter())
+                .map_err(|x| WieError::FatalError(x.to_string()))?;
+        }
+
+        let animation = decode_gif_animation(&bytes)?.expect("two-frame GIF must be animated");
+
+        assert_eq!(animation.frames.len(), 2);
+        assert_eq!(animation.frames[0].delay_ms, 20);
+        assert_eq!(animation.frames[1].delay_ms, 40);
+
+        assert_eq!(animation.frames[0].image.width(), 2);
+        assert_eq!(animation.frames[0].image.height(), 1);
+        assert_eq!(animation.frames[1].image.width(), 2);
+        assert_eq!(animation.frames[1].image.height(), 1);
+
+        let first = animation.frames[0].image.get_pixel(0, 0);
+        let second = animation.frames[1].image.get_pixel(0, 0);
+
+        assert_eq!((first.r, first.g, first.b, first.a), (255, 0, 0, 255));
+        assert_eq!((second.r, second.g, second.b, second.a), (0, 255, 0, 255));
+
+        Ok(())
+    }
 
     #[test]
     fn test_canvas() -> Result<()> {
