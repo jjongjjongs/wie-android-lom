@@ -812,10 +812,58 @@ impl Graphics {
         jvm.put_field(&mut this, "xorMode", "Z", xor_mode).await
     }
 
-    async fn get_pixel(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, x: i32, y: i32) -> JvmResult<i32> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Graphics::getPixel({this:?}, {x}, {y})");
+    async fn get_pixel(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, x: i32, y: i32) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::getPixel({this:?}, {x}, {y})");
 
-        Ok(0)
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> =
+            jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;")
+                .await?;
+
+        let width: i32 = jvm.get_field(&midp_graphics, "width", "I").await?;
+        let height: i32 = jvm.get_field(&midp_graphics, "height", "I").await?;
+
+        // Native dgraphics_get_pixel() returns M_E_OUTOFBOUND (-2022)
+        // rather than throwing when the logical coordinate is outside
+        // the Graphics region.
+        if x < 0 || y < 0 || x >= width || y >= height {
+            return Ok(-2022);
+        }
+
+        let translate_x: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
+            .await?;
+        let translate_y: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
+            .await?;
+
+        let image = MidpGraphics::image(jvm, &mut midp_graphics).await?;
+        let backend_image = MidpImage::image(jvm, &image).await?;
+
+        let absolute_x = x + translate_x;
+        let absolute_y = y + translate_y;
+
+        // Avoid an out-of-bounds backend access. Native Graphics objects
+        // normally keep their translated origin inside the backing image.
+        if absolute_x < 0
+            || absolute_y < 0
+            || absolute_x as u32 >= backend_image.width()
+            || absolute_y as u32 >= backend_image.height()
+        {
+            return Ok(-2022);
+        }
+
+        let pixel = backend_image.get_pixel(absolute_x, absolute_y);
+
+        // The reference implementation reads RGB565 and expands it without
+        // bit replication:
+        //   R5 << 19, G6 << 10, B5 << 3
+        // This is equivalent to masking an 8-bit backend color to
+        // RRRR_R000 / GGGG_GG00 / BBBB_B000.
+        let r = (pixel.r & 0xf8) as i32;
+        let g = (pixel.g & 0xfc) as i32;
+        let b = (pixel.b & 0xf8) as i32;
+
+        Ok((r << 16) | (g << 8) | b)
     }
 
     async fn get_pixels(
@@ -1033,6 +1081,72 @@ mod test {
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getAlpha", "()I", ()).await?, 255);
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getStrokeStyle", "()I", ()).await?, 0);
             assert!(!jvm.invoke_virtual::<_, bool>(&graphics, "isXORMode", "()Z", ()).await?);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_get_pixel_rgb565_translation_and_bounds() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "(II)Lorg/kwis/msp/lcdui/Image;",
+                    (4, 4),
+                )
+                .await?;
+
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .invoke_virtual(
+                    &image,
+                    "getGraphics",
+                    "()Lorg/kwis/msp/lcdui/Graphics;",
+                    (),
+                )
+                .await?;
+
+            // Draw a non-RGB565-exact color at absolute backing coordinate (2, 1).
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setColor", "(I)V", (0x12_34_56,))
+                .await?;
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setPixel", "(II)V", (2, 1))
+                .await?;
+
+            // Native getPixel reads RGB565 and expands without bit replication:
+            // 0x12 -> 0x10, 0x34 -> 0x34, 0x56 -> 0x50.
+            let pixel: i32 = jvm
+                .invoke_virtual(&graphics, "getPixel", "(II)I", (2, 1))
+                .await?;
+            assert_eq!(pixel, 0x10_34_50);
+
+            // Translation is applied when locating the backing pixel.
+            let _: () = jvm
+                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
+                .await?;
+            let translated: i32 = jvm
+                .invoke_virtual(&graphics, "getPixel", "(II)I", (1, 1))
+                .await?;
+            assert_eq!(translated, 0x10_34_50);
+
+            // Bounds are checked against the logical Graphics region before
+            // translation, and native returns M_E_OUTOFBOUND (-2022).
+            let left: i32 = jvm
+                .invoke_virtual(&graphics, "getPixel", "(II)I", (-1, 0))
+                .await?;
+            assert_eq!(left, -2022);
+
+            let right: i32 = jvm
+                .invoke_virtual(&graphics, "getPixel", "(II)I", (4, 0))
+                .await?;
+            assert_eq!(right, -2022);
+
+            let bottom: i32 = jvm
+                .invoke_virtual(&graphics, "getPixel", "(II)I", (0, 4))
+                .await?;
+            assert_eq!(bottom, -2022);
 
             Ok(())
         })
