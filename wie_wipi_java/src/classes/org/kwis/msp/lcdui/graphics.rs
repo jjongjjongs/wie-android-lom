@@ -1188,48 +1188,139 @@ impl Graphics {
         width: i32,
         height: i32,
     ) -> JvmResult<ClassInstanceRef<Array<u8>>> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Graphics::encodeImage({this:?}, {x}, {y}, {width}, {height})");
+        tracing::debug!(
+            "org.kwis.msp.lcdui.Graphics::encodeImage({this:?}, {x}, {y}, {width}, {height})"
+        );
 
+        // The native Java bridge allocates a 24-bpp BMP-sized byte array
+        // from the originally requested dimensions before native clipping.
         if width <= 0 || height <= 0 {
             return Ok(jvm.instantiate_array("B", 0).await?.into());
         }
 
-        let w = width as u32;
-        let h = height as u32;
+        let requested_width = width as usize;
+        let requested_height = height as usize;
 
-        // Each BMP row is padded to a multiple of 4 bytes
-        let row_stride = (w * 3).div_ceil(4) * 4; // 24bpp (3 bytes per pixel)
-        let image_size = row_stride * h;
-        let header_size = 14 + 40; // BITMAPFILEHEADER (14) + BITMAPINFOHEADER (40)
-        let file_size = header_size as u32 + image_size;
+        let requested_row_stride = match requested_width
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(3))
+            .map(|value| value & !3)
+        {
+            Some(value) => value,
+            None => return Ok(jvm.instantiate_array("B", 0).await?.into()),
+        };
 
-        let mut result = vec![0u8; file_size as usize];
+        let requested_image_size =
+            match requested_row_stride.checked_mul(requested_height) {
+                Some(value) => value,
+                None => return Ok(jvm.instantiate_array("B", 0).await?.into()),
+            };
+
+        let allocated_size = match requested_image_size.checked_add(54) {
+            Some(value) => value,
+            None => return Ok(jvm.instantiate_array("B", 0).await?.into()),
+        };
+
+        let mut result = vec![0u8; allocated_size];
+
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> =
+            jvm.get_field(
+                &this,
+                "midpGraphics",
+                "Ljavax/microedition/lcdui/Graphics;",
+            )
+            .await?;
+
+        let graphics_width: i32 =
+            jvm.get_field(&midp_graphics, "width", "I").await?;
+        let graphics_height: i32 =
+            jvm.get_field(&midp_graphics, "height", "I").await?;
+
+        // Native encode_image(flag=0) intersects against the Graphics'
+        // logical region, not the current translated origin or clip.
+        let request_right = x.wrapping_add(width);
+        let request_bottom = y.wrapping_add(height);
+
+        let left = x.max(0);
+        let top = y.max(0);
+        let right = request_right.min(graphics_width);
+        let bottom = request_bottom.min(graphics_height);
+
+        // The bridge ignores the native error return. Since VNI_NewByteArray
+        // has already produced a zero-filled array, a non-intersecting request
+        // simply returns that untouched allocation.
+        if right <= left || bottom <= top {
+            let mut data_array = jvm.instantiate_array("B", result.len()).await?;
+            jvm.array_raw_buffer_mut(&mut data_array)
+                .await?
+                .write(0, &result)?;
+            return Ok(data_array.into());
+        }
+
+        let encoded_width = (right - left) as usize;
+        let encoded_height = (bottom - top) as usize;
+
+        let row_stride = (encoded_width * 3 + 3) & !3;
+        let image_size = row_stride * encoded_height;
+        let file_size = image_size + 54;
 
         // BITMAPFILEHEADER
         result[0] = b'B';
         result[1] = b'M';
-        result[2..6].copy_from_slice(&(file_size).to_le_bytes());
-        // reserved1 (2 bytes) + reserved2 (2 bytes) already zero
-        result[10..14].copy_from_slice(&(header_size as u32).to_le_bytes()); // pixel data offset
+        result[2..6].copy_from_slice(&(file_size as u32).to_le_bytes());
+        // bfReserved1 / bfReserved2 remain zero.
+        result[10..14].copy_from_slice(&(54u32).to_le_bytes());
 
         // BITMAPINFOHEADER
-        result[14..18].copy_from_slice(&(40u32).to_le_bytes()); // DIB header size
-        result[18..22].copy_from_slice(&width.to_le_bytes()); // width (i32)
-        result[22..26].copy_from_slice(&height.to_le_bytes()); // height (i32), positive = bottom-up
-        result[26..28].copy_from_slice(&(1u16).to_le_bytes()); // planes
-        result[28..30].copy_from_slice(&(24u16).to_le_bytes()); // bits per pixel
-        result[30..34].copy_from_slice(&(0u32).to_le_bytes()); // compression = BI_RGB
-        result[34..38].copy_from_slice(&image_size.to_le_bytes()); // image size
-        result[38..42].copy_from_slice(&(2835u32).to_le_bytes()); // X pixels per meter (72 DPI)
-        result[42..46].copy_from_slice(&(2835u32).to_le_bytes()); // Y pixels per meter (72 DPI)
-        result[46..50].copy_from_slice(&(0u32).to_le_bytes()); // colors used
-        result[50..54].copy_from_slice(&(0u32).to_le_bytes()); // important colors
+        result[14..18].copy_from_slice(&(40u32).to_le_bytes());
+        result[18..22].copy_from_slice(&(encoded_width as i32).to_le_bytes());
+        result[22..26].copy_from_slice(&(encoded_height as i32).to_le_bytes());
+        result[26..28].copy_from_slice(&(1u16).to_le_bytes());
+        result[28..30].copy_from_slice(&(24u16).to_le_bytes());
+        // biCompression = BI_RGB
+        result[30..34].copy_from_slice(&(0u32).to_le_bytes());
+        result[34..38].copy_from_slice(&(image_size as u32).to_le_bytes());
+        // Native bmp_encode leaves X/Y pixels-per-meter and palette fields 0.
 
-        // TODO: fill in pixel data
+        let image = MidpGraphics::image(jvm, &mut midp_graphics).await?;
+        let backend_image = MidpImage::image(jvm, &image).await?;
 
-        // Return as Java byte array
+        // Native BMP encoder is bottom-up: the first output scanline is the
+        // bottom row of the selected source rectangle.
+        for output_row in 0..encoded_height {
+            let source_y = bottom - 1 - output_row as i32;
+            let destination_row = 54 + output_row * row_stride;
+
+            for column in 0..encoded_width {
+                let source_x = left + column as i32;
+
+                if source_x < 0
+                    || source_y < 0
+                    || source_x as u32 >= backend_image.width()
+                    || source_y as u32 >= backend_image.height()
+                {
+                    continue;
+                }
+
+                let pixel = backend_image.get_pixel(source_x, source_y);
+
+                // Native backing storage is RGB565. Expand exactly as the
+                // reference encoder does, without low-bit replication.
+                let red = pixel.r & 0xf8;
+                let green = pixel.g & 0xfc;
+                let blue = pixel.b & 0xf8;
+
+                let destination = destination_row + column * 3;
+                result[destination] = blue;
+                result[destination + 1] = green;
+                result[destination + 2] = red;
+            }
+        }
+
         let mut data_array = jvm.instantiate_array("B", result.len()).await?;
-        jvm.array_raw_buffer_mut(&mut data_array).await?.write(0, &result)?;
+        jvm.array_raw_buffer_mut(&mut data_array)
+            .await?
+            .write(0, &result)?;
 
         Ok(data_array.into())
     }
@@ -1776,6 +1867,116 @@ mod test {
             assert_eq!((p1.r, p1.g, p1.b), (0x00, 0x00, 0x00));
             assert_eq!((p2.r, p2.g, p2.b), (0x00, 0xff, 0x00));
             assert_eq!((p3.r, p3.g, p3.b), (0x00, 0x00, 0xff));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_encode_image_bmp_bottom_up_bgr_and_clipping() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "(II)Lorg/kwis/msp/lcdui/Image;",
+                    (3, 2),
+                )
+                .await?;
+
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .invoke_virtual(
+                    &image,
+                    "getGraphics",
+                    "()Lorg/kwis/msp/lcdui/Graphics;",
+                    (),
+                )
+                .await?;
+
+            // Top row:
+            // x0 red, x1 green, x2 blue
+            // Bottom row:
+            // x0 white, x1 black, x2 0x123456
+            for (x, y, color) in [
+                (0, 0, 0xff0000),
+                (1, 0, 0x00ff00),
+                (2, 0, 0x0000ff),
+                (0, 1, 0xffffff),
+                (1, 1, 0x000000),
+                (2, 1, 0x123456),
+            ] {
+                let _: () = jvm
+                    .invoke_virtual(&graphics, "setColor", "(I)V", (color,))
+                    .await?;
+                let _: () = jvm
+                    .invoke_virtual(&graphics, "setPixel", "(II)V", (x, y))
+                    .await?;
+            }
+
+            // Native encodeImage(flag=0) ignores later translation.
+            let _: () = jvm
+                .invoke_virtual(&graphics, "translate", "(II)V", (1, 1))
+                .await?;
+
+            // Request width 3 starting at x=1. Graphics width is 3,
+            // so encoded width becomes 2 while allocation still uses width 3.
+            let encoded: ClassInstanceRef<Array<i8>> = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "encodeImage",
+                    "(IIII)[B",
+                    (1, 0, 3, 2),
+                )
+                .await?;
+
+            let bytes: alloc::vec::Vec<i8> =
+                jvm.load_array(&encoded, 0, jvm.array_length(&encoded).await?).await?;
+            let bytes: alloc::vec::Vec<u8> =
+                bytes.into_iter().map(|value| value as u8).collect();
+
+            // Original request: width=3 -> row stride 12, height=2.
+            // Java bridge therefore allocates 54 + 12*2 = 78 bytes.
+            assert_eq!(bytes.len(), 78);
+
+            assert_eq!(&bytes[0..2], b"BM");
+            assert_eq!(u32::from_le_bytes(bytes[2..6].try_into().unwrap()), 70);
+            assert_eq!(u32::from_le_bytes(bytes[10..14].try_into().unwrap()), 54);
+            assert_eq!(u32::from_le_bytes(bytes[14..18].try_into().unwrap()), 40);
+
+            // Clipped native encode width/height.
+            assert_eq!(i32::from_le_bytes(bytes[18..22].try_into().unwrap()), 2);
+            assert_eq!(i32::from_le_bytes(bytes[22..26].try_into().unwrap()), 2);
+
+            assert_eq!(u16::from_le_bytes(bytes[26..28].try_into().unwrap()), 1);
+            assert_eq!(u16::from_le_bytes(bytes[28..30].try_into().unwrap()), 24);
+            assert_eq!(u32::from_le_bytes(bytes[30..34].try_into().unwrap()), 0);
+
+            // Encoded row stride for clipped width 2 is 8 bytes.
+            assert_eq!(u32::from_le_bytes(bytes[34..38].try_into().unwrap()), 16);
+
+            // Native leaves pixels-per-meter and palette fields zero.
+            assert_eq!(&bytes[38..54], &[0u8; 16]);
+
+            // BMP is bottom-up.
+            // Bottom source row x=1..2:
+            // black -> 00 00 00
+            // 0x123456 -> RGB565 truncation = 10 34 50, stored BGR = 50 34 10.
+            assert_eq!(
+                &bytes[54..62],
+                &[0x00, 0x00, 0x00, 0x50, 0x34, 0x10, 0x00, 0x00]
+            );
+
+            // Top source row x=1..2:
+            // green -> 00 FC 00
+            // blue  -> F8 00 00
+            assert_eq!(
+                &bytes[62..70],
+                &[0x00, 0xfc, 0x00, 0xf8, 0x00, 0x00, 0x00, 0x00]
+            );
+
+            // Allocation was based on requested width=3, but BMP itself is
+            // only 70 bytes after clipping. Remaining bytes stay zero.
+            assert_eq!(&bytes[70..78], &[0u8; 8]);
 
             Ok(())
         })
