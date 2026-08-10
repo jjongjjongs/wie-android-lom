@@ -77,6 +77,7 @@ impl Image {
                     Default::default(),
                 ),
                 JavaMethodProto::new("setTransparentColor", "(I)V", Self::set_transparent_color, Default::default()),
+                JavaMethodProto::new("getPlayTime", "()I", Self::get_play_time, Default::default()),
             ],
             fields: vec![
                 JavaFieldProto::new("midpImage", "Ljavax/microedition/lcdui/Image;", Default::default()),
@@ -1044,6 +1045,34 @@ impl Image {
         jvm.put_field(&mut this, "transparentColor", "I", rgb).await
     }
 
+    async fn get_play_time(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Image>,
+    ) -> JvmResult<i32> {
+        let frame_count: i32 = jvm.get_field(&this, "frameCount", "I").await?;
+        if frame_count <= 0 {
+            return Ok(0);
+        }
+
+        let delays: ClassInstanceRef<Array<i32>> =
+            jvm.get_field(&this, "animationDelays", "[I").await?;
+        if delays.is_null() {
+            return Ok(0);
+        }
+
+        let current_frame: i32 = jvm.get_field(&this, "currentFrame", "I").await?;
+        let delay_index = if current_frame <= 0 {
+            0
+        } else {
+            (current_frame - 1).rem_euclid(frame_count)
+        };
+
+        let delay: i32 = jvm.load_array(&delays, delay_index as usize, 1).await?[0];
+
+        Ok(delay.wrapping_mul(frame_count))
+    }
+
     pub async fn midp_image(jvm: &Jvm, this: &ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<MidpImage>> {
         jvm.get_field(this, "midpImage", "Ljavax/microedition/lcdui/Image;").await
     }
@@ -1599,6 +1628,54 @@ mod test {
         get_protos,
     };
 
+
+    #[test]
+    fn test_get_play_time_uses_current_frame_delay() -> Result<()> {
+        run_jvm_test(
+            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
+            |jvm| async move {
+                const GIF: &[u8] = &[
+                    71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 255, 0, 0, 0, 255, 0,
+                    33, 249, 4, 0, 2, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1,
+                    0, 33, 249, 4, 0, 4, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68,
+                    1, 0, 59,
+                ];
+
+                let mut data = jvm.instantiate_array("B", GIF.len()).await?;
+                jvm.store_array(
+                    &mut data,
+                    0,
+                    GIF.iter().copied().map(|x| x as i8).collect::<Vec<_>>(),
+                )
+                .await?;
+
+                let mut image: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "([BII)Lorg/kwis/msp/lcdui/Image;",
+                        (data, 0, GIF.len() as i32),
+                    )
+                    .await?;
+
+                let initial: i32 =
+                    jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
+                assert_eq!(initial, 40);
+
+                jvm.put_field(&mut image, "currentFrame", "I", 1).await?;
+                let first: i32 =
+                    jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
+                assert_eq!(first, 40);
+
+                jvm.put_field(&mut image, "currentFrame", "I", 2).await?;
+                let second: i32 =
+                    jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
+                assert_eq!(second, 80);
+
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn test_animated_gif_storage_and_state() -> Result<()> {
