@@ -82,6 +82,11 @@ impl Image {
             fields: vec![
                 JavaFieldProto::new("midpImage", "Ljavax/microedition/lcdui/Image;", Default::default()),
                 JavaFieldProto::new("mutable", "Z", Default::default()),
+                JavaFieldProto::new(
+                    "cachedGraphics",
+                    "Lorg/kwis/msp/lcdui/Graphics;",
+                    Default::default(),
+                ),
                 JavaFieldProto::new("transparentColor", "I", Default::default()),
                 JavaFieldProto::new("source", "Ljava/lang/String;", Default::default()),
                 JavaFieldProto::new(
@@ -119,6 +124,13 @@ impl Image {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", None).await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
+        jvm.put_field(
+            &mut this,
+            "cachedGraphics",
+            "Lorg/kwis/msp/lcdui/Graphics;",
+            None,
+        )
+        .await?;
         jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
         jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await?;
         jvm.put_field(
@@ -147,7 +159,21 @@ impl Image {
 
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", image).await?;
+        jvm.put_field(
+            &mut this,
+            "cachedGraphics",
+            "Lorg/kwis/msp/lcdui/Graphics;",
+            None,
+        )
+        .await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
+        jvm.put_field(
+            &mut this,
+            "cachedGraphics",
+            "Lorg/kwis/msp/lcdui/Graphics;",
+            None,
+        )
+        .await?;
         jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
         jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await?;
         jvm.put_field(
@@ -581,7 +607,11 @@ impl Image {
         Ok(instance)
     }
 
-    async fn get_graphics(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<Graphics>> {
+    async fn get_graphics(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Image>,
+    ) -> JvmResult<ClassInstanceRef<Graphics>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::getGraphics({this:?})");
 
         let mutable: bool = jvm.get_field(&this, "mutable", "Z").await?;
@@ -589,17 +619,36 @@ impl Image {
             return Ok(None.into());
         }
 
-        let midp_image: ClassInstanceRef<MidpImage> = jvm.get_field(&this, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
-
-        let midp_graphics: ClassInstanceRef<MidpGraphics> = jvm
-            .invoke_virtual(&midp_image, "getGraphics", "()Ljavax/microedition/lcdui/Graphics;", ())
+        let cached: ClassInstanceRef<Graphics> = jvm
+            .get_field(
+                &this,
+                "cachedGraphics",
+                "Lorg/kwis/msp/lcdui/Graphics;",
+            )
             .await?;
 
-        let instance = jvm
-            .new_class("org/kwis/msp/lcdui/Graphics", "(Ljavax/microedition/lcdui/Graphics;)V", (midp_graphics,))
-            .await?;
+        if !cached.is_null() {
+            return Ok(cached);
+        }
 
-        Ok(instance.into())
+        let graphics: ClassInstanceRef<Graphics> = jvm
+            .new_class(
+                "org/kwis/msp/lcdui/Graphics",
+                "(Lorg/kwis/msp/lcdui/Image;)V",
+                (this.clone(),),
+            )
+            .await?
+            .into();
+
+        jvm.put_field(
+            &mut this,
+            "cachedGraphics",
+            "Lorg/kwis/msp/lcdui/Graphics;",
+            graphics.clone(),
+        )
+        .await?;
+
+        Ok(graphics)
     }
 
     async fn get_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<i32> {
@@ -1920,6 +1969,66 @@ mod test {
                 let active_size: i32 =
                     jvm.invoke_virtual(&active, "size", "()I", ()).await?;
                 assert_eq!(active_size, 0);
+
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn test_get_graphics_is_cached_for_mutable_images() -> Result<()> {
+        run_jvm_test(
+            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
+            |jvm| async move {
+                let image: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "(II)Lorg/kwis/msp/lcdui/Image;",
+                        (2, 2),
+                    )
+                    .await?;
+
+                let first: ClassInstanceRef<Graphics> = jvm
+                    .invoke_virtual(
+                        &image,
+                        "getGraphics",
+                        "()Lorg/kwis/msp/lcdui/Graphics;",
+                        (),
+                    )
+                    .await?;
+
+                let second: ClassInstanceRef<Graphics> = jvm
+                    .invoke_virtual(
+                        &image,
+                        "getGraphics",
+                        "()Lorg/kwis/msp/lcdui/Graphics;",
+                        (),
+                    )
+                    .await?;
+
+                assert!(!first.is_null());
+                assert_eq!(first.identity(), second.identity());
+
+                let immutable: ClassInstanceRef<Image> = jvm
+                    .invoke_virtual(
+                        &image,
+                        "createSubImage",
+                        "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
+                        (0, 0, 1, 1, false),
+                    )
+                    .await?;
+
+                let immutable_graphics: ClassInstanceRef<Graphics> = jvm
+                    .invoke_virtual(
+                        &immutable,
+                        "getGraphics",
+                        "()Lorg/kwis/msp/lcdui/Graphics;",
+                        (),
+                    )
+                    .await?;
+
+                assert!(immutable_graphics.is_null());
 
                 Ok(())
             },

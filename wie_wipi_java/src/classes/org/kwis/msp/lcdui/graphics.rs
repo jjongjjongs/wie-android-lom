@@ -29,6 +29,12 @@ impl Graphics {
                     Self::init_with_midp_graphics,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "<init>",
+                    "(Lorg/kwis/msp/lcdui/Image;)V",
+                    Self::init_with_image,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("getFont", "()Lorg/kwis/msp/lcdui/Font;", Self::get_font, Default::default()),
                 JavaMethodProto::new("copyArea", "(IIIIII)V", Self::copy_area, Default::default()),
                 JavaMethodProto::new("setColor", "(I)V", Self::set_color, Default::default()),
@@ -142,6 +148,57 @@ impl Graphics {
         jvm.put_field(&mut this, "alpha", "I", 255).await?;
         jvm.put_field(&mut this, "strokeStyle", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
+
+        Ok(())
+    }
+
+    async fn init_with_image(
+        jvm: &Jvm,
+        _context: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        image: ClassInstanceRef<Image>,
+    ) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::<init>({this:?}, {image:?})");
+
+        if image.is_null() {
+            return Err(jvm
+                .exception("java/lang/NullPointerException", "image is null")
+                .await);
+        }
+
+        let midp_image = Image::midp_image(jvm, &image).await?;
+        let midp_graphics: ClassInstanceRef<MidpGraphics> = jvm
+            .invoke_virtual(
+                &midp_image,
+                "getGraphics",
+                "()Ljavax/microedition/lcdui/Graphics;",
+                (),
+            )
+            .await?;
+
+        let base_translate_x: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
+            .await?;
+        let base_translate_y: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "midpGraphics",
+            "Ljavax/microedition/lcdui/Graphics;",
+            midp_graphics,
+        )
+        .await?;
+        jvm.put_field(&mut this, "baseTranslateX", "I", base_translate_x)
+            .await?;
+        jvm.put_field(&mut this, "baseTranslateY", "I", base_translate_y)
+            .await?;
+        jvm.put_field(&mut this, "alpha", "I", 255).await?;
+        jvm.put_field(&mut this, "strokeStyle", "I", 0).await?;
+        jvm.put_field(&mut this, "xorMode", "Z", false).await?;
+
+        let _: () = jvm.invoke_virtual(&this, "reset", "()V", ()).await?;
 
         Ok(())
     }
