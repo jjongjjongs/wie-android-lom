@@ -1,9 +1,12 @@
-use alloc::vec;
+use alloc::{boxed::Box, vec};
 
-use java_class_proto::{JavaFieldProto, JavaMethodProto};
+use java_class_proto::{JavaFieldProto, JavaMethodProto, MethodBody};
 use java_constants::MethodAccessFlags;
 use java_runtime::classes::java::lang::String;
-use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult, runtime::{JavaIoInputStream, JavaLangString}};
+use jvm::{
+    Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult,
+    runtime::{JavaIoInputStream, JavaLangString},
+};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::lcdui::{Graphics as MidpGraphics, Image as MidpImage};
@@ -104,14 +107,105 @@ impl Image {
     }
 
     async fn load_image(
-        _: &Jvm,
-        _: &mut WieJvmContext,
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
         name: ClassInstanceRef<String>,
         observer: ClassInstanceRef<ImageObserver>,
     ) -> JvmResult<ClassInstanceRef<Image>> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Image::loadImage({name:?}, {observer:?})");
+        tracing::debug!("org.kwis.msp.lcdui.Image::loadImage({name:?}, {observer:?})");
 
-        Ok(None.into())
+        if name.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "name is null").await);
+        }
+
+        // Native WipiPlayer Plus returns an empty Image immediately and lets
+        // ImageReader populate it asynchronously.
+        let image: ClassInstanceRef<Image> = jvm
+            .new_class("org/kwis/msp/lcdui/Image", "()V", ())
+            .await?
+            .into();
+
+        context.spawn(
+            jvm,
+            Box::new(ImageLoadRunner {
+                image: image.clone(),
+                name,
+                observer,
+            }),
+        )?;
+
+        Ok(image)
+    }
+
+    async fn load_image_for_runner(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        name: ClassInstanceRef<String>,
+    ) -> JvmResult<Option<ClassInstanceRef<Image>>> {
+        let mut resource_name = JavaLangString::to_rust_string(jvm, &name).await?;
+
+        if !resource_name.contains(':') {
+            if !resource_name.starts_with('/') {
+                resource_name.insert(0, '/');
+            }
+
+            let java_name = JavaLangString::from_rust_string(jvm, &resource_name).await?;
+            let probe = jvm.new_class("org/kwis/msp/lcdui/Image", "()V", ()).await?;
+            let class = jvm
+                .invoke_virtual(&probe, "getClass", "()Ljava/lang/Class;", ())
+                .await?;
+
+            let resource_stream: ClassInstanceRef<java_runtime::classes::java::io::InputStream> = jvm
+                .invoke_virtual(
+                    &class,
+                    "getResourceAsStream",
+                    "(Ljava/lang/String;)Ljava/io/InputStream;",
+                    (java_name,),
+                )
+                .await?;
+
+            if resource_stream.is_null() {
+                return Ok(None);
+            }
+
+            let data = JavaIoInputStream::read_until_end(jvm, &resource_stream).await?;
+            let data_len = data.len();
+            let mut data_array = jvm.instantiate_array("B", data_len).await?;
+
+            jvm.store_array(
+                &mut data_array,
+                0,
+                data.into_iter()
+                    .map(|x| x as i8)
+                    .collect::<alloc::vec::Vec<_>>(),
+            )
+            .await?;
+
+            let midp_image: ClassInstanceRef<MidpImage> = jvm
+                .invoke_static(
+                    "javax/microedition/lcdui/Image",
+                    "createImage",
+                    "([BII)Ljavax/microedition/lcdui/Image;",
+                    (data_array, 0, data_len as i32),
+                )
+                .await?;
+
+            let image: ClassInstanceRef<Image> = jvm
+                .new_class(
+                    "org/kwis/msp/lcdui/Image",
+                    "(Ljavax/microedition/lcdui/Image;)V",
+                    (midp_image,),
+                )
+                .await?
+                .into();
+
+            return Ok(Some(image));
+        }
+
+        match Self::create_image_from_name(jvm, context, name).await {
+            Ok(image) => Ok(Some(image)),
+            Err(error) => Err(error),
+        }
     }
 
     async fn create_image(jvm: &Jvm, _: &mut WieJvmContext, width: i32, height: i32) -> JvmResult<ClassInstanceRef<Image>> {
@@ -520,6 +614,80 @@ impl Image {
 
     pub async fn midp_image(jvm: &Jvm, this: &ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<MidpImage>> {
         jvm.get_field(this, "midpImage", "Ljavax/microedition/lcdui/Image;").await
+    }
+}
+
+
+struct ImageLoadRunner {
+    image: ClassInstanceRef<Image>,
+    name: ClassInstanceRef<String>,
+    observer: ClassInstanceRef<ImageObserver>,
+}
+
+#[async_trait::async_trait]
+impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
+    async fn call(
+        &self,
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        _args: Box<[JavaValue]>,
+    ) -> Result<JavaValue, JavaError> {
+        const IMAGE_END: i32 = 1;
+        const NOT_EXIST: i32 = -1;
+        const DECODE_ERROR: i32 = -2;
+        const OUT_OF_MEMORY: i32 = -3;
+
+        jvm.attach_thread(None).await?;
+
+        let status = match Image::load_image_for_runner(jvm, context, self.name.clone()).await {
+            Ok(Some(loaded)) => {
+                let midp_image: ClassInstanceRef<MidpImage> = jvm
+                    .get_field(
+                        &loaded,
+                        "midpImage",
+                        "Ljavax/microedition/lcdui/Image;",
+                    )
+                    .await?;
+
+                let mut image = self.image.clone();
+                jvm.put_field(
+                    &mut image,
+                    "midpImage",
+                    "Ljavax/microedition/lcdui/Image;",
+                    midp_image,
+                )
+                .await?;
+
+                IMAGE_END
+            }
+            Ok(None) => NOT_EXIST,
+            Err(JavaError::JavaException(exception)) => {
+                if jvm.is_instance(&*exception, "java/lang/OutOfMemoryError") {
+                    OUT_OF_MEMORY
+                } else if jvm.is_instance(&*exception, "java/lang/IllegalArgumentException") {
+                    DECODE_ERROR
+                } else if jvm.is_instance(&*exception, "java/io/IOException")
+                    || jvm.is_instance(&*exception, "java/io/FileNotFoundException")
+                {
+                    NOT_EXIST
+                } else {
+                    DECODE_ERROR
+                }
+            }
+        };
+
+        if !self.observer.is_null() {
+            let _: () = jvm
+                .invoke_virtual(
+                    &self.observer,
+                    "notify",
+                    "(Lorg/kwis/msp/lcdui/Image;I)V",
+                    (self.image.clone(), status),
+                )
+                .await?;
+        }
+
+        Ok(JavaValue::Void)
     }
 }
 
