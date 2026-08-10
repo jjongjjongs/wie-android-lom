@@ -1037,7 +1037,7 @@ impl Graphics {
     }
 
     async fn set_pixels(
-        _: &Jvm,
+        jvm: &Jvm,
         _: &mut WieJvmContext,
         this: ClassInstanceRef<Self>,
         x: i32,
@@ -1048,7 +1048,109 @@ impl Graphics {
         offset: i32,
         bytes_per_line: i32,
     ) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Graphics::setPixels({this:?}, {x}, {y}, {width}, {height}, {pixels:?}, {offset}, {bytes_per_line})");
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::setPixels({this:?}, {x}, {y}, {width}, {height}, {pixels:?}, {offset}, {bytes_per_line})");
+
+        if pixels.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "pixels is null.")
+                    .await,
+            );
+        }
+
+        let array_length = jvm.array_length(&pixels).await? as i32;
+        let required_length = height.wrapping_mul(bytes_per_line);
+
+        if array_length < required_length {
+            return Err(
+                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                    .await,
+            );
+        }
+
+        if width <= 0 || height <= 0 {
+            return Ok(());
+        }
+
+        let pixel_count = match width.checked_mul(height) {
+            Some(value) if value >= 0 => value as usize,
+            _ => {
+                return Err(
+                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                        .await,
+                );
+            }
+        };
+
+        let source_bytes = match pixel_count.checked_mul(2) {
+            Some(value) => value,
+            None => {
+                return Err(
+                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                        .await,
+                );
+            }
+        };
+
+        // The 32-bit WIPI bridge treats the Java byte[] offset as a
+        // four-byte-scaled native offset.
+        let source_offset = match offset.checked_mul(4) {
+            Some(value) if value >= 0 => value as usize,
+            _ => {
+                return Err(
+                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                        .await,
+                );
+            }
+        };
+
+        // The reference implementation does not perform this second bounds
+        // check and may access outside the Java array. Preserve normal native
+        // semantics while keeping the Rust implementation memory-safe.
+        if source_offset
+            .checked_add(source_bytes)
+            .is_none_or(|end| end > array_length as usize)
+        {
+            return Err(
+                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                    .await,
+            );
+        }
+
+        let raw: Vec<i8> = jvm
+            .load_array(&pixels, source_offset, source_bytes)
+            .await?;
+
+        let mut rgb = Vec::with_capacity(pixel_count);
+
+        for pair in raw.chunks_exact(2) {
+            let value = (pair[0] as u8 as u16) | ((pair[1] as u8 as u16) << 8);
+
+            let r5 = ((value >> 11) & 0x1f) as u32;
+            let g6 = ((value >> 5) & 0x3f) as u32;
+            let b5 = (value & 0x1f) as u32;
+
+            // Expand RGB565 to ARGB8888. The backend will quantize again when
+            // the destination image itself uses a 16-bit representation.
+            let r = (r5 << 3) | (r5 >> 2);
+            let g = (g6 << 2) | (g6 >> 4);
+            let b = (b5 << 3) | (b5 >> 2);
+
+            rgb.push((0xff00_0000u32 | (r << 16) | (g << 8) | b) as i32);
+        }
+
+        let mut rgb_array = jvm.instantiate_array("I", pixel_count).await?;
+        jvm.store_array(&mut rgb_array, 0, rgb).await?;
+
+        // MIDP drawRGB already applies the current translation, clipping and
+        // XOR state, matching dgraphics_draw_raw_data().
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "setRGBPixels",
+                "(IIII[III)V",
+                (x, y, width, height, rgb_array, 0, width),
+            )
+            .await?;
 
         Ok(())
     }
@@ -1442,6 +1544,106 @@ mod test {
             assert_eq!(&out[10..12], &[0x55i8; 2]);
 
             assert_eq!(&out[12..], &[0x55i8; 12]);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_set_pixels_rgb565_offset_translation_and_clipping() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "(II)Lorg/kwis/msp/lcdui/Image;",
+                    (5, 2),
+                )
+                .await?;
+
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .invoke_virtual(
+                    &image,
+                    "getGraphics",
+                    "()Lorg/kwis/msp/lcdui/Graphics;",
+                    (),
+                )
+                .await?;
+
+            // Current translation must affect setPixels destination.
+            let _: () = jvm
+                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
+                .await?;
+
+            // Absolute clip becomes x=2..3 after the current translation.
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setClip", "(IIII)V", (1, 0, 2, 1))
+                .await?;
+
+            let mut pixels = jvm.instantiate_array("B", 24).await?;
+            jvm.store_array(&mut pixels, 0, [0x55i8; 24]).await?;
+
+            // Native byte[] offset is scaled by four, so RGB565 begins at byte 4.
+            // Source row:
+            // red   = f800 -> 00 f8
+            // green = 07e0 -> e0 07
+            // blue  = 001f -> 1f 00
+            jvm.store_array(
+                &mut pixels,
+                4,
+                [
+                    0x00i8,
+                    0xf8u8 as i8,
+                    0xe0u8 as i8,
+                    0x07i8,
+                    0x1fi8,
+                    0x00i8,
+                ],
+            )
+            .await?;
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "setPixels",
+                    "(IIII[BII)V",
+                    (0, 0, 3, 1, pixels, 1, 6),
+                )
+                .await?;
+
+            let mut midp_graphics: ClassInstanceRef<
+                wie_midp::classes::javax::microedition::lcdui::Graphics,
+            > = jvm
+                .get_field(
+                    &graphics,
+                    "midpGraphics",
+                    "Ljavax/microedition/lcdui/Graphics;",
+                )
+                .await?;
+
+            let midp_image =
+                wie_midp::classes::javax::microedition::lcdui::Graphics::image(
+                    &jvm,
+                    &mut midp_graphics,
+                )
+                .await?;
+
+            let backend_image =
+                wie_midp::classes::javax::microedition::lcdui::Image::image(
+                    &jvm,
+                    &midp_image,
+                )
+                .await?;
+
+            // setPixels destination before clipping is absolute x=1..3.
+            // Clip keeps only x=2..3, corresponding to source green/blue.
+            let p1 = backend_image.get_pixel(1, 0);
+            let p2 = backend_image.get_pixel(2, 0);
+            let p3 = backend_image.get_pixel(3, 0);
+
+            assert_eq!((p1.r, p1.g, p1.b), (0x00, 0x00, 0x00));
+            assert_eq!((p2.r, p2.g, p2.b), (0x00, 0xff, 0x00));
+            assert_eq!((p3.r, p3.g, p3.b), (0x00, 0x00, 0xff));
 
             Ok(())
         })
