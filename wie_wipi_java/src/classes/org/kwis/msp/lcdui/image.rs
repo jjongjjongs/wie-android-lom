@@ -790,6 +790,20 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
                         "Ljavax/microedition/lcdui/Image;",
                     )
                     .await?;
+                let animation_frames: ClassInstanceRef<Array<ClassInstanceRef<MidpImage>>> = jvm
+                    .get_field(
+                        &loaded,
+                        "animationFrames",
+                        "[Ljavax/microedition/lcdui/Image;",
+                    )
+                    .await?;
+                let animation_delays: ClassInstanceRef<Array<i32>> = jvm
+                    .get_field(&loaded, "animationDelays", "[I")
+                    .await?;
+                let frame_count: i32 =
+                    jvm.get_field(&loaded, "frameCount", "I").await?;
+                let current_frame: i32 =
+                    jvm.get_field(&loaded, "currentFrame", "I").await?;
 
                 let mut image = self.image.clone();
                 jvm.put_field(
@@ -799,6 +813,24 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
                     midp_image,
                 )
                 .await?;
+                jvm.put_field(
+                    &mut image,
+                    "animationFrames",
+                    "[Ljavax/microedition/lcdui/Image;",
+                    animation_frames,
+                )
+                .await?;
+                jvm.put_field(
+                    &mut image,
+                    "animationDelays",
+                    "[I",
+                    animation_delays,
+                )
+                .await?;
+                jvm.put_field(&mut image, "frameCount", "I", frame_count)
+                    .await?;
+                jvm.put_field(&mut image, "currentFrame", "I", current_frame)
+                    .await?;
 
                 IMAGE_END
             }
