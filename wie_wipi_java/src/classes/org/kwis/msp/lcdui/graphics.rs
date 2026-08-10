@@ -271,6 +271,20 @@ impl Graphics {
     async fn set_font(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>, font: ClassInstanceRef<Font>) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::setFont({this:?}, {font:?})");
 
+        // Native Graphics.setFont(null) substitutes Font.getDefaultFont()
+        // before applying the font to the native graphics state.
+        let font = if font.is_null() {
+            jvm.invoke_static(
+                "org/kwis/msp/lcdui/Font",
+                "getDefaultFont",
+                "()Lorg/kwis/msp/lcdui/Font;",
+                (),
+            )
+            .await?
+        } else {
+            font
+        };
+
         let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
         let midp_font = Font::midp_font(jvm, &font).await?;
 
@@ -1777,6 +1791,36 @@ mod test {
             assert_eq!(reset_face, default_face);
             assert_eq!(reset_style, default_style);
             assert_eq!(reset_size, default_size);
+
+            // Native setFont(null) substitutes Font.getDefaultFont().
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "setFont",
+                    "(Lorg/kwis/msp/lcdui/Font;)V",
+                    (ClassInstanceRef::<Font>::new(None),),
+                )
+                .await?;
+
+            let null_font: ClassInstanceRef<Font> = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "getFont",
+                    "()Lorg/kwis/msp/lcdui/Font;",
+                    (),
+                )
+                .await?;
+
+            let null_face: i32 =
+                jvm.invoke_virtual(&null_font, "getFace", "()I", ()).await?;
+            let null_style: i32 =
+                jvm.invoke_virtual(&null_font, "getStyle", "()I", ()).await?;
+            let null_size: i32 =
+                jvm.invoke_virtual(&null_font, "getSize", "()I", ()).await?;
+
+            assert_eq!(null_face, default_face);
+            assert_eq!(null_style, default_style);
+            assert_eq!(null_size, default_size);
 
             Ok(())
         })
