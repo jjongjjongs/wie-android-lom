@@ -8,7 +8,7 @@ use jvm::{
     runtime::{JavaIoInputStream, JavaLangString},
 };
 
-use wie_backend::canvas::decode_gif_animation;
+use wie_backend::canvas::{decode_gif_animation, decode_image};
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::lcdui::{Graphics as MidpGraphics, Image as MidpImage};
 
@@ -48,6 +48,12 @@ impl Image {
                     "createImage",
                     "([BII)Lorg/kwis/msp/lcdui/Image;",
                     Self::create_image_from_data,
+                    MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new(
+                    "createImage",
+                    "([BIIII)Lorg/kwis/msp/lcdui/Image;",
+                    Self::create_image_from_data_resized,
                     MethodAccessFlags::STATIC,
                 ),
                 JavaMethodProto::new(
@@ -465,10 +471,101 @@ impl Image {
         Ok(instance.into())
     }
 
+    fn native_scale_table(source: u32, target: u32) -> alloc::vec::Vec<u32> {
+        debug_assert!(source > 0);
+        debug_assert!(target > 0);
+
+        if source == target {
+            return (0..target).collect();
+        }
+
+        let mut table = alloc::vec::Vec::with_capacity(target as usize);
+
+        if target > source {
+            // Native get_scale_up_pixel_table():
+            // distribute each source pixel over the destination using
+            // cumulative integer division.
+            for source_index in 0..source {
+                let previous_end =
+                    ((u64::from(target) * u64::from(source_index)) / u64::from(source)) as u32;
+                let end = ((u64::from(target) * u64::from(source_index + 1))
+                    / u64::from(source)) as u32;
+
+                for _ in previous_end..end {
+                    table.push(source_index);
+                }
+            }
+        } else if source % target == 0 {
+            // Native fast path when the scale factor divides exactly.
+            let step = source / target;
+            for destination_index in 0..target {
+                table.push(destination_index * step);
+            }
+        } else {
+            // Native get_scale_down_pixel_table() non-integral path.
+            for destination_index in 0..target {
+                table.push(
+                    ((u64::from(source) * u64::from(destination_index + 1))
+                        / u64::from(target + 1)) as u32,
+                );
+            }
+        }
+
+        table
+    }
+
+    fn resize_raw_pixels(
+        source_width: u32,
+        source_height: u32,
+        bytes_per_pixel: u32,
+        raw: &[u8],
+        target_width: u32,
+        target_height: u32,
+    ) -> alloc::vec::Vec<u8> {
+        if source_width == target_width && source_height == target_height {
+            return raw.to_vec();
+        }
+
+        let x_table = Self::native_scale_table(source_width, target_width);
+        let y_table = Self::native_scale_table(source_height, target_height);
+        let bytes_per_pixel = bytes_per_pixel as usize;
+
+        let target_len =
+            target_width as usize * target_height as usize * bytes_per_pixel;
+        let mut resized = alloc::vec![0; target_len];
+
+        for (destination_y, &source_y) in y_table.iter().enumerate() {
+            for (destination_x, &source_x) in x_table.iter().enumerate() {
+                let source_offset =
+                    (source_y as usize * source_width as usize + source_x as usize)
+                        * bytes_per_pixel;
+                let destination_offset =
+                    (destination_y * target_width as usize + destination_x)
+                        * bytes_per_pixel;
+
+                resized[destination_offset..destination_offset + bytes_per_pixel]
+                    .copy_from_slice(
+                        &raw[source_offset..source_offset + bytes_per_pixel],
+                    );
+            }
+        }
+
+        resized
+    }
+
     async fn attach_gif_animation(
         jvm: &Jvm,
         image: &mut ClassInstanceRef<Image>,
         data: &[u8],
+    ) -> JvmResult<()> {
+        Self::attach_gif_animation_resized(jvm, image, data, None).await
+    }
+
+    async fn attach_gif_animation_resized(
+        jvm: &Jvm,
+        image: &mut ClassInstanceRef<Image>,
+        data: &[u8],
+        resize: Option<(u32, u32)>,
     ) -> JvmResult<()> {
         let animation = match decode_gif_animation(data) {
             Ok(animation) => animation,
@@ -486,13 +583,33 @@ impl Image {
         let mut delays = jvm.instantiate_array("I", frame_count).await?;
 
         for (index, frame) in animation.frames.into_iter().enumerate() {
+            let source_width = frame.image.width();
+            let source_height = frame.image.height();
+            let bytes_per_pixel = frame.image.bytes_per_pixel();
             let raw = frame.image.raw();
+
+            let (width, height, frame_data) = match resize {
+                Some((target_width, target_height)) => (
+                    target_width,
+                    target_height,
+                    Self::resize_raw_pixels(
+                        source_width,
+                        source_height,
+                        bytes_per_pixel,
+                        &raw,
+                        target_width,
+                        target_height,
+                    ),
+                ),
+                None => (source_width, source_height, raw.into_owned()),
+            };
+
             let midp_frame = MidpImage::create_image_instance(
                 jvm,
-                frame.image.width(),
-                frame.image.height(),
-                &raw,
-                frame.image.bytes_per_pixel(),
+                width,
+                height,
+                &frame_data,
+                bytes_per_pixel,
             )
             .await?;
 
@@ -566,6 +683,137 @@ impl Image {
             .into();
 
         Self::attach_gif_animation(jvm, &mut instance, &raw_data).await?;
+
+        Ok(instance)
+    }
+
+    async fn create_image_from_data_resized(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        data: ClassInstanceRef<Array<i8>>,
+        image_offset: i32,
+        image_length: i32,
+        resize_x: i32,
+        resize_y: i32,
+    ) -> JvmResult<ClassInstanceRef<Image>> {
+        tracing::debug!(
+            "org.kwis.msp.lcdui.Image::createImage({data:?}, {image_offset}, {image_length}, {resize_x}, {resize_y})"
+        );
+
+        if data.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let data_length = jvm.array_length(&data).await? as i32;
+
+        // Native s4 rejects offset == data.length as well as all other
+        // invalid offset/length ranges.
+        if image_offset < 0
+            || image_offset >= data_length
+            || image_length < 0
+            || image_length > data_length - image_offset
+        {
+            return Err(
+                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                    .await,
+            );
+        }
+
+        if resize_x < 0 || resize_y < 0 {
+            return Err(
+                jvm.exception("java/lang/IllegalArgumentException", "")
+                    .await,
+            );
+        }
+
+        let raw_data: alloc::vec::Vec<i8> = jvm
+            .load_array(
+                &data,
+                image_offset as usize,
+                image_length as usize,
+            )
+            .await?;
+        let raw_data: alloc::vec::Vec<u8> =
+            raw_data.into_iter().map(|value| value as u8).collect();
+
+        // Keep MIDP decoding on the normal path as the format validator and
+        // as the exact non-resizing implementation.
+        let midp_image: ClassInstanceRef<MidpImage> = jvm
+            .invoke_static(
+                "javax/microedition/lcdui/Image",
+                "createImage",
+                "([BII)Ljavax/microedition/lcdui/Image;",
+                (data, image_offset, image_length),
+            )
+            .await?;
+
+        if resize_x == 0 || resize_y == 0 {
+            let mut instance: ClassInstanceRef<Image> = jvm
+                .new_class(
+                    "org/kwis/msp/lcdui/Image",
+                    "(Ljavax/microedition/lcdui/Image;)V",
+                    (midp_image,),
+                )
+                .await?
+                .into();
+
+            Self::attach_gif_animation(jvm, &mut instance, &raw_data).await?;
+
+            return Ok(instance);
+        }
+
+        let decoded = match decode_image(&raw_data) {
+            Ok(decoded) => decoded,
+            Err(_) => {
+                return Err(
+                    jvm.exception("java/lang/IllegalArgumentException", "")
+                        .await,
+                );
+            }
+        };
+
+        let target_width = resize_x as u32;
+        let target_height = resize_y as u32;
+        let bytes_per_pixel = decoded.bytes_per_pixel();
+        let decoded_raw = decoded.raw();
+
+        let resized = Self::resize_raw_pixels(
+            decoded.width(),
+            decoded.height(),
+            bytes_per_pixel,
+            &decoded_raw,
+            target_width,
+            target_height,
+        );
+
+        let resized_midp = MidpImage::create_image_instance(
+            jvm,
+            target_width,
+            target_height,
+            &resized,
+            bytes_per_pixel,
+        )
+        .await?;
+
+        let mut instance: ClassInstanceRef<Image> = jvm
+            .new_class(
+                "org/kwis/msp/lcdui/Image",
+                "(Ljavax/microedition/lcdui/Image;)V",
+                (resized_midp,),
+            )
+            .await?
+            .into();
+
+        Self::attach_gif_animation_resized(
+            jvm,
+            &mut instance,
+            &raw_data,
+            Some((target_width, target_height)),
+        )
+        .await?;
 
         Ok(instance)
     }
@@ -2109,4 +2357,143 @@ mod test {
             Ok(())
         })
     }
+
+    #[test]
+    fn test_native_image_resize_pixel_mapping() {
+        assert_eq!(Image::native_scale_table(2, 3), vec![0, 1, 1]);
+        assert_eq!(Image::native_scale_table(2, 4), vec![0, 0, 1, 1]);
+        assert_eq!(Image::native_scale_table(6, 3), vec![0, 2, 4]);
+        assert_eq!(Image::native_scale_table(5, 3), vec![1, 2, 3]);
+
+        // Two 4-byte pixels. Keep the byte layout opaque here: native
+        // stretching copies complete pixels without channel interpolation.
+        let source = [
+            0x10, 0x20, 0x30, 0x40,
+            0x50, 0x60, 0x70, 0x80,
+        ];
+
+        let resized = Image::resize_raw_pixels(
+            2,
+            1,
+            4,
+            &source,
+            3,
+            1,
+        );
+
+        assert_eq!(
+            resized,
+            [
+                0x10, 0x20, 0x30, 0x40,
+                0x50, 0x60, 0x70, 0x80,
+                0x50, 0x60, 0x70, 0x80,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_create_image_resized_preserves_gif_animation() -> Result<()> {
+        run_jvm_test(
+            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
+            |jvm| async move {
+                use jvm::Array;
+
+                // Same known-good two-frame 1x1 GIF used by the existing
+                // animation tests. Frame delays are 20 ms and 40 ms.
+                let gif: &[u8] = &[
+                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x80, 0x00, 0x00,
+                    0xff, 0x00, 0x00,
+                    0x00, 0xff, 0x00,
+
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x02, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x44, 0x01, 0x00,
+
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x04, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x4c, 0x01, 0x00,
+
+                    0x3b,
+                ];
+
+                let mut data = jvm.instantiate_array("B", gif.len()).await?;
+                jvm.store_array(
+                    &mut data,
+                    0,
+                    gif.iter()
+                        .map(|&value| value as i8)
+                        .collect::<Vec<_>>(),
+                )
+                .await?;
+
+                let image: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "([BIIII)Lorg/kwis/msp/lcdui/Image;",
+                        (data, 0, gif.len() as i32, 2, 3),
+                    )
+                    .await?;
+
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&image, "getWidth", "()I", ())
+                        .await?,
+                    2
+                );
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&image, "getHeight", "()I", ())
+                        .await?,
+                    3
+                );
+                assert!(
+                    jvm.invoke_virtual::<_, bool>(&image, "isAnimated", "()Z", ())
+                        .await?
+                );
+
+                let frame_count: i32 =
+                    jvm.get_field(&image, "frameCount", "I").await?;
+                assert_eq!(frame_count, 2);
+
+                let frames: ClassInstanceRef<
+                    Array<ClassInstanceRef<MidpImage>>
+                > = jvm
+                    .get_field(
+                        &image,
+                        "animationFrames",
+                        "[Ljavax/microedition/lcdui/Image;",
+                    )
+                    .await?;
+
+                let frame_values: Vec<ClassInstanceRef<MidpImage>> =
+                    jvm.load_array(&frames, 0, 2).await?;
+
+                for frame in frame_values {
+                    let backend = MidpImage::image(&jvm, &frame).await?;
+                    assert_eq!(backend.width(), 2);
+                    assert_eq!(backend.height(), 3);
+                }
+
+                let delays: ClassInstanceRef<Array<i32>> =
+                    jvm.get_field(&image, "animationDelays", "[I").await?;
+                let delay_values: Vec<i32> =
+                    jvm.load_array(&delays, 0, 2).await?;
+                assert_eq!(delay_values, [20, 40]);
+
+                Ok(())
+            },
+        )
+    }
+
 }
