@@ -102,6 +102,11 @@ impl Image {
                     "Ljava/util/Vector;",
                     FieldAccessFlags::STATIC,
                 ),
+                JavaFieldProto::new(
+                    "defaultObserver",
+                    "Lorg/kwis/msp/lcdui/ImageObserver;",
+                    FieldAccessFlags::STATIC,
+                ),
             ],
             access_flags: Default::default(),
         }
@@ -178,6 +183,16 @@ impl Image {
         if name.is_null() {
             return Err(jvm.exception("java/lang/NullPointerException", "name is null").await);
         }
+
+        // Native Image.loadImage stores its observer in a class-static slot.
+        // Image.play(null) later reuses this most recently supplied observer.
+        jvm.put_static_field(
+            "org/kwis/msp/lcdui/Image",
+            "defaultObserver",
+            "Lorg/kwis/msp/lcdui/ImageObserver;",
+            observer.clone(),
+        )
+        .await?;
 
         // Native WipiPlayer Plus normalizes classpath resource names before
         // retaining them in the Image object.
@@ -719,6 +734,17 @@ impl Image {
         if frame_count <= 1 {
             return Ok(());
         }
+
+        let observer = if observer.is_null() {
+            jvm.get_static_field(
+                "org/kwis/msp/lcdui/Image",
+                "defaultObserver",
+                "Lorg/kwis/msp/lcdui/ImageObserver;",
+            )
+            .await?
+        } else {
+            observer
+        };
 
         // Native Image.play removes an existing ImageElement for this Image
         // before adding a new one. A generation token gives the same effect
@@ -1278,13 +1304,171 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
 
 #[cfg(test)]
 mod test {
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, vec, vec::Vec};
 
-    use jvm::ClassInstanceRef;
+    use java_class_proto::JavaMethodProto;
+    use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
     use test_utils::run_jvm_test;
+    use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
     use wie_midp::classes::javax::microedition::lcdui::Image as MidpImage;
     use wie_util::Result;
 
+
+    struct TestImageObserver;
+
+    impl TestImageObserver {
+        fn as_proto() -> WieJavaClassProto {
+            WieJavaClassProto {
+                name: "test/ImageObserverImpl",
+                parent_class: Some("java/lang/Object"),
+                interfaces: vec!["org/kwis/msp/lcdui/ImageObserver"],
+                methods: vec![
+                    JavaMethodProto::new(
+                        "<init>",
+                        "()V",
+                        Self::init,
+                        Default::default(),
+                    ),
+                    JavaMethodProto::new(
+                        "notify",
+                        "(Lorg/kwis/msp/lcdui/Image;I)V",
+                        Self::notify,
+                        Default::default(),
+                    ),
+                ],
+                fields: vec![],
+                access_flags: Default::default(),
+            }
+        }
+
+        async fn init(
+            jvm: &Jvm,
+            _: &mut WieJvmContext,
+            this: ClassInstanceRef<Self>,
+        ) -> JvmResult<()> {
+            let _: () = jvm
+                .invoke_special(&this, "java/lang/Object", "<init>", "()V", ())
+                .await?;
+            Ok(())
+        }
+
+        async fn notify(
+            _: &Jvm,
+            _: &mut WieJvmContext,
+            _: ClassInstanceRef<Self>,
+            _: ClassInstanceRef<Image>,
+            _: i32,
+        ) -> JvmResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_play_null_reuses_load_image_observer() -> Result<()> {
+        run_jvm_test(
+            Box::new([
+                wie_midp::get_protos().into(),
+                get_protos().into(),
+                Box::new([TestImageObserver::as_proto()]),
+            ]),
+            |jvm| async move {
+                let observer: ClassInstanceRef<ImageObserver> = jvm
+                    .new_class("test/ImageObserverImpl", "()V", ())
+                    .await?
+                    .into();
+
+                let name =
+                    JavaLangString::from_rust_string(
+                        &jvm,
+                        "/missing-default-observer.gif",
+                    )
+                    .await?;
+
+                let _: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "loadImage",
+                        "(Ljava/lang/String;Lorg/kwis/msp/lcdui/ImageObserver;)Lorg/kwis/msp/lcdui/Image;",
+                        (name, observer.clone()),
+                    )
+                    .await?;
+
+                let stored: ClassInstanceRef<ImageObserver> = jvm
+                    .get_static_field(
+                        "org/kwis/msp/lcdui/Image",
+                        "defaultObserver",
+                        "Lorg/kwis/msp/lcdui/ImageObserver;",
+                    )
+                    .await?;
+                assert_eq!(stored.identity(), observer.identity());
+
+                const GIF: &[u8] = &[
+                    71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 255, 0, 0, 0, 255, 0,
+                    33, 249, 4, 0, 2, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1,
+                    0, 33, 249, 4, 0, 4, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68,
+                    1, 0, 59,
+                ];
+
+                let mut data = jvm.instantiate_array("B", GIF.len()).await?;
+                jvm.store_array(
+                    &mut data,
+                    0,
+                    GIF.iter().copied().map(|x| x as i8).collect::<Vec<_>>(),
+                )
+                .await?;
+
+                let image: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "([BII)Lorg/kwis/msp/lcdui/Image;",
+                        (data, 0, GIF.len() as i32),
+                    )
+                    .await?;
+
+                let null_observer: ClassInstanceRef<ImageObserver> =
+                    ClassInstanceRef::new(None);
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &image,
+                        "play",
+                        "(Lorg/kwis/msp/lcdui/ImageObserver;)V",
+                        (null_observer,),
+                    )
+                    .await?;
+
+                let effective: ClassInstanceRef<ImageObserver> = jvm
+                    .get_field(
+                        &image,
+                        "animationObserver",
+                        "Lorg/kwis/msp/lcdui/ImageObserver;",
+                    )
+                    .await?;
+                assert_eq!(effective.identity(), observer.identity());
+
+                let _: () = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "stopImage",
+                        "(Lorg/kwis/msp/lcdui/ImageObserver;)V",
+                        (observer,),
+                    )
+                    .await?;
+
+                let effective_after_stop: ClassInstanceRef<ImageObserver> = jvm
+                    .get_field(
+                        &image,
+                        "animationObserver",
+                        "Lorg/kwis/msp/lcdui/ImageObserver;",
+                    )
+                    .await?;
+                assert!(effective_after_stop.is_null());
+
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn test_transparent_color_draw_and_subimage_preservation() -> Result<()> {
