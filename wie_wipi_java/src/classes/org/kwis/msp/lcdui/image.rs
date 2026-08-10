@@ -8,6 +8,7 @@ use jvm::{
     runtime::{JavaIoInputStream, JavaLangString},
 };
 
+use wie_backend::canvas::decode_gif_animation;
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::lcdui::{Graphics as MidpGraphics, Image as MidpImage};
 
@@ -82,6 +83,14 @@ impl Image {
                 JavaFieldProto::new("mutable", "Z", Default::default()),
                 JavaFieldProto::new("transparentColor", "I", Default::default()),
                 JavaFieldProto::new("source", "Ljava/lang/String;", Default::default()),
+                JavaFieldProto::new(
+                    "animationFrames",
+                    "[Ljavax/microedition/lcdui/Image;",
+                    Default::default(),
+                ),
+                JavaFieldProto::new("animationDelays", "[I", Default::default()),
+                JavaFieldProto::new("frameCount", "I", Default::default()),
+                JavaFieldProto::new("currentFrame", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -94,7 +103,17 @@ impl Image {
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", None).await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
         jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
-        jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await
+        jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await?;
+        jvm.put_field(
+            &mut this,
+            "animationFrames",
+            "[Ljavax/microedition/lcdui/Image;",
+            None,
+        )
+        .await?;
+        jvm.put_field(&mut this, "animationDelays", "[I", None).await?;
+        jvm.put_field(&mut this, "frameCount", "I", 0).await?;
+        jvm.put_field(&mut this, "currentFrame", "I", 0).await
     }
 
     async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Image>, image: ClassInstanceRef<MidpImage>) -> JvmResult<()> {
@@ -105,6 +124,16 @@ impl Image {
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
         jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
         jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await?;
+        jvm.put_field(
+            &mut this,
+            "animationFrames",
+            "[Ljavax/microedition/lcdui/Image;",
+            None,
+        )
+        .await?;
+        jvm.put_field(&mut this, "animationDelays", "[I", None).await?;
+        jvm.put_field(&mut this, "frameCount", "I", 0).await?;
+        jvm.put_field(&mut this, "currentFrame", "I", 0).await?;
 
         Ok(())
     }
@@ -352,6 +381,69 @@ impl Image {
         Ok(instance.into())
     }
 
+    async fn attach_gif_animation(
+        jvm: &Jvm,
+        image: &mut ClassInstanceRef<Image>,
+        data: &[u8],
+    ) -> JvmResult<()> {
+        let animation = match decode_gif_animation(data) {
+            Ok(animation) => animation,
+            Err(_) => return Ok(()),
+        };
+
+        let Some(animation) = animation else {
+            return Ok(());
+        };
+
+        let frame_count = animation.frames.len();
+        let mut frames = jvm
+            .instantiate_array("Ljavax/microedition/lcdui/Image;", frame_count)
+            .await?;
+        let mut delays = jvm.instantiate_array("I", frame_count).await?;
+
+        for (index, frame) in animation.frames.into_iter().enumerate() {
+            let raw = frame.image.raw();
+            let midp_frame = MidpImage::create_image_instance(
+                jvm,
+                frame.image.width(),
+                frame.image.height(),
+                &raw,
+                frame.image.bytes_per_pixel(),
+            )
+            .await?;
+
+            jvm.store_array(&mut frames, index, [midp_frame.clone()])
+                .await?;
+
+            let delay = frame.delay_ms.min(i32::MAX as u32) as i32;
+            jvm.store_array(&mut delays, index, [delay]).await?;
+
+            if index == 0 {
+                jvm.put_field(
+                    image,
+                    "midpImage",
+                    "Ljavax/microedition/lcdui/Image;",
+                    midp_frame,
+                )
+                .await?;
+            }
+        }
+
+        jvm.put_field(
+            image,
+            "animationFrames",
+            "[Ljavax/microedition/lcdui/Image;",
+            frames,
+        )
+        .await?;
+        jvm.put_field(image, "animationDelays", "[I", delays).await?;
+        jvm.put_field(image, "frameCount", "I", frame_count as i32)
+            .await?;
+        jvm.put_field(image, "currentFrame", "I", 0).await?;
+
+        Ok(())
+    }
+
     async fn create_image_from_data(
         jvm: &Jvm,
         _: &mut WieJvmContext,
@@ -360,6 +452,16 @@ impl Image {
         image_length: i32,
     ) -> JvmResult<ClassInstanceRef<Image>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::createImage({data:?}, {image_offset}, {image_length})");
+
+        let raw_data: alloc::vec::Vec<i8> = jvm
+            .load_array(
+                &data,
+                image_offset as usize,
+                image_length as usize,
+            )
+            .await?;
+        let raw_data: alloc::vec::Vec<u8> =
+            raw_data.into_iter().map(|value| value as u8).collect();
 
         let midp_image: ClassInstanceRef<MidpImage> = jvm
             .invoke_static(
@@ -370,11 +472,18 @@ impl Image {
             )
             .await?;
 
-        let instance = jvm
-            .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
-            .await?;
+        let mut instance: ClassInstanceRef<Image> = jvm
+            .new_class(
+                "org/kwis/msp/lcdui/Image",
+                "(Ljavax/microedition/lcdui/Image;)V",
+                (midp_image,),
+            )
+            .await?
+            .into();
 
-        Ok(instance.into())
+        Self::attach_gif_animation(jvm, &mut instance, &raw_data).await?;
+
+        Ok(instance)
     }
 
     async fn create_image_from_image(
@@ -457,10 +566,11 @@ impl Image {
         jvm.get_field(&this, "mutable", "Z").await
     }
 
-    async fn is_animated(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<bool> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Image::isAnimated({this:?})");
+    async fn is_animated(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<bool> {
+        tracing::debug!("org.kwis.msp.lcdui.Image::isAnimated({this:?})");
 
-        Ok(false)
+        let frame_count: i32 = jvm.get_field(&this, "frameCount", "I").await?;
+        Ok(frame_count > 1)
     }
 
     async fn play(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>, observer: ClassInstanceRef<ImageObserver>) -> JvmResult<()> {
@@ -848,6 +958,94 @@ mod test {
         classes::org::kwis::msp::lcdui::{Graphics, Image},
         get_protos,
     };
+
+
+    #[test]
+    fn test_animated_gif_storage_and_state() -> Result<()> {
+        run_jvm_test(
+            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
+            |jvm| async move {
+                use jvm::Array;
+
+                // Two-frame 1x1 GIF89a.
+                // Frame 0: red, 20 ms
+                // Frame 1: green, 40 ms
+                let gif: &[u8] = &[
+                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x80, 0x00, 0x00,
+                    0xff, 0x00, 0x00,
+                    0x00, 0xff, 0x00,
+
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x02, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x44, 0x01, 0x00,
+
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x04, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x4c, 0x01, 0x00,
+
+                    0x3b,
+                ];
+
+                let mut data = jvm.instantiate_array("B", gif.len()).await?;
+                jvm.store_array(
+                    &mut data,
+                    0,
+                    gif.iter().map(|&value| value as i8).collect::<alloc::vec::Vec<_>>(),
+                )
+                .await?;
+
+                let image: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "([BII)Lorg/kwis/msp/lcdui/Image;",
+                        (data, 0, gif.len() as i32),
+                    )
+                    .await?;
+
+                let animated: bool =
+                    jvm.invoke_virtual(&image, "isAnimated", "()Z", ()).await?;
+                assert!(animated);
+
+                let frame_count: i32 =
+                    jvm.get_field(&image, "frameCount", "I").await?;
+                let current_frame: i32 =
+                    jvm.get_field(&image, "currentFrame", "I").await?;
+
+                assert_eq!(frame_count, 2);
+                assert_eq!(current_frame, 0);
+
+                let width: i32 =
+                    jvm.invoke_virtual(&image, "getWidth", "()I", ()).await?;
+                let height: i32 =
+                    jvm.invoke_virtual(&image, "getHeight", "()I", ()).await?;
+
+                assert_eq!(width, 1);
+                assert_eq!(height, 1);
+
+                let delays: ClassInstanceRef<Array<i32>> =
+                    jvm.get_field(&image, "animationDelays", "[I").await?;
+                let delay_values: alloc::vec::Vec<i32> =
+                    jvm.load_array(&delays, 0, 2).await?;
+
+                assert_eq!(delay_values, [20, 40]);
+
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn test_mutability_and_region_draw() -> Result<()> {
