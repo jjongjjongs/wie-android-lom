@@ -81,6 +81,7 @@ impl Image {
                 JavaFieldProto::new("midpImage", "Ljavax/microedition/lcdui/Image;", Default::default()),
                 JavaFieldProto::new("mutable", "Z", Default::default()),
                 JavaFieldProto::new("transparentColor", "I", Default::default()),
+                JavaFieldProto::new("source", "Ljava/lang/String;", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -92,7 +93,8 @@ impl Image {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", None).await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
-        jvm.put_field(&mut this, "transparentColor", "I", -1).await
+        jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
+        jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await
     }
 
     async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Image>, image: ClassInstanceRef<MidpImage>) -> JvmResult<()> {
@@ -102,6 +104,7 @@ impl Image {
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", image).await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
         jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
+        jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await?;
 
         Ok(())
     }
@@ -118,18 +121,34 @@ impl Image {
             return Err(jvm.exception("java/lang/NullPointerException", "name is null").await);
         }
 
+        // Native WipiPlayer Plus normalizes classpath resource names before
+        // retaining them in the Image object.
+        let mut source_name = JavaLangString::to_rust_string(jvm, &name).await?;
+        if !source_name.contains(':') && !source_name.starts_with('/') {
+            source_name.insert(0, '/');
+        }
+        let source = JavaLangString::from_rust_string(jvm, &source_name).await?;
+
         // Native WipiPlayer Plus returns an empty Image immediately and lets
         // ImageReader populate it asynchronously.
-        let image: ClassInstanceRef<Image> = jvm
+        let mut image: ClassInstanceRef<Image> = jvm
             .new_class("org/kwis/msp/lcdui/Image", "()V", ())
             .await?
             .into();
+
+        jvm.put_field(
+            &mut image,
+            "source",
+            "Ljava/lang/String;",
+            source.clone(),
+        )
+        .await?;
 
         context.spawn(
             jvm,
             Box::new(ImageLoadRunner {
                 image: image.clone(),
-                name,
+                name: source.into(),
                 observer,
             }),
         )?;
