@@ -1311,6 +1311,25 @@ impl Graphics {
         jvm.put_field(&mut this, "strokeStyle", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
 
+        // Native Graphics.reset() performs reset0(), then restores
+        // Font.getDefaultFont() through this.setFont(defaultFont).
+        let default_font: ClassInstanceRef<Font> = jvm
+            .invoke_static(
+                "org/kwis/msp/lcdui/Font",
+                "getDefaultFont",
+                "()Lorg/kwis/msp/lcdui/Font;",
+                (),
+            )
+            .await?;
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "setFont",
+                "(Lorg/kwis/msp/lcdui/Font;)V",
+                (default_font,),
+            )
+            .await?;
+
         Ok(())
     }
 
@@ -1631,7 +1650,7 @@ mod test {
     use wie_midp::classes::javax::microedition::lcdui::Image as MidpImage;
     use wie_util::Result;
 
-    use crate::{classes::org::kwis::msp::lcdui::Image, get_protos};
+    use crate::{classes::org::kwis::msp::lcdui::{Font, Image}, get_protos};
 
     use super::Graphics;
 
@@ -1700,12 +1719,64 @@ mod test {
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getBlueComponent", "()I", ()).await?, 0x56);
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getGrayScale", "()I", ()).await?, 0x34);
 
+            let custom_font: ClassInstanceRef<Font> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Font",
+                    "getFont",
+                    "(III)Lorg/kwis/msp/lcdui/Font;",
+                    (0, 1, 16),
+                )
+                .await?;
+            let _: () = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "setFont",
+                    "(Lorg/kwis/msp/lcdui/Font;)V",
+                    (custom_font,),
+                )
+                .await?;
+
             let _: () = jvm.invoke_virtual(&graphics, "setStrokeStyle", "(I)V", (1,)).await?;
             let _: () = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await?;
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getColor", "()I", ()).await?, 0);
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getAlpha", "()I", ()).await?, 255);
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getStrokeStyle", "()I", ()).await?, 0);
             assert!(!jvm.invoke_virtual::<_, bool>(&graphics, "isXORMode", "()Z", ()).await?);
+
+            let reset_font: ClassInstanceRef<Font> = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "getFont",
+                    "()Lorg/kwis/msp/lcdui/Font;",
+                    (),
+                )
+                .await?;
+            let default_font: ClassInstanceRef<Font> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Font",
+                    "getDefaultFont",
+                    "()Lorg/kwis/msp/lcdui/Font;",
+                    (),
+                )
+                .await?;
+
+            let reset_face: i32 =
+                jvm.invoke_virtual(&reset_font, "getFace", "()I", ()).await?;
+            let reset_style: i32 =
+                jvm.invoke_virtual(&reset_font, "getStyle", "()I", ()).await?;
+            let reset_size: i32 =
+                jvm.invoke_virtual(&reset_font, "getSize", "()I", ()).await?;
+
+            let default_face: i32 =
+                jvm.invoke_virtual(&default_font, "getFace", "()I", ()).await?;
+            let default_style: i32 =
+                jvm.invoke_virtual(&default_font, "getStyle", "()I", ()).await?;
+            let default_size: i32 =
+                jvm.invoke_virtual(&default_font, "getSize", "()I", ()).await?;
+
+            assert_eq!(reset_face, default_face);
+            assert_eq!(reset_style, default_style);
+            assert_eq!(reset_size, default_size);
 
             Ok(())
         })
