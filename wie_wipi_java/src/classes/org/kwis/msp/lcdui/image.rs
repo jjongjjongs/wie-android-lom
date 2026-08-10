@@ -77,6 +77,7 @@ impl Image {
             fields: vec![
                 JavaFieldProto::new("midpImage", "Ljavax/microedition/lcdui/Image;", Default::default()),
                 JavaFieldProto::new("mutable", "Z", Default::default()),
+                JavaFieldProto::new("transparentColor", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -87,7 +88,8 @@ impl Image {
 
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", None).await?;
-        jvm.put_field(&mut this, "mutable", "Z", false).await
+        jvm.put_field(&mut this, "mutable", "Z", false).await?;
+        jvm.put_field(&mut this, "transparentColor", "I", -1).await
     }
 
     async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Image>, image: ClassInstanceRef<MidpImage>) -> JvmResult<()> {
@@ -96,6 +98,7 @@ impl Image {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", image).await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
+        jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
 
         Ok(())
     }
@@ -452,23 +455,49 @@ impl Image {
 
         let mut result = Self::create_image(jvm, context, width, height).await?;
 
-        let graphics: ClassInstanceRef<Graphics> = jvm
+        let target: ClassInstanceRef<MidpImage> =
+            jvm.get_field(&result, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
+        let source: ClassInstanceRef<MidpImage> =
+            jvm.get_field(&this, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
+        let target_graphics: ClassInstanceRef<MidpGraphics> = jvm
             .invoke_virtual(
-                &result,
+                &target,
                 "getGraphics",
-                "()Lorg/kwis/msp/lcdui/Graphics;",
+                "()Ljavax/microedition/lcdui/Graphics;",
                 (),
             )
             .await?;
 
+        // Native dimage_create_sub_image copies the source pixels directly.
+        // It does not render through the source transparent-color key.
         let _: () = jvm
             .invoke_virtual(
-                &graphics,
-                "drawImage",
-                "(Lorg/kwis/msp/lcdui/Image;III)V",
-                (this, -x, -y, 4),
+                &target_graphics,
+                "drawRegion",
+                "(Ljavax/microedition/lcdui/Image;IIIIIIII)V",
+                [
+                    source.into(),
+                    x.into(),
+                    y.into(),
+                    width.into(),
+                    height.into(),
+                    0.into(),
+                    0.into(),
+                    0.into(),
+                    20.into(),
+                ],
             )
             .await?;
+
+        let transparent_color: i32 =
+            jvm.get_field(&this, "transparentColor", "I").await?;
+        jvm.put_field(
+            &mut result,
+            "transparentColor",
+            "I",
+            transparent_color,
+        )
+        .await?;
 
         if !mutable {
             jvm.put_field(&mut result, "mutable", "Z", false).await?;
@@ -477,10 +506,16 @@ impl Image {
         Ok(result)
     }
 
-    async fn set_transparent_color(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>, rgb: i32) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Image::setTransparentColor({this:?}, {rgb})");
+    async fn set_transparent_color(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Image>,
+        rgb: i32,
+    ) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Image::setTransparentColor({this:?}, {rgb})");
 
-        Ok(())
+        // Native dimage_set_trans_color stores the Java int unchanged.
+        jvm.put_field(&mut this, "transparentColor", "I", rgb).await
     }
 
     pub async fn midp_image(jvm: &Jvm, this: &ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<MidpImage>> {
@@ -496,6 +531,131 @@ mod test {
     use test_utils::run_jvm_test;
     use wie_midp::classes::javax::microedition::lcdui::Image as MidpImage;
     use wie_util::Result;
+
+
+    #[test]
+    fn test_transparent_color_draw_and_subimage_preservation() -> Result<()> {
+        run_jvm_test(
+            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
+            |jvm| async move {
+                let source: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "(II)Lorg/kwis/msp/lcdui/Image;",
+                        (2, 1),
+                    )
+                    .await?;
+
+                let source_graphics: ClassInstanceRef<
+                    crate::classes::org::kwis::msp::lcdui::Graphics,
+                > = jvm
+                    .invoke_virtual(
+                        &source,
+                        "getGraphics",
+                        "()Lorg/kwis/msp/lcdui/Graphics;",
+                        (),
+                    )
+                    .await?;
+
+                // x0 = 0x123456, x1 = green.
+                let _: () = jvm
+                    .invoke_virtual(&source_graphics, "setColor", "(I)V", (0x123456,))
+                    .await?;
+                let _: () = jvm
+                    .invoke_virtual(&source_graphics, "setPixel", "(II)V", (0, 0))
+                    .await?;
+
+                let _: () = jvm
+                    .invoke_virtual(&source_graphics, "setColor", "(I)V", (0x00ff00,))
+                    .await?;
+                let _: () = jvm
+                    .invoke_virtual(&source_graphics, "setPixel", "(II)V", (1, 0))
+                    .await?;
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &source,
+                        "setTransparentColor",
+                        "(I)V",
+                        (0x123456,),
+                    )
+                    .await?;
+
+                // Sub-image must preserve raw pixels and inherit the key.
+                let sub: ClassInstanceRef<Image> = jvm
+                    .invoke_virtual(
+                        &source,
+                        "createSubImage",
+                        "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
+                        (0, 0, 2, 1, false),
+                    )
+                    .await?;
+
+                let sub_key: i32 =
+                    jvm.get_field(&sub, "transparentColor", "I").await?;
+                assert_eq!(sub_key, 0x123456);
+
+                let sub_midp = Image::midp_image(&jvm, &sub).await?;
+                let sub_backend = MidpImage::image(&jvm, &sub_midp).await?;
+
+                let preserved = sub_backend.get_pixel(0, 0);
+                assert_eq!(
+                    (preserved.r, preserved.g, preserved.b),
+                    (0x12, 0x34, 0x56)
+                );
+
+                // Drawing the source must treat the key pixel as transparent.
+                let target: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "createImage",
+                        "(II)Lorg/kwis/msp/lcdui/Image;",
+                        (2, 1),
+                    )
+                    .await?;
+
+                let target_graphics: ClassInstanceRef<
+                    crate::classes::org::kwis::msp::lcdui::Graphics,
+                > = jvm
+                    .invoke_virtual(
+                        &target,
+                        "getGraphics",
+                        "()Lorg/kwis/msp/lcdui/Graphics;",
+                        (),
+                    )
+                    .await?;
+
+                // Blue background makes the skipped key pixel observable.
+                let _: () = jvm
+                    .invoke_virtual(&target_graphics, "setColor", "(I)V", (0x0000ff,))
+                    .await?;
+                let _: () = jvm
+                    .invoke_virtual(&target_graphics, "fillRect", "(IIII)V", (0, 0, 2, 1))
+                    .await?;
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &target_graphics,
+                        "drawImage",
+                        "(Lorg/kwis/msp/lcdui/Image;III)V",
+                        (source, 0, 0, 20),
+                    )
+                    .await?;
+
+                let target_midp = Image::midp_image(&jvm, &target).await?;
+                let target_backend = MidpImage::image(&jvm, &target_midp).await?;
+
+                let skipped = target_backend.get_pixel(0, 0);
+                assert_eq!((skipped.r, skipped.g, skipped.b), (0x00, 0x00, 0xff));
+
+                let drawn = target_backend.get_pixel(1, 0);
+                assert_eq!((drawn.r, drawn.g, drawn.b), (0x00, 0xff, 0x00));
+
+                Ok(())
+            },
+        )
+    }
 
     use crate::{
         classes::org::kwis::msp::lcdui::{Graphics, Image},
