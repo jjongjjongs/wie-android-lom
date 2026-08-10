@@ -264,13 +264,136 @@ impl Graphics {
     }
 
     async fn fill_polygon(
-        _: &Jvm,
+        jvm: &Jvm,
         _: &mut WieJvmContext,
         this: ClassInstanceRef<Self>,
         x_points: ClassInstanceRef<Array<i32>>,
         y_points: ClassInstanceRef<Array<i32>>,
     ) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Graphics::fillPolygon({this:?}, {x_points:?}, {y_points:?})");
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::fillPolygon({this:?}, {x_points:?}, {y_points:?})");
+
+        if x_points.is_null() {
+            return Err(jvm
+                .exception("java/lang/NullPointerException", "x is null.")
+                .await);
+        }
+        if y_points.is_null() {
+            return Err(jvm
+                .exception("java/lang/NullPointerException", "y is null.")
+                .await);
+        }
+
+        let x_len = jvm.array_length(&x_points).await?;
+        let y_len = jvm.array_length(&y_points).await?;
+        if x_len != y_len {
+            return Err(jvm
+                .exception(
+                    "java/lang/IllegalArgumentException",
+                    "x.length != y.length",
+                )
+                .await);
+        }
+
+        if x_len == 0 {
+            return Ok(());
+        }
+
+        let xs: Vec<i32> = jvm.load_array(&x_points, 0, x_len).await?;
+        let ys: Vec<i32> = jvm.load_array(&y_points, 0, y_len).await?;
+
+        let midp_graphics =
+            jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;")
+                .await?;
+
+        // Native dgraphics_fill_polygon() first draws the closed outline.
+        for i in 1..x_len {
+            let _: () = jvm
+                .invoke_virtual(
+                    &midp_graphics,
+                    "drawLine",
+                    "(IIII)V",
+                    (xs[i - 1], ys[i - 1], xs[i], ys[i]),
+                )
+                .await?;
+        }
+
+        let last = x_len - 1;
+        let _: () = jvm
+            .invoke_virtual(
+                &midp_graphics,
+                "drawLine",
+                "(IIII)V",
+                (xs[last], ys[last], xs[0], ys[0]),
+            )
+            .await?;
+
+        if x_len < 3 {
+            return Ok(());
+        }
+
+        let min_y = *ys.iter().min().unwrap();
+        let max_y = *ys.iter().max().unwrap();
+
+        // Native uses a fixed-point active-edge scanline fill.
+        // Use 12.12 fixed point here as well; 4096 is the scale visible
+        // in dgraphics_fill_polygon.
+        const FP_SHIFT: i64 = 12;
+        const FP_ONE: i64 = 1 << FP_SHIFT;
+
+        for scan_y in min_y..=max_y {
+            let mut intersections: Vec<i64> = Vec::new();
+
+            for i in 0..x_len {
+                let j = if i + 1 == x_len { 0 } else { i + 1 };
+
+                let mut x1 = xs[i] as i64;
+                let mut y1 = ys[i] as i64;
+                let mut x2 = xs[j] as i64;
+                let mut y2 = ys[j] as i64;
+
+                if y1 == y2 {
+                    continue;
+                }
+
+                if y1 > y2 {
+                    core::mem::swap(&mut x1, &mut x2);
+                    core::mem::swap(&mut y1, &mut y2);
+                }
+
+                let y = scan_y as i64;
+
+                // Half-open edge interval prevents a shared vertex from
+                // contributing twice to the same scanline.
+                if y < y1 || y >= y2 {
+                    continue;
+                }
+
+                let dy = y2 - y1;
+                let dx = x2 - x1;
+                let x_fp = x1 * FP_ONE + (y - y1) * dx * FP_ONE / dy;
+                intersections.push(x_fp);
+            }
+
+            intersections.sort_unstable();
+
+            for pair in intersections.chunks_exact(2) {
+                // Match integer raster semantics: left edge rounds upward,
+                // right edge rounds downward.
+                let left = ((pair[0] + FP_ONE - 1) >> FP_SHIFT) as i32;
+                let right = (pair[1] >> FP_SHIFT) as i32;
+
+                if left <= right {
+                    let _: () = jvm
+                        .invoke_virtual(
+                            &midp_graphics,
+                            "drawLine",
+                            "(IIII)V",
+                            (left, scan_y, right, scan_y),
+                        )
+                        .await?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -830,7 +953,7 @@ impl Graphics {
 mod test {
     use alloc::boxed::Box;
 
-    use jvm::ClassInstanceRef;
+    use jvm::{Array, ClassInstanceRef, JavaError};
     use test_utils::run_jvm_test;
     use wie_midp::classes::javax::microedition::lcdui::Image as MidpImage;
     use wie_util::Result;
@@ -910,6 +1033,187 @@ mod test {
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getAlpha", "()I", ()).await?, 255);
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getStrokeStyle", "()I", ()).await?, 0);
             assert!(!jvm.invoke_virtual::<_, bool>(&graphics, "isXORMode", "()Z", ()).await?);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_fill_polygon_concave_with_horizontal_edges() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "(II)Lorg/kwis/msp/lcdui/Image;",
+                    (8, 8),
+                )
+                .await?;
+
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .invoke_virtual(
+                    &image,
+                    "getGraphics",
+                    "()Lorg/kwis/msp/lcdui/Graphics;",
+                    (),
+                )
+                .await?;
+
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setColor", "(I)V", (0x00ff00,))
+                .await?;
+
+            // Concave L shape:
+            //
+            // (1,1) ---- (6,1)
+            //   |          |
+            //   |        (6,3)
+            //   |        /
+            //   |   (3,3)
+            //   |     |
+            // (1,6)--(3,6)
+            //
+            // Includes horizontal top/inner/bottom edges.
+            let mut xs: ClassInstanceRef<Array<i32>> =
+                jvm.instantiate_array("I", 6).await?.into();
+            let mut ys: ClassInstanceRef<Array<i32>> =
+                jvm.instantiate_array("I", 6).await?.into();
+
+            jvm.store_array(&mut xs, 0, [1i32, 6, 6, 3, 3, 1]).await?;
+            jvm.store_array(&mut ys, 0, [1i32, 1, 3, 3, 6, 6]).await?;
+
+            let _: () = jvm
+                .invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs, ys))
+                .await?;
+
+            let midp_image = Image::midp_image(&jvm, &image).await?;
+            let backend_image = MidpImage::image(&jvm, &midp_image).await?;
+
+            let filled_top = backend_image.get_pixel(5, 2);
+            assert_eq!(
+                (filled_top.r, filled_top.g, filled_top.b),
+                (0x00, 0xff, 0x00),
+                "upper arm of concave polygon should be filled"
+            );
+
+            let filled_left = backend_image.get_pixel(2, 5);
+            assert_eq!(
+                (filled_left.r, filled_left.g, filled_left.b),
+                (0x00, 0xff, 0x00),
+                "left arm of concave polygon should be filled"
+            );
+
+            let notch = backend_image.get_pixel(5, 5);
+            assert_ne!(
+                (notch.r, notch.g, notch.b),
+                (0x00, 0xff, 0x00),
+                "concave notch must remain outside the fill"
+            );
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn test_fill_polygon_triangle_and_validation() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "(II)Lorg/kwis/msp/lcdui/Image;",
+                    (7, 7),
+                )
+                .await?;
+
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .invoke_virtual(
+                    &image,
+                    "getGraphics",
+                    "()Lorg/kwis/msp/lcdui/Graphics;",
+                    (),
+                )
+                .await?;
+
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setColor", "(I)V", (0xff0000,))
+                .await?;
+
+            let mut xs: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 3).await?.into();
+            let mut ys: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 3).await?.into();
+            jvm.store_array(&mut xs, 0, [1i32, 5, 3]).await?;
+            jvm.store_array(&mut ys, 0, [1i32, 1, 5]).await?;
+
+            let _: () = jvm
+                .invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs.clone(), ys.clone()))
+                .await?;
+
+            let midp_image = Image::midp_image(&jvm, &image).await?;
+            let backend_image = MidpImage::image(&jvm, &midp_image).await?;
+
+            let interior = backend_image.get_pixel(3, 3);
+            assert_eq!(
+                (interior.r, interior.g, interior.b),
+                (0xff, 0x00, 0x00),
+                "triangle interior should be filled"
+            );
+
+            let outside = backend_image.get_pixel(0, 0);
+            assert_ne!(
+                (outside.r, outside.g, outside.b),
+                (0xff, 0x00, 0x00),
+                "pixel outside polygon must remain unfilled"
+            );
+
+            // Native Graphics_fillPolygon0 throws IllegalArgumentException
+            // when x.length != y.length.
+            let short_y: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 2).await?.into();
+            let mismatch: jvm::Result<()> = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "fillPolygon",
+                    "([I[I)V",
+                    (xs.clone(), short_y),
+                )
+                .await;
+
+            let Err(JavaError::JavaException(exception)) = mismatch else {
+                panic!("fillPolygon accepted mismatched coordinate arrays");
+            };
+            assert!(jvm.is_instance(&*exception, "java/lang/IllegalArgumentException"));
+
+            // Native messages:
+            // x == null -> NullPointerException("x is null.")
+            // y == null -> NullPointerException("y is null.")
+            let null_x = ClassInstanceRef::<Array<i32>>::new(None);
+            let null_result: jvm::Result<()> = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "fillPolygon",
+                    "([I[I)V",
+                    (null_x, ys.clone()),
+                )
+                .await;
+
+            let Err(JavaError::JavaException(exception)) = null_result else {
+                panic!("fillPolygon accepted null x array");
+            };
+            assert!(jvm.is_instance(&*exception, "java/lang/NullPointerException"));
+
+            let null_y = ClassInstanceRef::<Array<i32>>::new(None);
+            let null_result: jvm::Result<()> = jvm
+                .invoke_virtual(
+                    &graphics,
+                    "fillPolygon",
+                    "([I[I)V",
+                    (xs, null_y),
+                )
+                .await;
+
+            let Err(JavaError::JavaException(exception)) = null_result else {
+                panic!("fillPolygon accepted null y array");
+            };
+            assert!(jvm.is_instance(&*exception, "java/lang/NullPointerException"));
 
             Ok(())
         })
