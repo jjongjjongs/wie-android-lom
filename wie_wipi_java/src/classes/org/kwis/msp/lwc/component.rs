@@ -19,6 +19,8 @@ impl Component {
                 JavaMethodProto::new("<init>", "()V", Self::init, MethodAccessFlags::PROTECTED),
                 JavaMethodProto::new("getWidth", "()I", Self::get_width, Default::default()),
                 JavaMethodProto::new("getHeight", "()I", Self::get_height, Default::default()),
+                JavaMethodProto::new("getXOnScreen", "()I", Self::get_x_on_screen, Default::default()),
+                JavaMethodProto::new("getYOnScreen", "()I", Self::get_y_on_screen, Default::default()),
                 JavaMethodProto::new(
                     "getPreferredWidth",
                     "()I",
@@ -457,6 +459,82 @@ impl Component {
 
     async fn get_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         jvm.get_field(&this, "w", "I").await
+    }
+
+    async fn get_x_on_screen(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        let mut x: i32 = jvm.invoke_virtual(&this, "getX", "()I", ()).await?;
+
+        let mut parent: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "parent",
+                "Lorg/kwis/msp/lwc/ContainerComponent;",
+            )
+            .await?;
+
+        while !parent.is_null() {
+            let parent_x: i32 = jvm.invoke_virtual(&parent, "getX", "()I", ()).await?;
+            x += parent_x;
+
+            if jvm
+                .is_instance(&**parent, "org/kwis/msp/lwc/ContainerComponent")
+            {
+                let offset_x: i32 = jvm.get_field(&parent, "offsetX", "I").await?;
+                x += offset_x;
+            }
+
+            parent = jvm
+                .get_field(
+                    &parent,
+                    "parent",
+                    "Lorg/kwis/msp/lwc/ContainerComponent;",
+                )
+                .await?;
+        }
+
+        Ok(x)
+    }
+
+    async fn get_y_on_screen(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        let mut y: i32 = jvm.invoke_virtual(&this, "getY", "()I", ()).await?;
+
+        let mut parent: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "parent",
+                "Lorg/kwis/msp/lwc/ContainerComponent;",
+            )
+            .await?;
+
+        while !parent.is_null() {
+            let parent_y: i32 = jvm.invoke_virtual(&parent, "getY", "()I", ()).await?;
+            y += parent_y;
+
+            if jvm
+                .is_instance(&**parent, "org/kwis/msp/lwc/ContainerComponent")
+            {
+                let offset_y: i32 = jvm.get_field(&parent, "offsetY", "I").await?;
+                y += offset_y;
+            }
+
+            parent = jvm
+                .get_field(
+                    &parent,
+                    "parent",
+                    "Lorg/kwis/msp/lwc/ContainerComponent;",
+                )
+                .await?;
+        }
+
+        Ok(y)
     }
 
     async fn get_height(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
