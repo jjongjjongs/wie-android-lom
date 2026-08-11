@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -36,6 +36,7 @@ pub struct Shared {
     last_render: Arc<Mutex<Option<std::time::Instant>>>,
     redraw_requested: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
+    backlight_mode: Arc<AtomicU8>,
 }
 
 /// Bound on queued audio commands. A game that pushes samples faster than
@@ -110,6 +111,14 @@ impl Shared {
     pub fn has_exited(&self) -> bool {
         self.exited.load(Ordering::SeqCst)
     }
+
+    pub fn set_backlight_mode(&self, mode: u8) {
+        self.backlight_mode.store(mode, Ordering::SeqCst);
+    }
+
+    pub fn take_backlight_mode(&self) -> u8 {
+        self.backlight_mode.swap(0, Ordering::SeqCst)
+    }
 }
 
 pub struct AndroidPlatform {
@@ -171,6 +180,10 @@ impl Platform for AndroidPlatform {
 
     fn vibrate(&self, duration_ms: u64, intensity: u8) {
         self.shared.push_audio(crate::audio::vibrate_command(duration_ms, intensity));
+    }
+
+    fn set_backlight_mode(&self, mode: u8) {
+        self.shared.set_backlight_mode(mode);
     }
 }
 

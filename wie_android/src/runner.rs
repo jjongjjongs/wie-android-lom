@@ -200,6 +200,13 @@ impl Runner {
     pub fn take_audio(&mut self) -> Option<Vec<u8>> {
         self.instance.as_ref()?.shared.take_audio()
     }
+
+    pub fn take_backlight_mode(&mut self) -> u8 {
+        self.instance
+            .as_ref()
+            .map(|instance| instance.shared.take_backlight_mode())
+            .unwrap_or(0)
+    }
 }
 
 fn build_emulator(platform: Box<AndroidPlatform>, data: &[u8], options: Options) -> Result<Box<dyn Emulator + Send>, String> {

@@ -33,6 +33,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.view.WindowManager;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -851,6 +852,12 @@ public final class MainActivity extends Activity {
                 break;
             }
             audioOutput.handle(command);
+        }
+
+        int backlightMode = NativeBridge.nativePollBacklightMode();
+        if (backlightMode == 2) {
+            runOnUiThread(() ->
+                    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
         }
 
         if (NativeBridge.nativeRunning() == 0) {

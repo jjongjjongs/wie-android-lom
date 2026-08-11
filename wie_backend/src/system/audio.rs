@@ -340,6 +340,8 @@ mod tests {
         fn exit(&self) {}
 
         fn vibrate(&self, _duration_ms: u64, _intensity: u8) {}
+
+        fn set_backlight_mode(&self, _mode: u8) {}
     }
 
     struct NoopAudioSink;

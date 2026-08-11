@@ -232,6 +232,24 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     }
 }
 
+/// `nativePollBacklightMode() -> int`
+///
+/// Returns zero when there is no pending change. Non-zero values are handset
+/// backlight modes supplied by the emulated runtime.
+///
+/// # Safety
+/// Called by the JVM with a valid `env` reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBacklightMode(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        with_runner(|runner| runner.take_backlight_mode())
+    }))
+    .unwrap_or(0) as jint
+}
+
 /// `nativeInspect(byte[] archive) -> String`
 ///
 /// Describes an archive without running it.

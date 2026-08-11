@@ -149,6 +149,8 @@ impl Platform for WieCliPlatform {
     fn vibrate(&self, duration_ms: u64, intensity: u8) {
         tracing::info!("vibrate({duration_ms}ms, {intensity}%) - not supported on this platform");
     }
+
+    fn set_backlight_mode(&self, _mode: u8) {}
 }
 
 #[derive(Parser)]

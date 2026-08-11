@@ -61,6 +61,9 @@ final class NativeBridge {
      */
     static native byte[] nativePollOutput();
 
+    /** Returns a pending handset backlight mode, or zero when unchanged. */
+    static native int nativePollBacklightMode();
+
     /** Describes an archive without running it. */
     static native String nativeInspect(byte[] archive);
 
