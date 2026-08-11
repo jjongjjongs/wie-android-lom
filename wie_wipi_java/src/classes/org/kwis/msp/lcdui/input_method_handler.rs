@@ -201,13 +201,11 @@ impl InputMethodHandler {
             return Ok(());
         }
 
-        // Native throws IllegalArgumentException when any geometry value
-        // is non-positive before attempting CandidateWindow.setPosition().
-        // The native exception message comes from constant string 182;
-        // its exact text is not yet modeled here.
+        // Native throws IllegalArgumentException with constant string 182
+        // when any geometry value is non-positive.
         if x <= 0 || y <= 0 || width <= 0 || height <= 0 {
             return Err(
-                jvm.exception("java/lang/IllegalArgumentException", "")
+                jvm.exception("java/lang/IllegalArgumentException", "pos neg value")
                     .await,
             );
         }
