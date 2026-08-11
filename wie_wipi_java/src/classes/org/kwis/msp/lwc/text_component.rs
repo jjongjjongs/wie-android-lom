@@ -23,6 +23,7 @@ impl TextComponent {
             fields: vec![
                 JavaFieldProto::new("m_cPos", "I", Default::default()),
                 JavaFieldProto::new("imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;", Default::default()),
+                JavaFieldProto::new("iMode", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
