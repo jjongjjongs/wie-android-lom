@@ -15,9 +15,48 @@ impl TextBoxComponent {
             name: "org/kwis/msp/lwc/TextBoxComponent",
             parent_class: Some("org/kwis/msp/lwc/TextComponent"),
             interfaces: vec![],
-            methods: vec![JavaMethodProto::new("<init>", "(Ljava/lang/String;I)V", Self::init, Default::default())],
+            methods: vec![
+                JavaMethodProto::new("<init>", "(Ljava/lang/String;I)V", Self::init, Default::default()),
+                JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
+            ],
             fields: vec![],
             access_flags: Default::default(),
+        }
+    }
+
+    async fn key_notify(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextBoxComponent>,
+        event_type: i32,
+        key: i32,
+    ) -> JvmResult<bool> {
+        match event_type {
+            0 => Ok(false),
+            1 | 2 | 3 => {
+                jvm.invoke_special(
+                    &this,
+                    "org/kwis/msp/lwc/TextComponent",
+                    "keyNotify",
+                    "(II)Z",
+                    (event_type, key),
+                )
+                .await
+            }
+            4 => {
+                let _: bool = jvm
+                    .invoke_special(
+                        &this,
+                        "org/kwis/msp/lwc/TextComponent",
+                        "keyNotify",
+                        "(II)Z",
+                        (event_type, key),
+                    )
+                    .await?;
+
+                Ok(true)
+            }
+            _ => Ok(false),
         }
     }
 
