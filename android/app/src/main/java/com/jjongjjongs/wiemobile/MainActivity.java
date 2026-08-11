@@ -4,7 +4,9 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -24,6 +26,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -89,13 +92,19 @@ public final class MainActivity extends Activity {
     private static final int KEY_DIRECTION = 3;
     private static final int KEY_SOFT = 4;
 
-    private static final int COLOR_BG = Color.rgb(47, 47, 47);
-    private static final int COLOR_PANEL = Color.rgb(35, 35, 35);
-    private static final int COLOR_TEXT = Color.rgb(232, 232, 232);
-    private static final int COLOR_SUBTEXT = Color.rgb(190, 190, 190);
-
-    /** Handset keypad: light keys with a black face, dark keys for the pad. */
-    private static final int COLOR_KEYPAD_TRAY = Color.rgb(186, 186, 186);
+    // Device-dark palette shared by the library and the player, so the whole
+    // app reads as one piece of hardware rather than a list over a player.
+    private static final int COLOR_BG = Color.rgb(18, 19, 23);        // ground
+    private static final int COLOR_PANEL = Color.rgb(28, 30, 36);     // bars, cards, rows
+    private static final int COLOR_PANEL_2 = Color.rgb(35, 38, 46);   // raised surface
+    private static final int COLOR_HAIR = Color.rgb(43, 46, 55);      // hairline borders
+    private static final int COLOR_TEXT = Color.rgb(233, 234, 237);
+    private static final int COLOR_SUBTEXT = Color.rgb(154, 156, 166);
+    private static final int COLOR_ACCENT = Color.rgb(84, 199, 214);  // toggle / active
+    /** Behind the emulated LCD, so its letterbox reads as a screen bezel. */
+    private static final int COLOR_SCREEN_BEZEL = Color.rgb(10, 11, 14);
+    /** The pad the keys sit on: dark, matching the device body. */
+    private static final int COLOR_KEYPAD_TRAY = Color.rgb(23, 26, 32);
 
     private final ScheduledExecutorService emulatorThread = Executors.newSingleThreadScheduledExecutor();
 
@@ -105,6 +114,10 @@ public final class MainActivity extends Activity {
     private KeypadView keypad;
     private TextView playerStatus;
     private String currentGameName;
+    /** The game the player is showing, kept so a rotation can relay it out. */
+    private File currentGame;
+    /** Which way the player is turned; the toggle in the title bar flips it. */
+    private boolean landscapeMode;
     /** What is waiting on the storage permission, if anything. */
     private Runnable pendingDownload;
 
@@ -199,6 +212,9 @@ public final class MainActivity extends Activity {
         running = false;
         playerVisible = false;
         keypad = null;
+        landscapeMode = false;
+        // The library is always upright, whichever way the player was left.
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -652,48 +668,126 @@ public final class MainActivity extends Activity {
     private void showPlayer(File game) {
         playerVisible = true;
         running = false;
+        currentGame = game;
         currentGameName = displayName(game);
+        landscapeMode = false;
+
+        // Persistent views, kept across rotations so the last frame and any
+        // held keys survive a re-layout instead of being torn down.
+        gameView = new GameView(this);
+        keypad = new KeypadView(this);
+
+        // Button-driven rotation only: lock to portrait so the sensor cannot
+        // turn the player on its own, then let the title-bar toggle switch it.
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        buildPlayerContent();
+
+        emulatorThread.execute(() -> startGame(game));
+    }
+
+    /**
+     * Lays the player out for the current orientation, reusing the persistent
+     * game and keypad views. Portrait stacks the screen over the keypad;
+     * landscape floats the screen in the gap between the two key columns.
+     */
+    private void buildPlayerContent() {
+        detach(gameView);
+        detach(keypad);
+        gameView.landscape = landscapeMode;
+        keypad.landscape = landscapeMode;
+        keypad.requestLayout();
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackgroundColor(COLOR_BG);
 
-        // The title bar doubles as the status line: it carries the game's name
-        // once there is one, and what the loader is doing until then. A message
-        // long enough to matter does not fit, which is what the log is for.
-        LinearLayout titleBar = new LinearLayout(this);
-        titleBar.setBackgroundColor(Color.BLACK);
-        titleBar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        root.addView(buildTitleBar(),
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(landscapeMode ? 40 : 46)));
+
+        if (landscapeMode) {
+            // One keypad view across the whole area with the two key columns,
+            // the screen floated over the empty gap between them, so a finger
+            // on each side is still one view's business.
+            FrameLayout arena = new FrameLayout(this);
+            arena.setBackgroundColor(COLOR_KEYPAD_TRAY);
+            arena.addView(keypad,
+                    new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            FrameLayout.LayoutParams screenParams =
+                    new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            screenParams.gravity = android.view.Gravity.CENTER;
+            arena.addView(gameView, screenParams);
+            root.addView(arena, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        } else {
+            root.addView(gameView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, GAME_WEIGHT));
+            root.addView(keypad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, KEYPAD_WEIGHT));
+        }
+
+        applyStatusBarInset(root);
+        setContentView(root);
+    }
+
+    /** Status line, with the rotate and log buttons in the top-right corner. */
+    private View buildTitleBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setBackgroundColor(COLOR_PANEL);
+        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
 
         playerStatus = new TextView(this);
-        playerStatus.setText("게임을 시작하는 중...");
+        playerStatus.setText(running ? currentGameName : "게임을 시작하는 중...");
         playerStatus.setTextColor(COLOR_TEXT);
-        playerStatus.setTextSize(16f);
+        playerStatus.setTextSize(15f);
         playerStatus.setGravity(android.view.Gravity.CENTER_VERTICAL);
         playerStatus.setPadding(dp(14), 0, dp(8), 0);
         playerStatus.setSingleLine(true);
         playerStatus.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        titleBar.addView(playerStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        bar.addView(playerStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         Button log = flatButton("로그");
         log.setTextSize(13f);
         log.setOnClickListener(v -> saveLog());
-        LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(dp(64), dp(34));
-        logParams.rightMargin = dp(10);
-        titleBar.addView(log, logParams);
+        LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(dp(56), dp(34));
+        logParams.rightMargin = dp(8);
+        bar.addView(log, logParams);
 
-        root.addView(titleBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        Button rotate = flatButton(landscapeMode ? "세로" : "가로");
+        rotate.setTextSize(13f);
+        rotate.setBackgroundColor(COLOR_ACCENT);
+        rotate.setTextColor(COLOR_BG);
+        rotate.setOnClickListener(v -> toggleOrientation());
+        LinearLayout.LayoutParams rotateParams = new LinearLayout.LayoutParams(dp(56), dp(34));
+        rotateParams.rightMargin = dp(10);
+        bar.addView(rotate, rotateParams);
 
-        gameView = new GameView(this);
-        root.addView(gameView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, GAME_WEIGHT));
+        return bar;
+    }
 
-        keypad = new KeypadView(this);
-        root.addView(keypad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, KEYPAD_WEIGHT));
+    /**
+     * Asks for the other orientation. The window turning is what fires
+     * onConfigurationChanged, which flips {@code landscapeMode} and relays the
+     * player out - so that callback stays the one place the mode changes.
+     */
+    private void toggleOrientation() {
+        setRequestedOrientation(landscapeMode
+                ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+    }
 
-        applyStatusBarInset(root);
-        setContentView(root);
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
 
-        emulatorThread.execute(() -> startGame(game));
+        // The activity is kept alive across rotation (see the manifest's
+        // configChanges), so the game thread never stops - only the views move.
+        if (playerVisible && gameView != null && keypad != null) {
+            landscapeMode = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE;
+            buildPlayerContent();
+        }
+    }
+
+    private static void detach(View view) {
+        if (view != null && view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
+        }
     }
 
     private void startGame(File game) {
@@ -810,10 +904,27 @@ public final class MainActivity extends Activity {
     private final class GameView extends View {
         private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
         private Bitmap bitmap;
+        /** In landscape the screen is centered at its own aspect; see onMeasure. */
+        boolean landscape;
 
         GameView(MainActivity activity) {
             super(activity);
-            setBackgroundColor(Color.WHITE);
+            setBackgroundColor(COLOR_SCREEN_BEZEL);
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            // Landscape: fill the height but take only the width the screen's own
+            // aspect needs, so the controls on either side stay uncovered.
+            if (landscape) {
+                int h = MeasureSpec.getSize(heightSpec);
+                float aspect = bitmap != null && bitmap.getHeight() > 0
+                        ? (float) bitmap.getWidth() / bitmap.getHeight()
+                        : 240f / 320f;
+                setMeasuredDimension(Math.round(h * aspect), h);
+                return;
+            }
+            super.onMeasure(widthSpec, heightSpec);
         }
 
         /** @param frame {@code {width, height, RGB565 pixels...}} */
@@ -872,6 +983,13 @@ public final class MainActivity extends Activity {
         private final List<Key> keys = new ArrayList<>();
         private final SparseArray<Key> underFinger = new SparseArray<>();
 
+        /**
+         * Landscape splits the keys into two side columns with the screen in
+         * the gap between them; portrait keeps the handset stack below it. It
+         * stays one view either way so a finger on each side is still tracked.
+         */
+        boolean landscape;
+
         KeypadView(MainActivity activity) {
             super(activity);
             setBackgroundColor(COLOR_KEYPAD_TRAY);
@@ -911,6 +1029,11 @@ public final class MainActivity extends Activity {
 
         @Override
         protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+            if (landscape) {
+                layoutLandscape(width, height);
+                return;
+            }
+
             float pad = dp(5);
             float gap = dp(4);
 
@@ -950,6 +1073,62 @@ public final class MainActivity extends Activity {
                 float x = rightX + (index % 3) * (numberWidth + gap);
                 float y = padTop + (index / 3) * (numberHeight + gap);
 
+                place(9 + index, x, y, numberWidth, numberHeight);
+            }
+
+            ink.setTextSize(Math.min(numberHeight * 0.42f, dp(22)));
+        }
+
+        /**
+         * Landscape layout: two control columns with the screen's gap between
+         * them. Left column is the soft keys over the direction pad; right is
+         * save and back over the number pad.
+         */
+        private void layoutLandscape(int width, int height) {
+            float pad = dp(7);
+            float gap = dp(4);
+
+            // The center gap holds the screen at its portrait aspect; the keys
+            // fill whatever is left on either side.
+            float centerW = height * (240f / 320f);
+            float sideW = (width - centerW) / 2f - pad;
+            if (sideW < dp(96)) {
+                sideW = (width - 2 * pad) / 2f - dp(48);
+            }
+            float leftX = pad;
+            float rightX = width - pad - sideW;
+
+            float top = pad;
+            float usable = height - 2 * pad;
+            float topRow = (usable - gap) * 0.15f;
+            float below = usable - gap - topRow;
+            float belowTop = top + topRow + gap;
+
+            float functionWidth = (sideW - gap) / 2f;
+
+            // LEFT column: soft keys over the direction pad.
+            place(0, leftX, top, functionWidth, topRow);
+            place(1, leftX + functionWidth + gap, top, functionWidth, topRow);
+
+            float cell = Math.min((sideW - 2 * gap) / 3f, (below - 2 * gap) / 3f);
+            float dpadSize = cell * 3 + gap * 2;
+            float dx = leftX + (sideW - dpadSize) / 2f;
+            float dy = belowTop + (below - dpadSize) / 2f;
+            place(4, dx + cell + gap, dy, cell, cell);
+            place(5, dx, dy + cell + gap, cell, cell);
+            place(6, dx + cell + gap, dy + cell + gap, cell, cell);
+            place(7, dx + 2 * (cell + gap), dy + cell + gap, cell, cell);
+            place(8, dx + cell + gap, dy + 2 * (cell + gap), cell, cell);
+
+            // RIGHT column: save and back over the number pad.
+            place(2, rightX, top, functionWidth, topRow);
+            place(3, rightX + functionWidth + gap, top, functionWidth, topRow);
+
+            float numberWidth = (sideW - 2 * gap) / 3f;
+            float numberHeight = (below - 3 * gap) / 4f;
+            for (int index = 0; index < 12; index++) {
+                float x = rightX + (index % 3) * (numberWidth + gap);
+                float y = belowTop + (index / 3) * (numberHeight + gap);
                 place(9 + index, x, y, numberWidth, numberHeight);
             }
 
@@ -1108,65 +1287,63 @@ public final class MainActivity extends Activity {
         private int topColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(63, 143, 82);
+                    return Color.rgb(75, 176, 105);
                 case KEY_SOFT:
-                    return Color.rgb(133, 133, 133);
+                    return Color.rgb(231, 233, 236);
                 case KEY_CLEAR:
-                    return Color.rgb(154, 64, 64);
+                    return Color.rgb(207, 98, 89);
                 case KEY_DIRECTION:
-                    return Color.rgb(108, 108, 108);
+                    return Color.rgb(62, 65, 75);
                 default:
-                    return Color.rgb(251, 251, 251);
+                    return Color.rgb(242, 243, 244);
             }
         }
 
         private int bottomColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(44, 107, 59);
+                    return Color.rgb(53, 128, 80);
                 case KEY_SOFT:
-                    return Color.rgb(104, 104, 104);
+                    return Color.rgb(207, 210, 215);
                 case KEY_CLEAR:
-                    return Color.rgb(122, 47, 47);
+                    return Color.rgb(169, 70, 61);
                 case KEY_DIRECTION:
-                    return Color.rgb(82, 82, 82);
+                    return Color.rgb(52, 55, 63);
                 default:
-                    return Color.rgb(210, 210, 210);
+                    return Color.rgb(222, 223, 226);
             }
         }
 
         int borderColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(36, 82, 49);
+                    return Color.rgb(46, 107, 65);
                 case KEY_SOFT:
-                    return Color.rgb(86, 86, 86);
+                    return Color.rgb(194, 197, 203);
                 case KEY_CLEAR:
-                    return Color.rgb(94, 35, 35);
+                    return Color.rgb(138, 55, 48);
                 case KEY_DIRECTION:
-                    return Color.rgb(68, 68, 68);
+                    return Color.rgb(42, 44, 51);
                 default:
-                    return Color.rgb(169, 169, 169);
+                    return Color.rgb(199, 199, 203);
             }
         }
 
         int pressedColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(92, 180, 112);
-                case KEY_SOFT:
-                    return Color.rgb(168, 168, 168);
+                    return Color.rgb(104, 206, 134);
                 case KEY_CLEAR:
-                    return Color.rgb(190, 90, 90);
+                    return Color.rgb(220, 126, 117);
                 case KEY_DIRECTION:
-                    return Color.rgb(140, 140, 140);
+                    return Color.rgb(74, 170, 182);   // accent-tinted
                 default:
-                    return Color.rgb(160, 160, 160);
+                    return Color.rgb(150, 205, 214);  // accent-tinted light press
             }
         }
 
         int textColor() {
-            return style == KEY_PLAIN ? Color.rgb(22, 24, 28) : Color.WHITE;
+            return style == KEY_DIRECTION ? Color.rgb(240, 241, 243) : Color.rgb(29, 31, 36);
         }
     }
 }
