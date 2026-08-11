@@ -29,6 +29,12 @@ impl InputMethodHandler {
                     Self::get_current_mode_code,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "notifyKeyInput",
+                    "(II)Z",
+                    Self::notify_key_input,
+                    Default::default(),
+                ),
             ],
             fields: vec![JavaFieldProto::new("currentMode", "I", Default::default())],
             access_flags: Default::default(),
@@ -77,6 +83,21 @@ impl InputMethodHandler {
         jvm.put_field(&mut this, "currentMode", "I", next).await?;
 
         Ok(())
+    }
+
+    async fn notify_key_input(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        _key: i32,
+        event_type: i32,
+    ) -> JvmResult<bool> {
+        let mode: i32 = jvm.get_field(&this, "currentMode", "I").await?;
+
+        // LoM enters mode 3 before sending ordinary character input.
+        // Native InputMethodHandler accepts the type-1 key event and delivers
+        // the resulting text through its InputMethodListener callback.
+        Ok(mode == 3 && event_type == 1)
     }
 
     async fn get_current_mode_code(

@@ -1,4 +1,4 @@
-use alloc::vec;
+use alloc::{string::ToString, vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_runtime::classes::java::lang::String;
@@ -254,6 +254,50 @@ impl TextComponent {
             }
 
             return Ok(true);
+        }
+
+        if matches!(event_type, 1 | 2 | 3) {
+            let im_handler =
+                jvm.get_field(&this, "imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;").await?;
+
+            let handled: bool = jvm
+                .invoke_virtual(
+                    &im_handler,
+                    "notifyKeyInput",
+                    "(II)Z",
+                    (key, event_type),
+                )
+                .await?;
+
+            if handled {
+                // Native mode-3 input reaches TextComponent through
+                // InputMethodListener.notifyTextChanged and inserts at m_cPos.
+                let text: ClassInstanceRef<String> =
+                    jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+                let text_length: i32 =
+                    jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+                let max_length: i32 = jvm.get_field(&this, "maxLength", "I").await?;
+                if max_length < 0 || text_length < max_length {
+                    if let Some(chr) = core::char::from_u32(key as u32) {
+                        let input = JavaLangString::from_rust_string(jvm, &chr.to_string()).await?;
+                        let position: i32 = jvm.get_field(&this, "m_cPos", "I").await?;
+
+                        let _: () = jvm
+                            .invoke_virtual(
+                                &this,
+                                "insert",
+                                "(Ljava/lang/String;III)V",
+                                (input, 0, 1, position),
+                            )
+                            .await?;
+
+                        jvm.put_field(&mut this, "m_cPos", "I", position + 1).await?;
+                    }
+                }
+
+                return Ok(true);
+            }
         }
 
         jvm.invoke_special(
