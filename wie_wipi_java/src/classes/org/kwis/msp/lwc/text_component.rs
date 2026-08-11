@@ -30,6 +30,19 @@ impl TextComponent {
                 JavaFieldProto::new("iMode", "I", Default::default()),
                 JavaFieldProto::new("text", "Ljava/lang/String;", Default::default()),
                 JavaFieldProto::new("maxLength", "I", Default::default()),
+                // Native TextComponent has its own display/modeViewer state.
+                // Synthetic names avoid colliding with Component.display while
+                // preserving the native per-instance lifecycle.
+                JavaFieldProto::new(
+                    "__wieTextDisplay",
+                    "Lorg/kwis/msp/lcdui/Display;",
+                    Default::default(),
+                ),
+                JavaFieldProto::new(
+                    "__wieModeViewer",
+                    "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+                    Default::default(),
+                ),
                 // WipiPlayer Plus keeps these values in TextComponent's
                 // native per-instance auxiliary area (+0x74..+0x84).
                 // They are WIE-internal storage, not platform Java fields.
@@ -48,11 +61,56 @@ impl TextComponent {
 
         let _: () = jvm.invoke_special(&this, "org/kwis/msp/lwc/Component", "<init>", "()V", ()).await?;
 
-        // TODO constant. 0: CONSTRAINT_ANY
-        let im_handler = jvm.new_class("org/kwis/msp/lcdui/InputMethodHandler", "(I)V", (0,)).await?;
-
-        jvm.put_field(&mut this, "imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;", im_handler)
+        // Native no-display constructor obtains Display.getDefaultDisplay()
+        // and delegates with CONSTRAINT_ANY (0) on the current WIE path.
+        let display: ClassInstanceRef<crate::classes::org::kwis::msp::lcdui::Display> = jvm
+            .invoke_static(
+                "org/kwis/msp/lcdui/Display",
+                "getDefaultDisplay",
+                "()Lorg/kwis/msp/lcdui/Display;",
+                (),
+            )
             .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieTextDisplay",
+            "Lorg/kwis/msp/lcdui/Display;",
+            display.clone(),
+        )
+        .await?;
+
+        let im_handler = jvm
+            .new_class(
+                "org/kwis/msp/lcdui/InputMethodHandler",
+                "(I)V",
+                (0,),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "imHandler",
+            "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+            im_handler,
+        )
+        .await?;
+
+        let mode_viewer = jvm
+            .new_class(
+                "org/kwis/msp/lwc/TextComponent$ModeViewer",
+                "(Lorg/kwis/msp/lwc/TextComponent;Lorg/kwis/msp/lcdui/Display;)V",
+                (this.clone(), display),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieModeViewer",
+            "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+            mode_viewer,
+        )
+        .await?;
 
         let text = JavaLangString::from_rust_string(jvm, "").await?;
         jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
