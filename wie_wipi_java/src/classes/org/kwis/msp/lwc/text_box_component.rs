@@ -19,10 +19,30 @@ impl TextBoxComponent {
                 JavaMethodProto::new("<init>", "(Ljava/lang/String;I)V", Self::init, Default::default()),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
                 JavaMethodProto::new("focusNotify", "(Z)V", Self::focus_notify, Default::default()),
+                JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
             ],
             fields: vec![],
             access_flags: Default::default(),
         }
+    }
+
+    async fn set_max_length(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextBoxComponent>,
+        max_length: i32,
+    ) -> JvmResult<()> {
+        // Native TextBoxComponent delegates the actual length semantics to
+        // TextComponent, then updates its private formatter/scroll helper.
+        // WIE does not yet model that TextBox-private helper object.
+        jvm.invoke_special(
+            &this,
+            "org/kwis/msp/lwc/TextComponent",
+            "setMaxLength",
+            "(I)V",
+            (max_length,),
+        )
+        .await
     }
 
     async fn focus_notify(
