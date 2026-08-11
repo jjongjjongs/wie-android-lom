@@ -19,6 +19,7 @@ impl TextComponent {
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
                 JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
                 JavaMethodProto::new("getString", "()Ljava/lang/String;", Self::get_string, Default::default()),
+                JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
             ],
             fields: vec![
                 JavaFieldProto::new("m_cPos", "I", Default::default()),
@@ -78,6 +79,53 @@ impl TextComponent {
         }
 
         Ok(())
+    }
+
+    async fn key_notify(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        event_type: i32,
+        key: i32,
+    ) -> JvmResult<bool> {
+        let game_action: i32 = jvm
+            .invoke_static(
+                "org/kwis/msp/lcdui/Display",
+                "getGameAction",
+                "(I)I",
+                (key,),
+            )
+            .await?;
+
+        // Native game action 90 is the input-mode key. Only the type 1
+        // event advances the mode; the paired type 0 event is consumed.
+        if game_action == 90 {
+            if event_type == 1 {
+                let im_handler =
+                    jvm.get_field(&this, "imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;").await?;
+
+                let _: () = jvm
+                    .invoke_virtual(&im_handler, "changeCurrentModeToNext", "()V", ())
+                    .await?;
+
+                let mode: i32 = jvm
+                    .invoke_virtual(&im_handler, "getCurrentModeCode", "()I", ())
+                    .await?;
+
+                jvm.put_field(&mut this, "iMode", "I", mode).await?;
+            }
+
+            return Ok(true);
+        }
+
+        jvm.invoke_special(
+            &this,
+            "org/kwis/msp/lwc/Component",
+            "keyNotify",
+            "(II)Z",
+            (event_type, key),
+        )
+        .await
     }
 
     async fn get_string(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<TextComponent>) -> JvmResult<ClassInstanceRef<String>> {
