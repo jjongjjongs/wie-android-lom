@@ -265,6 +265,107 @@ impl TextComponent {
         Ok(())
     }
 
+    async fn set_symbol_position(
+        jvm: &Jvm,
+        this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<()> {
+        let mode_viewer: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieModeViewer",
+                "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+            )
+            .await?;
+
+        if mode_viewer.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
+        }
+
+        // Native call order:
+        // ModeViewer.getX(), getWidth(), getY().
+        let viewer_x: i32 = jvm.invoke_virtual(&mode_viewer, "getX", "()I", ()).await?;
+        let viewer_width: i32 = jvm
+            .invoke_virtual(&mode_viewer, "getWidth", "()I", ())
+            .await?;
+        let viewer_y: i32 = jvm.invoke_virtual(&mode_viewer, "getY", "()I", ()).await?;
+
+        let parent: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "parent",
+                "Lorg/kwis/msp/lwc/ContainerComponent;",
+            )
+            .await?;
+
+        if parent.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
+        }
+
+        // Component vtable +0xac is getCard().
+        let card: ClassInstanceRef<()> = jvm
+            .invoke_virtual(
+                &parent,
+                "getCard",
+                "()Lorg/kwis/msp/lcdui/Card;",
+                (),
+            )
+            .await?;
+
+        if card.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
+        }
+
+        let card_y: i32 = jvm.invoke_virtual(&card, "getY", "()I", ()).await?;
+        let this_y: i32 = jvm
+            .invoke_virtual(&this, "getYOnScreen", "()I", ())
+            .await?;
+
+        let symbol_y = if this_y + card_y > viewer_y {
+            viewer_y - 8
+        } else {
+            viewer_y
+        };
+
+        // Native reloads these values before constructing the remaining width.
+        let parent_width: i32 = jvm.get_field(&parent, "w", "I").await?;
+        let viewer_width_2: i32 = jvm
+            .invoke_virtual(&mode_viewer, "getWidth", "()I", ())
+            .await?;
+        let viewer_x_2: i32 = jvm
+            .invoke_virtual(&mode_viewer, "getX", "()I", ())
+            .await?;
+        let parent_x: i32 = jvm
+            .invoke_virtual(&parent, "getXOnScreen", "()I", ())
+            .await?;
+
+        let symbol_x = viewer_x + 2 + viewer_width;
+        let symbol_width =
+            parent_width - viewer_width_2 - 2 - (viewer_x_2 - parent_x);
+
+        let im_handler: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "imHandler",
+                "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+            )
+            .await?;
+
+        if im_handler.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
+        }
+
+        let _: () = jvm
+            .invoke_virtual(
+                &im_handler,
+                "setSymbolPosition",
+                "(IIII)V",
+                (symbol_x, symbol_y, symbol_width, 15),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     async fn mode_setting(
         jvm: &Jvm,
         mut this: ClassInstanceRef<TextComponent>,
@@ -272,6 +373,7 @@ impl TextComponent {
     ) -> JvmResult<()> {
         if mode == 99 {
             jvm.put_field(&mut this, "iMode", "I", 99).await?;
+            Self::set_symbol_position(jvm, this).await?;
             return Ok(());
         }
 
@@ -403,8 +505,9 @@ impl TextComponent {
                 )
                 .await?;
 
-                // Native mode 99 additionally invokes setSymbolPosition().
-                // Its coordinate semantics are restored separately.
+                if mode == 99 {
+                    Self::set_symbol_position(jvm, this.clone()).await?;
+                }
             }
         } else {
             let display: ClassInstanceRef<()> = jvm

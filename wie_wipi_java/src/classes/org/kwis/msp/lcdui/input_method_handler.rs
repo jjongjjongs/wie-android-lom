@@ -42,13 +42,26 @@ impl InputMethodHandler {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "setSymbolPosition",
+                    "(IIII)V",
+                    Self::set_symbol_position,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "notifyKeyInput",
                     "(II)Z",
                     Self::notify_key_input,
                     Default::default(),
                 ),
             ],
-            fields: vec![JavaFieldProto::new("currentMode", "I", Default::default())],
+            fields: vec![
+                JavaFieldProto::new("currentMode", "I", Default::default()),
+                JavaFieldProto::new("__wieSymbolCardActive", "Z", Default::default()),
+                JavaFieldProto::new("__wieSymbolX", "I", Default::default()),
+                JavaFieldProto::new("__wieSymbolY", "I", Default::default()),
+                JavaFieldProto::new("__wieSymbolWidth", "I", Default::default()),
+                JavaFieldProto::new("__wieSymbolHeight", "I", Default::default()),
+            ],
             access_flags: Default::default(),
         }
     }
@@ -70,7 +83,24 @@ impl InputMethodHandler {
         mut this: ClassInstanceRef<Self>,
         mode: i32,
     ) -> JvmResult<bool> {
+        let previous_mode: i32 = jvm.get_field(&this, "currentMode", "I").await?;
+
         jvm.put_field(&mut this, "currentMode", "I", mode).await?;
+
+        // Native setCurrentMode(I) delegates to setCurrentMode(I, false).
+        // Entering symbol mode creates/shows a CandidateWindow, while leaving
+        // symbol mode destroys the symbol-card object.
+        if mode == 99 {
+            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", true)
+                .await?;
+        } else if previous_mode == 99 {
+            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", false)
+                .await?;
+            jvm.put_field(&mut this, "__wieSymbolX", "I", 0).await?;
+            jvm.put_field(&mut this, "__wieSymbolY", "I", 0).await?;
+            jvm.put_field(&mut this, "__wieSymbolWidth", "I", 0).await?;
+            jvm.put_field(&mut this, "__wieSymbolHeight", "I", 0).await?;
+        }
 
         Ok(true)
     }
@@ -92,7 +122,23 @@ impl InputMethodHandler {
             _ => 0,
         };
 
+        let previous_mode = mode;
+
         jvm.put_field(&mut this, "currentMode", "I", next).await?;
+
+        // Keep the synthetic symbol-card lifecycle consistent with native
+        // setCurrentMode when mode cycling enters or leaves symbol mode.
+        if next == 99 {
+            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", true)
+                .await?;
+        } else if previous_mode == 99 {
+            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", false)
+                .await?;
+            jvm.put_field(&mut this, "__wieSymbolX", "I", 0).await?;
+            jvm.put_field(&mut this, "__wieSymbolY", "I", 0).await?;
+            jvm.put_field(&mut this, "__wieSymbolWidth", "I", 0).await?;
+            jvm.put_field(&mut this, "__wieSymbolHeight", "I", 0).await?;
+        }
 
         Ok(())
     }
@@ -121,11 +167,54 @@ impl InputMethodHandler {
     }
 
     async fn hide_symbol_card(
-        _: &Jvm,
+        jvm: &Jvm,
         _: &mut WieJvmContext,
-        _: ClassInstanceRef<Self>,
+        mut this: ClassInstanceRef<Self>,
     ) -> JvmResult<()> {
-        // WIE does not yet model the native DIME symbol-card object.
+        // Native removes CandidateWindow/CandidateTouchWindow from Display,
+        // notifies it, then clears the corresponding object field.
+        jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", false)
+            .await?;
+        jvm.put_field(&mut this, "__wieSymbolX", "I", 0).await?;
+        jvm.put_field(&mut this, "__wieSymbolY", "I", 0).await?;
+        jvm.put_field(&mut this, "__wieSymbolWidth", "I", 0).await?;
+        jvm.put_field(&mut this, "__wieSymbolHeight", "I", 0).await?;
+
+        Ok(())
+    }
+
+    async fn set_symbol_position(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> JvmResult<()> {
+        // Native only forwards the rectangle when a symbol-card object exists.
+        let active: bool = jvm
+            .get_field(&this, "__wieSymbolCardActive", "Z")
+            .await?;
+
+        if !active {
+            return Ok(());
+        }
+
+        // The native routine rejects non-positive geometry before forwarding
+        // CandidateWindow.setPosition(x, y, width, height).  Internal
+        // TextComponent calls produce positive geometry on a valid viewport.
+        if x <= 0 || y <= 0 || width <= 0 || height <= 0 {
+            return Ok(());
+        }
+
+        jvm.put_field(&mut this, "__wieSymbolX", "I", x).await?;
+        jvm.put_field(&mut this, "__wieSymbolY", "I", y).await?;
+        jvm.put_field(&mut this, "__wieSymbolWidth", "I", width)
+            .await?;
+        jvm.put_field(&mut this, "__wieSymbolHeight", "I", height)
+            .await?;
+
         Ok(())
     }
 
