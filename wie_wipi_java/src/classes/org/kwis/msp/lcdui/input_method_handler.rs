@@ -201,11 +201,15 @@ impl InputMethodHandler {
             return Ok(());
         }
 
-        // The native routine rejects non-positive geometry before forwarding
-        // CandidateWindow.setPosition(x, y, width, height).  Internal
-        // TextComponent calls produce positive geometry on a valid viewport.
+        // Native throws IllegalArgumentException when any geometry value
+        // is non-positive before attempting CandidateWindow.setPosition().
+        // The native exception message comes from constant string 182;
+        // its exact text is not yet modeled here.
         if x <= 0 || y <= 0 || width <= 0 || height <= 0 {
-            return Ok(());
+            return Err(
+                jvm.exception("java/lang/IllegalArgumentException", "")
+                    .await,
+            );
         }
 
         jvm.put_field(&mut this, "__wieSymbolX", "I", x).await?;
