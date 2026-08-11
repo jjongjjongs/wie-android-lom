@@ -30,6 +30,14 @@ impl TextComponent {
                 JavaFieldProto::new("iMode", "I", Default::default()),
                 JavaFieldProto::new("text", "Ljava/lang/String;", Default::default()),
                 JavaFieldProto::new("maxLength", "I", Default::default()),
+                // WipiPlayer Plus keeps these values in TextComponent's
+                // native per-instance auxiliary area (+0x74..+0x84).
+                // They are WIE-internal storage, not platform Java fields.
+                JavaFieldProto::new("__wieViewportHeight", "I", Default::default()),
+                JavaFieldProto::new("__wieViewportY", "I", Default::default()),
+                JavaFieldProto::new("__wieViewportWidth", "I", Default::default()),
+                JavaFieldProto::new("__wieViewportX", "I", Default::default()),
+                JavaFieldProto::new("__wieViewportParentHeight", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -49,6 +57,151 @@ impl TextComponent {
         let text = JavaLangString::from_rust_string(jvm, "").await?;
         jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
         jvm.put_field(&mut this, "maxLength", "I", -1).await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn calc_view_port_area(
+        jvm: &Jvm,
+        mut this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<()> {
+        // Native TextComponent.calcViewPortArea:
+        // intersect this component's screen rectangle with every ancestor.
+        let mut top: i32 = jvm
+            .invoke_virtual(&this, "getYOnScreen", "()I", ())
+            .await?;
+        let height: i32 = jvm.get_field(&this, "h", "I").await?;
+        let mut bottom = top + height;
+
+        let mut left: i32 = jvm
+            .invoke_virtual(&this, "getXOnScreen", "()I", ())
+            .await?;
+        let width: i32 = jvm.get_field(&this, "w", "I").await?;
+        let mut right = left + width;
+
+        let mut current: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "parent",
+                "Lorg/kwis/msp/lwc/ContainerComponent;",
+            )
+            .await?;
+
+        while !current.is_null() {
+            let current_top: i32 = jvm
+                .invoke_virtual(&current, "getYOnScreen", "()I", ())
+                .await?;
+            let current_height: i32 = jvm.get_field(&current, "h", "I").await?;
+            let current_bottom = current_top + current_height;
+
+            if current_top > top {
+                top = current_top;
+            }
+            if current_bottom < bottom {
+                bottom = current_bottom;
+            }
+
+            let current_left: i32 = jvm
+                .invoke_virtual(&current, "getXOnScreen", "()I", ())
+                .await?;
+            let current_width: i32 = jvm.get_field(&current, "w", "I").await?;
+            let current_right = current_left + current_width;
+
+            if current_left > left {
+                left = current_left;
+            }
+            if current_right < right {
+                right = current_right;
+            }
+
+            current = jvm
+                .get_field(
+                    &current,
+                    "parent",
+                    "Lorg/kwis/msp/lwc/ContainerComponent;",
+                )
+                .await?;
+        }
+
+        // Native stores the subtraction result without clamping.
+        jvm.put_field(&mut this, "__wieViewportHeight", "I", bottom - top)
+            .await?;
+        jvm.put_field(&mut this, "__wieViewportY", "I", top)
+            .await?;
+        jvm.put_field(&mut this, "__wieViewportWidth", "I", right - left)
+            .await?;
+        jvm.put_field(&mut this, "__wieViewportX", "I", left)
+            .await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn pcalc_view_port_area(
+        jvm: &Jvm,
+        mut this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<()> {
+        // Native pcalcViewPortArea starts at the parent, not at this.
+        let mut current: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "parent",
+                "Lorg/kwis/msp/lwc/ContainerComponent;",
+            )
+            .await?;
+
+        // Native dereferences the parent immediately.
+        if current.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let mut top: i32 = jvm
+            .invoke_virtual(&current, "getYOnScreen", "()I", ())
+            .await?;
+        let height: i32 = jvm.get_field(&current, "h", "I").await?;
+        let mut bottom = top + height;
+
+        current = jvm
+            .get_field(
+                &current,
+                "parent",
+                "Lorg/kwis/msp/lwc/ContainerComponent;",
+            )
+            .await?;
+
+        while !current.is_null() {
+            let current_top: i32 = jvm
+                .invoke_virtual(&current, "getYOnScreen", "()I", ())
+                .await?;
+            let current_height: i32 = jvm.get_field(&current, "h", "I").await?;
+            let current_bottom = current_top + current_height;
+
+            if current_top > top {
+                top = current_top;
+            }
+            if current_bottom < bottom {
+                bottom = current_bottom;
+            }
+
+            current = jvm
+                .get_field(
+                    &current,
+                    "parent",
+                    "Lorg/kwis/msp/lwc/ContainerComponent;",
+                )
+                .await?;
+        }
+
+        // Native +0x84: vertical intersection span of the ancestor chain.
+        jvm.put_field(
+            &mut this,
+            "__wieViewportParentHeight",
+            "I",
+            bottom - top,
+        )
+        .await?;
 
         Ok(())
     }
