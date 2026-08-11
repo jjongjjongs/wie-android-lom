@@ -1537,12 +1537,15 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
         context: &mut WieJvmContext,
         _args: Box<[JavaValue]>,
     ) -> Result<JavaValue, JavaError> {
+        const FRAME_END: i32 = 0;
         const IMAGE_END: i32 = 1;
         const NOT_EXIST: i32 = -1;
         const DECODE_ERROR: i32 = -2;
         const OUT_OF_MEMORY: i32 = -3;
 
         jvm.attach_thread(None).await?;
+
+        let mut animation_generation = None;
 
         let status = match Image::load_image_for_runner(jvm, context, self.name.clone()).await {
             Ok(Some(loaded)) => {
@@ -1592,10 +1595,54 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
                 .await?;
                 jvm.put_field(&mut image, "frameCount", "I", frame_count)
                     .await?;
-                jvm.put_field(&mut image, "currentFrame", "I", current_frame)
+
+                if frame_count > 1 {
+                    // Native Image.decodeNextFrame() performs the first animated
+                    // frame decode as part of the asynchronous load:
+                    //
+                    //   currentFrame: 0 -> 1
+                    //   decodeFrame(1)
+                    //   return FRAME_END
+                    //
+                    // attach_gif_animation() already installed frame 1 as
+                    // midpImage, so only the native cursor transition remains.
+                    jvm.put_field(&mut image, "currentFrame", "I", 1)
+                        .await?;
+
+                    // ImageReader.addElement() re-registers the ImageElement
+                    // before observer.notify(). Register equivalent removable
+                    // animation state before invoking the observer so stop() or
+                    // stopImage() from inside notify() can cancel this cycle.
+                    let generation: i32 = jvm
+                        .get_field::<i32>(&image, "animationGeneration", "I")
+                        .await?
+                        .wrapping_add(1);
+
+                    jvm.put_field(
+                        &mut image,
+                        "animationGeneration",
+                        "I",
+                        generation,
+                    )
+                    .await?;
+                    jvm.put_field(
+                        &mut image,
+                        "animationObserver",
+                        "Lorg/kwis/msp/lcdui/ImageObserver;",
+                        self.observer.clone(),
+                    )
                     .await?;
 
-                IMAGE_END
+                    Image::add_active_animation(jvm, &image).await?;
+                    animation_generation = Some(generation);
+
+                    FRAME_END
+                } else {
+                    jvm.put_field(&mut image, "currentFrame", "I", current_frame)
+                        .await?;
+
+                    IMAGE_END
+                }
             }
             Ok(None) => NOT_EXIST,
             Err(JavaError::JavaException(exception)) => {
@@ -1622,6 +1669,27 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
                     (self.image.clone(), status),
                 )
                 .await?;
+        }
+
+        if let Some(generation) = animation_generation {
+            // The observer may have called stop() or stopImage() while handling
+            // FRAME_END. Both invalidate this generation, matching native
+            // ImageReader removal of the element that was re-added before
+            // notify().
+            let active_generation: i32 = jvm
+                .get_field(&self.image, "animationGeneration", "I")
+                .await?;
+
+            if active_generation == generation {
+                context.spawn(
+                    jvm,
+                    Box::new(ImageAnimationRunner {
+                        image: self.image.clone(),
+                        observer: self.observer.clone(),
+                        generation,
+                    }),
+                )?;
+            }
         }
 
         Ok(JavaValue::Void)
@@ -2055,6 +2123,138 @@ mod test {
                     jvm.load_array(&delays, 0, 2).await?;
 
                 assert_eq!(delay_values, [20, 40]);
+
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn test_async_load_image_animated_gif_lifecycle() -> Result<()> {
+        run_jvm_test(
+            Box::new([
+                wie_midp::get_protos().into(),
+                get_protos().into(),
+                Box::new([TestImageObserver::as_proto()]),
+            ]),
+            |jvm| async move {
+                use crate::classes::org::kwis::msp::io::File;
+
+                // Two-frame 1x1 GIF89a.
+                // Frame 0: 20 ms
+                // Frame 1: 40 ms
+                let gif: &[u8] = &[
+                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x80, 0x00, 0x00,
+                    0xff, 0x00, 0x00,
+                    0x00, 0xff, 0x00,
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x02, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x44, 0x01, 0x00,
+                    0x21, 0xf9, 0x04, 0x00,
+                    0x04, 0x00,
+                    0x00, 0x00,
+                    0x2c,
+                    0x00, 0x00, 0x00, 0x00,
+                    0x01, 0x00, 0x01, 0x00,
+                    0x00,
+                    0x02, 0x02, 0x4c, 0x01, 0x00,
+                    0x3b,
+                ];
+
+                let filename =
+                    JavaLangString::from_rust_string(&jvm, "async-load.gif").await?;
+
+                let file: ClassInstanceRef<File> = jvm
+                    .new_class(
+                        "org/kwis/msp/io/File",
+                        "(Ljava/lang/String;I)V",
+                        (filename, 3i32), // org.kwis.msp.io.File.WRITE_TRUNC
+                    )
+                    .await?
+                    .into();
+
+                let mut data = jvm.instantiate_array("B", gif.len()).await?;
+                jvm.store_array(
+                    &mut data,
+                    0,
+                    gif.iter()
+                        .map(|&value| value as i8)
+                        .collect::<alloc::vec::Vec<_>>(),
+                )
+                .await?;
+
+                let written: i32 =
+                    jvm.invoke_virtual(&file, "write", "([B)I", (data,)).await?;
+                assert_eq!(written, 0);
+
+                let _: () = jvm.invoke_virtual(&file, "close", "()V", ()).await?;
+
+                let observer: ClassInstanceRef<ImageObserver> = jvm
+                    .new_class("test/ImageObserverImpl", "()V", ())
+                    .await?
+                    .into();
+
+                let source =
+                    JavaLangString::from_rust_string(&jvm, "file://async-load.gif").await?;
+
+                let image: ClassInstanceRef<Image> = jvm
+                    .invoke_static(
+                        "org/kwis/msp/lcdui/Image",
+                        "loadImage",
+                        "(Ljava/lang/String;Lorg/kwis/msp/lcdui/ImageObserver;)Lorg/kwis/msp/lcdui/Image;",
+                        (source, observer),
+                    )
+                    .await?;
+
+                // loadImage returns before ImageLoadRunner performs the decode.
+                let initial_frame_count: i32 =
+                    jvm.get_field(&image, "frameCount", "I").await?;
+                assert_eq!(initial_frame_count, 0);
+
+                // Allow ImageLoadRunner to decode frame 1 and the animation
+                // runner to advance through the final frame.
+                let _: () = jvm
+                    .invoke_static(
+                        "java/lang/Thread",
+                        "sleep",
+                        "(J)V",
+                        (120i64,),
+                    )
+                    .await?;
+
+                for _ in 0..4 {
+                    let _: () = jvm
+                        .invoke_static("java/lang/Thread", "yield", "()V", ())
+                        .await?;
+                }
+
+                let frame_count: i32 =
+                    jvm.get_field(&image, "frameCount", "I").await?;
+                let current_frame: i32 =
+                    jvm.get_field(&image, "currentFrame", "I").await?;
+
+                assert_eq!(frame_count, 2);
+                assert_eq!(current_frame, 2);
+
+                let active: ClassInstanceRef<()> = jvm
+                    .get_static_field(
+                        "org/kwis/msp/lcdui/Image",
+                        "activeAnimations",
+                        "Ljava/util/Vector;",
+                    )
+                    .await?;
+                assert!(!active.is_null());
+
+                let active_size: i32 =
+                    jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+                assert_eq!(active_size, 0);
 
                 Ok(())
             },
