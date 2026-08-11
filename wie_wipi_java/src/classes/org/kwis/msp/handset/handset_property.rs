@@ -41,6 +41,7 @@ impl HandsetProperty {
 
         let value = match name.as_ref() {
             "VIBRATORLEVEL" => "0",
+            "DS_LOCK" => "0",
             _ => "",
         };
 
