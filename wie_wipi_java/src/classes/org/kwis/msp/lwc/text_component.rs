@@ -19,6 +19,9 @@ impl TextComponent {
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
                 JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
                 JavaMethodProto::new("getString", "()Ljava/lang/String;", Self::get_string, Default::default()),
+                JavaMethodProto::new("insert", "(Ljava/lang/String;III)V", Self::insert, Default::default()),
+                JavaMethodProto::new("delete", "(II)V", Self::delete, Default::default()),
+                JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
             ],
             fields: vec![
@@ -79,6 +82,141 @@ impl TextComponent {
         }
 
         Ok(())
+    }
+
+    async fn insert(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        string: ClassInstanceRef<String>,
+        offset: i32,
+        length: i32,
+        position: i32,
+    ) -> JvmResult<()> {
+        let text: ClassInstanceRef<String> =
+            jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+        let text_length: i32 = jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+        let inserted: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &string,
+                "substring",
+                "(II)Ljava/lang/String;",
+                (offset, offset + length),
+            )
+            .await?;
+
+        let prefix: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &text,
+                "substring",
+                "(II)Ljava/lang/String;",
+                (0, position),
+            )
+            .await?;
+
+        let suffix: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &text,
+                "substring",
+                "(II)Ljava/lang/String;",
+                (position, text_length),
+            )
+            .await?;
+
+        let combined: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &prefix,
+                "concat",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                (inserted,),
+            )
+            .await?;
+
+        let combined: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &combined,
+                "concat",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                (suffix,),
+            )
+            .await?;
+
+        jvm.put_field(&mut this, "text", "Ljava/lang/String;", combined).await?;
+
+        Ok(())
+    }
+
+    async fn delete(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        position: i32,
+        length: i32,
+    ) -> JvmResult<()> {
+        let text: ClassInstanceRef<String> =
+            jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+        let text_length: i32 = jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+        let prefix: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &text,
+                "substring",
+                "(II)Ljava/lang/String;",
+                (0, position),
+            )
+            .await?;
+
+        let suffix: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &text,
+                "substring",
+                "(II)Ljava/lang/String;",
+                (position + length, text_length),
+            )
+            .await?;
+
+        let combined: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &prefix,
+                "concat",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                (suffix,),
+            )
+            .await?;
+
+        jvm.put_field(&mut this, "text", "Ljava/lang/String;", combined).await?;
+
+        Ok(())
+    }
+
+    async fn replace(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+        string: ClassInstanceRef<String>,
+        length: i32,
+        position: i32,
+    ) -> JvmResult<()> {
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "delete",
+                "(II)V",
+                (position, length),
+            )
+            .await?;
+
+        let string_length: i32 =
+            jvm.invoke_virtual(&string, "length", "()I", ()).await?;
+
+        jvm.invoke_virtual(
+            &this,
+            "insert",
+            "(Ljava/lang/String;III)V",
+            (string, 0, string_length, position),
+        )
+        .await
     }
 
     async fn key_notify(
