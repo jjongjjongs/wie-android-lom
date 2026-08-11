@@ -25,6 +25,7 @@ impl TextComponent {
                 JavaFieldProto::new("imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;", Default::default()),
                 JavaFieldProto::new("iMode", "I", Default::default()),
                 JavaFieldProto::new("text", "Ljava/lang/String;", Default::default()),
+                JavaFieldProto::new("maxLength", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -43,12 +44,38 @@ impl TextComponent {
 
         let text = JavaLangString::from_rust_string(jvm, "").await?;
         jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
+        jvm.put_field(&mut this, "maxLength", "I", -1).await?;
 
         Ok(())
     }
 
-    async fn set_max_length(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<TextComponent>, max_length: i32) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.lwc.TextComponent::<init>({this:?}, {max_length})");
+    async fn set_max_length(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        max_length: i32,
+    ) -> JvmResult<()> {
+        jvm.put_field(&mut this, "maxLength", "I", max_length).await?;
+
+        if max_length > 0 {
+            let text: ClassInstanceRef<String> =
+                jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+            let length: i32 = jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+            if length > max_length {
+                let text: ClassInstanceRef<String> = jvm
+                    .invoke_virtual(
+                        &text,
+                        "substring",
+                        "(II)Ljava/lang/String;",
+                        (0, max_length),
+                    )
+                    .await?;
+
+                jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
+                jvm.put_field(&mut this, "m_cPos", "I", 0).await?;
+            }
+        }
 
         Ok(())
     }
