@@ -18,10 +18,52 @@ impl TextBoxComponent {
             methods: vec![
                 JavaMethodProto::new("<init>", "(Ljava/lang/String;I)V", Self::init, Default::default()),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
+                JavaMethodProto::new("focusNotify", "(Z)V", Self::focus_notify, Default::default()),
             ],
             fields: vec![],
             access_flags: Default::default(),
         }
+    }
+
+    async fn focus_notify(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextBoxComponent>,
+        focus: bool,
+    ) -> JvmResult<()> {
+        let _: () = jvm
+            .invoke_special(
+                &this,
+                "org/kwis/msp/lwc/TextComponent",
+                "focusNotify",
+                "(Z)V",
+                (focus,),
+            )
+            .await?;
+
+        if !focus {
+            return Ok(());
+        }
+
+        let mut this = this;
+        let position: i32 = jvm.get_field(&this, "m_cPos", "I").await?;
+
+        let text: ClassInstanceRef<String> =
+            jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+        let length: i32 =
+            jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+        let position = if position <= 0 {
+            0
+        } else if position >= length {
+            length
+        } else {
+            position
+        };
+
+        jvm.put_field(&mut this, "m_cPos", "I", position).await?;
+
+        Ok(())
     }
 
     async fn key_notify(
