@@ -149,6 +149,11 @@ impl CardCanvas {
     async fn paint(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>, g: ClassInstanceRef<MidpGraphics>) -> JvmResult<()> {
         tracing::debug!("net.wie.CardCanvas::paint({this:?}, {g:?})");
 
+        // MIDP may reuse a Graphics instance whose translate/clip/color state
+        // was changed by a previous paint. CardCanvas establishes a fresh
+        // canvas drawing state before wrapping it as WIPI Graphics.
+        let _: () = jvm.invoke_virtual(&g, "reset", "()V", ()).await?;
+
         let graphics = jvm
             .new_class("org/kwis/msp/lcdui/Graphics", "(Ljavax/microedition/lcdui/Graphics;)V", (g,))
             .await?;

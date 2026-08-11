@@ -929,14 +929,20 @@ impl Graphics {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::getTranslateX({this:?})");
 
         let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
-        jvm.invoke_virtual(&midp_graphics, "getTranslateX", "()I", ()).await
+        let translate_x: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateX", "()I", ()).await?;
+        let base_translate_x: i32 = jvm.get_field(&this, "baseTranslateX", "I").await?;
+
+        Ok(translate_x - base_translate_x)
     }
 
     async fn get_translate_y(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::getTranslateY({this:?})");
 
         let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
-        jvm.invoke_virtual(&midp_graphics, "getTranslateY", "()I", ()).await
+        let translate_y: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateY", "()I", ()).await?;
+        let base_translate_y: i32 = jvm.get_field(&this, "baseTranslateY", "I").await?;
+
+        Ok(translate_y - base_translate_y)
     }
 
     async fn translate(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>, x: i32, y: i32) -> JvmResult<()> {
@@ -1321,6 +1327,39 @@ impl Graphics {
 
         let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
         let _: () = jvm.invoke_virtual(&midp_graphics, "reset", "()V", ()).await?;
+
+        // Native dgraphics_reset restores the current origin
+        // (+0x34/+0x38) from the immutable base origin (+0x3c/+0x40).
+        let base_translate_x: i32 = jvm.get_field(&this, "baseTranslateX", "I").await?;
+        let base_translate_y: i32 = jvm.get_field(&this, "baseTranslateY", "I").await?;
+        let _: () = jvm
+            .invoke_virtual(
+                &midp_graphics,
+                "translate",
+                "(II)V",
+                (base_translate_x, base_translate_y),
+            )
+            .await?;
+
+        // MIDP reset leaves its absolute clip origin at (0, 0).
+        // Native dgraphics_reset restores absolute clip X/Y to the
+        // immutable base origin. Re-establish that origin while
+        // preserving MIDP reset's current clip width/height for now.
+        let clip_width: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getClipWidth", "()I", ())
+            .await?;
+        let clip_height: i32 = jvm
+            .invoke_virtual(&midp_graphics, "getClipHeight", "()I", ())
+            .await?;
+        let _: () = jvm
+            .invoke_virtual(
+                &midp_graphics,
+                "setClip",
+                "(IIII)V",
+                (0, 0, clip_width, clip_height),
+            )
+            .await?;
+
         jvm.put_field(&mut this, "alpha", "I", 255).await?;
         jvm.put_field(&mut this, "strokeStyle", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
@@ -1891,6 +1930,118 @@ mod test {
 
             Ok(())
         })
+    }
+
+    #[test]
+    fn test_wrapped_graphics_translate_is_relative_to_base_and_reset_restores_base() -> Result<()> {
+        run_jvm_test(
+            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
+            |jvm| async move {
+                let midp_image: ClassInstanceRef<MidpImage> = jvm
+                    .invoke_static(
+                        "javax/microedition/lcdui/Image",
+                        "createImage",
+                        "(II)Ljavax/microedition/lcdui/Image;",
+                        (12, 10),
+                    )
+                    .await?;
+
+                let midp_graphics: ClassInstanceRef<wie_midp::classes::javax::microedition::lcdui::Graphics> = jvm
+                    .invoke_virtual(
+                        &midp_image,
+                        "getGraphics",
+                        "()Ljavax/microedition/lcdui/Graphics;",
+                        (),
+                    )
+                    .await?;
+
+                // Establish a non-zero WIPI base origin, then narrow only
+                // the current clip. Native Graphics reset restores the fixed
+                // logical Graphics size, not this current clip size.
+                let _: () = jvm
+                    .invoke_virtual(&midp_graphics, "translate", "(II)V", (3, 4))
+                    .await?;
+                let _: () = jvm
+                    .invoke_virtual(&midp_graphics, "setClip", "(IIII)V", (1, 2, 6, 3))
+                    .await?;
+
+                let graphics: ClassInstanceRef<Graphics> = jvm
+                    .new_class(
+                        "org/kwis/msp/lcdui/Graphics",
+                        "(Ljavax/microedition/lcdui/Graphics;)V",
+                        (midp_graphics,),
+                    )
+                    .await?
+                    .into();
+
+                // WIPI reports translation relative to its immutable base.
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ())
+                        .await?,
+                    0
+                );
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ())
+                        .await?,
+                    0
+                );
+
+                let _: () = jvm
+                    .invoke_virtual(&graphics, "translate", "(II)V", (5, 6))
+                    .await?;
+
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ())
+                        .await?,
+                    5
+                );
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ())
+                        .await?,
+                    6
+                );
+
+                let _: () = jvm
+                    .invoke_virtual(&graphics, "setClip", "(IIII)V", (0, 0, 1, 1))
+                    .await?;
+
+                let _: () = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await?;
+
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ())
+                        .await?,
+                    0
+                );
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ())
+                        .await?,
+                    0
+                );
+
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipX", "()I", ())
+                        .await?,
+                    0
+                );
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipY", "()I", ())
+                        .await?,
+                    0
+                );
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipWidth", "()I", ())
+                        .await?,
+                    12
+                );
+                assert_eq!(
+                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipHeight", "()I", ())
+                        .await?,
+                    10
+                );
+
+                Ok(())
+            },
+        )
     }
 
     #[test]
