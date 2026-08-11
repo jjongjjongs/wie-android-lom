@@ -24,6 +24,7 @@ impl TextComponent {
                 JavaFieldProto::new("m_cPos", "I", Default::default()),
                 JavaFieldProto::new("imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;", Default::default()),
                 JavaFieldProto::new("iMode", "I", Default::default()),
+                JavaFieldProto::new("text", "Ljava/lang/String;", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -40,6 +41,9 @@ impl TextComponent {
         jvm.put_field(&mut this, "imHandler", "Lorg/kwis/msp/lcdui/InputMethodHandler;", im_handler)
             .await?;
 
+        let text = JavaLangString::from_rust_string(jvm, "").await?;
+        jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
+
         Ok(())
     }
 
@@ -50,10 +54,8 @@ impl TextComponent {
     }
 
     async fn get_string(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<TextComponent>) -> JvmResult<ClassInstanceRef<String>> {
-        tracing::warn!("stub org.kwis.msp.lwc.TextComponent::<init>({this:?})");
+        let text: ClassInstanceRef<String> = jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
 
-        let result = JavaLangString::from_rust_string(jvm, "temp").await?;
-
-        Ok(result.into())
+        Ok(text)
     }
 }

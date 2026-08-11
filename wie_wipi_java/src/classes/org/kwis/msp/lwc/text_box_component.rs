@@ -32,6 +32,11 @@ impl TextBoxComponent {
 
         let _: () = jvm.invoke_special(&this, "org/kwis/msp/lwc/TextComponent", "<init>", "()V", ()).await?;
 
+        if !data.is_null() {
+            let mut this = this;
+            jvm.put_field(&mut this, "text", "Ljava/lang/String;", data).await?;
+        }
+
         Ok(())
     }
 }
