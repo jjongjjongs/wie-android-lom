@@ -162,6 +162,14 @@ impl Filesystem for AndroidFilesystem {
             tracing::warn!(aid, path, error = %error, "truncate: set_len failed");
         }
     }
+
+    async fn remove(&self, aid: &str, path: &str) -> bool {
+        let Some(disk_path) = self.path_for(aid, path) else {
+            return false;
+        };
+
+        fs::remove_file(disk_path).is_ok()
+    }
 }
 
 #[cfg(test)]

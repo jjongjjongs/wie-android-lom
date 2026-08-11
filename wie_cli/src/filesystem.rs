@@ -185,4 +185,12 @@ impl Filesystem for CliFilesystem {
             tracing::warn!(aid, path, error = %err, "truncate: set_len failed");
         }
     }
+
+    async fn remove(&self, aid: &str, path: &str) -> bool {
+        let Some(disk_path) = self.path_for(aid, path) else {
+            return false;
+        };
+
+        fs::remove_file(disk_path).is_ok()
+    }
 }

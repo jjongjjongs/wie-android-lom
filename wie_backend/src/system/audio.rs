@@ -270,6 +270,10 @@ mod tests {
         }
 
         async fn truncate(&self, _aid: &str, _path: &str, _len: usize) {}
+
+        async fn remove(&self, _aid: &str, _path: &str) -> bool {
+            false
+        }
     }
 
     struct NullScreen;

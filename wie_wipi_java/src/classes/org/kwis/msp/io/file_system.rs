@@ -145,14 +145,35 @@ impl FileSystem {
         Ok(ClassInstanceRef::new(None))
     }
 
-    async fn remove(_: &Jvm, _: &mut WieJvmContext, filename: ClassInstanceRef<String>) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.io.FileSystem::remove({filename:?})");
+    async fn remove(jvm: &Jvm, _: &mut WieJvmContext, filename: ClassInstanceRef<String>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.io.FileSystem::remove({filename:?})");
 
-        Ok(())
+        jvm.invoke_static(
+            "org/kwis/msp/io/FileSystem",
+            "remove",
+            "(Ljava/lang/String;I)V",
+            (filename, 1),
+        )
+        .await
     }
 
-    async fn remove_with_flag(_: &Jvm, _: &mut WieJvmContext, filename: ClassInstanceRef<String>, flag: i32) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.io.FileSystem::remove({filename:?}, {flag})");
+    async fn remove_with_flag(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        filename: ClassInstanceRef<String>,
+        flag: i32,
+    ) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.io.FileSystem::remove({filename:?}, {flag})");
+
+        let file = jvm
+            .new_class("java/io/File", "(Ljava/lang/String;)V", (filename,))
+            .await?;
+
+        let removed: bool = jvm.invoke_virtual(&file, "delete", "()Z", ()).await?;
+
+        if !removed {
+            return Err(jvm.exception("java/io/IOException", "file isn't exist").await);
+        }
 
         Ok(())
     }
@@ -230,7 +251,7 @@ mod test {
     use alloc::boxed::Box;
 
     use java_runtime::classes::java::{lang::String, util::Vector};
-    use jvm::{Array, ClassInstanceRef, runtime::JavaLangString};
+    use jvm::{Array, ClassInstanceRef, JavaError, Result as JvmResult, runtime::JavaLangString};
     use test_utils::run_jvm_test;
     use wie_util::Result;
 
@@ -295,12 +316,6 @@ mod test {
             assert_eq!(creation_time_with_flag, 0);
 
             let _: () = jvm
-                .invoke_static("org/kwis/msp/io/FileSystem", "remove", "(Ljava/lang/String;)V", (name.clone(),))
-                .await?;
-            let _: () = jvm
-                .invoke_static("org/kwis/msp/io/FileSystem", "remove", "(Ljava/lang/String;I)V", (name.clone(), 1))
-                .await?;
-            let _: () = jvm
                 .invoke_static("org/kwis/msp/io/FileSystem", "mkdir", "(Ljava/lang/String;)V", (name.clone(),))
                 .await?;
             let _: () = jvm
@@ -329,4 +344,56 @@ mod test {
             Ok(())
         })
     }
+
+    #[test]
+    fn test_filesystem_remove_deletes_file_and_reports_missing_file() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
+            let name: ClassInstanceRef<String> =
+                JavaLangString::from_rust_string(&jvm, "remove-test.dat").await?.into();
+
+            let file = jvm
+                .new_class("java/io/File", "(Ljava/lang/String;)V", (name.clone(),))
+                .await?;
+
+            let output = jvm
+                .new_class("java/io/FileOutputStream", "(Ljava/io/File;)V", (file.clone(),))
+                .await?;
+
+            let _: () = jvm.invoke_virtual(&output, "write", "(I)V", (0x41,)).await?;
+            let _: () = jvm.invoke_virtual(&output, "close", "()V", ()).await?;
+
+            let exists_before: bool = jvm.invoke_virtual(&file, "exists", "()Z", ()).await?;
+            assert!(exists_before);
+
+            let _: () = jvm
+                .invoke_static(
+                    "org/kwis/msp/io/FileSystem",
+                    "remove",
+                    "(Ljava/lang/String;)V",
+                    (name.clone(),),
+                )
+                .await?;
+
+            let exists_after: bool = jvm.invoke_virtual(&file, "exists", "()Z", ()).await?;
+            assert!(!exists_after);
+
+            let second: JvmResult<()> = jvm
+                .invoke_static(
+                    "org/kwis/msp/io/FileSystem",
+                    "remove",
+                    "(Ljava/lang/String;)V",
+                    (name,),
+                )
+                .await;
+
+            let Err(JavaError::JavaException(exception)) = second else {
+                panic!("second remove unexpectedly succeeded");
+            };
+
+            assert!(jvm.is_instance(&*exception, "java/io/IOException"));
+
+            Ok(())
+        })
+    }
+
 }

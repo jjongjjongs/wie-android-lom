@@ -51,4 +51,6 @@ pub trait Filesystem: Send + Sync {
     /// - `len > current_size` → zero-fill extend.
     /// - `len < current_size` → tail bytes dropped.
     async fn truncate(&self, aid: &str, path: &str, len: usize);
+
+    async fn remove(&self, aid: &str, path: &str) -> bool;
 }

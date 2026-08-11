@@ -61,4 +61,8 @@ impl Filesystem for MemoryFilesystem {
         let file = files.entry((aid.to_string(), path.to_string())).or_default();
         file.resize(len, 0);
     }
+
+    async fn remove(&self, aid: &str, path: &str) -> bool {
+        self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
+    }
 }
