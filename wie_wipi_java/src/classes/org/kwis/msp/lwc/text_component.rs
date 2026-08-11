@@ -23,6 +23,7 @@ impl TextComponent {
                 JavaMethodProto::new("delete", "(II)V", Self::delete, Default::default()),
                 JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
+                JavaMethodProto::new("focusNotify", "(Z)V", Self::focus_notify, Default::default()),
             ],
             fields: vec![
                 JavaFieldProto::new("m_cPos", "I", Default::default()),
@@ -262,6 +263,226 @@ impl TextComponent {
         .await?;
 
         Ok(())
+    }
+
+    async fn mode_setting(
+        jvm: &Jvm,
+        mut this: ClassInstanceRef<TextComponent>,
+        mode: i32,
+    ) -> JvmResult<()> {
+        if mode == 99 {
+            jvm.put_field(&mut this, "iMode", "I", 99).await?;
+            return Ok(());
+        }
+
+        let im_handler: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "imHandler",
+                "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+            )
+            .await?;
+
+        if im_handler.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let mode: i32 = jvm
+            .invoke_virtual(
+                &im_handler,
+                "getCurrentModeCode",
+                "()I",
+                (),
+            )
+            .await?;
+
+        jvm.put_field(&mut this, "iMode", "I", mode).await?;
+
+        Ok(())
+    }
+
+    async fn focus_notify(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+        focus: bool,
+    ) -> JvmResult<()> {
+        let shown: bool = if focus {
+            jvm.invoke_virtual(&this, "isShown", "()Z", ()).await?
+        } else {
+            false
+        };
+
+        if focus {
+            if shown {
+                let im_handler: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "imHandler",
+                    "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+                )
+                .await?;
+
+            if im_handler.is_null() {
+                return Err(
+                    jvm.exception("java/lang/NullPointerException", "")
+                        .await,
+                );
+            }
+
+            let mode: i32 = jvm
+                .invoke_virtual(
+                    &im_handler,
+                    "getCurrentMode",
+                    "()I",
+                    (),
+                )
+                .await?;
+
+            Self::mode_setting(jvm, this.clone(), mode).await?;
+            Self::pcalc_view_port_area(jvm, this.clone()).await?;
+            Self::calc_view_port_area(jvm, this.clone()).await?;
+
+            let display: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "__wieTextDisplay",
+                    "Lorg/kwis/msp/lcdui/Display;",
+                )
+                .await?;
+
+            if display.is_null() {
+                return Err(
+                    jvm.exception("java/lang/NullPointerException", "")
+                        .await,
+                );
+            }
+
+            let mode_viewer: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "__wieModeViewer",
+                    "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+                )
+                .await?;
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &display,
+                    "pushCard",
+                    "(Lorg/kwis/msp/lcdui/Card;)V",
+                    (mode_viewer,),
+                )
+                .await?;
+
+            // Native reloads imHandler after pushCard.
+            let im_handler: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "imHandler",
+                    "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+                )
+                .await?;
+
+            if im_handler.is_null() {
+                return Err(
+                    jvm.exception("java/lang/NullPointerException", "")
+                        .await,
+                );
+            }
+
+            let _: bool = jvm
+                .invoke_virtual(
+                    &im_handler,
+                    "setCurrentMode",
+                    "(I)Z",
+                    (mode,),
+                )
+                .await?;
+
+                // Native mode 99 additionally invokes setSymbolPosition().
+                // Its coordinate semantics are restored separately.
+            }
+        } else {
+            let display: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "__wieTextDisplay",
+                    "Lorg/kwis/msp/lcdui/Display;",
+                )
+                .await?;
+
+            if display.is_null() {
+                return Err(
+                    jvm.exception("java/lang/NullPointerException", "")
+                        .await,
+                );
+            }
+
+            let mode_viewer: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "__wieModeViewer",
+                    "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+                )
+                .await?;
+
+            let _: bool = jvm
+                .invoke_virtual(
+                    &display,
+                    "removeCard",
+                    "(Lorg/kwis/msp/lcdui/Card;)Z",
+                    (mode_viewer,),
+                )
+                .await?;
+
+            let im_handler: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "imHandler",
+                    "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+                )
+                .await?;
+
+            if im_handler.is_null() {
+                return Err(
+                    jvm.exception("java/lang/NullPointerException", "")
+                        .await,
+                );
+            }
+
+            let mode: i32 = jvm
+                .invoke_virtual(
+                    &im_handler,
+                    "getCurrentMode",
+                    "()I",
+                    (),
+                )
+                .await?;
+
+            if mode == 99 {
+                let _: () = jvm
+                    .invoke_virtual(
+                        &im_handler,
+                        "hideSymbolCard",
+                        "()V",
+                        (),
+                    )
+                    .await?;
+            }
+        }
+
+        jvm.invoke_special(
+            &this,
+            "org/kwis/msp/lwc/Component",
+            "focusNotify",
+            "(Z)V",
+            (focus,),
+        )
+        .await
     }
 
     async fn set_max_length(

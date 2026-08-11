@@ -24,9 +24,21 @@ impl InputMethodHandler {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "getCurrentMode",
+                    "()I",
+                    Self::get_current_mode,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "getCurrentModeCode",
                     "()I",
                     Self::get_current_mode_code,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "hideSymbolCard",
+                    "()V",
+                    Self::hide_symbol_card,
                     Default::default(),
                 ),
                 JavaMethodProto::new(
@@ -98,6 +110,23 @@ impl InputMethodHandler {
         // Native InputMethodHandler accepts the type-1 key event and delivers
         // the resulting text through its InputMethodListener callback.
         Ok(mode == 3 && event_type == 1)
+    }
+
+    async fn get_current_mode(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        jvm.get_field(&this, "currentMode", "I").await
+    }
+
+    async fn hide_symbol_card(
+        _: &Jvm,
+        _: &mut WieJvmContext,
+        _: ClassInstanceRef<Self>,
+    ) -> JvmResult<()> {
+        // WIE does not yet model the native DIME symbol-card object.
+        Ok(())
     }
 
     async fn get_current_mode_code(
