@@ -308,23 +308,50 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
 
     build_dispatch_tables(core, handles, table)?;
 
-    // A field access is `fields[field_offsets[row]]`, where `fields` is the
-    // word array an instance points at. The rows are not the platform's own
-    // field table - the compiled code indexes far past it, into what must be
-    // the application's own fields - and nothing says which field a row means.
+    // Imported platform fields use the native VM's word-slot ABI. Rows beyond
+    // the imported field table are also used by the application's AOT object
+    // model, so keep those compatibility rows distinct from every native slot.
     //
-    // It does not have to. The application only ever reaches a field through
-    // this array, so any assignment it agrees with itself on works, and giving
-    // every row its own word is the assignment that cannot collide. It costs
-    // an instance one word per row instead of one per field.
+    // The highest native slot currently established is TextComponent.iMode at
+    // slot 19. Compatibility rows therefore begin at slot 20.
     let capacity = table.field_offset_capacity();
+    let compatibility_base = table
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(index, member)| member.as_ref().and_then(|_| table.native_field_slot(index as u32)))
+        .max()
+        .map(|slot| slot + 1)
+        .unwrap_or(0);
+
+    let mut field_bindings = Vec::new();
+
     for row in 0..capacity {
-        write_generic(core, table.outputs.field_offsets + row * 2, row as u16)?;
+        let slot = match table.native_field_slot(row) {
+            Some(slot) => {
+                let member = table.fields[row as usize].as_ref().expect("resolved field row");
+
+                field_bindings.push(super::handles::JavaFieldBinding {
+                    class_name: table.class_name(member.class_index).into(),
+                    name: member.name.clone(),
+                    descriptor: member.descriptor.clone(),
+                    slot,
+                });
+
+                slot
+            }
+            None => compatibility_base + row,
+        };
+
+        write_generic(core, table.outputs.field_offsets + row * 2, slot as u16)?;
     }
 
-    handles.set_field_slots(capacity);
+    handles.set_field_bindings(field_bindings);
+    handles.set_field_slots(compatibility_base + capacity);
 
-    tracing::debug!("LGT field slots: {capacity} rows, identity mapped");
+    tracing::debug!(
+        "LGT field slots: {capacity} rows, native base {compatibility_base}"
+    );
 
     Ok(())
 }

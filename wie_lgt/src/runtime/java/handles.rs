@@ -27,12 +27,23 @@ const INSTANCE_FIELDS_OFFSET: u32 = 8;
 /// Words an array's block spends on its length before the elements start.
 const ARRAY_HEADER_SIZE: u32 = 4;
 
+#[derive(Clone, Debug)]
+pub struct JavaFieldBinding {
+    pub class_name: String,
+    pub name: String,
+    pub descriptor: String,
+    pub slot: u32,
+}
+
 #[derive(Clone)]
 pub struct JavaHandles {
     core: ArmCore,
-    /// Words every instance's field array holds, one per row of
-    /// `field_offsets`, set once the class table is known.
+    /// Words every instance's field array holds, set once the class table is
+    /// known.
     field_slots: Arc<AtomicU32>,
+    /// Imported platform fields whose native ABI slot must stay coherent with
+    /// the JVM instance retained under the same handle.
+    field_bindings: Arc<Mutex<Vec<JavaFieldBinding>>>,
     /// Class name to dispatch table, so an object handed to the compiled code
     /// can be given the table its virtual calls will go through.
     dispatch_tables: Arc<Mutex<BTreeMap<String, u32>>>,
@@ -50,6 +61,7 @@ impl JavaHandles {
         Self {
             core,
             field_slots: Arc::new(AtomicU32::new(0)),
+            field_bindings: Default::default(),
             dispatch_tables: Default::default(),
             fallback_dispatch_table: Arc::new(AtomicU32::new(0)),
             entries: Default::default(),
@@ -60,6 +72,31 @@ impl JavaHandles {
     /// Records how many words an instance's field array needs.
     pub fn set_field_slots(&self, slots: u32) {
         self.field_slots.store(slots, Ordering::SeqCst);
+    }
+
+    /// Records imported platform fields that have native guest ABI slots.
+    pub fn set_field_bindings(&self, bindings: Vec<JavaFieldBinding>) {
+        *self.field_bindings.lock() = bindings;
+    }
+
+    pub fn field_bindings(&self) -> Vec<JavaFieldBinding> {
+        self.field_bindings.lock().clone()
+    }
+
+    /// Reads one word from an instance's guest-side field block.
+    pub fn read_field_word(&self, handle: u32, slot: u32) -> Result<u32> {
+        let core = self.core.clone();
+        let fields: u32 = read_generic(&core, handle + INSTANCE_FIELDS_OFFSET)?;
+
+        read_generic(&core, fields + slot * 4)
+    }
+
+    /// Writes one word to an instance's guest-side field block.
+    pub fn write_field_word(&self, handle: u32, slot: u32, value: u32) -> Result<()> {
+        let mut core = self.core.clone();
+        let fields: u32 = read_generic(&core, handle + INSTANCE_FIELDS_OFFSET)?;
+
+        write_generic(&mut core, fields + slot * 4, value)
     }
 
     /// Records the dispatch table to give instances of `class`.

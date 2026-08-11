@@ -10,7 +10,7 @@
 //! - **virtual methods** get the method's slot number within its own class.
 //!   The compiled code indexes the receiver's vtable with it, so dispatch has
 //!   to go through an object built by [`super::instance`].
-//! - **fields** get a byte offset into the instance.
+//! - **fields** get a word slot into the instance's field block.
 //!
 //! Arguments arrive under the ARM procedure call standard: the first four
 //! words in `r0`-`r3`, the rest on the stack, with `long` and `double` taking
@@ -81,6 +81,79 @@ async fn write_back_byte_arrays(jvm: &Jvm, handles: &JavaHandles, writebacks: &[
         };
 
         handles.write_byte_array(writeback.guest_handle, &bytes)?;
+    }
+
+    Ok(())
+}
+
+/// Copies imported native-ABI instance fields from the guest object's word
+/// block into the JVM object before an imported Java method observes them.
+async fn sync_guest_fields_to_jvm(jvm: &Jvm, handles: &JavaHandles, handle: u32) -> Result<()> {
+    let Some(mut instance) = handles.get(handle) else {
+        return Ok(());
+    };
+
+    for binding in handles.field_bindings() {
+        if !jvm.is_instance(&*instance, &binding.class_name) {
+            continue;
+        }
+
+        let word = handles.read_field_word(handle, binding.slot)?;
+
+        match binding.descriptor.as_str() {
+            "I" => {
+                if let Err(error) = jvm
+                    .put_field(&mut instance, &binding.name, &binding.descriptor, word as i32)
+                    .await
+                {
+                    return Err(JvmSupport::to_wie_err(jvm, error).await);
+                }
+            }
+            descriptor => {
+                return Err(WieError::FatalError(format!(
+                    "Unsupported LGT imported field descriptor {descriptor} for {}.{}",
+                    binding.class_name, binding.name
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Copies imported instance fields modified by JVM code back to the native
+/// guest word slots consumed directly by AOT ARM code.
+async fn sync_jvm_fields_to_guest(jvm: &Jvm, handles: &JavaHandles, handle: u32) -> Result<()> {
+    let Some(instance) = handles.get(handle) else {
+        return Ok(());
+    };
+
+    for binding in handles.field_bindings() {
+        if !jvm.is_instance(&*instance, &binding.class_name) {
+            continue;
+        }
+
+        let word = match binding.descriptor.as_str() {
+            "I" => {
+                let value: i32 = match jvm
+                    .get_field(&instance, &binding.name, &binding.descriptor)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+                };
+
+                value as u32
+            }
+            descriptor => {
+                return Err(WieError::FatalError(format!(
+                    "Unsupported LGT imported field descriptor {descriptor} for {}.{}",
+                    binding.class_name, binding.name
+                )));
+            }
+        };
+
+        handles.write_field_word(handle, binding.slot, word)?;
     }
 
     Ok(())
@@ -235,12 +308,15 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         if let Some(instance) = handles.get(this) {
             tracing::debug!("LGT {class_name}.<init>{descriptor} on existing {this:#x}");
 
+            sync_guest_fields_to_jvm(jvm, handles, this).await?;
+
             let result: JvmResult<()> = jvm.invoke_special(&instance, class_name, "<init>", descriptor, arguments).await;
             if let Err(error) = result {
                 return Err(JvmSupport::to_wie_err(jvm, error).await);
             }
 
             write_back_byte_arrays(jvm, handles, &writebacks).await?;
+            sync_jvm_fields_to_guest(jvm, handles, this).await?;
 
             return Ok(this);
         }
@@ -254,6 +330,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
 
         write_back_byte_arrays(jvm, handles, &writebacks).await?;
         handles.bind(this, instance);
+        sync_jvm_fields_to_guest(jvm, handles, this).await?;
 
         return Ok(this);
     }
@@ -275,6 +352,12 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     let mut writebacks = Vec::new();
     let arguments = marshal_arguments(core, jvm, handles, &parameters, first_word, &mut writebacks).await?;
 
+    let receiver_handle = receiver.as_ref().map(|_| core.read_param(0)).transpose()?;
+
+    if let Some(handle) = receiver_handle {
+        sync_guest_fields_to_jvm(jvm, handles, handle).await?;
+    }
+
     let result = if let Some(instance) = receiver {
         tracing::debug!("LGT invoke virtual {class_name}.{name}{descriptor}");
 
@@ -288,6 +371,11 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     match result {
         Ok(value) => {
             write_back_byte_arrays(jvm, handles, &writebacks).await?;
+
+            if let Some(handle) = receiver_handle {
+                sync_jvm_fields_to_guest(jvm, handles, handle).await?;
+            }
+
             marshal_return(handles, value)
         }
         Err(error) => Err(JvmSupport::to_wie_err(jvm, error).await),

@@ -259,6 +259,21 @@ impl ClassTable {
         format!("{}.{}{}", self.class_name(member.class_index), member.name, member.descriptor)
     }
 
+    /// Native LGT instance-field word slot for an imported platform field.
+    ///
+    /// The 32-bit runtime resolves an imported `(class, name, descriptor)` to
+    /// the field metadata's 16-bit word slot and writes that slot into
+    /// `field_offsets`. TextComponent.iMode is native slot 19 (+0x4c).
+    pub fn native_field_slot(&self, index: u32) -> Option<u32> {
+        let member = self.fields.get(index as usize)?.as_ref()?;
+        let class_name = self.class_name(member.class_index);
+
+        match (class_name, member.name.as_str(), member.descriptor.as_str()) {
+            ("org/kwis/msp/lwc/TextComponent", "iMode", "I") => Some(19),
+            _ => None,
+        }
+    }
+
     /// Position of a virtual method within its own class, which is the slot
     /// number the compiled code will index the receiver's vtable with.
     pub fn virtual_slot(&self, index: u32) -> Option<u32> {
