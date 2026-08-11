@@ -59,6 +59,7 @@ public final class MainActivity extends Activity {
 
     private static final int PICK_GAME = 1001;
     private static final int REQUEST_WRITE_DOWNLOADS = 1002;
+    private static final int PICK_SAVE = 1003;
 
     /** How long a single tick may run, and how often ticks are scheduled. */
     private static final int TICK_BUDGET_MS = 20;
@@ -231,7 +232,7 @@ public final class MainActivity extends Activity {
         header.addView(about);
 
         TextView hint = new TextView(this);
-        hint.setText("게임 실행: 한 번 누르기\n세이브 꺼내기 · 삭제: 길게 누르기");
+        hint.setText("게임 실행: 한 번 누르기\n세이브 꺼내기·불러오기 · 삭제: 길게 누르기");
         hint.setTextSize(14f);
         hint.setTextColor(COLOR_SUBTEXT);
         hint.setPadding(0, dp(16), 0, dp(14));
@@ -323,9 +324,11 @@ public final class MainActivity extends Activity {
     private void showGameMenu(File game) {
         new AlertDialog.Builder(this)
                 .setTitle(displayName(game))
-                .setItems(new CharSequence[]{"세이브 파일 꺼내기", "목록에서 삭제"}, (dialog, which) -> {
+                .setItems(new CharSequence[]{"세이브 파일 꺼내기", "세이브 불러오기", "목록에서 삭제"}, (dialog, which) -> {
                     if (which == 0) {
                         exportSaves(game);
+                    } else if (which == 1) {
+                        importSaves(game);
                     } else {
                         confirmDelete(game);
                     }
@@ -377,6 +380,51 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> Toast.makeText(this, "꺼내기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
+    /**
+     * Restores saved data from a previously exported save zip, overwriting the
+     * app's private save folder. The zip's own {@code db/<id>}/{@code fs/<id>}
+     * paths route each file to the game it belongs to, so this works from any
+     * title's menu; the file can sit in Downloads or any other folder.
+     */
+    private void importSaves(File game) {
+        new AlertDialog.Builder(this)
+                .setTitle(displayName(game))
+                .setMessage("세이브 파일(.zip)을 골라 지금 저장된 내용에 덮어씁니다.\n덮어쓴 뒤에는 되돌릴 수 없습니다.")
+                .setNegativeButton("취소", null)
+                .setPositiveButton("파일 선택", (dialog, which) -> openSavePicker())
+                .show();
+    }
+
+    private void openSavePicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/zip",
+                "application/octet-stream",
+        });
+        startActivityForResult(intent, PICK_SAVE);
+    }
+
+    private void importSaveNow(Uri uri) {
+        emulatorThread.execute(() -> {
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) {
+                    throw new IllegalStateException("파일을 열 수 없습니다.");
+                }
+
+                SaveImporter.Result result = SaveImporter.importZip(this, input);
+
+                runOnUiThread(() -> Toast.makeText(
+                        this,
+                        "세이브를 불러왔습니다 (" + result.files + "개). 게임을 다시 시작하면 적용됩니다.",
+                        Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "불러오기 실패: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         });
     }
@@ -517,12 +565,21 @@ public final class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
-        if (requestCode != PICK_GAME || resultCode != RESULT_OK || data == null) {
+        if (resultCode != RESULT_OK || data == null) {
+            return;
+        }
+        if (requestCode != PICK_GAME && requestCode != PICK_SAVE) {
             return;
         }
 
         Uri uri = data.getData();
         if (uri == null) {
+            return;
+        }
+
+        if (requestCode == PICK_SAVE) {
+            Toast.makeText(this, "세이브를 불러오는 중...", Toast.LENGTH_SHORT).show();
+            importSaveNow(uri);
             return;
         }
 
