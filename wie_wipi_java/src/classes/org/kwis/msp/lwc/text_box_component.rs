@@ -1,10 +1,12 @@
-use alloc::vec;
+use alloc::{boxed::Box, vec};
 
 use java_class_proto::JavaMethodProto;
 use java_runtime::classes::java::lang::String;
 use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
+
+use crate::classes::org::kwis::msp::lwc::TextComponent;
 
 // class org.kwis.msp.lwc.TextBoxComponent
 pub struct TextBoxComponent;
@@ -20,10 +22,39 @@ impl TextBoxComponent {
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
                 JavaMethodProto::new("focusNotify", "(Z)V", Self::focus_notify, Default::default()),
                 JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
+                JavaMethodProto::new("configure", "(IIIII)V", Self::configure, Default::default()),
             ],
             fields: vec![],
             access_flags: Default::default(),
         }
+    }
+
+    async fn configure(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextBoxComponent>,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        flags: i32,
+    ) -> JvmResult<()> {
+        // Native TextBoxComponent.configure invokes Component.configure
+        // directly, then refreshes TextComponent's viewport intersection.
+        let _: () = jvm
+            .invoke_special(
+                &this,
+                "org/kwis/msp/lwc/Component",
+                "configure",
+                "(IIIII)V",
+                (x, y, w, h, flags),
+            )
+            .await?;
+
+        let raw: Box<dyn jvm::ClassInstance> = this.into();
+        let this: ClassInstanceRef<TextComponent> = raw.into();
+
+        TextComponent::calc_view_port_area(jvm, this).await
     }
 
     async fn set_max_length(
