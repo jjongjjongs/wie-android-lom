@@ -376,6 +376,7 @@ impl Display {
             Some(WIPIKeyCode::LEFT) => 2,
             Some(WIPIKeyCode::RIGHT) => 5,
             Some(WIPIKeyCode::FIRE) => 8,
+            Some(WIPIKeyCode::LEFT_SOFT_KEY) => 90,
             Some(WIPIKeyCode::CLEAR) => 99,
             _ => key,
         };
