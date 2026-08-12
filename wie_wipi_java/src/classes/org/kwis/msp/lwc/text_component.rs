@@ -19,6 +19,7 @@ impl TextComponent {
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
                 JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
                 JavaMethodProto::new("getString", "()Ljava/lang/String;", Self::get_string, Default::default()),
+                JavaMethodProto::new("setString", "(Ljava/lang/String;)V", Self::set_string, Default::default()),
                 JavaMethodProto::new("insert", "(Ljava/lang/String;III)V", Self::insert, Default::default()),
                 JavaMethodProto::new(
                     "insert",
@@ -628,6 +629,126 @@ impl TextComponent {
             (focus,),
         )
         .await
+    }
+
+    async fn set_string(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        mut string: ClassInstanceRef<String>,
+    ) -> JvmResult<()> {
+        // Native setString(null) substitutes the empty string.
+        if string.is_null() {
+            string = jvm.intern_string("").await?.into();
+        }
+
+        // Native remembers whether the previous backing text was non-empty.
+        // That controls the later -99 input notification.
+        let old_text: ClassInstanceRef<String> =
+            jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+        let had_text = if old_text.is_null() {
+            false
+        } else {
+            let old_length: i32 =
+                jvm.invoke_virtual(&old_text, "length", "()I", ()).await?;
+            old_length > 0
+        };
+
+        let max_length: i32 = jvm.get_field(&this, "maxLength", "I").await?;
+
+        if max_length > 0 {
+            let length: i32 = jvm.invoke_virtual(&string, "length", "()I", ()).await?;
+
+            if length > max_length {
+                string = jvm
+                    .invoke_virtual(
+                        &string,
+                        "substring",
+                        "(II)Ljava/lang/String;",
+                        (0, max_length),
+                    )
+                    .await?;
+            }
+        }
+
+        let mut input_listener: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieInputListener",
+                "Lorg/kwis/msp/lwc/InputListener;",
+            )
+            .await?;
+
+        if input_listener.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        jvm.put_field(
+            &mut input_listener,
+            "__wieChanged",
+            "Z",
+            false,
+        )
+        .await?;
+
+        jvm.put_field(
+            &mut this,
+            "text",
+            "Ljava/lang/String;",
+            string,
+        )
+        .await?;
+
+        jvm.put_field(&mut this, "m_cPos", "I", 0).await?;
+
+        if had_text {
+            let im_handler: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "imHandler",
+                    "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+                )
+                .await?;
+
+            if im_handler.is_null() {
+                return Err(
+                    jvm.exception("java/lang/NullPointerException", "")
+                        .await,
+                );
+            }
+
+            let _: bool = jvm
+                .invoke_virtual(
+                    &im_handler,
+                    "notifyKeyInput",
+                    "(II)Z",
+                    (-99, 1),
+                )
+                .await?;
+        }
+
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "invalidate",
+                "()V",
+                (),
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "repaint",
+                "()V",
+                (),
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn set_max_length(
