@@ -1,4 +1,4 @@
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
@@ -47,6 +47,12 @@ impl CandidateWindow {
                     Self::set_candidate_list,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "notifyData",
+                    "()V",
+                    Self::notify_data,
+                    Default::default(),
+                ),
             ],
             fields: vec![
                 JavaFieldProto::new(
@@ -56,6 +62,8 @@ impl CandidateWindow {
                 ),
                 JavaFieldProto::new("__wieDisableChars", "[C", Default::default()),
                 JavaFieldProto::new("__wieCandidateIndex", "I", Default::default()),
+                JavaFieldProto::new("__wieData", "[C", Default::default()),
+                JavaFieldProto::new("__wieCount", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -87,6 +95,13 @@ impl CandidateWindow {
 
         jvm.put_field(&mut this, "__wieCandidateIndex", "I", 0)
             .await?;
+
+        // Native CandidateWindow.setMaxLength() allocates this buffer later
+        // from the available text width and Font.stringWidth().  Until that
+        // lifecycle is restored, keep a valid empty buffer for count == 0.
+        let data = jvm.instantiate_array("C", 0).await?;
+        jvm.put_field(&mut this, "__wieData", "[C", data).await?;
+        jvm.put_field(&mut this, "__wieCount", "I", 0).await?;
 
         Ok(())
     }
@@ -133,5 +148,56 @@ impl CandidateWindow {
         // Candidate data population is restored separately from this lifecycle.
         jvm.put_field(&mut this, "__wieCandidateIndex", "I", index)
             .await
+    }
+
+    async fn notify_data(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+    ) -> JvmResult<()> {
+        let count: i32 = jvm.get_field(&this, "__wieCount", "I").await?;
+
+        // Native CandidateWindow.notifyData() returns immediately for
+        // negative counts without notifying the handler.
+        if count < 0 {
+            return Ok(());
+        }
+
+        let mut data: ClassInstanceRef<Array<JavaChar>> =
+            jvm.get_field(&this, "__wieData", "[C").await?;
+
+        if count > 0 {
+            let mut chars: Vec<JavaChar> =
+                jvm.load_array(&data, 0, count as usize).await?;
+
+            // Native code normalizes character 182 to LF before dispatch.
+            for ch in &mut chars {
+                if *ch == 182 {
+                    *ch = 10;
+                }
+            }
+
+            jvm.store_array(&mut data, 0, chars).await?;
+
+            // Preserve the in-place mutation in the CandidateWindow field.
+            jvm.put_field(&mut this, "__wieData", "[C", data.clone())
+                .await?;
+        }
+
+        let handler: ClassInstanceRef<InputMethodHandler> = jvm
+            .get_field(
+                &this,
+                "__wieInputMethodHandler",
+                "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+            )
+            .await?;
+
+        jvm.invoke_virtual(
+            &handler,
+            "notifyDataSelected",
+            "([CII)V",
+            (data, count, -1),
+        )
+        .await
     }
 }
