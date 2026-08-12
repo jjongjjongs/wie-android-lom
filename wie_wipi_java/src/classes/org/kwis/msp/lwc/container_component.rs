@@ -2,7 +2,7 @@ use alloc::{boxed::Box, vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_constants::MethodAccessFlags;
-use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
+use jvm::{ClassInstanceRef, JavaError, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
@@ -1238,7 +1238,11 @@ impl ContainerComponent {
     ) -> JvmResult<()> {
         let mut this = this;
 
-        // Native implementation treats null as this ContainerComponent.
+        let shown: bool = jvm
+            .invoke_virtual(&this, "isShown", "()Z", ())
+            .await?;
+
+        // Native treats null as this ContainerComponent.
         let this_raw: Box<dyn jvm::ClassInstance> = this.clone().into();
         let this_component: ClassInstanceRef<Component> = this_raw.into();
 
@@ -1248,7 +1252,7 @@ impl ContainerComponent {
             component
         };
 
-        // No card => no focus-chain mutation.
+        // Native returns immediately when the requested component has no card.
         let card: ClassInstanceRef<()> = jvm
             .invoke_virtual(
                 &requested,
@@ -1262,93 +1266,74 @@ impl ContainerComponent {
             return Ok(());
         }
 
-        let shown: bool = jvm
-            .invoke_virtual(&this, "isShown", "()Z", ())
-            .await?;
+        let mut old_focus = ClassInstanceRef::<Component>::new(None);
+        let mut branch = ClassInstanceRef::<ContainerComponent>::new(None);
 
-        let old_focus: ClassInstanceRef<Component> = if shown {
-            jvm.invoke_virtual(
-                &this,
-                "getFocusComponent",
-                "()Lorg/kwis/msp/lwc/Component;",
-                (),
-            )
-            .await?
-        } else {
-            ClassInstanceRef::<Component>::new(None)
-        };
-
-        let focus_changed = old_focus.is_null()
-            || old_focus.identity() != requested.identity();
-
-        let branch: ClassInstanceRef<Component> =
-            if shown && focus_changed && !old_focus.is_null() {
-                jvm.invoke_virtual(
+        if shown {
+            old_focus = jvm
+                .invoke_virtual(
                     &this,
-                    "findBranch",
-                    "(Lorg/kwis/msp/lwc/Component;Lorg/kwis/msp/lwc/Component;)Lorg/kwis/msp/lwc/Component;",
-                    (old_focus.clone(), requested.clone()),
+                    "getFocusComponent",
+                    "()Lorg/kwis/msp/lwc/Component;",
+                    (),
                 )
-                .await?
-            } else {
-                ClassInstanceRef::<Component>::new(None)
-            };
+                .await?;
 
-        // Notify the old branch before replacing the focus chain.
-        if shown && focus_changed && !branch.is_null() {
-            let old_branch_child: ClassInstanceRef<Component> = if branch.identity()
-                == old_focus.identity()
-            {
-                ClassInstanceRef::<Component>::new(None)
-            } else {
-                let mut current = old_focus.clone();
-                let mut child = current.clone();
+            if old_focus.identity() != requested.identity() {
+                let found: ClassInstanceRef<Component> = jvm
+                    .invoke_virtual(
+                        &this,
+                        "findBranch",
+                        "(Lorg/kwis/msp/lwc/Component;Lorg/kwis/msp/lwc/Component;)Lorg/kwis/msp/lwc/Component;",
+                        (old_focus.clone(), requested.clone()),
+                    )
+                    .await?;
 
-                loop {
-                    let parent: ClassInstanceRef<Component> = jvm
+                if !found.is_null() {
+                    let found_raw: Box<dyn jvm::ClassInstance> = found.into();
+
+                    if !jvm.is_instance(
+                        &*found_raw,
+                        "org/kwis/msp/lwc/ContainerComponent",
+                    ) {
+                        let exception = jvm
+                            .instantiate_class("java/lang/ClassCastException")
+                            .await?;
+
+                        return Err(JavaError::JavaException(exception));
+                    }
+
+                    branch = found_raw.into();
+
+                    let old_branch_child: ClassInstanceRef<Component> = jvm
                         .get_field(
-                            &current,
-                            "parent",
-                            "Lorg/kwis/msp/lwc/ContainerComponent;",
+                            &branch,
+                            "focusComponent",
+                            "Lorg/kwis/msp/lwc/Component;",
                         )
                         .await?;
 
-                    if parent.is_null() {
-                        break;
+                    if !old_branch_child.is_null()
+                        && old_branch_child.identity() != requested.identity()
+                    {
+                        let _: bool = jvm
+                            .invoke_virtual(
+                                &old_branch_child,
+                                "processEvent",
+                                "(IIII)Z",
+                                (1, 0, 0, 0),
+                            )
+                            .await?;
                     }
-
-                    if parent.identity() == branch.identity() {
-                        child = current;
-                        break;
-                    }
-
-                    current = parent;
                 }
-
-                child
-            };
-
-            if !old_branch_child.is_null()
-                && old_branch_child.identity() != requested.identity()
-            {
-                let _: bool = jvm
-                    .invoke_virtual(
-                        &old_branch_child,
-                        "processEvent",
-                        "(IIII)Z",
-                        (1, 0, 0, 0),
-                    )
-                    .await?;
             }
         }
 
-        // requested == this means this.focusComponent = null.
-        let local_focus =
-            if requested.identity() == this_component.identity() {
-                ClassInstanceRef::<Component>::new(None)
-            } else {
-                requested.clone()
-            };
+        let local_focus = if requested.identity() == this_component.identity() {
+            ClassInstanceRef::<Component>::new(None)
+        } else {
+            requested.clone()
+        };
 
         jvm.put_field(
             &mut this,
@@ -1358,12 +1343,11 @@ impl ContainerComponent {
         )
         .await?;
 
-        // Propagate the focus path upward:
-        // parent.focusComponent = current child, then continue climbing.
+        // Propagate this container as the focused child through each parent.
         let mut current = this_component.clone();
 
         loop {
-            let parent: ClassInstanceRef<Component> = jvm
+            let parent: ClassInstanceRef<ContainerComponent> = jvm
                 .get_field(
                     &current,
                     "parent",
@@ -1385,43 +1369,21 @@ impl ContainerComponent {
             )
             .await?;
 
-            current = parent;
+            let parent_raw: Box<dyn jvm::ClassInstance> = parent.into();
+            current = parent_raw.into();
         }
 
-        // Notify the newly-focused branch after the hierarchy is updated.
-        if shown && focus_changed {
-            let new_branch_child: ClassInstanceRef<Component> =
-                if branch.is_null() {
-                    requested.clone()
-                } else if branch.identity() == requested.identity() {
-                    ClassInstanceRef::<Component>::new(None)
-                } else {
-                    let mut current = requested.clone();
-                    let mut child = current.clone();
-
-                    loop {
-                        let parent: ClassInstanceRef<Component> = jvm
-                            .get_field(
-                                &current,
-                                "parent",
-                                "Lorg/kwis/msp/lwc/ContainerComponent;",
-                            )
-                            .await?;
-
-                        if parent.is_null() {
-                            break;
-                        }
-
-                        if parent.identity() == branch.identity() {
-                            child = current;
-                            break;
-                        }
-
-                        current = parent;
-                    }
-
-                    child
-                };
+        if shown
+            && old_focus.identity() != requested.identity()
+            && !branch.is_null()
+        {
+            let new_branch_child: ClassInstanceRef<Component> = jvm
+                .get_field(
+                    &branch,
+                    "focusComponent",
+                    "Lorg/kwis/msp/lwc/Component;",
+                )
+                .await?;
 
             if !new_branch_child.is_null() {
                 let _: bool = jvm
