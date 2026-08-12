@@ -28,6 +28,12 @@ impl TextComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new("delete", "(II)V", Self::delete, Default::default()),
+                JavaMethodProto::new(
+                    "controlCursor",
+                    "(III)V",
+                    Self::control_cursor,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
                 JavaMethodProto::new(
                     "replace",
@@ -891,6 +897,51 @@ impl TextComponent {
             (string, 0, length, position),
         )
         .await
+    }
+
+    async fn control_cursor(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        position: i32,
+        length: i32,
+        mode: i32,
+    ) -> JvmResult<()> {
+        let cursor: i32 = jvm
+            .get_field(&this, "m_cPos", "I")
+            .await?;
+
+        if cursor < position {
+            return Ok(());
+        }
+
+        match mode {
+            1 => {
+                jvm.put_field(
+                    &mut this,
+                    "m_cPos",
+                    "I",
+                    position + length,
+                )
+                .await?;
+            }
+
+            2 => {
+                let end = position + length;
+                let cursor = if cursor < end {
+                    position
+                } else {
+                    cursor - length
+                };
+
+                jvm.put_field(&mut this, "m_cPos", "I", cursor)
+                    .await?;
+            }
+
+            _ => {}
+        }
+
+        Ok(())
     }
 
     async fn delete(
