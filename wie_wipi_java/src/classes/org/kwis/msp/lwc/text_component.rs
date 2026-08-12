@@ -1041,38 +1041,62 @@ impl TextComponent {
     ) -> JvmResult<()> {
         let text: ClassInstanceRef<String> =
             jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
-        let text_length: i32 = jvm.invoke_virtual(&text, "length", "()I", ()).await?;
 
-        // Native delete resets InputListener +0x04 after its basic
-        // position/length validation and before modifying the text.
-        if position >= 0
-            && position <= text_length
-            && length >= 0
-            && length <= text_length
-        {
-            let mut input_listener: ClassInstanceRef<()> = jvm
-                .get_field(
-                    &this,
-                    "__wieInputListener",
-                    "Lorg/kwis/msp/lwc/InputListener;",
+        let text_length: i32 =
+            jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+        if position < 0 || position > text_length {
+            return Err(
+                jvm.exception(
+                    "java/lang/IndexOutOfBoundsException",
+                    "Invalid index. Can't delete data",
                 )
-                .await?;
+                .await,
+            );
+        }
 
-            if input_listener.is_null() {
-                return Err(
-                    jvm.exception("java/lang/NullPointerException", "")
-                        .await,
-                );
-            }
+        if length < 0 {
+            return Err(
+                jvm.exception(
+                    "java/lang/IndexOutOfBoundsException",
+                    "Delete length is negative",
+                )
+                .await,
+            );
+        }
 
-            jvm.put_field(
-                &mut input_listener,
-                "__wieChanged",
-                "Z",
-                false,
+        if text_length < length {
+            return Err(
+                jvm.exception(
+                    "java/lang/IllegalArgumentException",
+                    "Delete length Over",
+                )
+                .await,
+            );
+        }
+
+        let mut input_listener: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieInputListener",
+                "Lorg/kwis/msp/lwc/InputListener;",
             )
             .await?;
+
+        if input_listener.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
         }
+
+        jvm.put_field(
+            &mut input_listener,
+            "__wieChanged",
+            "Z",
+            false,
+        )
+        .await?;
 
         let prefix: ClassInstanceRef<String> = jvm
             .invoke_virtual(
@@ -1101,9 +1125,21 @@ impl TextComponent {
             )
             .await?;
 
-        jvm.put_field(&mut this, "text", "Ljava/lang/String;", combined).await?;
+        jvm.put_field(
+            &mut this,
+            "text",
+            "Ljava/lang/String;",
+            combined,
+        )
+        .await?;
 
-        Ok(())
+        jvm.invoke_virtual(
+            &this,
+            "controlCursor",
+            "(III)V",
+            (position, length, 2),
+        )
+        .await
     }
 
     async fn replace(
