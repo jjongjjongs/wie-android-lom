@@ -881,6 +881,85 @@ impl TextComponent {
         length: i32,
         position: i32,
     ) -> JvmResult<()> {
+        if chars.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let text: ClassInstanceRef<String> =
+            jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+        let text_length: i32 =
+            jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+        if position < 0 || position > text_length {
+            return Err(
+                jvm.exception(
+                    "java/lang/IndexOutOfBoundsException",
+                    " Invalid index. Can't insert data",
+                )
+                .await,
+            );
+        }
+
+        if length < 0 || text_length.wrapping_add(length) < 0 {
+            return Err(
+                jvm.exception(
+                    "java/lang/IndexOutOfBoundsException",
+                    "Invalid len. len is negative",
+                )
+                .await,
+            );
+        }
+
+        let max_length: i32 =
+            jvm.get_field(&this, "maxLength", "I").await?;
+
+        if max_length > 0 && max_length < text_length.wrapping_add(length) {
+            return Err(
+                jvm.exception(
+                    "java/lang/IllegalArgumentException",
+                    "Max Length Over",
+                )
+                .await,
+            );
+        }
+
+        let constraint_checker: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieConstraintChecker",
+                "Lorg/kwis/msp/lwc/ConstraintChecker;",
+            )
+            .await?;
+
+        if constraint_checker.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let valid: bool = jvm
+            .invoke_virtual(
+                &constraint_checker,
+                "checkData",
+                "([CII)Z",
+                (chars.clone(), offset, length),
+            )
+            .await?;
+
+        if !valid {
+            return Err(
+                jvm.exception(
+                    "java/lang/IllegalArgumentException",
+                    "%Data isn't identical this constriants",
+                )
+                .await,
+            );
+        }
+
         let string: ClassInstanceRef<String> = jvm
             .new_class(
                 "java/lang/String",
@@ -890,11 +969,20 @@ impl TextComponent {
             .await?
             .into();
 
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "insert",
+                "(Ljava/lang/String;III)V",
+                (string, 0, length, position),
+            )
+            .await?;
+
         jvm.invoke_virtual(
             &this,
-            "insert",
-            "(Ljava/lang/String;III)V",
-            (string, 0, length, position),
+            "controlCursor",
+            "(III)V",
+            (position, length, 1),
         )
         .await
     }
