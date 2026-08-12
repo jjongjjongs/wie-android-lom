@@ -1430,8 +1430,12 @@ impl TextComponent {
     }
 
     async fn get_string(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<TextComponent>) -> JvmResult<ClassInstanceRef<String>> {
-        let text: ClassInstanceRef<String> = jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+        let text: ClassInstanceRef<String> =
+            jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
 
-        Ok(text)
+        let text = JavaLangString::to_rust_string(jvm, &text).await?;
+        let text = JavaLangString::from_rust_string(jvm, &text).await?;
+
+        Ok(text.into())
     }
 }
