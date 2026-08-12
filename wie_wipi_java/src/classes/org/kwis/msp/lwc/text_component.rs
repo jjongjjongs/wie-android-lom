@@ -18,6 +18,7 @@ impl TextComponent {
             methods: vec![
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
                 JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
+                JavaMethodProto::new("getMaxLength", "()I", Self::get_max_length, Default::default()),
                 JavaMethodProto::new("getString", "()Ljava/lang/String;", Self::get_string, Default::default()),
                 JavaMethodProto::new("setString", "(Ljava/lang/String;)V", Self::set_string, Default::default()),
                 JavaMethodProto::new("insert", "(Ljava/lang/String;III)V", Self::insert, Default::default()),
@@ -789,6 +790,14 @@ impl TextComponent {
             .await?;
 
         Ok(())
+    }
+
+    async fn get_max_length(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<i32> {
+        jvm.get_field(&this, "maxLength", "I").await
     }
 
     async fn set_max_length(
