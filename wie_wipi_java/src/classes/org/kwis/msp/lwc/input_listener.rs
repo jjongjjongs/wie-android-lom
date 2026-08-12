@@ -169,20 +169,20 @@ impl InputListener {
             }
 
             1 => {
+                if cursor == 0 {
+                    return Ok(());
+                }
+
                 let mut owner = owner;
                 jvm.put_field(&mut owner, "iMode", "I", 1).await?;
 
-                let (position, length) = if count < 0 {
-                    (0, cursor)
-                } else {
-                    (cursor - count, count)
-                };
+                let length = if count < 0 { cursor } else { count };
 
                 jvm.invoke_virtual(
                     &owner,
                     "delete",
                     "(II)V",
-                    (position, length),
+                    (cursor - length, length),
                 )
                 .await
             }
