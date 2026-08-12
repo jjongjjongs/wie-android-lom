@@ -490,6 +490,46 @@ impl TextComponent {
         Ok(())
     }
 
+    async fn check_mode_code(
+        jvm: &Jvm,
+        mode_code: ClassInstanceRef<String>,
+    ) -> JvmResult<i32> {
+        if mode_code.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
+        }
+
+        let mode_code_rust = JavaLangString::to_rust_string(jvm, &mode_code).await?;
+
+        if mode_code_rust == "EN/S" {
+            return Ok(0);
+        }
+
+        if mode_code_rust == "EN/L" {
+            return Ok(1);
+        }
+
+        if mode_code_rust == "N123" {
+            return Ok(2);
+        }
+
+        let trimmed: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &mode_code,
+                "trim",
+                "()Ljava/lang/String;",
+                (),
+            )
+            .await?;
+
+        let trimmed = JavaLangString::to_rust_string(jvm, &trimmed).await?;
+
+        if trimmed == "KO" {
+            Ok(3)
+        } else {
+            Ok(-1)
+        }
+    }
+
     async fn mode_setting(
         jvm: &Jvm,
         mut this: ClassInstanceRef<TextComponent>,
@@ -516,14 +556,25 @@ impl TextComponent {
             );
         }
 
-        let mode: i32 = jvm
+        let current_mode: i32 = jvm
             .invoke_virtual(
                 &im_handler,
-                "getCurrentModeCode",
+                "getCurrentMode",
                 "()I",
                 (),
             )
             .await?;
+
+        let mode_code = match current_mode {
+            0 => "EN/S",
+            1 => "EN/L",
+            2 => "N123",
+            3 => "KO",
+            _ => "",
+        };
+
+        let mode_code = JavaLangString::from_rust_string(jvm, mode_code).await?;
+        let mode = Self::check_mode_code(jvm, mode_code.into()).await?;
 
         jvm.put_field(&mut this, "iMode", "I", mode).await?;
 
