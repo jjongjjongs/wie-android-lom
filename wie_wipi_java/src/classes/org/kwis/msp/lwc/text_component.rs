@@ -797,29 +797,62 @@ impl TextComponent {
         mut this: ClassInstanceRef<TextComponent>,
         max_length: i32,
     ) -> JvmResult<()> {
-        jvm.put_field(&mut this, "maxLength", "I", max_length).await?;
-
-        if max_length > 0 {
-            let text: ClassInstanceRef<String> =
-                jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
-            let length: i32 = jvm.invoke_virtual(&text, "length", "()I", ()).await?;
-
-            if length > max_length {
-                let text: ClassInstanceRef<String> = jvm
-                    .invoke_virtual(
-                        &text,
-                        "substring",
-                        "(II)Ljava/lang/String;",
-                        (0, max_length),
-                    )
-                    .await?;
-
-                jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
-                jvm.put_field(&mut this, "m_cPos", "I", 0).await?;
-            }
+        if max_length == 0 || max_length < -1 {
+            return Err(
+                jvm.exception(
+                    "java/lang/IllegalArgumentException",
+                    "Invalid max length",
+                )
+                .await,
+            );
         }
 
-        Ok(())
+        jvm.put_field(
+            &mut this,
+            "maxLength",
+            "I",
+            max_length,
+        )
+        .await?;
+
+        if max_length == -1 {
+            return Ok(());
+        }
+
+        let text: ClassInstanceRef<String> =
+            jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
+
+        let text_length: i32 =
+            jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+        if max_length >= text_length {
+            return Ok(());
+        }
+
+        let text: ClassInstanceRef<String> = jvm
+            .invoke_virtual(
+                &text,
+                "substring",
+                "(II)Ljava/lang/String;",
+                (0, max_length),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "m_cPos",
+            "I",
+            max_length,
+        )
+        .await?;
+
+        jvm.invoke_virtual(
+            &this,
+            "setString",
+            "(Ljava/lang/String;)V",
+            (text,),
+        )
+        .await
     }
 
     async fn insert(
