@@ -40,6 +40,12 @@ impl TextComponent {
                     Self::set_constraint,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "getConstraint",
+                    "()I",
+                    Self::get_constraint,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
                 JavaMethodProto::new(
                     "replace",
@@ -1147,6 +1153,14 @@ impl TextComponent {
             (position, length, 2),
         )
         .await
+    }
+
+    async fn get_constraint(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<i32> {
+        jvm.get_field(&this, "__wieConstraint", "I").await
     }
 
     async fn set_constraint(
