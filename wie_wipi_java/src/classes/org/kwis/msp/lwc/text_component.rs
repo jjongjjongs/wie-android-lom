@@ -44,6 +44,11 @@ impl TextComponent {
                 JavaFieldProto::new("iMode", "I", Default::default()),
                 JavaFieldProto::new("text", "Ljava/lang/String;", Default::default()),
                 JavaFieldProto::new("maxLength", "I", Default::default()),
+            JavaFieldProto::new(
+                "__wieConstraintChecker",
+                "Lorg/kwis/msp/lwc/ConstraintChecker;",
+                Default::default(),
+            ),
                 // Native TextComponent has its own display/modeViewer state.
                 // Synthetic names avoid colliding with Component.display while
                 // preserving the native per-instance lifecycle.
@@ -159,6 +164,22 @@ impl TextComponent {
         let text = JavaLangString::from_rust_string(jvm, "").await?;
         jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
         jvm.put_field(&mut this, "maxLength", "I", -1).await?;
+
+        let constraint_checker = jvm
+            .new_class(
+                "org/kwis/msp/lwc/ConstraintChecker",
+                "(Lorg/kwis/msp/lwc/TextComponent;)V",
+                (this.clone(),),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieConstraintChecker",
+            "Lorg/kwis/msp/lwc/ConstraintChecker;",
+            constraint_checker,
+        )
+        .await?;
 
         Ok(())
     }
