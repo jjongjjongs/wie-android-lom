@@ -23,7 +23,7 @@ impl ContainerComponent {
                     "addComponent",
                     "(ILorg/kwis/msp/lwc/Component;)V",
                     Self::add_component_index,
-                    Default::default(),
+                    MethodAccessFlags::SYNCHRONIZED,
                 ),
                 JavaMethodProto::new(
                     "addComponent",
@@ -1553,7 +1553,7 @@ impl ContainerComponent {
             return Err(
                 jvm.exception(
                     "java/lang/IndexOutOfBoundsException",
-                    "component index out of range",
+                    "Invalid index",
                 )
                 .await,
             );
@@ -1561,9 +1561,11 @@ impl ContainerComponent {
 
         // WipiPlayer Plus resolver pair +0x210/+0x218.
         if component.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "").await,
-            );
+            let exception = jvm
+                .new_class("java/lang/NullPointerException", "()V", ())
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
         }
 
         // A Component already attached to a Container cannot be inserted again.
@@ -1577,12 +1579,14 @@ impl ContainerComponent {
             .await?;
 
         if !parent.is_null() {
-            return Err(
-                jvm.exception("java/lang/IllegalArgumentException", "").await,
-            );
+            let exception = jvm
+                .new_class("java/lang/IllegalArgumentException", "()V", ())
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
         }
 
-        let mut children = jvm
+        let children_before_inflate = jvm
             .get_field(
                 &this,
                 "children",
@@ -1590,17 +1594,17 @@ impl ContainerComponent {
             )
             .await?;
 
-        let capacity = jvm.array_length(&children).await?;
+        let capacity = jvm.array_length(&children_before_inflate).await?;
         let requested = child_count as usize + 1;
 
-        // Native checkAndInflateArray grows when requested >= capacity,
-        // not only when requested > capacity.
+        // Native checkAndInflateArray(this, childCount + 1):
+        // grow when requested >= capacity, to exactly capacity * 2.
         if requested >= capacity {
             let old_values: alloc::vec::Vec<ClassInstanceRef<Component>> =
                 if capacity == 0 {
                     alloc::vec::Vec::new()
                 } else {
-                    jvm.load_array(&children, 0, capacity).await?
+                    jvm.load_array(&children_before_inflate, 0, capacity).await?
                 };
 
             let new_capacity = capacity * 2;
@@ -1619,15 +1623,25 @@ impl ContainerComponent {
                 &mut this,
                 "children",
                 "[Lorg/kwis/msp/lwc/Component;",
-                expanded.clone(),
+                expanded,
+            )
+            .await?;
+        }
+
+        // Native re-reads childCount and children after checkAndInflateArray().
+        let current_child_count: i32 =
+            jvm.get_field(&this, "childCount", "I").await?;
+
+        let mut children = jvm
+            .get_field(
+                &this,
+                "children",
+                "[Lorg/kwis/msp/lwc/Component;",
             )
             .await?;
 
-            children = expanded;
-        }
-
         // Shift [index, childCount) one position to the right.
-        let mut pos = child_count as usize;
+        let mut pos = current_child_count as usize;
         let insertion_index = index as usize;
 
         while pos > insertion_index {
@@ -1649,7 +1663,7 @@ impl ContainerComponent {
             &mut this,
             "childCount",
             "I",
-            child_count + 1,
+            current_child_count + 1,
         )
         .await?;
 
@@ -1673,7 +1687,7 @@ impl ContainerComponent {
         let mut mask: i32 = jvm.get_field(&this, "mask", "I").await?;
         mask &= !0x4;
 
-        let new_child_count = child_count + 1;
+        let new_child_count = current_child_count + 1;
         let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
             jvm.load_array(
                 &children,
@@ -1683,10 +1697,6 @@ impl ContainerComponent {
             .await?;
 
         for child in &values {
-            if child.is_null() {
-                continue;
-            }
-
             let child_mask: i32 =
                 jvm.get_field(child, "mask", "I").await?;
 
