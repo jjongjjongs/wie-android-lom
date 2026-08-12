@@ -68,6 +68,12 @@ impl ContainerComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "scrollTo",
+                    "(II)Z",
+                    Self::scroll_to,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "validate",
                     "()V",
                     Self::validate,
@@ -302,10 +308,11 @@ impl ContainerComponent {
         // therefore the exact color value is 0x000000.
 
         if graphics.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "")
-                    .await,
-            );
+            let exception = jvm
+                .instantiate_class("java/lang/NullPointerException")
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
         }
 
         let _: () = jvm
@@ -757,6 +764,41 @@ impl ContainerComponent {
             .await?;
 
         Ok(())
+    }
+
+    async fn scroll_to(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        x: i32,
+        y: i32,
+    ) -> JvmResult<bool> {
+        // Native ContainerComponent.scrollTo(II)Z:
+        //
+        // if (parent == null)
+        //     return false;
+        //
+        // return parent.scrollTo(x, y);
+
+        let parent: ClassInstanceRef<ContainerComponent> = jvm
+            .get_field(
+                &this,
+                "parent",
+                "Lorg/kwis/msp/lwc/ContainerComponent;",
+            )
+            .await?;
+
+        if parent.is_null() {
+            return Ok(false);
+        }
+
+        jvm.invoke_virtual(
+            &parent,
+            "scrollTo",
+            "(II)Z",
+            (x, y),
+        )
+        .await
     }
 
     async fn validate(
