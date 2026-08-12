@@ -1246,6 +1246,16 @@ impl ContainerComponent {
         first: ClassInstanceRef<Component>,
         second: ClassInstanceRef<Component>,
     ) -> JvmResult<ClassInstanceRef<Component>> {
+        // Native compares the two references first. null == null then
+        // dereferences the common value, producing a raw NPE.
+        if first.is_null() && second.is_null() {
+            let exception = jvm
+                .instantiate_class("java/lang/NullPointerException")
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
+        }
+
         if !first.is_null()
             && !second.is_null()
             && first.identity() == second.identity()
