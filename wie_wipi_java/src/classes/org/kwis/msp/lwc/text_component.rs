@@ -34,6 +34,12 @@ impl TextComponent {
                     Self::control_cursor,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "setConstraint",
+                    "(I)V",
+                    Self::set_constraint,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
                 JavaMethodProto::new(
                     "replace",
@@ -50,6 +56,7 @@ impl TextComponent {
                 JavaFieldProto::new("iMode", "I", Default::default()),
                 JavaFieldProto::new("text", "Ljava/lang/String;", Default::default()),
                 JavaFieldProto::new("maxLength", "I", Default::default()),
+                JavaFieldProto::new("__wieConstraint", "I", Default::default()),
             JavaFieldProto::new(
                 "__wieConstraintChecker",
                 "Lorg/kwis/msp/lwc/ConstraintChecker;",
@@ -1138,6 +1145,54 @@ impl TextComponent {
             "controlCursor",
             "(III)V",
             (position, length, 2),
+        )
+        .await
+    }
+
+    async fn set_constraint(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        constraint: i32,
+    ) -> JvmResult<()> {
+        if !(0..=5).contains(&constraint) {
+            return Err(
+                jvm.exception(
+                    "java/lang/IllegalArgumentException",
+                    "Invalid constraint",
+                )
+                .await,
+            );
+        }
+
+        jvm.put_field(
+            &mut this,
+            "__wieConstraint",
+            "I",
+            constraint,
+        )
+        .await?;
+
+        let constraint_checker: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieConstraintChecker",
+                "Lorg/kwis/msp/lwc/ConstraintChecker;",
+            )
+            .await?;
+
+        if constraint_checker.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        jvm.invoke_virtual(
+            &constraint_checker,
+            "setConstraint",
+            "(I)V",
+            (constraint,),
         )
         .await
     }
