@@ -47,6 +47,18 @@ impl TextComponent {
                     Self::get_constraint,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "setFont",
+                    "(Lorg/kwis/msp/lcdui/Font;)V",
+                    Self::set_font,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "getFont",
+                    "()Lorg/kwis/msp/lcdui/Font;",
+                    Self::get_font,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
                 JavaMethodProto::new(
                     "replace",
@@ -64,6 +76,11 @@ impl TextComponent {
                 JavaFieldProto::new("text", "Ljava/lang/String;", Default::default()),
                 JavaFieldProto::new("maxLength", "I", Default::default()),
                 JavaFieldProto::new("__wieConstraint", "I", Default::default()),
+                JavaFieldProto::new(
+                    "__wieFont",
+                    "Lorg/kwis/msp/lcdui/Font;",
+                    Default::default(),
+                ),
             JavaFieldProto::new(
                 "__wieConstraintChecker",
                 "Lorg/kwis/msp/lwc/ConstraintChecker;",
@@ -184,6 +201,23 @@ impl TextComponent {
         let text = JavaLangString::from_rust_string(jvm, "").await?;
         jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
         jvm.put_field(&mut this, "maxLength", "I", -1).await?;
+
+        let font: ClassInstanceRef<()> = jvm
+            .invoke_static(
+                "org/kwis/msp/lcdui/Font",
+                "getDefaultFont",
+                "()Lorg/kwis/msp/lcdui/Font;",
+                (),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieFont",
+            "Lorg/kwis/msp/lcdui/Font;",
+            font,
+        )
+        .await?;
 
         let constraint_checker = jvm
             .new_class(
@@ -1249,6 +1283,49 @@ impl TextComponent {
             "setConstraint",
             "(I)V",
             (constraint,),
+        )
+        .await
+    }
+
+    async fn set_font(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        font: ClassInstanceRef<()>,
+    ) -> JvmResult<()> {
+        jvm.put_field(
+            &mut this,
+            "__wieFont",
+            "Lorg/kwis/msp/lcdui/Font;",
+            font,
+        )
+        .await?;
+
+        let _: () = jvm
+            .invoke_virtual(&this, "invalidate", "()V", ())
+            .await?;
+
+        let width: i32 = jvm.get_field(&this, "w", "I").await?;
+        let height: i32 = jvm.get_field(&this, "h", "I").await?;
+
+        jvm.invoke_virtual(
+            &this,
+            "repaint",
+            "(IIII)V",
+            (0, 0, width, height),
+        )
+        .await
+    }
+
+    async fn get_font(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<ClassInstanceRef<()>> {
+        jvm.get_field(
+            &this,
+            "__wieFont",
+            "Lorg/kwis/msp/lcdui/Font;",
         )
         .await
     }
