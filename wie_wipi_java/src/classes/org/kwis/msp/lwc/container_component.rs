@@ -354,10 +354,11 @@ impl ContainerComponent {
         //  9. Undo offsetX/offsetY translation.
 
         if graphics.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "")
-                    .await,
-            );
+            let exception = jvm
+                .instantiate_class("java/lang/NullPointerException")
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
         }
 
         // Native +0x70/+0x74/+0x6c/+0x68.
@@ -497,141 +498,179 @@ impl ContainerComponent {
         let clip_right = local_clip_x + clip_width;
         let clip_bottom = local_clip_y + clip_height;
 
-        for index in 0..child_count {
-            let child: ClassInstanceRef<Component> = jvm
-                .invoke_virtual(
-                    &this,
-                    "getComponent",
-                    "(I)Lorg/kwis/msp/lwc/Component;",
-                    (index,),
-                )
-                .await?;
+        if child_count > 0 {
+            let mut index = 0i32;
 
-            // Native dereferences the child immediately.
-            if child.is_null() {
-                return Err(
-                    jvm.exception("java/lang/NullPointerException", "")
-                        .await,
-                );
-            }
-
-            let child_x: i32 =
-                jvm.get_field(&child, "x", "I").await?;
-            let child_y: i32 =
-                jvm.get_field(&child, "y", "I").await?;
-            let child_width: i32 =
-                jvm.get_field(&child, "w", "I").await?;
-            let child_height: i32 =
-                jvm.get_field(&child, "h", "I").await?;
-
-            // Exact native intersection rejection tests.
-            if child_x >= clip_right
-                || local_clip_x >= child_x + child_width
-                || clip_bottom <= child_y
-                || local_clip_y >= child_y + child_height
-            {
-                continue;
-            }
-
-            // Restrict painting to this child's bounds.
-            let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "clipRect",
-                    "(IIII)V",
-                    (
-                        child_x,
-                        child_y,
-                        child_width,
-                        child_height,
-                    ),
-                )
-                .await?;
-
-            let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "translate",
-                    "(II)V",
-                    (child_x, child_y),
-                )
-                .await?;
-
-            if jvm.is_instance(
-                &**child,
-                "org/kwis/msp/lwc/ContainerComponent",
-            ) {
-                // Native instanceof + cast + virtual Container.paint().
-                let _: () = jvm
-                    .invoke_virtual(
-                        &child,
-                        "paint",
-                        "(Lorg/kwis/msp/lcdui/Graphics;)V",
-                        (graphics.clone(),),
+            loop {
+                let children = jvm
+                    .get_field(
+                        &this,
+                        "children",
+                        "[Lorg/kwis/msp/lwc/Component;",
                     )
                     .await?;
-            } else {
-                // Non-container child: Component.paintContent().
-                let _: () = jvm
-                    .invoke_virtual(
-                        &child,
-                        "paintContent",
-                        "(Lorg/kwis/msp/lcdui/Graphics;)V",
-                        (graphics.clone(),),
-                    )
-                    .await?;
+
+                let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
+                    jvm.load_array(&children, index as usize, 1).await?;
+
+                let child = values[0].clone();
+
+                if child.is_null() {
+                    let exception = jvm
+                        .instantiate_class("java/lang/NullPointerException")
+                        .await?;
+
+                    return Err(JavaError::JavaException(exception));
+                }
+
+                let child_x: i32 =
+                    jvm.get_field(&child, "x", "I").await?;
+                let child_y: i32 =
+                    jvm.get_field(&child, "y", "I").await?;
+                let child_width: i32 =
+                    jvm.get_field(&child, "w", "I").await?;
+                let child_height: i32 =
+                    jvm.get_field(&child, "h", "I").await?;
+
+                let intersects = child_x < clip_right
+                    && local_clip_x < child_x + child_width
+                    && clip_bottom > child_y
+                    && local_clip_y < child_y + child_height;
+
+                if intersects {
+                    let _: () = jvm
+                        .invoke_virtual(
+                            &graphics,
+                            "clipRect",
+                            "(IIII)V",
+                            (
+                                child_x,
+                                child_y,
+                                child_width,
+                                child_height,
+                            ),
+                        )
+                        .await?;
+
+                    let _: () = jvm
+                        .invoke_virtual(
+                            &graphics,
+                            "translate",
+                            "(II)V",
+                            (child_x, child_y),
+                        )
+                        .await?;
+
+                    if jvm.is_instance(
+                        &**child,
+                        "org/kwis/msp/lwc/ContainerComponent",
+                    ) {
+                        let _: () = jvm
+                            .invoke_virtual(
+                                &child,
+                                "paint",
+                                "(Lorg/kwis/msp/lcdui/Graphics;)V",
+                                (graphics.clone(),),
+                            )
+                            .await?;
+                    } else {
+                        let _: () = jvm
+                            .invoke_virtual(
+                                &child,
+                                "paintContent",
+                                "(Lorg/kwis/msp/lcdui/Graphics;)V",
+                                (graphics.clone(),),
+                            )
+                            .await?;
+                    }
+
+                    let _: () = jvm
+                        .invoke_virtual(&graphics, "reset", "()V", ())
+                        .await?;
+
+                    let _: () = jvm
+                        .invoke_virtual(
+                            &graphics,
+                            "translate",
+                            "(II)V",
+                            (translated_x, translated_y),
+                        )
+                        .await?;
+
+                    let _: () = jvm
+                        .invoke_virtual(
+                            &graphics,
+                            "setClip",
+                            "(IIII)V",
+                            (
+                                local_clip_x,
+                                local_clip_y,
+                                clip_width,
+                                clip_height,
+                            ),
+                        )
+                        .await?;
+
+                    let current_inset_top =
+                        jvm.get_field::<i16>(&this, "insetTop", "S").await? as i32;
+                    let current_inset_bottom =
+                        jvm.get_field::<i16>(&this, "insetBottom", "S").await? as i32;
+                    let current_inset_left =
+                        jvm.get_field::<i16>(&this, "insetLeft", "S").await? as i32;
+                    let current_inset_right =
+                        jvm.get_field::<i16>(&this, "insetRight", "S").await? as i32;
+
+                    let current_width: i32 =
+                        jvm.get_field(&this, "w", "I").await?;
+                    let current_height: i32 =
+                        jvm.get_field(&this, "h", "I").await?;
+                    let current_offset_x: i32 =
+                        jvm.get_field(&this, "offsetX", "I").await?;
+                    let current_offset_y: i32 =
+                        jvm.get_field(&this, "offsetY", "I").await?;
+
+                    let _: () = jvm
+                        .invoke_virtual(
+                            &graphics,
+                            "clipRect",
+                            "(IIII)V",
+                            (
+                                current_inset_left - current_offset_x,
+                                current_inset_top - current_offset_y,
+                                current_width
+                                    - current_inset_left
+                                    - current_inset_right,
+                                current_height
+                                    - current_inset_top
+                                    - current_inset_bottom,
+                            ),
+                        )
+                        .await?;
+                }
+
+                index += 1;
+
+                let current_child_count: i32 =
+                    jvm.get_field(&this, "childCount", "I").await?;
+
+                if index >= current_child_count {
+                    break;
+                }
             }
-
-            // Native restores the parent Graphics state after each child.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "reset", "()V", ())
-                .await?;
-
-            let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "translate",
-                    "(II)V",
-                    (translated_x, translated_y),
-                )
-                .await?;
-
-            let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "setClip",
-                    "(IIII)V",
-                    (
-                        local_clip_x,
-                        local_clip_y,
-                        clip_width,
-                        clip_height,
-                    ),
-                )
-                .await?;
-
-            let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "clipRect",
-                    "(IIII)V",
-                    (
-                        inner_x,
-                        inner_y,
-                        inner_width,
-                        inner_height,
-                    ),
-                )
-                .await?;
         }
 
-        // Undo the initial Container offset translation.
+        // Native re-reads offsetX/offsetY before undoing the translation.
+        let final_offset_x: i32 =
+            jvm.get_field(&this, "offsetX", "I").await?;
+        let final_offset_y: i32 =
+            jvm.get_field(&this, "offsetY", "I").await?;
+
         let _: () = jvm
             .invoke_virtual(
                 &graphics,
                 "translate",
                 "(II)V",
-                (-offset_x, -offset_y),
+                (-final_offset_x, -final_offset_y),
             )
             .await?;
 
