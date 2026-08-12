@@ -762,6 +762,37 @@ impl TextComponent {
             jvm.get_field(&this, "text", "Ljava/lang/String;").await?;
         let text_length: i32 = jvm.invoke_virtual(&text, "length", "()I", ()).await?;
 
+        // Native delete resets InputListener +0x04 after its basic
+        // position/length validation and before modifying the text.
+        if position >= 0
+            && position <= text_length
+            && length >= 0
+            && length <= text_length
+        {
+            let mut input_listener: ClassInstanceRef<()> = jvm
+                .get_field(
+                    &this,
+                    "__wieInputListener",
+                    "Lorg/kwis/msp/lwc/InputListener;",
+                )
+                .await?;
+
+            if input_listener.is_null() {
+                return Err(
+                    jvm.exception("java/lang/NullPointerException", "")
+                        .await,
+                );
+            }
+
+            jvm.put_field(
+                &mut input_listener,
+                "__wieChanged",
+                "Z",
+                false,
+            )
+            .await?;
+        }
+
         let prefix: ClassInstanceRef<String> = jvm
             .invoke_virtual(
                 &text,
