@@ -3,6 +3,8 @@ use alloc::vec;
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 
+use crate::classes::org::kwis::msp::lcdui::{CandidateWindow, Display};
+
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
 // class org.kwis.msp.lcdui.InputMethodHandler
@@ -57,6 +59,11 @@ impl InputMethodHandler {
             fields: vec![
                 JavaFieldProto::new("currentMode", "I", Default::default()),
                 JavaFieldProto::new("__wieSymbolCardActive", "Z", Default::default()),
+                JavaFieldProto::new(
+                    "__wieSymbolCard",
+                    "Lorg/kwis/msp/lcdui/CandidateWindow;",
+                    Default::default(),
+                ),
                 JavaFieldProto::new("__wieSymbolX", "I", Default::default()),
                 JavaFieldProto::new("__wieSymbolY", "I", Default::default()),
                 JavaFieldProto::new("__wieSymbolWidth", "I", Default::default()),
@@ -91,15 +98,9 @@ impl InputMethodHandler {
         // Entering symbol mode creates/shows a CandidateWindow, while leaving
         // symbol mode destroys the symbol-card object.
         if mode == 99 {
-            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", true)
-                .await?;
+            Self::show_symbol_card(jvm, &mut this).await?;
         } else if previous_mode == 99 {
-            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", false)
-                .await?;
-            jvm.put_field(&mut this, "__wieSymbolX", "I", 0).await?;
-            jvm.put_field(&mut this, "__wieSymbolY", "I", 0).await?;
-            jvm.put_field(&mut this, "__wieSymbolWidth", "I", 0).await?;
-            jvm.put_field(&mut this, "__wieSymbolHeight", "I", 0).await?;
+            Self::remove_symbol_card(jvm, &mut this).await?;
         }
 
         Ok(true)
@@ -129,15 +130,9 @@ impl InputMethodHandler {
         // Keep the synthetic symbol-card lifecycle consistent with native
         // setCurrentMode when mode cycling enters or leaves symbol mode.
         if next == 99 {
-            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", true)
-                .await?;
+            Self::show_symbol_card(jvm, &mut this).await?;
         } else if previous_mode == 99 {
-            jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", false)
-                .await?;
-            jvm.put_field(&mut this, "__wieSymbolX", "I", 0).await?;
-            jvm.put_field(&mut this, "__wieSymbolY", "I", 0).await?;
-            jvm.put_field(&mut this, "__wieSymbolWidth", "I", 0).await?;
-            jvm.put_field(&mut this, "__wieSymbolHeight", "I", 0).await?;
+            Self::remove_symbol_card(jvm, &mut this).await?;
         }
 
         Ok(())
@@ -171,16 +166,7 @@ impl InputMethodHandler {
         _: &mut WieJvmContext,
         mut this: ClassInstanceRef<Self>,
     ) -> JvmResult<()> {
-        // Native removes CandidateWindow/CandidateTouchWindow from Display,
-        // notifies it, then clears the corresponding object field.
-        jvm.put_field(&mut this, "__wieSymbolCardActive", "Z", false)
-            .await?;
-        jvm.put_field(&mut this, "__wieSymbolX", "I", 0).await?;
-        jvm.put_field(&mut this, "__wieSymbolY", "I", 0).await?;
-        jvm.put_field(&mut this, "__wieSymbolWidth", "I", 0).await?;
-        jvm.put_field(&mut this, "__wieSymbolHeight", "I", 0).await?;
-
-        Ok(())
+        Self::remove_symbol_card(jvm, &mut this).await
     }
 
     async fn set_symbol_position(
@@ -192,17 +178,19 @@ impl InputMethodHandler {
         width: i32,
         height: i32,
     ) -> JvmResult<()> {
-        // Native only forwards the rectangle when a symbol-card object exists.
-        let active: bool = jvm
-            .get_field(&this, "__wieSymbolCardActive", "Z")
+        let card: ClassInstanceRef<CandidateWindow> = jvm
+            .get_field(
+                &this,
+                "__wieSymbolCard",
+                "Lorg/kwis/msp/lcdui/CandidateWindow;",
+            )
             .await?;
 
-        if !active {
+        if card.is_null() {
             return Ok(());
         }
 
-        // Native throws IllegalArgumentException with constant string 182
-        // when any geometry value is non-positive.
+        // Native validates geometry before dispatching CandidateWindow.setPosition.
         if x <= 0 || y <= 0 || width <= 0 || height <= 0 {
             return Err(
                 jvm.exception("java/lang/IllegalArgumentException", "pos neg value")
@@ -210,12 +198,144 @@ impl InputMethodHandler {
             );
         }
 
+        let _: () = jvm
+            .invoke_virtual(
+                &card,
+                "setPosition",
+                "(IIII)V",
+                (x, y, width, height),
+            )
+            .await?;
+
         jvm.put_field(&mut this, "__wieSymbolX", "I", x).await?;
         jvm.put_field(&mut this, "__wieSymbolY", "I", y).await?;
         jvm.put_field(&mut this, "__wieSymbolWidth", "I", width)
             .await?;
         jvm.put_field(&mut this, "__wieSymbolHeight", "I", height)
             .await?;
+
+        Ok(())
+    }
+
+    async fn show_symbol_card(
+        jvm: &Jvm,
+        this: &mut ClassInstanceRef<Self>,
+    ) -> JvmResult<()> {
+        let mut card: ClassInstanceRef<CandidateWindow> = jvm
+            .get_field(
+                this,
+                "__wieSymbolCard",
+                "Lorg/kwis/msp/lcdui/CandidateWindow;",
+            )
+            .await?;
+
+        if card.is_null() {
+            card = jvm
+                .new_class(
+                    "org/kwis/msp/lcdui/CandidateWindow",
+                    "(Lorg/kwis/msp/lcdui/InputMethodHandler;)V",
+                    (this.clone(),),
+                )
+                .await?
+                .into();
+
+            jvm.put_field(
+                this,
+                "__wieSymbolCard",
+                "Lorg/kwis/msp/lcdui/CandidateWindow;",
+                card.clone(),
+            )
+            .await?;
+        }
+
+        let _: () = jvm
+            .invoke_virtual(
+                &card,
+                "setDiableChars",
+                "([C)V",
+                (None,),
+            )
+            .await?;
+
+        let display: ClassInstanceRef<Display> = jvm
+            .invoke_static(
+                "org/kwis/msp/lcdui/Display",
+                "getDefaultDisplay",
+                "()Lorg/kwis/msp/lcdui/Display;",
+                (),
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &display,
+                "pushCard",
+                "(Lorg/kwis/msp/lcdui/Card;)V",
+                (card.clone(),),
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &card,
+                "showNotify",
+                "()V",
+                (),
+            )
+            .await?;
+
+        jvm.put_field(this, "__wieSymbolCardActive", "Z", true)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn remove_symbol_card(
+        jvm: &Jvm,
+        this: &mut ClassInstanceRef<Self>,
+    ) -> JvmResult<()> {
+        let card: ClassInstanceRef<CandidateWindow> = jvm
+            .get_field(
+                this,
+                "__wieSymbolCard",
+                "Lorg/kwis/msp/lcdui/CandidateWindow;",
+            )
+            .await?;
+
+        if !card.is_null() {
+            let display: ClassInstanceRef<Display> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Display",
+                    "getDefaultDisplay",
+                    "()Lorg/kwis/msp/lcdui/Display;",
+                    (),
+                )
+                .await?;
+
+            let _: bool = jvm
+                .invoke_virtual(
+                    &display,
+                    "removeCard",
+                    "(Lorg/kwis/msp/lcdui/Card;)Z",
+                    (card,),
+                )
+                .await?;
+        }
+
+        jvm.put_field(
+            this,
+            "__wieSymbolCard",
+            "Lorg/kwis/msp/lcdui/CandidateWindow;",
+            None,
+        )
+        .await?;
+
+        jvm.put_field(this, "__wieSymbolCardActive", "Z", false)
+            .await?;
+        jvm.put_field(this, "__wieSymbolX", "I", 0).await?;
+        jvm.put_field(this, "__wieSymbolY", "I", 0).await?;
+        jvm.put_field(this, "__wieSymbolWidth", "I", 0).await?;
+        jvm.put_field(this, "__wieSymbolHeight", "I", 0).await?;
 
         Ok(())
     }
