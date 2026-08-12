@@ -59,6 +59,12 @@ impl TextComponent {
                     Self::get_font,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "controlInputMethodHandler",
+                    "(I)V",
+                    Self::control_input_method_handler,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
                 JavaMethodProto::new(
                     "replace",
@@ -1328,6 +1334,81 @@ impl TextComponent {
             "Lorg/kwis/msp/lcdui/Font;",
         )
         .await
+    }
+
+    async fn control_input_method_handler(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        constraint: i32,
+    ) -> JvmResult<()> {
+        let im_handler = jvm
+            .new_class(
+                "org/kwis/msp/lcdui/InputMethodHandler",
+                "(I)V",
+                (constraint,),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "imHandler",
+            "Lorg/kwis/msp/lcdui/InputMethodHandler;",
+            im_handler.clone(),
+        )
+        .await?;
+
+        let display: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieTextDisplay",
+                "Lorg/kwis/msp/lcdui/Display;",
+            )
+            .await?;
+
+        let mode_viewer = jvm
+            .new_class(
+                "org/kwis/msp/lwc/TextComponent$ModeViewer",
+                "(Lorg/kwis/msp/lwc/TextComponent;Lorg/kwis/msp/lcdui/Display;)V",
+                (this.clone(), display),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieModeViewer",
+            "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+            mode_viewer,
+        )
+        .await?;
+
+        let input_listener: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieInputListener",
+                "Lorg/kwis/msp/lwc/InputListener;",
+            )
+            .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &im_handler,
+                "setInputMethodListener",
+                "(Lorg/kwis/msp/lcdui/InputMethodListener;)V",
+                (input_listener,),
+            )
+            .await?;
+
+        let mode: i32 = jvm
+            .invoke_virtual(
+                &im_handler,
+                "getCurrentMode",
+                "()I",
+                (),
+            )
+            .await?;
+
+        Self::mode_setting(jvm, this, mode).await
     }
 
     async fn replace(
