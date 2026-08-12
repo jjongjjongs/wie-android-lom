@@ -917,13 +917,7 @@ impl ContainerComponent {
         let child_count: i32 = jvm.get_field(&this, "childCount", "I").await?;
 
         if index < 0 || index >= child_count {
-            return Err(
-                jvm.exception(
-                    "java/lang/IndexOutOfBoundsException",
-                    "component index out of range",
-                )
-                .await,
-            );
+            return Ok(ClassInstanceRef::<Component>::new(None));
         }
 
         let children = jvm
@@ -948,7 +942,7 @@ impl ContainerComponent {
     ) -> JvmResult<i32> {
         let child_count: i32 = jvm.get_field(&this, "childCount", "I").await?;
 
-        if component.is_null() {
+        if child_count <= 0 {
             return Ok(-1);
         }
 
@@ -960,19 +954,26 @@ impl ContainerComponent {
             )
             .await?;
 
-        let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
-            if child_count == 0 {
-                alloc::vec::Vec::new()
+        let mut index = child_count - 1;
+
+        while index >= 0 {
+            let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
+                jvm.load_array(&children, index as usize, 1).await?;
+
+            let child = &values[0];
+
+            let same = if component.is_null() {
+                child.is_null()
             } else {
-                jvm.load_array(&children, 0, child_count as usize).await?
+                !child.is_null()
+                    && child.identity() == component.identity()
             };
 
-        let target_identity = component.identity();
-
-        for (index, child) in values.iter().enumerate() {
-            if !child.is_null() && child.identity() == target_identity {
-                return Ok(index as i32);
+            if same {
+                return Ok(index);
             }
+
+            index -= 1;
         }
 
         Ok(-1)
