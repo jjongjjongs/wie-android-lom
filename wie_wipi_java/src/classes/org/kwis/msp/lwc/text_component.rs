@@ -2,7 +2,7 @@ use alloc::{string::ToString, vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_runtime::classes::java::lang::String;
-use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
@@ -20,8 +20,20 @@ impl TextComponent {
                 JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
                 JavaMethodProto::new("getString", "()Ljava/lang/String;", Self::get_string, Default::default()),
                 JavaMethodProto::new("insert", "(Ljava/lang/String;III)V", Self::insert, Default::default()),
+                JavaMethodProto::new(
+                    "insert",
+                    "([CIII)V",
+                    Self::insert_chars,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("delete", "(II)V", Self::delete, Default::default()),
                 JavaMethodProto::new("replace", "(Ljava/lang/String;II)V", Self::replace, Default::default()),
+                JavaMethodProto::new(
+                    "replace",
+                    "([CII)V",
+                    Self::replace_chars,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
                 JavaMethodProto::new("focusNotify", "(Z)V", Self::focus_notify, Default::default()),
             ],
@@ -712,6 +724,33 @@ impl TextComponent {
         Ok(())
     }
 
+    async fn insert_chars(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+        chars: ClassInstanceRef<Array<JavaChar>>,
+        offset: i32,
+        length: i32,
+        position: i32,
+    ) -> JvmResult<()> {
+        let string: ClassInstanceRef<String> = jvm
+            .new_class(
+                "java/lang/String",
+                "([CII)V",
+                (chars, offset, length),
+            )
+            .await?
+            .into();
+
+        jvm.invoke_virtual(
+            &this,
+            "insert",
+            "(Ljava/lang/String;III)V",
+            (string, 0, length, position),
+        )
+        .await
+    }
+
     async fn delete(
         jvm: &Jvm,
         _: &mut WieJvmContext,
@@ -780,6 +819,34 @@ impl TextComponent {
             "insert",
             "(Ljava/lang/String;III)V",
             (string, 0, string_length, position),
+        )
+        .await
+    }
+
+    async fn replace_chars(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+        chars: ClassInstanceRef<Array<JavaChar>>,
+        length: i32,
+        position: i32,
+    ) -> JvmResult<()> {
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "delete",
+                "(II)V",
+                (position, length),
+            )
+            .await?;
+
+        let array_length = jvm.array_length(&chars).await? as i32;
+
+        jvm.invoke_virtual(
+            &this,
+            "insert",
+            "([CIII)V",
+            (chars, 0, array_length, position),
         )
         .await
     }

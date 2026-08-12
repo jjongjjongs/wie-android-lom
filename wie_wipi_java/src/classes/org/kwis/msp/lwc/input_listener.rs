@@ -67,14 +67,79 @@ impl InputListener {
     }
 
     async fn notify_text_changed(
-        _: &Jvm,
+        jvm: &Jvm,
         _: &mut WieJvmContext,
-        _: ClassInstanceRef<Self>,
-        _: ClassInstanceRef<Array<JavaChar>>,
-        _: i32,
-        _: i32,
+        this: ClassInstanceRef<Self>,
+        data: ClassInstanceRef<Array<JavaChar>>,
+        count: i32,
+        change_type: i32,
     ) -> JvmResult<()> {
-        // Native edit dispatch is restored separately from listener wiring.
-        Ok(())
+        let owner: ClassInstanceRef<TextComponent> = jvm
+            .get_field(
+                &this,
+                "__wieTextComponent",
+                "Lorg/kwis/msp/lwc/TextComponent;",
+            )
+            .await?;
+
+        if owner.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let cursor: i32 = jvm
+            .get_field(&owner, "m_cPos", "I")
+            .await?;
+
+        match change_type {
+            -1 => {
+                let mut owner = owner;
+                jvm.put_field(&mut owner, "iMode", "I", 1).await?;
+
+                jvm.invoke_virtual(
+                    &owner,
+                    "insert",
+                    "([CIII)V",
+                    (data, 0, count, cursor),
+                )
+                .await
+            }
+
+            0 => {
+                let mut owner = owner;
+                jvm.put_field(&mut owner, "iMode", "I", 0).await?;
+
+                jvm.invoke_virtual(
+                    &owner,
+                    "replace",
+                    "([CII)V",
+                    (data, count, cursor - count),
+                )
+                .await
+            }
+
+            1 => {
+                let mut owner = owner;
+                jvm.put_field(&mut owner, "iMode", "I", 1).await?;
+
+                let (position, length) = if count < 0 {
+                    (0, cursor)
+                } else {
+                    (cursor - count, count)
+                };
+
+                jvm.invoke_virtual(
+                    &owner,
+                    "delete",
+                    "(II)V",
+                    (position, length),
+                )
+                .await
+            }
+
+            _ => Ok(()),
+        }
     }
 }
