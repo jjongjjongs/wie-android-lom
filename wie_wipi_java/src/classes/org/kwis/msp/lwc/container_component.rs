@@ -143,7 +143,7 @@ impl ContainerComponent {
                     "removeAllComponents",
                     "()V",
                     Self::remove_all_components,
-                    Default::default(),
+                    MethodAccessFlags::SYNCHRONIZED,
                 ),
                 JavaMethodProto::new(
                     "setComponent",
@@ -1994,10 +1994,6 @@ impl ContainerComponent {
             };
 
         for child in values {
-            if child.is_null() {
-                continue;
-            }
-
             let mut child_for_parent = child.clone();
 
             jvm.put_field(
