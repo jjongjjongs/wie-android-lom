@@ -1179,6 +1179,15 @@ impl TextComponent {
         length: i32,
         position: i32,
     ) -> JvmResult<()> {
+        let cursor: i32 = jvm.get_field(&this, "m_cPos", "I").await?;
+
+        if position < 0 || position > cursor {
+            return Err(
+                jvm.exception("java/lang/IllegalArgumentException", "")
+                    .await,
+            );
+        }
+
         let _: () = jvm
             .invoke_virtual(
                 &this,
@@ -1188,13 +1197,32 @@ impl TextComponent {
             )
             .await?;
 
+        if chars.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
         let array_length = jvm.array_length(&chars).await? as i32;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "insert",
+                "([CIII)V",
+                (chars, 0, array_length, position),
+            )
+            .await?;
+
+        let width: i32 = jvm.get_field(&this, "w", "I").await?;
+        let height: i32 = jvm.get_field(&this, "h", "I").await?;
 
         jvm.invoke_virtual(
             &this,
-            "insert",
-            "([CIII)V",
-            (chars, 0, array_length, position),
+            "repaint",
+            "(IIII)V",
+            (0, 0, width, height),
         )
         .await
     }
