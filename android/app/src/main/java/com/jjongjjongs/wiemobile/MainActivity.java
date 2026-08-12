@@ -16,6 +16,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -742,23 +743,41 @@ public final class MainActivity extends Activity {
         playerStatus.setEllipsize(android.text.TextUtils.TruncateAt.END);
         bar.addView(playerStatus, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        Button log = flatButton("로그");
-        log.setTextSize(13f);
+        Button log = navyButton("로그");
         log.setOnClickListener(v -> saveLog());
         LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(dp(56), dp(34));
         logParams.rightMargin = dp(8);
         bar.addView(log, logParams);
 
-        Button rotate = flatButton(landscapeMode ? "세로" : "가로");
-        rotate.setTextSize(13f);
-        rotate.setBackgroundColor(COLOR_ACCENT);
-        rotate.setTextColor(COLOR_BG);
+        Button rotate = navyButton(landscapeMode ? "세로" : "가로");
         rotate.setOnClickListener(v -> toggleOrientation());
         LinearLayout.LayoutParams rotateParams = new LinearLayout.LayoutParams(dp(56), dp(34));
         rotateParams.rightMargin = dp(10);
         bar.addView(rotate, rotateParams);
 
         return bar;
+    }
+
+    /**
+     * A small pill in the same dark-navy flat style as the keypad, for the
+     * title bar's log and rotate buttons.
+     */
+    private Button navyButton(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(13f);
+        button.setAllCaps(false);
+        button.setTextColor(Color.rgb(182, 194, 216));
+        button.setPadding(0, 0, 0, 0);
+
+        GradientDrawable face = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] {Color.rgb(46, 57, 84), Color.rgb(38, 48, 72)});
+        face.setCornerRadius(dp(8));
+        face.setStroke(Math.max(1, Math.round(dp(1) * 0.8f)), Color.rgb(24, 32, 52));
+        button.setBackground(face);
+
+        return button;
     }
 
     /**
@@ -1080,59 +1099,71 @@ public final class MainActivity extends Activity {
         }
 
         /**
-         * Landscape layout: two control columns with the screen's gap between
-         * them. Left column is the soft keys over the direction pad; right is
-         * save and back over the number pad.
+         * Landscape layout: two compact control clusters, one at each edge,
+         * with the screen filling the wide gap between them. Left cluster is
+         * the soft keys over the direction pad; right is save and back over
+         * the number pad. The keys are capped and centered in their side band
+         * rather than stretched to fill it, so the screen stays the prominent
+         * thing on the display.
          */
         private void layoutLandscape(int width, int height) {
-            float pad = dp(7);
-            float gap = dp(4);
+            float pad = dp(10);
+            float gap = dp(5);
 
-            // The center gap holds the screen at its portrait aspect; the keys
-            // fill whatever is left on either side.
+            // The screen keeps its portrait aspect in the middle; each side
+            // band is whatever is left over, and the keys sit compactly inside.
             float centerW = height * (240f / 320f);
             float sideW = (width - centerW) / 2f - pad;
-            if (sideW < dp(96)) {
-                sideW = (width - 2 * pad) / 2f - dp(48);
+            if (sideW < dp(120)) {
+                sideW = (width - 2 * pad) / 2f - dp(60);
             }
             float leftX = pad;
             float rightX = width - pad - sideW;
 
-            float top = pad;
             float usable = height - 2 * pad;
-            float topRow = (usable - gap) * 0.15f;
-            float below = usable - gap - topRow;
-            float belowTop = top + topRow + gap;
 
-            float functionWidth = (sideW - gap) / 2f;
+            // A hard cap keeps the keys small; the two size limits keep them
+            // inside the band's width and inside its height (the taller, right
+            // cluster is one function row over four number rows = 4.8 cells).
+            float keyCap = dp(54);
+            float cell = Math.min(keyCap, Math.min((sideW - 2 * gap) / 3f, (usable - 4 * gap) / 4.8f));
+            float funcH = cell * 0.8f;
 
-            // LEFT column: soft keys over the direction pad.
-            place(0, leftX, top, functionWidth, topRow);
-            place(1, leftX + functionWidth + gap, top, functionWidth, topRow);
+            float clusterW = cell * 3 + gap * 2;
+            float functionWidth = (clusterW - gap) / 2f;
+            float leftClusterX = leftX + (sideW - clusterW) / 2f;
+            float rightClusterX = rightX + (sideW - clusterW) / 2f;
 
-            float cell = Math.min((sideW - 2 * gap) / 3f, (below - 2 * gap) / 3f);
-            float dpadSize = cell * 3 + gap * 2;
-            float dx = leftX + (sideW - dpadSize) / 2f;
-            float dy = belowTop + (below - dpadSize) / 2f;
+            float leftHeight = funcH + 3 * cell + 3 * gap;
+            float rightHeight = funcH + 4 * cell + 4 * gap;
+            float leftTop = pad + (usable - leftHeight) / 2f;
+            float rightTop = pad + (usable - rightHeight) / 2f;
+
+            // LEFT cluster: soft keys over the direction pad.
+            place(0, leftClusterX, leftTop, functionWidth, funcH);
+            place(1, leftClusterX + functionWidth + gap, leftTop, functionWidth, funcH);
+
+            float dx = leftClusterX;
+            float dy = leftTop + funcH + gap;
             place(4, dx + cell + gap, dy, cell, cell);
             place(5, dx, dy + cell + gap, cell, cell);
             place(6, dx + cell + gap, dy + cell + gap, cell, cell);
             place(7, dx + 2 * (cell + gap), dy + cell + gap, cell, cell);
             place(8, dx + cell + gap, dy + 2 * (cell + gap), cell, cell);
 
-            // RIGHT column: save and back over the number pad.
-            place(2, rightX, top, functionWidth, topRow);
-            place(3, rightX + functionWidth + gap, top, functionWidth, topRow);
+            // RIGHT cluster: save and back over the number pad.
+            place(2, rightClusterX, rightTop, functionWidth, funcH);
+            place(3, rightClusterX + functionWidth + gap, rightTop, functionWidth, funcH);
 
-            float numberWidth = (sideW - 2 * gap) / 3f;
-            float numberHeight = (below - 3 * gap) / 4f;
+            float nx = rightClusterX;
+            float ny = rightTop + funcH + gap;
             for (int index = 0; index < 12; index++) {
-                float x = rightX + (index % 3) * (numberWidth + gap);
-                float y = belowTop + (index / 3) * (numberHeight + gap);
-                place(9 + index, x, y, numberWidth, numberHeight);
+                float x = nx + (index % 3) * (cell + gap);
+                float y = ny + (index / 3) * (cell + gap);
+                place(9 + index, x, y, cell, cell);
             }
 
-            ink.setTextSize(Math.min(numberHeight * 0.42f, dp(22)));
+            ink.setTextSize(Math.min(cell * 0.42f, dp(20)));
         }
 
         private void place(int index, float x, float y, float width, float height) {
@@ -1143,7 +1174,7 @@ public final class MainActivity extends Activity {
 
         @Override
         protected void onDraw(Canvas canvas) {
-            float radius = dp(5);
+            float radius = dp(8);
 
             for (Key key : keys) {
                 if (key.down) {
@@ -1284,66 +1315,78 @@ public final class MainActivity extends Activity {
                     topColor(), bottomColor(), android.graphics.Shader.TileMode.CLAMP);
         }
 
+        // Every key is a flat dark-navy face with light blue-gray text; save
+        // and back carry only a faint green / red cast within the same family
+        // so they still read apart from the rest at a glance. The top/bottom
+        // pair keeps the barest gradient so a face has some depth without
+        // looking glossy.
         private int topColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(75, 176, 105);
-                case KEY_SOFT:
-                    return Color.rgb(231, 233, 236);
+                    return Color.rgb(45, 74, 63);
                 case KEY_CLEAR:
-                    return Color.rgb(207, 98, 89);
+                    return Color.rgb(78, 51, 60);
+                case KEY_SOFT:
+                    return Color.rgb(52, 64, 92);
                 case KEY_DIRECTION:
-                    return Color.rgb(62, 65, 75);
+                    return Color.rgb(44, 56, 84);
                 default:
-                    return Color.rgb(242, 243, 244);
+                    return Color.rgb(46, 57, 84);
             }
         }
 
         private int bottomColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(53, 128, 80);
-                case KEY_SOFT:
-                    return Color.rgb(207, 210, 215);
+                    return Color.rgb(37, 62, 53);
                 case KEY_CLEAR:
-                    return Color.rgb(169, 70, 61);
+                    return Color.rgb(66, 43, 51);
+                case KEY_SOFT:
+                    return Color.rgb(43, 54, 80);
                 case KEY_DIRECTION:
-                    return Color.rgb(52, 55, 63);
+                    return Color.rgb(36, 46, 72);
                 default:
-                    return Color.rgb(222, 223, 226);
+                    return Color.rgb(38, 48, 72);
             }
         }
 
         int borderColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(46, 107, 65);
-                case KEY_SOFT:
-                    return Color.rgb(194, 197, 203);
+                    return Color.rgb(28, 52, 44);
                 case KEY_CLEAR:
-                    return Color.rgb(138, 55, 48);
-                case KEY_DIRECTION:
-                    return Color.rgb(42, 44, 51);
+                    return Color.rgb(52, 32, 38);
+                case KEY_SOFT:
+                    return Color.rgb(30, 40, 62);
                 default:
-                    return Color.rgb(199, 199, 203);
+                    return Color.rgb(24, 32, 52);
             }
         }
 
         int pressedColor() {
             switch (style) {
                 case KEY_SAVE:
-                    return Color.rgb(104, 206, 134);
+                    return Color.rgb(60, 110, 90);
                 case KEY_CLEAR:
-                    return Color.rgb(220, 126, 117);
+                    return Color.rgb(120, 70, 82);
                 case KEY_DIRECTION:
-                    return Color.rgb(74, 170, 182);   // accent-tinted
+                    return Color.rgb(70, 92, 132);
                 default:
-                    return Color.rgb(150, 205, 214);  // accent-tinted light press
+                    return Color.rgb(66, 82, 120);
             }
         }
 
         int textColor() {
-            return style == KEY_DIRECTION ? Color.rgb(240, 241, 243) : Color.rgb(29, 31, 36);
+            switch (style) {
+                case KEY_SAVE:
+                    return Color.rgb(180, 214, 196);
+                case KEY_CLEAR:
+                    return Color.rgb(220, 186, 190);
+                case KEY_DIRECTION:
+                    return Color.rgb(198, 210, 230);
+                default:
+                    return Color.rgb(182, 194, 216);
+            }
         }
     }
 }
