@@ -72,6 +72,18 @@ impl TextComponent {
                     Self::replace_chars,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "modeSetting",
+                    "(I)V",
+                    Self::mode_setting_java,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "changeModeCard",
+                    "(I)V",
+                    Self::change_mode_card,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
                 JavaMethodProto::new("focusNotify", "(Z)V", Self::focus_notify, Default::default()),
             ],
@@ -556,29 +568,51 @@ impl TextComponent {
             );
         }
 
-        let current_mode: i32 = jvm
+        let mode_code: ClassInstanceRef<String> = jvm
             .invoke_virtual(
                 &im_handler,
-                "getCurrentMode",
-                "()I",
+                "getCurrentModeCode",
+                "()Ljava/lang/String;",
                 (),
             )
             .await?;
 
-        let mode_code = match current_mode {
-            0 => "EN/S",
-            1 => "EN/L",
-            2 => "N123",
-            3 => "KO",
-            _ => "",
-        };
-
-        let mode_code = JavaLangString::from_rust_string(jvm, mode_code).await?;
-        let mode = Self::check_mode_code(jvm, mode_code.into()).await?;
+        let mode = Self::check_mode_code(jvm, mode_code).await?;
 
         jvm.put_field(&mut this, "iMode", "I", mode).await?;
 
         Ok(())
+    }
+
+    async fn mode_setting_java(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+        mode: i32,
+    ) -> JvmResult<()> {
+        Self::mode_setting(jvm, this, mode).await
+    }
+
+    async fn change_mode_card(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+        _mode: i32,
+    ) -> JvmResult<()> {
+        let mode_viewer: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieModeViewer",
+                "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+            )
+            .await?;
+
+        if mode_viewer.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
+        }
+
+        jvm.invoke_virtual(&mode_viewer, "notifyChangeMode", "()V", ())
+            .await
     }
 
     async fn focus_notify(
@@ -1575,10 +1609,18 @@ impl TextComponent {
                     .await?;
 
                 let mode: i32 = jvm
-                    .invoke_virtual(&im_handler, "getCurrentModeCode", "()I", ())
+                    .invoke_virtual(&im_handler, "getCurrentMode", "()I", ())
                     .await?;
 
-                jvm.put_field(&mut this, "iMode", "I", mode).await?;
+                let _: () = jvm
+                    .invoke_virtual(&this, "modeSetting", "(I)V", (mode,))
+                    .await?;
+
+                let mode: i32 = jvm.get_field(&this, "iMode", "I").await?;
+
+                let _: () = jvm
+                    .invoke_virtual(&this, "changeModeCard", "(I)V", (mode,))
+                    .await?;
             }
 
             return Ok(true);

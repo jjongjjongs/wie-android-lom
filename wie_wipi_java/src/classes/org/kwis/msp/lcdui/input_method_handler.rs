@@ -1,7 +1,9 @@
 use alloc::vec;
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
+use java_constants::FieldAccessFlags;
+use java_runtime::classes::java::lang::String;
+use jvm::{runtime::JavaLangString, Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
 
 use crate::classes::org::kwis::msp::lcdui::{CandidateWindow, Display};
 
@@ -17,6 +19,7 @@ impl InputMethodHandler {
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
             methods: vec![
+                JavaMethodProto::new("<clinit>", "()V", Self::cl_init, Default::default()),
                 JavaMethodProto::new("<init>", "(I)V", Self::init, Default::default()),
                 JavaMethodProto::new("setCurrentMode", "(I)Z", Self::set_current_mode, Default::default()),
                 JavaMethodProto::new(
@@ -33,7 +36,7 @@ impl InputMethodHandler {
                 ),
                 JavaMethodProto::new(
                     "getCurrentModeCode",
-                    "()I",
+                    "()Ljava/lang/String;",
                     Self::get_current_mode_code,
                     Default::default(),
                 ),
@@ -69,7 +72,17 @@ impl InputMethodHandler {
                 ),
             ],
             fields: vec![
+                JavaFieldProto::new(
+                    "__wieSymbolModeCode",
+                    "Ljava/lang/String;",
+                    FieldAccessFlags::STATIC,
+                ),
                 JavaFieldProto::new("currentMode", "I", Default::default()),
+                JavaFieldProto::new(
+                    "__wieSupportedModes",
+                    "[Ljava/lang/String;",
+                    Default::default(),
+                ),
                 JavaFieldProto::new("__wieSymbolCardActive", "Z", Default::default()),
                 JavaFieldProto::new(
                     "__wieSymbolCard",
@@ -90,10 +103,51 @@ impl InputMethodHandler {
         }
     }
 
+    async fn cl_init(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+    ) -> JvmResult<()> {
+        let symbol = JavaLangString::from_rust_string(jvm, "SYMBOL").await?;
+
+        jvm.put_static_field(
+            "org/kwis/msp/lcdui/InputMethodHandler",
+            "__wieSymbolModeCode",
+            "Ljava/lang/String;",
+            symbol,
+        )
+        .await?;
+
+        Ok(())
+    }
+
     async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, constraint: i32) -> JvmResult<()> {
         tracing::debug!("stub org.kwis.msp.lcdui.InputMethodHandler::<init>({this:?}, {constraint})");
 
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
+
+        let mut supported_modes = jvm
+            .instantiate_array("Ljava/lang/String;", 4)
+            .await?;
+
+        let en_short = JavaLangString::from_rust_string(jvm, "EN/S").await?;
+        let en_long = JavaLangString::from_rust_string(jvm, "EN/L").await?;
+        let numeric = JavaLangString::from_rust_string(jvm, "N123").await?;
+        let korean = JavaLangString::from_rust_string(jvm, "KO").await?;
+
+        jvm.store_array(
+            &mut supported_modes,
+            0,
+            vec![en_short, en_long, numeric, korean],
+        )
+        .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieSupportedModes",
+            "[Ljava/lang/String;",
+            supported_modes,
+        )
+        .await?;
 
         // Native constraint 0 initializes the first supported input mode.
         jvm.put_field(&mut this, "currentMode", "I", 0).await?;
@@ -411,7 +465,38 @@ impl InputMethodHandler {
         jvm: &Jvm,
         _: &mut WieJvmContext,
         this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
-        jvm.get_field(&this, "currentMode", "I").await
+    ) -> JvmResult<ClassInstanceRef<String>> {
+        let mode: i32 = jvm.get_field(&this, "currentMode", "I").await?;
+
+        if mode == 99 {
+            return jvm
+                .get_static_field(
+                    "org/kwis/msp/lcdui/InputMethodHandler",
+                    "__wieSymbolModeCode",
+                    "Ljava/lang/String;",
+                )
+                .await;
+        }
+
+        if mode < 0 {
+            return Err(
+                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
+                    .await,
+            );
+        }
+
+        let supported_modes: ClassInstanceRef<Array<ClassInstanceRef<String>>> = jvm
+            .get_field(
+                &this,
+                "__wieSupportedModes",
+                "[Ljava/lang/String;",
+            )
+            .await?;
+
+        let mode_code: alloc::vec::Vec<ClassInstanceRef<String>> = jvm
+            .load_array(&supported_modes, mode as usize, 1)
+            .await?;
+
+        Ok(mode_code[0].clone())
     }
 }
