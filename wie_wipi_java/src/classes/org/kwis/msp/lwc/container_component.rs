@@ -127,12 +127,17 @@ impl ContainerComponent {
                     Self::process_event,
                     Default::default(),
                 ),
-                JavaMethodProto::new("removeComponent", "(I)V", Self::remove_component_index, Default::default()),
+                JavaMethodProto::new(
+                    "removeComponent",
+                    "(I)V",
+                    Self::remove_component_index,
+                    MethodAccessFlags::SYNCHRONIZED,
+                ),
                 JavaMethodProto::new(
                     "removeComponent",
                     "(Lorg/kwis/msp/lwc/Component;)V",
                     Self::remove_component,
-                    Default::default(),
+                    MethodAccessFlags::SYNCHRONIZED,
                 ),
                 JavaMethodProto::new(
                     "removeAllComponents",
@@ -2062,7 +2067,7 @@ impl ContainerComponent {
             return Err(
                 jvm.exception(
                     "java/lang/IndexOutOfBoundsException",
-                    "component index out of range",
+                    "Invalid index",
                 )
                 .await,
             );
@@ -2216,10 +2221,11 @@ impl ContainerComponent {
             .await?;
 
         if index < 0 {
-            return Err(
-                jvm.exception("java/lang/IllegalArgumentException", "")
-                    .await,
-            );
+            let exception = jvm
+                .new_class("java/lang/IllegalArgumentException", "()V", ())
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
         }
 
         let _: () = jvm
