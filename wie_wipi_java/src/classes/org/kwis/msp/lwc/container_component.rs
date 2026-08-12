@@ -1003,11 +1003,17 @@ impl ContainerComponent {
 
         let child_count: i32 = jvm.get_field(&this, "childCount", "I").await?;
 
-        let mut index = if focus_index >= 0 {
-            focus_index - 1
+        let start = if focus_index >= 0 {
+            focus_index
         } else {
-            child_count - 1
+            child_count
         };
+
+        if start == 0 {
+            return Ok(ClassInstanceRef::<Component>::new(None));
+        }
+
+        let mut index = start - 1;
 
         while index >= 0 {
             let child: ClassInstanceRef<Component> = jvm
@@ -1019,29 +1025,32 @@ impl ContainerComponent {
                 )
                 .await?;
 
-            if !child.is_null() {
-                let can_handle_input: bool = jvm
-                    .invoke_virtual(&child, "canHandleInput", "()Z", ())
-                    .await?;
+            if child.is_null() {
+                return Ok(child);
+            }
 
-                if can_handle_input {
-                    if jvm.is_instance(&**child, "org/kwis/msp/lwc/ContainerComponent") {
-                        let nested: ClassInstanceRef<Component> = jvm
-                            .invoke_virtual(
-                                &child,
-                                "getPrevTraversalComponent",
-                                "()Lorg/kwis/msp/lwc/Component;",
-                                (),
-                            )
-                            .await?;
+            let mask: i32 = jvm.get_field(&child, "mask", "I").await?;
 
-                        if !nested.is_null() {
-                            return Ok(nested);
-                        }
+            if mask & 0x4 != 0 {
+                if jvm.is_instance(
+                    &**child,
+                    "org/kwis/msp/lwc/ContainerComponent",
+                ) {
+                    let nested: ClassInstanceRef<Component> = jvm
+                        .invoke_virtual(
+                            &child,
+                            "getPrevTraversalComponent",
+                            "()Lorg/kwis/msp/lwc/Component;",
+                            (),
+                        )
+                        .await?;
+
+                    if !nested.is_null() {
+                        return Ok(nested);
                     }
-
-                    return Ok(child);
                 }
+
+                return Ok(child);
             }
 
             index -= 1;
@@ -1074,13 +1083,13 @@ impl ContainerComponent {
 
         let child_count: i32 = jvm.get_field(&this, "childCount", "I").await?;
 
-        if focus_index == child_count - 1 {
+        if child_count < 0 || focus_index == child_count - 1 {
             return Ok(ClassInstanceRef::<Component>::new(None));
         }
 
         let mut index = focus_index + 1;
 
-        while index < child_count {
+        loop {
             let child: ClassInstanceRef<Component> = jvm
                 .invoke_virtual(
                     &this,
@@ -1090,35 +1099,43 @@ impl ContainerComponent {
                 )
                 .await?;
 
-            if !child.is_null() {
-                let can_handle_input: bool = jvm
-                    .invoke_virtual(&child, "canHandleInput", "()Z", ())
-                    .await?;
+            let current_child_count: i32 =
+                jvm.get_field(&this, "childCount", "I").await?;
 
-                if can_handle_input {
-                    if jvm.is_instance(&**child, "org/kwis/msp/lwc/ContainerComponent") {
-                        let nested: ClassInstanceRef<Component> = jvm
-                            .invoke_virtual(
-                                &child,
-                                "getNextTraversalComponent",
-                                "()Lorg/kwis/msp/lwc/Component;",
-                                (),
-                            )
-                            .await?;
+            if index >= current_child_count {
+                return Ok(ClassInstanceRef::<Component>::new(None));
+            }
 
-                        if !nested.is_null() {
-                            return Ok(nested);
-                        }
+            if child.is_null() {
+                return Ok(child);
+            }
+
+            let mask: i32 = jvm.get_field(&child, "mask", "I").await?;
+
+            if mask & 0x4 != 0 {
+                if jvm.is_instance(
+                    &**child,
+                    "org/kwis/msp/lwc/ContainerComponent",
+                ) {
+                    let nested: ClassInstanceRef<Component> = jvm
+                        .invoke_virtual(
+                            &child,
+                            "getNextTraversalComponent",
+                            "()Lorg/kwis/msp/lwc/Component;",
+                            (),
+                        )
+                        .await?;
+
+                    if !nested.is_null() {
+                        return Ok(nested);
                     }
-
-                    return Ok(child);
                 }
+
+                return Ok(child);
             }
 
             index += 1;
         }
-
-        Ok(ClassInstanceRef::<Component>::new(None))
     }
 
     async fn get_focus_component(
@@ -1159,10 +1176,6 @@ impl ContainerComponent {
         }
 
         loop {
-            if !jvm.is_instance(&**current, "org/kwis/msp/lwc/ContainerComponent") {
-                return Ok(current);
-            }
-
             let focus: ClassInstanceRef<Component> = jvm
                 .get_field(
                     &current,
@@ -1175,11 +1188,54 @@ impl ContainerComponent {
                 return Ok(current);
             }
 
-            if !jvm.is_instance(&**focus, "org/kwis/msp/lwc/ContainerComponent") {
-                return Ok(focus);
+            if !jvm.is_instance(
+                &**focus,
+                "org/kwis/msp/lwc/ContainerComponent",
+            ) {
+                let current_focus: ClassInstanceRef<Component> = jvm
+                    .get_field(
+                        &current,
+                        "focusComponent",
+                        "Lorg/kwis/msp/lwc/Component;",
+                    )
+                    .await?;
+
+                if current_focus.is_null() {
+                    return Ok(current);
+                }
+
+                return Ok(current_focus);
             }
 
-            current = focus;
+            // Native re-reads focusComponent after the instanceof check.
+            let next: ClassInstanceRef<Component> = jvm
+                .get_field(
+                    &current,
+                    "focusComponent",
+                    "Lorg/kwis/msp/lwc/Component;",
+                )
+                .await?;
+
+            if next.is_null() {
+                let exception = jvm
+                    .instantiate_class("java/lang/NullPointerException")
+                    .await?;
+
+                return Err(JavaError::JavaException(exception));
+            }
+
+            if !jvm.is_instance(
+                &**next,
+                "org/kwis/msp/lwc/ContainerComponent",
+            ) {
+                let exception = jvm
+                    .instantiate_class("java/lang/ClassCastException")
+                    .await?;
+
+                return Err(JavaError::JavaException(exception));
+            }
+
+            current = next;
         }
     }
 
