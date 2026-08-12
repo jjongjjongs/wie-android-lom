@@ -1,11 +1,11 @@
 use alloc::{vec, vec::Vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
+use jvm::{runtime::JavaLangString, Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
-use crate::classes::org::kwis::msp::lcdui::InputMethodHandler;
+use crate::classes::org::kwis::msp::lcdui::{Display, Font, InputMethodHandler};
 
 // class org.kwis.msp.lcdui.CandidateWindow
 pub struct CandidateWindow;
@@ -64,6 +64,8 @@ impl CandidateWindow {
                 JavaFieldProto::new("__wieCandidateIndex", "I", Default::default()),
                 JavaFieldProto::new("__wieData", "[C", Default::default()),
                 JavaFieldProto::new("__wieCount", "I", Default::default()),
+                JavaFieldProto::new("__wieMaxLength", "I", Default::default()),
+                JavaFieldProto::new("__wieInputX", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -96,12 +98,66 @@ impl CandidateWindow {
         jvm.put_field(&mut this, "__wieCandidateIndex", "I", 0)
             .await?;
 
-        // Native CandidateWindow.setMaxLength() allocates this buffer later
-        // from the available text width and Font.stringWidth().  Until that
-        // lifecycle is restored, keep a valid empty buffer for count == 0.
-        let data = jvm.instantiate_array("C", 0).await?;
+        // Native CandidateWindow.isNewSymbolUI() is hard-wired to false in
+        // this platform build. getSymbolDrawPosition() therefore selects one
+        // of the old symbol-UI input bounds from the default display width.
+        let display: ClassInstanceRef<Display> = jvm
+            .invoke_static(
+                "org/kwis/msp/lcdui/Display",
+                "getDefaultDisplay",
+                "()Lorg/kwis/msp/lcdui/Display;",
+                (),
+            )
+            .await?;
+        let width: i32 = jvm.invoke_virtual(&display, "getWidth", "()I", ()).await?;
+
+        let (left_x, right_x) = match width {
+            120 => (11, 102),
+            176 => (17, 154),
+            240 => (30, 206),
+            320 => (69, 246),
+            _ => {
+                return Err(jvm
+                    .exception("java/lang/IllegalArgumentException", "Unknown ")
+                    .await);
+            }
+        };
+
+        // Old-symbol UI class initialization fills Font[4] with the default
+        // font. setMaxLength() measures "M" with that font.
+        let font: ClassInstanceRef<Font> = jvm
+            .invoke_static(
+                "org/kwis/msp/lcdui/Font",
+                "getDefaultFont",
+                "()Lorg/kwis/msp/lcdui/Font;",
+                (),
+            )
+            .await?;
+        let measure = JavaLangString::from_rust_string(jvm, "M").await?;
+        let font_width: i32 = jvm
+            .invoke_virtual(
+                &font,
+                "stringWidth",
+                "(Ljava/lang/String;)I",
+                (measure,),
+            )
+            .await?;
+
+        if font_width == 0 {
+            return Err(jvm
+                .exception("java/lang/ArithmeticException", "/ by zero")
+                .await);
+        }
+
+        let max_length = (right_x - left_x) / font_width;
+        let data = jvm.instantiate_array("C", max_length as usize).await?;
+
         jvm.put_field(&mut this, "__wieData", "[C", data).await?;
         jvm.put_field(&mut this, "__wieCount", "I", 0).await?;
+        jvm.put_field(&mut this, "__wieMaxLength", "I", max_length)
+            .await?;
+        jvm.put_field(&mut this, "__wieInputX", "I", left_x)
+            .await?;
 
         Ok(())
     }
