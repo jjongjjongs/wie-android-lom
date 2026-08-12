@@ -893,7 +893,15 @@ public final class MainActivity extends Activity {
 
     private void applyStatusBarInset(View view) {
         view.setOnApplyWindowInsetsListener((v, insets) -> {
-            v.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom());
+            // Reserve all four system-bar insets, not just top and bottom: in
+            // landscape a device can put its navigation bar on the left or the
+            // right edge, and without the side padding the number pad would
+            // slide under it.
+            v.setPadding(
+                    insets.getSystemWindowInsetLeft(),
+                    insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(),
+                    insets.getSystemWindowInsetBottom());
             return insets;
         });
     }
