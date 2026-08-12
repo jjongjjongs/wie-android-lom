@@ -1,7 +1,7 @@
 use alloc::vec;
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
+use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
 
 use crate::classes::org::kwis::msp::lcdui::{CandidateWindow, Display};
 
@@ -55,6 +55,18 @@ impl InputMethodHandler {
                     Self::notify_key_input,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "setInputMethodListener",
+                    "(Lorg/kwis/msp/lcdui/InputMethodListener;)V",
+                    Self::set_input_method_listener,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "notifyDataSelected",
+                    "([CII)V",
+                    Self::notify_data_selected,
+                    Default::default(),
+                ),
             ],
             fields: vec![
                 JavaFieldProto::new("currentMode", "I", Default::default()),
@@ -68,6 +80,11 @@ impl InputMethodHandler {
                 JavaFieldProto::new("__wieSymbolY", "I", Default::default()),
                 JavaFieldProto::new("__wieSymbolWidth", "I", Default::default()),
                 JavaFieldProto::new("__wieSymbolHeight", "I", Default::default()),
+                JavaFieldProto::new(
+                    "__wieInputMethodListener",
+                    "Lorg/kwis/msp/lcdui/InputMethodListener;",
+                    Default::default(),
+                ),
             ],
             access_flags: Default::default(),
         }
@@ -151,6 +168,56 @@ impl InputMethodHandler {
         // Native InputMethodHandler accepts the type-1 key event and delivers
         // the resulting text through its InputMethodListener callback.
         Ok(mode == 3 && event_type == 1)
+    }
+
+    async fn set_input_method_listener(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        listener: ClassInstanceRef<()>,
+    ) -> JvmResult<()> {
+        jvm.put_field(
+            &mut this,
+            "__wieInputMethodListener",
+            "Lorg/kwis/msp/lcdui/InputMethodListener;",
+            listener,
+        )
+        .await
+    }
+
+    async fn notify_data_selected(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        data: ClassInstanceRef<Array<JavaChar>>,
+        count: i32,
+        change_type: i32,
+    ) -> JvmResult<()> {
+        let listener: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieInputMethodListener",
+                "Lorg/kwis/msp/lcdui/InputMethodListener;",
+            )
+            .await?;
+
+        if listener.is_null() {
+            return Ok(());
+        }
+
+        let callback_type = match change_type {
+            0 => -1,
+            1 | -1 => change_type,
+            _ => return Ok(()),
+        };
+
+        jvm.invoke_virtual(
+            &listener,
+            "notifyTextChanged",
+            "([CII)V",
+            (data, count, callback_type),
+        )
+        .await
     }
 
     async fn get_current_mode(

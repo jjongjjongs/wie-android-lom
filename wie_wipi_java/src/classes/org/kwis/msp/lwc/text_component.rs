@@ -44,6 +44,11 @@ impl TextComponent {
                     "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
                     Default::default(),
                 ),
+                JavaFieldProto::new(
+                    "__wieInputListener",
+                    "Lorg/kwis/msp/lwc/InputListener;",
+                    Default::default(),
+                ),
                 // WipiPlayer Plus keeps these values in TextComponent's
                 // native per-instance auxiliary area (+0x74..+0x84).
                 // They are WIE-internal storage, not platform Java fields.
@@ -81,6 +86,22 @@ impl TextComponent {
         )
         .await?;
 
+        let input_listener = jvm
+            .new_class(
+                "org/kwis/msp/lwc/InputListener",
+                "(Lorg/kwis/msp/lwc/TextComponent;)V",
+                (this.clone(),),
+            )
+            .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieInputListener",
+            "Lorg/kwis/msp/lwc/InputListener;",
+            input_listener.clone(),
+        )
+        .await?;
+
         let im_handler = jvm
             .new_class(
                 "org/kwis/msp/lcdui/InputMethodHandler",
@@ -93,7 +114,7 @@ impl TextComponent {
             &mut this,
             "imHandler",
             "Lorg/kwis/msp/lcdui/InputMethodHandler;",
-            im_handler,
+            im_handler.clone(),
         )
         .await?;
 
@@ -112,6 +133,15 @@ impl TextComponent {
             mode_viewer,
         )
         .await?;
+
+        let _: () = jvm
+            .invoke_virtual(
+                &im_handler,
+                "setInputMethodListener",
+                "(Lorg/kwis/msp/lcdui/InputMethodListener;)V",
+                (input_listener,),
+            )
+            .await?;
 
         let text = JavaLangString::from_rust_string(jvm, "").await?;
         jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
