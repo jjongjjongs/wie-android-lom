@@ -752,34 +752,44 @@ impl ContainerComponent {
         let child_count: i32 = jvm.get_field(&this, "childCount", "I").await?;
 
         if child_count > 0 {
-            let children = jvm
-                .get_field(
-                    &this,
-                    "children",
-                    "[Lorg/kwis/msp/lwc/Component;",
-                )
-                .await?;
+            let mut index = 0i32;
 
-            let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
-                jvm.load_array(&children, 0, child_count as usize).await?;
+            loop {
+                let children = jvm
+                    .get_field(
+                        &this,
+                        "children",
+                        "[Lorg/kwis/msp/lwc/Component;",
+                    )
+                    .await?;
 
-            for child in values {
+                let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
+                    jvm.load_array(&children, index as usize, 1).await?;
+
+                let child = values[0].clone();
+
                 if child.is_null() {
-                    return Err(
-                        jvm.exception(
-                            "java/lang/NullPointerException",
-                            "null child in ContainerComponent",
-                        )
-                        .await,
-                    );
+                    let exception = jvm
+                        .instantiate_class("java/lang/NullPointerException")
+                        .await?;
+
+                    return Err(JavaError::JavaException(exception));
                 }
 
-                let child_valid: bool =
-                    jvm.invoke_virtual(&child, "isValid", "()Z", ()).await?;
+                let child_mask: i32 = jvm.get_field(&child, "mask", "I").await?;
 
-                if !child_valid {
+                if child_mask & 0x1 == 0 {
                     let _: () =
                         jvm.invoke_virtual(&child, "validate", "()V", ()).await?;
+                }
+
+                index += 1;
+
+                let current_child_count: i32 =
+                    jvm.get_field(&this, "childCount", "I").await?;
+
+                if index >= current_child_count {
+                    break;
                 }
             }
         }
