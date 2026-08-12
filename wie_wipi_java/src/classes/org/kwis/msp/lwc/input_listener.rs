@@ -69,7 +69,7 @@ impl InputListener {
     async fn notify_text_changed(
         jvm: &Jvm,
         _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
+        mut this: ClassInstanceRef<Self>,
         data: ClassInstanceRef<Array<JavaChar>>,
         count: i32,
         change_type: i32,
@@ -97,6 +97,54 @@ impl InputListener {
             -1 => {
                 let mut owner = owner;
                 jvm.put_field(&mut owner, "iMode", "I", 1).await?;
+
+                let max_length: i32 =
+                    jvm.get_field(&owner, "maxLength", "I").await?;
+
+                if max_length > 0 {
+                    let text: ClassInstanceRef<java_runtime::classes::java::lang::String> =
+                        jvm.get_field(
+                            &owner,
+                            "text",
+                            "Ljava/lang/String;",
+                        )
+                        .await?;
+
+                    let text_length: i32 =
+                        jvm.invoke_virtual(&text, "length", "()I", ()).await?;
+
+                    if max_length < text_length + count {
+                        jvm.put_field(
+                            &mut this,
+                            "__wieChanged",
+                            "Z",
+                            true,
+                        )
+                        .await?;
+
+                        if count == 2 {
+                            let _: () = jvm
+                                .invoke_virtual(
+                                    &owner,
+                                    "insert",
+                                    "([CIII)V",
+                                    (data, 0, 1, cursor),
+                                )
+                                .await?;
+                        }
+
+                        let _: bool = jvm
+                            .invoke_virtual(
+                                &owner,
+                                "keyNotify",
+                                "(II)Z",
+                                (1, -99),
+                            )
+                            .await?;
+
+                        return Ok(());
+                    }
+                }
 
                 jvm.invoke_virtual(
                     &owner,
