@@ -1479,11 +1479,7 @@ impl ContainerComponent {
         event_type: i32,
         key: i32,
     ) -> JvmResult<bool> {
-        // WipiPlayer Plus only performs traversal on key release.
-        if event_type != 2 {
-            return Ok(false);
-        }
-
+        // Native resolves the game action before checking event_type.
         let game_action: i32 = jvm
             .invoke_static(
                 "org/kwis/msp/lcdui/Display",
@@ -1492,6 +1488,10 @@ impl ContainerComponent {
                 (key,),
             )
             .await?;
+
+        if event_type != 2 {
+            return Ok(false);
+        }
 
         let target: ClassInstanceRef<Component> = match game_action {
             // UP / LEFT
@@ -1544,43 +1544,204 @@ impl ContainerComponent {
         p2: i32,
         p3: i32,
     ) -> JvmResult<bool> {
-        // Native ContainerComponent::processEvent gives KEY events to the
-        // currently focused component first.
-        if event == 3 {
-            let focus: ClassInstanceRef<Component> = jvm
-                .get_field(
-                    &this,
-                    "focusComponent",
-                    "Lorg/kwis/msp/lwc/Component;",
-                )
-                .await?;
-
-            if !focus.is_null() {
-                let handled: bool = jvm
-                    .invoke_virtual(
-                        &focus,
-                        "processEvent",
-                        "(IIII)Z",
-                        (event, p1, p2, p3),
+        match event {
+            // FOCUS
+            1 => {
+                let focus: ClassInstanceRef<Component> = jvm
+                    .get_field(
+                        &this,
+                        "focusComponent",
+                        "Lorg/kwis/msp/lwc/Component;",
                     )
                     .await?;
 
-                if handled {
-                    return Ok(true);
+                if !focus.is_null() {
+                    let _: bool = jvm
+                        .invoke_virtual(
+                            &focus,
+                            "processEvent",
+                            "(IIII)Z",
+                            (1, p1, p2, p3),
+                        )
+                        .await?;
                 }
-            }
-        }
 
-        // For unhandled KEY events, and for the other event classes,
-        // fall back to Component.processEvent().
-        jvm.invoke_special(
-            &this,
-            "org/kwis/msp/lwc/Component",
-            "processEvent",
-            "(IIII)Z",
-            (event, p1, p2, p3),
-        )
-        .await
+                let _: bool = jvm
+                    .invoke_special(
+                        &this,
+                        "org/kwis/msp/lwc/Component",
+                        "processEvent",
+                        "(IIII)Z",
+                        (1, p1, p2, p3),
+                    )
+                    .await?;
+
+                Ok(true)
+            }
+
+            // SHOW
+            2 => {
+                let mut index = 0i32;
+
+                let initial_child_count: i32 =
+                    jvm.get_field(&this, "childCount", "I").await?;
+
+                if initial_child_count > 0 {
+                    loop {
+                        let children = jvm
+                            .get_field(
+                                &this,
+                                "children",
+                                "[Lorg/kwis/msp/lwc/Component;",
+                            )
+                            .await?;
+
+                        let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
+                            jvm.load_array(&children, index as usize, 1).await?;
+
+                        let child = values[0].clone();
+
+                        if child.is_null() {
+                            let exception = jvm
+                                .instantiate_class("java/lang/NullPointerException")
+                                .await?;
+
+                            return Err(JavaError::JavaException(exception));
+                        }
+
+                        let _: bool = jvm
+                            .invoke_virtual(
+                                &child,
+                                "processEvent",
+                                "(IIII)Z",
+                                (2, p1, p2, p3),
+                            )
+                            .await?;
+
+                        index += 1;
+
+                        let child_count: i32 =
+                            jvm.get_field(&this, "childCount", "I").await?;
+
+                        if index >= child_count {
+                            break;
+                        }
+                    }
+                }
+
+                let _: bool = jvm
+                    .invoke_special(
+                        &this,
+                        "org/kwis/msp/lwc/Component",
+                        "processEvent",
+                        "(IIII)Z",
+                        (2, p1, p2, p3),
+                    )
+                    .await?;
+
+                Ok(true)
+            }
+
+            // KEY
+            3 => {
+                let focus: ClassInstanceRef<Component> = jvm
+                    .get_field(
+                        &this,
+                        "focusComponent",
+                        "Lorg/kwis/msp/lwc/Component;",
+                    )
+                    .await?;
+
+                if !focus.is_null() {
+                    let handled: bool = jvm
+                        .invoke_virtual(
+                            &focus,
+                            "processEvent",
+                            "(IIII)Z",
+                            (3, p1, p2, p3),
+                        )
+                        .await?;
+
+                    if handled {
+                        return Ok(true);
+                    }
+                }
+
+                jvm.invoke_special(
+                    &this,
+                    "org/kwis/msp/lwc/Component",
+                    "processEvent",
+                    "(IIII)Z",
+                    (3, p1, p2, p3),
+                )
+                .await
+            }
+
+            // HIDE / container-wide event 4
+            4 => {
+                let mut index = 0i32;
+
+                let initial_child_count: i32 =
+                    jvm.get_field(&this, "childCount", "I").await?;
+
+                if initial_child_count > 0 {
+                    loop {
+                        let children = jvm
+                            .get_field(
+                                &this,
+                                "children",
+                                "[Lorg/kwis/msp/lwc/Component;",
+                            )
+                            .await?;
+
+                        let values: alloc::vec::Vec<ClassInstanceRef<Component>> =
+                            jvm.load_array(&children, index as usize, 1).await?;
+
+                        let child = values[0].clone();
+
+                        if child.is_null() {
+                            let exception = jvm
+                                .instantiate_class("java/lang/NullPointerException")
+                                .await?;
+
+                            return Err(JavaError::JavaException(exception));
+                        }
+
+                        let _: bool = jvm
+                            .invoke_virtual(
+                                &child,
+                                "processEvent",
+                                "(IIII)Z",
+                                (4, p1, p2, p3),
+                            )
+                            .await?;
+
+                        index += 1;
+
+                        let child_count: i32 =
+                            jvm.get_field(&this, "childCount", "I").await?;
+
+                        if index >= child_count {
+                            break;
+                        }
+                    }
+                }
+
+                let _: bool = jvm
+                    .invoke_special(
+                        &this,
+                        "org/kwis/msp/lwc/Component",
+                        "processEvent",
+                        "(IIII)Z",
+                        (4, p1, p2, p3),
+                    )
+                    .await?;
+
+                Ok(false)
+            }
+
+            _ => Ok(false),
+        }
     }
 
     async fn add_component(
