@@ -1807,17 +1807,18 @@ impl ContainerComponent {
             return Err(
                 jvm.exception(
                     "java/lang/IndexOutOfBoundsException",
-                    "component index out of range",
+                    "Invalid index",
                 )
                 .await,
             );
         }
 
         if component.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "")
-                    .await,
-            );
+            let exception = jvm
+                .new_class("java/lang/NullPointerException", "()V", ())
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
         }
 
         let parent: ClassInstanceRef<()> = jvm
@@ -1829,13 +1830,14 @@ impl ContainerComponent {
             .await?;
 
         if !parent.is_null() {
-            return Err(
-                jvm.exception("java/lang/IllegalArgumentException", "")
-                    .await,
-            );
+            let exception = jvm
+                .new_class("java/lang/IllegalArgumentException", "()V", ())
+                .await?;
+
+            return Err(JavaError::JavaException(exception));
         }
 
-        let mut children = jvm
+        let children = jvm
             .get_field(
                 &this,
                 "children",
@@ -1857,36 +1859,64 @@ impl ContainerComponent {
             .await?;
 
         let transfer_focus =
-            !focus.is_null()
-                && !old.is_null()
-                && focus.identity() == old.identity();
+            if focus.is_null() && old.is_null() {
+                let exception = jvm
+                    .instantiate_class("java/lang/NullPointerException")
+                    .await?;
 
-        if transfer_focus {
-            let _: bool = jvm
-                .invoke_virtual(
-                    &old,
-                    "processEvent",
-                    "(IIII)Z",
-                    (1, 0, 0, 0),
-                )
-                .await?;
-        }
+                return Err(JavaError::JavaException(exception));
+            } else if !focus.is_null()
+                && !old.is_null()
+                && focus.identity() == old.identity()
+            {
+                let _: bool = jvm
+                    .invoke_virtual(
+                        &old,
+                        "processEvent",
+                        "(IIII)Z",
+                        (1, 0, 0, 0),
+                    )
+                    .await?;
+
+                true
+            } else {
+                false
+            };
 
         let shown: bool = jvm
             .invoke_virtual(&this, "isShown", "()Z", ())
             .await?;
 
         if shown {
-            if !old.is_null() {
-                let _: bool = jvm
-                    .invoke_virtual(
-                        &old,
-                        "processEvent",
-                        "(IIII)Z",
-                        (2, 0, 0, 0),
-                    )
+            let shown_children = jvm
+                .get_field(
+                    &this,
+                    "children",
+                    "[Lorg/kwis/msp/lwc/Component;",
+                )
+                .await?;
+
+            let shown_old_values: alloc::vec::Vec<ClassInstanceRef<Component>> =
+                jvm.load_array(&shown_children, index as usize, 1).await?;
+
+            let shown_old = shown_old_values[0].clone();
+
+            if shown_old.is_null() {
+                let exception = jvm
+                    .instantiate_class("java/lang/NullPointerException")
                     .await?;
+
+                return Err(JavaError::JavaException(exception));
             }
+
+            let _: bool = jvm
+                .invoke_virtual(
+                    &shown_old,
+                    "processEvent",
+                    "(IIII)Z",
+                    (2, 0, 0, 0),
+                )
+                .await?;
 
             let _: bool = jvm
                 .invoke_virtual(
@@ -1898,8 +1928,16 @@ impl ContainerComponent {
                 .await?;
         }
 
+        let mut current_children = jvm
+            .get_field(
+                &this,
+                "children",
+                "[Lorg/kwis/msp/lwc/Component;",
+            )
+            .await?;
+
         jvm.store_array(
-            &mut children,
+            &mut current_children,
             index as usize,
             [component.clone()],
         )
