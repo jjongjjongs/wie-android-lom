@@ -32,6 +32,12 @@ impl ContainerComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "getNumberOfComponent",
+                    "()I",
+                    Self::get_number_of_component,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "controlInset",
                     "(Z)V",
                     Self::control_inset,
@@ -182,9 +188,11 @@ impl ContainerComponent {
         }
     }
 
-    async fn init(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
-        tracing::debug!("stub org.kwis.msp.lwc.ContainerComponent::<init>({this:?})");
-
+    async fn init(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<()> {
         let _: () = jvm
             .invoke_special(
                 &this,
@@ -200,6 +208,8 @@ impl ContainerComponent {
             .await?;
 
         let mut this = this;
+
+        jvm.put_field(&mut this, "useFrame", "Z", false).await?;
         jvm.put_field(
             &mut this,
             "children",
@@ -207,26 +217,17 @@ impl ContainerComponent {
             children,
         )
         .await?;
-        jvm.put_field(&mut this, "childCount", "I", 0).await?;
-        jvm.put_field(
-            &mut this,
-            "focusComponent",
-            "Lorg/kwis/msp/lwc/Component;",
-            ClassInstanceRef::<Component>::new(None),
-        )
-        .await?;
-
-        jvm.put_field(&mut this, "offsetX", "I", 0).await?;
-        jvm.put_field(&mut this, "offsetY", "I", 0).await?;
-        jvm.put_field(&mut this, "insetTop", "S", 0i16).await?;
-        jvm.put_field(&mut this, "insetBottom", "S", 0i16).await?;
-        jvm.put_field(&mut this, "insetLeft", "S", 0i16).await?;
-        jvm.put_field(&mut this, "insetRight", "S", 0i16).await?;
-        jvm.put_field(&mut this, "useFrame", "Z", false).await?;
 
         Ok(())
     }
 
+    async fn get_number_of_component(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+    ) -> JvmResult<i32> {
+        jvm.get_field(&this, "childCount", "I").await
+    }
 
     async fn control_inset(
         jvm: &Jvm,
