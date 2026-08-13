@@ -183,6 +183,14 @@ impl ContainerComponent {
                 JavaFieldProto::new("insetLeft", "S", Default::default()),
                 JavaFieldProto::new("insetRight", "S", Default::default()),
                 JavaFieldProto::new("useFrame", "Z", Default::default()),
+                // WIE-private equivalent of native ContainerComponent +0x60.
+                // FormComponent layout uses this as the current overflow /
+                // scrollbar-required state.
+                JavaFieldProto::new(
+                    "__wieContainerLayoutOverflow",
+                    "Z",
+                    Default::default(),
+                ),
             ],
             access_flags: Default::default(),
         }
