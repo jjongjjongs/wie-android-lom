@@ -16,7 +16,22 @@ impl TextComponent {
             parent_class: Some("org/kwis/msp/lwc/Component"),
             interfaces: vec![],
             methods: vec![
+                // Compatibility constructor retained for existing Rust-side callers.
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
+                // Native TextComponent::<init>(int)
+                JavaMethodProto::new(
+                    "<init>",
+                    "(I)V",
+                    Self::init_with_constraint,
+                    Default::default(),
+                ),
+                // Native TextComponent::<init>(Display,int)
+                JavaMethodProto::new(
+                    "<init>",
+                    "(Lorg/kwis/msp/lcdui/Display;I)V",
+                    Self::init_with_display_constraint,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("setMaxLength", "(I)V", Self::set_max_length, Default::default()),
                 JavaMethodProto::new("getMaxLength", "()I", Self::get_max_length, Default::default()),
                 JavaMethodProto::new("getString", "()Ljava/lang/String;", Self::get_string, Default::default()),
@@ -84,6 +99,12 @@ impl TextComponent {
                     Self::change_mode_card,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "setSymbolPosition",
+                    "()V",
+                    Self::set_symbol_position_java,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("keyNotify", "(II)Z", Self::key_notify, Default::default()),
                 JavaMethodProto::new("focusNotify", "(Z)V", Self::focus_notify, Default::default()),
             ],
@@ -125,6 +146,11 @@ impl TextComponent {
                 // WipiPlayer Plus keeps these values in TextComponent's
                 // native per-instance auxiliary area (+0x74..+0x84).
                 // They are WIE-internal storage, not platform Java fields.
+                // Native TextComponent auxiliary state:
+                //   +0x6c = 1
+                //   +0x70 = -1
+                JavaFieldProto::new("__wieTextState6c", "I", Default::default()),
+                JavaFieldProto::new("__wieTextState70", "I", Default::default()),
                 JavaFieldProto::new("__wieViewportHeight", "I", Default::default()),
                 JavaFieldProto::new("__wieViewportY", "I", Default::default()),
                 JavaFieldProto::new("__wieViewportWidth", "I", Default::default()),
@@ -135,14 +161,47 @@ impl TextComponent {
         }
     }
 
-    async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<TextComponent>) -> JvmResult<()> {
-        tracing::debug!("stub org.kwis.msp.lwc.TextComponent::<init>({this:?})");
+    async fn init(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<()> {
+        // Compatibility-only ()V constructor. The native class exposes
+        // (I)V and (Display,I)V; keep ()V for existing incomplete Rust
+        // subclasses such as TextFieldComponent.
+        Self::init_with_constraint(
+            jvm,
+            context,
+            this.clone(),
+            0,
+        )
+        .await?;
 
-        let _: () = jvm.invoke_special(&this, "org/kwis/msp/lwc/Component", "<init>", "()V", ()).await?;
+        // Native TextBox immediately supplies its own string. Compatibility
+        // callers of ()V historically expect a non-null empty text object.
+        let text = JavaLangString::from_rust_string(jvm, "").await?;
+        let mut this = this;
+        jvm.put_field(
+            &mut this,
+            "text",
+            "Ljava/lang/String;",
+            text,
+        )
+        .await?;
 
-        // Native no-display constructor obtains Display.getDefaultDisplay()
-        // and delegates with CONSTRAINT_ANY (0) on the current WIE path.
-        let display: ClassInstanceRef<crate::classes::org::kwis::msp::lcdui::Display> = jvm
+        Ok(())
+    }
+
+    async fn init_with_constraint(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+        constraint: i32,
+    ) -> JvmResult<()> {
+        // Native s0 @ 0x236c3c:
+        // Display.getDefaultDisplay();
+        // tail-call TextComponent(Display,constraint).
+        let display: ClassInstanceRef<()> = jvm
             .invoke_static(
                 "org/kwis/msp/lcdui/Display",
                 "getDefaultDisplay",
@@ -151,17 +210,46 @@ impl TextComponent {
             )
             .await?;
 
-        jvm.put_field(
-            &mut this,
-            "__wieTextDisplay",
-            "Lorg/kwis/msp/lcdui/Display;",
-            display.clone(),
+        Self::init_with_display_constraint(
+            jvm,
+            context,
+            this,
+            display,
+            constraint,
         )
-        .await?;
+        .await
+    }
 
-        let input_listener = jvm
+    async fn init_with_display_constraint(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<TextComponent>,
+        display: ClassInstanceRef<()>,
+        constraint: i32,
+    ) -> JvmResult<()> {
+        // Native s1 @ 0x24377c.
+        let _: () = jvm
+            .invoke_special(
+                &this,
+                "org/kwis/msp/lwc/Component",
+                "<init>",
+                "()V",
+                (),
+            )
+            .await?;
+
+        // Native defaults:
+        // +0x3c m_cPos = 0
+        // +0x40 charCount = 0 (derived from Rust String representation)
+        // +0x58 wide = 0   (unused synthetic native storage)
+        // +0x5c tShell = null
+        // +0x60 maxLength = -1
+        jvm.put_field(&mut this, "m_cPos", "I", 0).await?;
+        jvm.put_field(&mut this, "maxLength", "I", -1).await?;
+
+        let constraint_checker = jvm
             .new_class(
-                "org/kwis/msp/lwc/InputListener",
+                "org/kwis/msp/lwc/ConstraintChecker",
                 "(Lorg/kwis/msp/lwc/TextComponent;)V",
                 (this.clone(),),
             )
@@ -169,56 +257,11 @@ impl TextComponent {
 
         jvm.put_field(
             &mut this,
-            "__wieInputListener",
-            "Lorg/kwis/msp/lwc/InputListener;",
-            input_listener.clone(),
+            "__wieConstraintChecker",
+            "Lorg/kwis/msp/lwc/ConstraintChecker;",
+            constraint_checker,
         )
         .await?;
-
-        let im_handler = jvm
-            .new_class(
-                "org/kwis/msp/lcdui/InputMethodHandler",
-                "(I)V",
-                (0,),
-            )
-            .await?;
-
-        jvm.put_field(
-            &mut this,
-            "imHandler",
-            "Lorg/kwis/msp/lcdui/InputMethodHandler;",
-            im_handler.clone(),
-        )
-        .await?;
-
-        let mode_viewer = jvm
-            .new_class(
-                "org/kwis/msp/lwc/TextComponent$ModeViewer",
-                "(Lorg/kwis/msp/lwc/TextComponent;Lorg/kwis/msp/lcdui/Display;)V",
-                (this.clone(), display),
-            )
-            .await?;
-
-        jvm.put_field(
-            &mut this,
-            "__wieModeViewer",
-            "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
-            mode_viewer,
-        )
-        .await?;
-
-        let _: () = jvm
-            .invoke_virtual(
-                &im_handler,
-                "setInputMethodListener",
-                "(Lorg/kwis/msp/lcdui/InputMethodListener;)V",
-                (input_listener,),
-            )
-            .await?;
-
-        let text = JavaLangString::from_rust_string(jvm, "").await?;
-        jvm.put_field(&mut this, "text", "Ljava/lang/String;", text).await?;
-        jvm.put_field(&mut this, "maxLength", "I", -1).await?;
 
         let font: ClassInstanceRef<()> = jvm
             .invoke_static(
@@ -237,9 +280,26 @@ impl TextComponent {
         )
         .await?;
 
-        let constraint_checker = jvm
+        // Native +0x70 = -1, +0x6c = 1.
+        jvm.put_field(
+            &mut this,
+            "__wieTextState70",
+            "I",
+            -1,
+        )
+        .await?;
+
+        jvm.put_field(
+            &mut this,
+            "__wieTextState6c",
+            "I",
+            1,
+        )
+        .await?;
+
+        let input_listener = jvm
             .new_class(
-                "org/kwis/msp/lwc/ConstraintChecker",
+                "org/kwis/msp/lwc/InputListener",
                 "(Lorg/kwis/msp/lwc/TextComponent;)V",
                 (this.clone(),),
             )
@@ -247,11 +307,53 @@ impl TextComponent {
 
         jvm.put_field(
             &mut this,
-            "__wieConstraintChecker",
-            "Lorg/kwis/msp/lwc/ConstraintChecker;",
-            constraint_checker,
+            "__wieInputListener",
+            "Lorg/kwis/msp/lwc/InputListener;",
+            input_listener,
         )
         .await?;
+
+        // Native +0x50 = supplied Display.
+        jvm.put_field(
+            &mut this,
+            "__wieTextDisplay",
+            "Lorg/kwis/msp/lcdui/Display;",
+            display,
+        )
+        .await?;
+
+        // Native Component +0x34 |= 4.
+        let mut mask: i32 =
+            jvm.get_field(&this, "mask", "I").await?;
+        mask |= 0x4;
+        jvm.put_field(
+            &mut this,
+            "mask",
+            "I",
+            mask,
+        )
+        .await?;
+
+        // Native virtual +0xe0.
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "setConstraint",
+                "(I)V",
+                (constraint,),
+            )
+            .await?;
+
+        // Native virtual +0xe8. This creates InputMethodHandler,
+        // ModeViewer, attaches InputListener and applies the current mode.
+        let _: () = jvm
+            .invoke_virtual(
+                &this,
+                "controlInputMethodHandler",
+                "(I)V",
+                (constraint,),
+            )
+            .await?;
 
         Ok(())
     }
@@ -399,6 +501,14 @@ impl TextComponent {
         .await?;
 
         Ok(())
+    }
+
+    async fn set_symbol_position_java(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<()> {
+        Self::set_symbol_position(jvm, this).await
     }
 
     async fn set_symbol_position(
