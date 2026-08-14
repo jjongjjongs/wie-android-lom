@@ -6,7 +6,7 @@ pub mod classes;
 
 use wie_jvm_support::WieJavaClassProto;
 
-pub fn get_protos() -> [WieJavaClassProto; 49] {
+pub fn get_protos() -> [WieJavaClassProto; 51] {
     [
         crate::classes::org::kwis::msf::io::Network::as_proto(),
         crate::classes::org::kwis::msf::io::SchemeNotFoundException::as_proto(),
@@ -45,6 +45,8 @@ pub fn get_protos() -> [WieJavaClassProto; 49] {
         crate::classes::org::kwis::msp::lwc::TextComponentModeViewer::as_proto(),
         crate::classes::org::kwis::msp::lwc::TextBoxComponent::as_proto(),
         crate::classes::org::kwis::msp::lwc::TextBoxComponentAction::as_proto(),
+        crate::classes::org::kwis::msp::lwc::TextFieldComponentAction::as_proto(),
+        crate::classes::org::kwis::msp::lwc::TextFieldComponentTextPopup::as_proto(),
         crate::classes::org::kwis::msp::lwc::TextFieldComponent::as_proto(),
         crate::classes::org::kwis::msp::lwc::TextFormatProcessor::as_proto(),
         crate::classes::org::kwis::msp::lwc::TextPopup::as_proto(),

@@ -100,6 +100,12 @@ impl TextComponent {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "countModeYPos",
+                    "()I",
+                    Self::count_mode_y_pos,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "setSymbolPosition",
                     "()V",
                     Self::set_symbol_position_java,
@@ -701,6 +707,86 @@ impl TextComponent {
         mode: i32,
     ) -> JvmResult<()> {
         Self::mode_setting(jvm, this, mode).await
+    }
+
+
+    async fn count_mode_y_pos(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<TextComponent>,
+    ) -> JvmResult<i32> {
+        // Native countModeYPos_v0 @ 0x236c74.
+        let mode_viewer: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieModeViewer",
+                "Lorg/kwis/msp/lwc/TextComponent$ModeViewer;",
+            )
+            .await?;
+
+        if mode_viewer.is_null() {
+            return Err(
+                jvm.exception("java/lang/NullPointerException", "")
+                    .await,
+            );
+        }
+
+        let mode_height: i32 = jvm
+            .invoke_virtual(
+                &mode_viewer,
+                "getHeight",
+                "()I",
+                (),
+            )
+            .await?;
+
+        let viewport_y: i32 = jvm
+            .get_field(
+                &this,
+                "__wieViewportY",
+                "I",
+            )
+            .await?;
+
+        // candidate = viewportY + 2 - modeViewer.getHeight()
+        let candidate = viewport_y
+            .wrapping_add(2)
+            .wrapping_sub(mode_height);
+
+        if candidate >= 0 {
+            return Ok(candidate);
+        }
+
+        let viewport_height: i32 = jvm
+            .get_field(
+                &this,
+                "__wieViewportHeight",
+                "I",
+            )
+            .await?;
+
+        let viewport_parent_height: i32 = jvm
+            .get_field(
+                &this,
+                "__wieViewportParentHeight",
+                "I",
+            )
+            .await?;
+
+        // min(viewportY + viewportHeight - 2,
+        //     viewportParentHeight - 2)
+        let bottom = viewport_y
+            .wrapping_add(viewport_height)
+            .wrapping_sub(2);
+
+        let parent_bottom =
+            viewport_parent_height.wrapping_sub(2);
+
+        Ok(if bottom < parent_bottom {
+            bottom
+        } else {
+            parent_bottom
+        })
     }
 
     async fn change_mode_card(
