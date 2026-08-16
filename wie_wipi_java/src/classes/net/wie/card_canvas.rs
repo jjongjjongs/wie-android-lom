@@ -364,6 +364,16 @@ impl CardCanvas {
     ) -> JvmResult<()> {
         tracing::debug!("net.wie.CardCanvas::handleNotifyEvent({this:?}, {type}, {param1}, {param2})");
 
+        // Native org.kwis.msp.lcdui.Display.eventNotify_v0 dispatches
+        // registered JletEventListeners independently of Card presence.
+        Display::notify_jlet_event_listeners(
+            jvm,
+            r#type,
+            param1,
+            param2,
+        )
+        .await?;
+
         let cards = jvm.get_field(&this, "cards", "Ljava/util/Vector;").await?;
         let length: i32 = jvm.invoke_virtual(&cards, "size", "()I", ()).await?;
         if length == 0 {

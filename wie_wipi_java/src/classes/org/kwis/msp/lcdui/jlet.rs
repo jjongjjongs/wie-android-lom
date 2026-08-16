@@ -3,7 +3,7 @@ use alloc::vec;
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_constants::{FieldAccessFlags, MethodAccessFlags};
 use java_runtime::classes::java::lang::String;
-use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
+use jvm::{runtime::JavaLangString, ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::midlet::MIDlet;
@@ -34,6 +34,18 @@ impl Jlet {
                     Default::default(),
                 ),
                 JavaMethodProto::new(
+                    "getDisplay",
+                    "(Ljava/lang/String;)Lorg/kwis/msp/lcdui/Display;",
+                    Self::get_display,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "setRotatedDisplay",
+                    "(Lorg/kwis/msp/lcdui/Display;)V",
+                    Self::set_rotated_display,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "getAppProperty",
                     "(Ljava/lang/String;)Ljava/lang/String;",
                     Self::get_app_property,
@@ -44,6 +56,8 @@ impl Jlet {
             fields: vec![
                 JavaFieldProto::new("wipiMidlet", "Lnet/wie/WIPIMIDlet;", Default::default()),
                 JavaFieldProto::new("dis", "Lorg/kwis/msp/lcdui/Display;", Default::default()),
+                JavaFieldProto::new("dualDis", "Lorg/kwis/msp/lcdui/Display;", Default::default()),
+                JavaFieldProto::new("rotatedDis", "Lorg/kwis/msp/lcdui/Display;", Default::default()),
                 JavaFieldProto::new("eq", "Lorg/kwis/msp/lcdui/EventQueue;", Default::default()),
                 JavaFieldProto::new("currentJlet", "Lorg/kwis/msp/lcdui/Jlet;", FieldAccessFlags::STATIC),
             ],
@@ -102,6 +116,54 @@ impl Jlet {
         let eq = jvm.get_field(&this, "eq", "Lorg/kwis/msp/lcdui/EventQueue;").await?;
 
         Ok(eq)
+    }
+
+    async fn get_display(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        name: ClassInstanceRef<String>,
+    ) -> JvmResult<ClassInstanceRef<Display>> {
+        tracing::debug!("org.kwis.msp.lcdui.Jlet::getDisplay({this:?}, {name:?})");
+
+        if name.is_null() {
+            return jvm
+                .get_field(&this, "dis", "Lorg/kwis/msp/lcdui/Display;")
+                .await;
+        }
+
+        let name = JavaLangString::to_rust_string(jvm, &name).await?;
+
+        match name.as_ref() {
+            "dual" => {
+                jvm.get_field(&this, "dualDis", "Lorg/kwis/msp/lcdui/Display;")
+                    .await
+            }
+            "rotated" => {
+                jvm.get_field(&this, "rotatedDis", "Lorg/kwis/msp/lcdui/Display;")
+                    .await
+            }
+            _ => Ok(None.into()),
+        }
+    }
+
+    async fn set_rotated_display(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        rotated_display: ClassInstanceRef<Display>,
+    ) -> JvmResult<()> {
+        tracing::debug!(
+            "org.kwis.msp.lcdui.Jlet::setRotatedDisplay({this:?}, {rotated_display:?})"
+        );
+
+        jvm.put_field(
+            &mut this,
+            "rotatedDis",
+            "Lorg/kwis/msp/lcdui/Display;",
+            rotated_display,
+        )
+        .await
     }
 
     async fn get_app_property(

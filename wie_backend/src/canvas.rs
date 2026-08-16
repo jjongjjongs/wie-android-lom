@@ -915,13 +915,119 @@ pub fn decode_gif_animation(data: &[u8]) -> Result<Option<AnimatedImage>> {
     }))
 }
 
+fn decode_ecnx(data: &[u8]) -> Result<Box<dyn Image>> {
+    if data.len() < 0x14 || &data[..4] != b"ECNX" {
+        return Err(WieError::FatalError("Invalid ECNX image".to_string()));
+    }
+
+    let kind = u16::from_le_bytes([data[4], data[5]]);
+    if kind != 0x1900 {
+        return Err(WieError::FatalError("Unsupported ECNX image type".to_string()));
+    }
+
+    let width = u16::from_le_bytes([data[6], data[7]]) as usize;
+    let height = u16::from_le_bytes([data[8], data[9]]) as usize;
+    let transparent_index =
+        u32::from_le_bytes([data[0x0a], data[0x0b], data[0x0c], data[0x0d]]) as usize;
+    let index_len =
+        u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]) as usize;
+
+    let pixel_count = width
+        .checked_mul(height)
+        .ok_or_else(|| WieError::FatalError("ECNX dimensions overflow".to_string()))?;
+
+    if index_len != pixel_count {
+        return Err(WieError::FatalError("Invalid ECNX pixel data length".to_string()));
+    }
+
+    let index_offset = 0x14usize;
+    let index_end = index_offset
+        .checked_add(index_len)
+        .ok_or_else(|| WieError::FatalError("ECNX pixel data overflow".to_string()))?;
+
+    if index_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX pixel data".to_string()));
+    }
+
+    let padding = (4 - (index_len & 3)) & 3;
+    let palette_count_offset = index_end
+        .checked_add(padding)
+        .ok_or_else(|| WieError::FatalError("ECNX palette offset overflow".to_string()))?;
+
+    let palette_count_end = palette_count_offset
+        .checked_add(4)
+        .ok_or_else(|| WieError::FatalError("ECNX palette count overflow".to_string()))?;
+
+    if palette_count_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX palette count".to_string()));
+    }
+
+    let palette_count = u32::from_le_bytes([
+        data[palette_count_offset],
+        data[palette_count_offset + 1],
+        data[palette_count_offset + 2],
+        data[palette_count_offset + 3],
+    ]) as usize;
+
+    let palette_offset = palette_count_end;
+    let palette_size = palette_count
+        .checked_mul(2)
+        .ok_or_else(|| WieError::FatalError("ECNX palette size overflow".to_string()))?;
+    let palette_end = palette_offset
+        .checked_add(palette_size)
+        .ok_or_else(|| WieError::FatalError("ECNX palette data overflow".to_string()))?;
+
+    if palette_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX palette".to_string()));
+    }
+
+    let mut palette = Vec::with_capacity(palette_count);
+    for i in 0..palette_count {
+        let offset = palette_offset + i * 2;
+        palette.push(u16::from_le_bytes([data[offset], data[offset + 1]]));
+    }
+
+    let mut pixels = Vec::with_capacity(pixel_count * 4);
+
+    for &index in &data[index_offset..index_end] {
+        let index = index as usize;
+
+        let color = if index < palette.len() {
+            palette[index]
+        } else {
+            0
+        };
+
+        let r5 = ((color >> 11) & 0x1f) as u8;
+        let g6 = ((color >> 5) & 0x3f) as u8;
+        let b5 = (color & 0x1f) as u8;
+
+        let r = (r5 << 3) | (r5 >> 2);
+        let g = (g6 << 2) | (g6 >> 4);
+        let b = (b5 << 3) | (b5 >> 2);
+        let a = if index == transparent_index { 0 } else { 255 };
+
+        pixels.extend_from_slice(&[b, g, r, a]);
+    }
+
+    Ok(Box::new(VecImageBuffer::<ArgbPixel>::from_raw(
+        width as u32,
+        height as u32,
+        pod_collect_to_vec(&pixels),
+    )) as Box<dyn Image>)
+}
+
 pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
     extern crate std; // XXX
 
     use std::io::Cursor;
 
-    if data[0] == b'L' && data[1] == b'B' && data[2] == b'M' && data[3] == b'P' {
+    if data.len() >= 4 && &data[..4] == b"LBMP" {
         return decode_lbmp(data);
+    }
+
+    if data.len() >= 4 && &data[..4] == b"ECNX" {
+        return decode_ecnx(data);
     }
 
     let image = ImageReader::new(Cursor::new(&data))
