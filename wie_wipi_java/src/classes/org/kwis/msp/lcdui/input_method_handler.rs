@@ -78,6 +78,8 @@ impl InputMethodHandler {
                     FieldAccessFlags::STATIC,
                 ),
                 JavaFieldProto::new("currentMode", "I", Default::default()),
+                JavaFieldProto::new("__wieConstraint", "I", Default::default()),
+                JavaFieldProto::new("__wieAllowedModes", "[I", Default::default()),
                 JavaFieldProto::new(
                     "__wieSupportedModes",
                     "[Ljava/lang/String;",
@@ -120,9 +122,7 @@ impl InputMethodHandler {
         Ok(())
     }
 
-    async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, constraint: i32) -> JvmResult<()> {
-        tracing::debug!("stub org.kwis.msp.lcdui.InputMethodHandler::<init>({this:?}, {constraint})");
-
+    async fn init(jvm: &Jvm, context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, constraint: i32) -> JvmResult<()> {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
         let mut supported_modes = jvm
@@ -149,8 +149,39 @@ impl InputMethodHandler {
         )
         .await?;
 
-        // Native constraint 0 initializes the first supported input mode.
-        jvm.put_field(&mut this, "currentMode", "I", 0).await?;
+        if !(0..=5).contains(&constraint) {
+            return Err(
+                jvm.exception("java/lang/IllegalArgumentException", "")
+                    .await,
+            );
+        }
+
+        jvm.put_field(&mut this, "__wieConstraint", "I", constraint)
+            .await?;
+
+        // Native InputMethodHandler builds an int[] of modes allowed by the
+        // constructor constraint.  Constraints 3/4 intentionally allocate
+        // int[4] and leave the last element at its default zero value.
+        let allowed_values: &[i32] = match constraint {
+            0 => &[0, 1, 2, 3, 99],
+            1 | 2 | 5 => &[2],
+            3 | 4 => &[0, 1, 2, 0],
+            _ => unreachable!(),
+        };
+
+        let mut allowed_modes: ClassInstanceRef<Array<i32>> = jvm
+            .instantiate_array("I", allowed_values.len())
+            .await?
+            .into();
+        jvm.store_array(&mut allowed_modes, 0, allowed_values.iter().copied()).await?;
+
+        let initial_mode = allowed_values[0];
+
+        jvm.put_field(&mut this, "__wieAllowedModes", "[I", allowed_modes)
+            .await?;
+
+        // Native constructor initializes through setCurrentMode(int).
+        Self::set_current_mode(jvm, context, this.clone(), initial_mode).await?;
 
         Ok(())
     }
@@ -161,13 +192,19 @@ impl InputMethodHandler {
         mut this: ClassInstanceRef<Self>,
         mode: i32,
     ) -> JvmResult<bool> {
+        // Native accepts the supported-mode indices 0..3 and special symbol
+        // mode 99.  Any other value throws IllegalArgumentException.
+        if !(0..4).contains(&mode) && mode != 99 {
+            return Err(
+                jvm.exception("java/lang/IllegalArgumentException", "Invalid mode")
+                    .await,
+            );
+        }
+
         let previous_mode: i32 = jvm.get_field(&this, "currentMode", "I").await?;
 
         jvm.put_field(&mut this, "currentMode", "I", mode).await?;
 
-        // Native setCurrentMode(I) delegates to setCurrentMode(I, false).
-        // Entering symbol mode creates/shows a CandidateWindow, while leaving
-        // symbol mode destroys the symbol-card object.
         if mode == 99 {
             Self::show_symbol_card(jvm, &mut this).await?;
         } else if previous_mode == 99 {
@@ -179,32 +216,25 @@ impl InputMethodHandler {
 
     async fn change_current_mode_to_next(
         jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Self>,
+        context: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
     ) -> JvmResult<()> {
         let mode: i32 = jvm.get_field(&this, "currentMode", "I").await?;
 
-        // WipiPlayer Plus constraint 0 cycles the four normal modes and
-        // the symbol mode (99), wrapping to the first mode.
-        let next = match mode {
-            0 => 1,
-            1 => 2,
-            2 => 3,
-            3 => 99,
-            _ => 0,
+        let allowed_modes: ClassInstanceRef<Array<i32>> =
+            jvm.get_field(&this, "__wieAllowedModes", "[I").await?;
+        let allowed_len = jvm.array_length(&allowed_modes).await?;
+        let allowed_modes: alloc::vec::Vec<i32> = jvm
+            .load_array(&allowed_modes, 0, allowed_len)
+            .await?;
+
+        let Some(index) = allowed_modes.iter().position(|candidate| *candidate == mode) else {
+            return Ok(());
         };
 
-        let previous_mode = mode;
+        let next = allowed_modes[(index + 1) % allowed_modes.len()];
 
-        jvm.put_field(&mut this, "currentMode", "I", next).await?;
-
-        // Keep the synthetic symbol-card lifecycle consistent with native
-        // setCurrentMode when mode cycling enters or leaves symbol mode.
-        if next == 99 {
-            Self::show_symbol_card(jvm, &mut this).await?;
-        } else if previous_mode == 99 {
-            Self::remove_symbol_card(jvm, &mut this).await?;
-        }
+        let _: bool = Self::set_current_mode(jvm, context, this, next).await?;
 
         Ok(())
     }
