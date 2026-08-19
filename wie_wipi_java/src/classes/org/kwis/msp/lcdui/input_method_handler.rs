@@ -77,6 +77,11 @@ impl InputMethodHandler {
                     "Ljava/lang/String;",
                     FieldAccessFlags::STATIC,
                 ),
+                JavaFieldProto::new("__wieKeyUp", "I", FieldAccessFlags::STATIC),
+                JavaFieldProto::new("__wieKeyDown", "I", FieldAccessFlags::STATIC),
+                JavaFieldProto::new("__wieKeyLeft", "I", FieldAccessFlags::STATIC),
+                JavaFieldProto::new("__wieKeyRight", "I", FieldAccessFlags::STATIC),
+                JavaFieldProto::new("__wieKeyClear", "I", FieldAccessFlags::STATIC),
                 JavaFieldProto::new("currentMode", "I", Default::default()),
                 JavaFieldProto::new("__wieConstraint", "I", Default::default()),
                 JavaFieldProto::new("__wieAllowedModes", "[I", Default::default()),
@@ -118,6 +123,31 @@ impl InputMethodHandler {
             symbol,
         )
         .await?;
+
+        for (field, game_key) in [
+            ("__wieKeyUp", 1),
+            ("__wieKeyDown", 6),
+            ("__wieKeyLeft", 2),
+            ("__wieKeyRight", 5),
+            ("__wieKeyClear", 99),
+        ] {
+            let key_code: i32 = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Display",
+                    "getKeyCode",
+                    "(I)I",
+                    (game_key,),
+                )
+                .await?;
+
+            jvm.put_static_field(
+                "org/kwis/msp/lcdui/InputMethodHandler",
+                field,
+                "I",
+                key_code,
+            )
+            .await?;
+        }
 
         Ok(())
     }
