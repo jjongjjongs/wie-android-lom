@@ -1,6 +1,7 @@
 mod audio;
 mod event_queue;
 mod file_system;
+mod input_method;
 
 use alloc::{borrow::ToOwned, boxed::Box, string::String, sync::Arc};
 
@@ -16,7 +17,7 @@ use crate::{
     task_runner::TaskRunner,
 };
 
-use self::{audio::Audio, event_queue::EventQueue};
+use self::{audio::Audio, event_queue::EventQueue, input_method::InputMethod};
 
 pub use self::{
     event_queue::{Event, KeyCode},
@@ -32,6 +33,7 @@ pub struct System {
     filesystem: FilesystemOverlay,
     event_queue: Arc<RwLock<EventQueue>>,
     audio: Arc<RwLock<Audio>>,
+    input_method: Arc<RwLock<InputMethod>>,
     task_runner: Arc<dyn TaskRunner>,
 }
 
@@ -51,6 +53,7 @@ impl System {
             platform,
             event_queue: Arc::new(RwLock::new(EventQueue::new())),
             audio: Arc::new(RwLock::new(Audio::new(audio_sink))),
+            input_method: Arc::new(RwLock::new(InputMethod::new())),
             task_runner: Arc::new(task_runner),
         }
     }
@@ -105,5 +108,13 @@ impl System {
 
     pub fn event_queue(&self) -> RwLockWriteGuard<'_, EventQueue> {
         self.event_queue.write()
+    }
+
+    pub fn current_input_mode(&self) -> u32 {
+        self.input_method.read().current_mode()
+    }
+
+    pub fn set_current_input_mode(&self, mode: u32) {
+        self.input_method.write().set_current_mode(mode);
     }
 }

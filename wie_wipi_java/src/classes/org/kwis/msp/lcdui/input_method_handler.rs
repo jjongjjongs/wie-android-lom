@@ -188,7 +188,7 @@ impl InputMethodHandler {
 
     async fn set_current_mode(
         jvm: &Jvm,
-        _: &mut WieJvmContext,
+        context: &mut WieJvmContext,
         mut this: ClassInstanceRef<Self>,
         mode: i32,
     ) -> JvmResult<bool> {
@@ -207,8 +207,12 @@ impl InputMethodHandler {
 
         if mode == 99 {
             Self::show_symbol_card(jvm, &mut this).await?;
-        } else if previous_mode == 99 {
-            Self::remove_symbol_card(jvm, &mut this).await?;
+        } else {
+            context.system().set_current_input_mode(mode as u32);
+
+            if previous_mode == 99 {
+                Self::remove_symbol_card(jvm, &mut this).await?;
+            }
         }
 
         Ok(true)

@@ -22,6 +22,7 @@ use crate::runtime::java::classes::net::wie::{CletWrapper, CletWrapperCard, Clet
 use crate::runtime::{SVC_CATEGORY_WIPIC, svc_ids::WIPICSvcId};
 
 const TIME_VALUE_PTR: u32 = 0x7fff1004;
+const IME_SUPPORTED_MODES_PTR: u32 = 0x7fff1008;
 
 struct WIPICMethodResult {
     result: WIPICResult,
@@ -282,21 +283,62 @@ async fn unk2(context: &mut dyn WIPICContext) -> Result<u32> {
     Ok(result)
 }
 
-/// `MC_imGetSurpportModeCount` (vendor export 300). No input-method engine is
-/// emulated, so no modes are offered; a title reads zero as "the handset has
-/// no IME" and uses its own on-screen entry instead of asking to switch modes.
+/// `MC_imGetSurpportModeCount` (vendor export 300).
+///
+/// The native LGT runtime registers four DIME modes:
+/// EN/S, EN/L, N123, KO.
 async fn im_get_support_mode_count(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::debug!("MC_imGetSurpportModeCount({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
-    Ok(0)
+    Ok(4)
 }
 
-/// `MC_imGetSupportedModes` (vendor export 301). Nothing to enumerate while no
-/// modes are supported.
-async fn im_get_supported_modes(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+/// `MC_imGetSupportedModes` (vendor export 301).
+///
+/// Native LGT returns a persistent `char **` table containing:
+/// EN/S, EN/L, N123, KO.
+async fn im_get_supported_modes(context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::debug!("MC_imGetSupportedModes({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
-    Ok(0)
+    let existing: u32 = read_generic(context, IME_SUPPORTED_MODES_PTR)?;
+    if existing != 0 {
+        return Ok(existing);
+    }
+
+    // Four 32-bit pointers followed by the four NUL-terminated mode strings.
+    const TABLE_SIZE: u32 = 4 * 4;
+    const EN_S: &[u8] = b"EN/S";
+    const EN_L: &[u8] = b"EN/L";
+    const N123: &[u8] = b"N123";
+    const KO: &[u8] = b"KO";
+
+    let total_size = TABLE_SIZE
+        + (EN_S.len() + 1) as u32
+        + (EN_L.len() + 1) as u32
+        + (N123.len() + 1) as u32
+        + (KO.len() + 1) as u32;
+
+    let memory = context.alloc(total_size)?;
+    let table = context.data_ptr(memory)?;
+
+    let en_s = table + TABLE_SIZE;
+    let en_l = en_s + (EN_S.len() + 1) as u32;
+    let n123 = en_l + (EN_L.len() + 1) as u32;
+    let ko = n123 + (N123.len() + 1) as u32;
+
+    write_null_terminated_string_bytes(context, en_s, EN_S)?;
+    write_null_terminated_string_bytes(context, en_l, EN_L)?;
+    write_null_terminated_string_bytes(context, n123, N123)?;
+    write_null_terminated_string_bytes(context, ko, KO)?;
+
+    write_generic(context, table, en_s)?;
+    write_generic(context, table + 4, en_l)?;
+    write_generic(context, table + 8, n123)?;
+    write_generic(context, table + 12, ko)?;
+
+    write_generic(context, IME_SUPPORTED_MODES_PTR, table)?;
+
+    Ok(table)
 }
 
 async fn unk5(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
@@ -324,24 +366,29 @@ async fn fs_available(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32
     Ok(FREE_BYTES)
 }
 
-/// `MC_imGetCurrentMode` (vendor export 303). No mode is ever set, so there is
-/// none to report.
-async fn im_get_current_mode(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+/// `MC_imGetCurrentMode` (vendor export 303).
+///
+/// Native DIME returns the index of the currently selected supported mode.
+async fn im_get_current_mode(context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::debug!("MC_imGetCurrentMode({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
-    Ok(0)
+    Ok(context.system().current_input_mode())
 }
 
-/// `MC_imSetCurrentMode` (vendor export 302). Returns failure because no mode
-/// is supported. The vendor runtime crashes here when an out-of-range mode
-/// index reaches `dime_set_mode`, which reads a NULL mode name through
-/// `strcmp` - the failure WipiPlayer patches in. There is no equivalent path
-/// to fault here: the request is rejected before anything is dereferenced, so
-/// the null-mode crash cannot happen.
-async fn im_set_current_mode(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::debug!("MC_imSetCurrentMode({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imSetCurrentMode` (vendor export 302).
+///
+/// Native DIME accepts supported-mode indices 0..3. A valid mode becomes the
+/// current mode and returns 1; an unsupported index returns 0.
+async fn im_set_current_mode(context: &mut dyn WIPICContext, mode: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imSetCurrentMode({mode:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
-    Ok(0)
+    if mode >= 4 {
+        return Ok(0);
+    }
+
+    context.system().set_current_input_mode(mode);
+
+    Ok(1)
 }
 
 async fn time_now(context: &mut dyn WIPICContext, component_class: u32) -> Result<u32> {
