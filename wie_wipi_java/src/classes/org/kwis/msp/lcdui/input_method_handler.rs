@@ -275,17 +275,144 @@ impl InputMethodHandler {
 
     async fn notify_key_input(
         jvm: &Jvm,
-        _: &mut WieJvmContext,
+        context: &mut WieJvmContext,
         this: ClassInstanceRef<Self>,
-        _key: i32,
+        key: i32,
         event_type: i32,
     ) -> JvmResult<bool> {
-        let mode: i32 = jvm.get_field(&this, "currentMode", "I").await?;
+        let listener: ClassInstanceRef<()> = jvm
+            .get_field(
+                &this,
+                "__wieInputMethodListener",
+                "Lorg/kwis/msp/lcdui/InputMethodListener;",
+            )
+            .await?;
 
-        // LoM enters mode 3 before sending ordinary character input.
-        // Native InputMethodHandler accepts the type-1 key event and delivers
-        // the resulting text through its InputMethodListener callback.
-        Ok(mode == 3 && event_type == 1)
+        // Native returns false immediately when no listener is installed.
+        if listener.is_null() {
+            return Ok(false);
+        }
+
+        // Native notifyKeyInput only processes press/release event types 1/3.
+        let internal_event = match event_type {
+            1 => 2,
+            3 => 4,
+            _ => return Ok(false),
+        };
+
+        let key_up: i32 = jvm
+            .get_static_field("org/kwis/msp/lcdui/InputMethodHandler", "__wieKeyUp", "I")
+            .await?;
+        let key_down: i32 = jvm
+            .get_static_field("org/kwis/msp/lcdui/InputMethodHandler", "__wieKeyDown", "I")
+            .await?;
+        let key_left: i32 = jvm
+            .get_static_field("org/kwis/msp/lcdui/InputMethodHandler", "__wieKeyLeft", "I")
+            .await?;
+        let key_right: i32 = jvm
+            .get_static_field("org/kwis/msp/lcdui/InputMethodHandler", "__wieKeyRight", "I")
+            .await?;
+        let key_clear: i32 = jvm
+            .get_static_field("org/kwis/msp/lcdui/InputMethodHandler", "__wieKeyClear", "I")
+            .await?;
+
+        // CLEAR is handled directly by native InputMethodHandler.
+        if key == key_clear {
+            let data: ClassInstanceRef<Array<JavaChar>> = ClassInstanceRef::new(None);
+            let count = if event_type == 3 { -1 } else { 1 };
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &listener,
+                    "notifyTextChanged",
+                    "([CII)V",
+                    (data, count, 1),
+                )
+                .await?;
+
+            return Ok(true);
+        }
+
+        // Directional keys are converted to the native flush sentinel.
+        let normalized_key = if matches!(key, k if k == key_up || k == key_down || k == key_left || k == key_right) {
+            -99
+        } else {
+            key
+        };
+
+        let result = context
+            .system()
+            .handle_input_method(normalized_key as i8, internal_event);
+
+        if result.output0_len != 0 {
+            let mut bytes: ClassInstanceRef<Array<i8>> =
+                jvm.instantiate_array("B", result.output0_len).await?.into();
+            jvm.store_array(
+                &mut bytes,
+                0,
+                result.output0[..result.output0_len]
+                    .iter()
+                    .map(|byte| *byte as i8),
+            )
+            .await?;
+
+            let text: ClassInstanceRef<String> = jvm
+                .new_class(
+                    "java/lang/String",
+                    "([BII)V",
+                    (bytes, 0, result.output0_len as i32),
+                )
+                .await?
+            .into();
+            let chars: ClassInstanceRef<Array<JavaChar>> =
+                jvm.invoke_virtual(&text, "toCharArray", "()[C", ()).await?;
+            let char_count = jvm.array_length(&chars).await? as i32;
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &listener,
+                    "notifyTextChanged",
+                    "([CII)V",
+                    (chars, char_count, -1),
+                )
+                .await?;
+        }
+
+        if result.output1_len != 0 {
+            let mut bytes: ClassInstanceRef<Array<i8>> =
+                jvm.instantiate_array("B", result.output1_len).await?.into();
+            jvm.store_array(
+                &mut bytes,
+                0,
+                result.output1[..result.output1_len]
+                    .iter()
+                    .map(|byte| *byte as i8),
+            )
+            .await?;
+
+            let text: ClassInstanceRef<String> = jvm
+                .new_class(
+                    "java/lang/String",
+                    "([BII)V",
+                    (bytes, 0, result.output1_len as i32),
+                )
+                .await?
+            .into();
+            let chars: ClassInstanceRef<Array<JavaChar>> =
+                jvm.invoke_virtual(&text, "toCharArray", "()[C", ()).await?;
+            let char_count = jvm.array_length(&chars).await? as i32;
+
+            let _: () = jvm
+                .invoke_virtual(
+                    &listener,
+                    "notifyTextChanged",
+                    "([CII)V",
+                    (chars, char_count, -1),
+                )
+                .await?;
+        }
+
+        Ok(result.handled)
     }
 
     async fn set_input_method_listener(
