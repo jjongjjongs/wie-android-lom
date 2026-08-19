@@ -3441,6 +3441,7 @@ dependencies = [
  "ab_glyph",
  "async-trait",
  "bytemuck",
+ "encoding_rs",
  "futures-test",
  "hashbrown",
  "image",

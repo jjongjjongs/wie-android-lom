@@ -22,6 +22,7 @@ use self::{audio::Audio, event_queue::EventQueue, input_method::InputMethod};
 pub use self::{
     event_queue::{Event, KeyCode},
     file_system::FilesystemOverlay,
+    input_method::InputMethodOutput,
 };
 
 #[derive(Clone)]
@@ -116,5 +117,9 @@ impl System {
 
     pub fn set_current_input_mode(&self, mode: u32) {
         self.input_method.write().set_current_mode(mode);
+    }
+
+    pub fn handle_input_method(&self, key: i8, event: u32) -> InputMethodOutput {
+        self.input_method.write().handle_input(key, event)
     }
 }
