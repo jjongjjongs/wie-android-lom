@@ -982,29 +982,6 @@ const OBJECT_DISPATCH_SLOTS: &[(&str, &str)] = &[
 async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, class_index: u32, slot: u32) -> Result<u32> {
     let this = core.read_param(0)?;
 
-    // Slots 1 to 9 are `java/lang/Object`'s, in every dispatch table there
-    // is, so they can be answered without knowing whose table this one is.
-    if let Some((name, descriptor)) = OBJECT_DISPATCH_SLOTS.get((slot as usize).wrapping_sub(1)) {
-        let member = ResolvedMember {
-            class_name: "java/lang/Object".into(),
-            name: (*name).into(),
-            descriptor: (*descriptor).into(),
-        };
-
-        let handles = context.java_handles.clone();
-        let jvm = context.jvm.clone();
-
-        // An object the compiled code built for itself has no instance on the
-        // JVM side to call these on.
-        if handles.get(this).is_some() {
-            return method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await;
-        }
-
-        tracing::debug!("LGT java/lang/Object.{name}{descriptor} on {this:#x}, which has no instance");
-
-        return Ok(0);
-    }
-
     // Resolve fixed native dispatch slots from the receiver's actual platform
     // class even when the application never imported that class or method.
     if let Some(receiver_class) = context.java_handles.get(this).map(|instance| instance.class_definition().name())
@@ -1031,6 +1008,32 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
                 Ok(0)
             }
         };
+    }
+
+    // Native dt_* entries take precedence over java/lang/Object slots when the
+    // concrete receiver overrides one. Keep the Object layout only as a
+    // fallback for objects whose JVM-side class cannot identify a native dt_*.
+    // Slots 1 to 9 are `java/lang/Object`'s, in every dispatch table there
+    // is, so they can be answered without knowing whose table this one is.
+    if let Some((name, descriptor)) = OBJECT_DISPATCH_SLOTS.get((slot as usize).wrapping_sub(1)) {
+        let member = ResolvedMember {
+            class_name: "java/lang/Object".into(),
+            name: (*name).into(),
+            descriptor: (*descriptor).into(),
+        };
+
+        let handles = context.java_handles.clone();
+        let jvm = context.jvm.clone();
+
+        // An object the compiled code built for itself has no instance on the
+        // JVM side to call these on.
+        if handles.get(this).is_some() {
+            return method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await;
+        }
+
+        tracing::debug!("LGT java/lang/Object.{name}{descriptor} on {this:#x}, which has no instance");
+
+        return Ok(0);
     }
 
     let imported_class = context
