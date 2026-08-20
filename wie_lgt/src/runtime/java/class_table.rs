@@ -46,8 +46,12 @@ pub struct JavaClass {
     pub name: String,
     pub field_start: u32,
     pub field_count: u32,
+    pub static_field_start: u32,
+    pub static_field_count: u32,
     pub virtual_method_start: u32,
     pub virtual_method_count: u32,
+    pub interface_method_start: u32,
+    pub interface_method_count: u32,
     pub static_method_start: u32,
     pub static_method_count: u32,
 }
@@ -83,7 +87,9 @@ pub struct ClassTable {
     /// slots reserved at the head of each class's static method block.
     pub static_methods: Vec<Option<JavaMember>>,
     pub virtual_methods: Vec<Option<JavaMember>>,
+    pub interface_methods: Vec<Option<JavaMember>>,
     pub fields: Vec<Option<JavaMember>>,
+    pub static_fields: Vec<Option<JavaMember>>,
     pub outputs: OutputArrays,
 }
 
@@ -140,16 +146,17 @@ impl ClassTable {
         reader: &R,
         classes: u32,
         fields: u32,
-        _static_fields: u32,
+        static_fields: u32,
         virtual_methods: u32,
-        _interface_methods: u32,
+        interface_methods: u32,
         static_methods: u32,
         outputs: OutputArrays,
     ) -> Result<Self>
     where
         R: ?Sized + ByteRead,
     {
-        let count: u32 = read_generic(reader, classes)?;
+        let count: u16 = read_generic(reader, classes)?;
+        let count = u32::from(count);
         if count > MAX_CLASSES {
             return Err(WieError::FatalError(format!(
                 "Implausible LGT class count {count} at {classes:#x}; not a class table"
@@ -162,7 +169,9 @@ impl ClassTable {
             class_objects: Vec::new(),
             static_methods: Vec::new(),
             virtual_methods: Vec::new(),
+            interface_methods: Vec::new(),
             fields: Vec::new(),
+            static_fields: Vec::new(),
             outputs,
         };
 
@@ -172,8 +181,12 @@ impl ClassTable {
             let name_address: u32 = read_generic(reader, entry)?;
             let field_start: u16 = read_generic(reader, entry + 4)?;
             let field_count: u16 = read_generic(reader, entry + 6)?;
+            let static_field_start: u16 = read_generic(reader, entry + 8)?;
+            let static_field_count: u16 = read_generic(reader, entry + 10)?;
             let virtual_method_start: u16 = read_generic(reader, entry + 12)?;
             let virtual_method_count: u16 = read_generic(reader, entry + 14)?;
+            let interface_method_start: u16 = read_generic(reader, entry + 16)?;
+            let interface_method_count: u16 = read_generic(reader, entry + 18)?;
             let static_method_start: u16 = read_generic(reader, entry + 20)?;
             let static_method_count: u16 = read_generic(reader, entry + 22)?;
 
@@ -181,8 +194,12 @@ impl ClassTable {
                 name: read_string(reader, name_address)?,
                 field_start: field_start.into(),
                 field_count: field_count.into(),
+                static_field_start: static_field_start.into(),
+                static_field_count: static_field_count.into(),
                 virtual_method_start: virtual_method_start.into(),
                 virtual_method_count: virtual_method_count.into(),
+                interface_method_start: interface_method_start.into(),
+                interface_method_count: interface_method_count.into(),
                 static_method_start: static_method_start.into(),
                 static_method_count: static_method_count.into(),
             };
@@ -190,11 +207,27 @@ impl ClassTable {
             read_members(reader, fields, class.field_start, class.field_count, index, &mut table.fields)?;
             read_members(
                 reader,
+                static_fields,
+                class.static_field_start,
+                class.static_field_count,
+                index,
+                &mut table.static_fields,
+            )?;
+            read_members(
+                reader,
                 virtual_methods,
                 class.virtual_method_start,
                 class.virtual_method_count,
                 index,
                 &mut table.virtual_methods,
+            )?;
+            read_members(
+                reader,
+                interface_methods,
+                class.interface_method_start,
+                class.interface_method_count,
+                index,
+                &mut table.interface_methods,
             )?;
             read_members(
                 reader,
