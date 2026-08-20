@@ -256,10 +256,17 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 return Ok(());
             }
 
-            // The activated-class header occupies the first 20 bytes.
-            // Legend of Master's initializer stores seven additional static
-            // references at offsets 0x14 through 0x2c.
-            let data_size = if root == 0x0140_6140 { 0x30 } else { 20 };
+            // Native vm_activate_class allocates a 20-byte class header plus
+            // one word for each static field declared at metadata + 0x48.
+            // Classes carrying metadata flag 0x2000 use only the header.
+            let metadata: u32 = read_generic(core, root + 8)?;
+            let flags: u16 = read_generic(core, metadata)?;
+            let static_field_count: u16 = read_generic(core, metadata + 0x48)?;
+            let data_size = if flags & 0x2000 != 0 {
+                20
+            } else {
+                20 + u32::from(static_field_count) * 4
+            };
             let data = Allocator::alloc(core, data_size)?;
             core.write_bytes(data, &vec![0; data_size as usize])?;
 
