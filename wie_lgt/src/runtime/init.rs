@@ -165,7 +165,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
     if id.0 >= JAVA_RESERVED_SLOT_SVC_BASE && id.0 < JAVA_RESERVED_SLOT_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let index = id.0 - JAVA_RESERVED_SLOT_SVC_BASE;
-        let result = call_reserved_slot(core, context, index)?;
+        let result = call_reserved_slot(core, context, index).await?;
 
         return result.write(core, lr);
     }
@@ -899,31 +899,25 @@ async fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcCo
     Ok(object)
 }
 
-/// Reports a call through one of the reserved rows at the head of a class's
-/// static method block, and returns the first argument.
+/// Implements the two class-accessor rows at the head of an imported class's
+/// static method block.
 ///
-/// Identity is a placeholder, not a semantic: these rows are called for their
-/// effect, and what that effect is has not been worked out. Returning the
-/// argument at least keeps a constructor that threads an allocation through
-/// them going, instead of stopping at a branch to zero.
-fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+/// Native `vm_resolve_one` installs `get_class` followed by `get_raw_class`.
+/// Both return the class token; `get_class` additionally guarantees that the
+/// JVM class has completed initialization.
+async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
     let a0 = core.read_param(0)?;
 
-    let imported_classes = context.imported_classes.clone();
-    let table = imported_classes.lock();
+    let resolved = {
+        let imported_classes = context.imported_classes.lock();
+        let Some(table) = imported_classes.as_ref() else {
+            return Ok(a0);
+        };
+        let Some((class, slot)) = table.static_method_owner(index) else {
+            tracing::warn!("LGT reserved static row {index} belongs to no class");
+            return Ok(a0);
+        };
 
-    let Some(table) = table.as_ref() else {
-        return Ok(a0);
-    };
-    let Some((class, slot)) = table.static_method_owner(index) else {
-        tracing::warn!("LGT reserved static row {index} belongs to no class");
-        return Ok(a0);
-    };
-
-    // Slot 0 hands back the class token. A constructor calls it and drops the
-    // result, which is how a superclass gets initialized; `new` calls it and
-    // passes the result to vm_instantiate.
-    if slot == 0 {
         let class_object = table
             .classes
             .iter()
@@ -931,13 +925,32 @@ fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u
             .and_then(|index| table.class_objects.get(index).copied())
             .unwrap_or(a0);
 
-        tracing::debug!("LGT class object of {} -> {class_object:#x}", class.name);
+        (class.name.clone(), slot, class_object)
+    };
+
+    let (class_name, slot, class_object) = resolved;
+
+    // Native vm_resolve_one fills the leading blank static-method pair with
+    // get_class/get_raw_class. Both return the same activated class token;
+    // get_class additionally guarantees Java class initialization.
+    if slot <= 1 {
+        if slot == 0 {
+            let class = context.jvm.resolve_class(&class_name).await.map_err(|error| {
+                wie_util::WieError::FatalError(alloc::format!(
+                    "LGT get_class could not resolve {class_name}: {error:?}"
+                ))
+            })?;
+            context.jvm.ensure_initialized(&class).await.map_err(|error| {
+                wie_util::WieError::FatalError(alloc::format!(
+                    "LGT get_class could not initialize {class_name}: {error:?}"
+                ))
+            })?;
+        }
 
         return Ok(class_object);
     }
 
-    tracing::warn!("LGT reserved slot {slot} of {} called with a0={a0:#x}", class.name);
-
+    tracing::warn!("LGT reserved slot {slot} of {class_name} called with a0={a0:#x}");
     Ok(a0)
 }
 
