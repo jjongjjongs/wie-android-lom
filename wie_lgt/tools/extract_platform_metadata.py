@@ -84,6 +84,33 @@ def main():
 
         methods_ptr = u32(metadata + 0x38)
         fields_ptr = u32(metadata + 0x3C)
+        dispatch_ptr = u32(metadata + 0x0C)
+
+        dispatch = []
+        if dispatch_ptr:
+            dispatch_symbol = next(
+                (
+                    (symbol, size)
+                    for symbol, (address, size, _) in symbols.items()
+                    if symbol.startswith("dt_") and address == dispatch_ptr
+                ),
+                None,
+            )
+            if dispatch_symbol is None:
+                raise ValueError(f"{name}: dispatch table {dispatch_ptr:#x} has no dt_* symbol")
+
+            _, dispatch_size = dispatch_symbol
+            if dispatch_size < 4 or dispatch_size % 4:
+                raise ValueError(f"{name}: invalid dispatch table size {dispatch_size:#x}")
+            if u32(dispatch_ptr) != root:
+                raise ValueError(
+                    f"{name}: dispatch header {u32(dispatch_ptr):#x} != root {root:#x}"
+                )
+
+            dispatch = [
+                u32(dispatch_ptr + 4 + slot * 4)
+                for slot in range(dispatch_size // 4 - 1)
+            ]
 
         fields = []
         if fields_ptr:
@@ -133,6 +160,7 @@ def main():
                 "get_raw_class": u32(metadata + 0x34),
                 "fields": fields,
                 "methods": methods,
+                "dispatch": dispatch,
             }
         )
 
@@ -170,6 +198,7 @@ def main():
     lines.append("    pub get_raw_class: u32,")
     lines.append("    pub fields: &'static [PlatformField],")
     lines.append("    pub methods: &'static [PlatformMethod],")
+    lines.append("    pub dispatch: &'static [u32],")
     lines.append("}")
     lines.append("")
 
@@ -207,6 +236,13 @@ def main():
             lines.append(f"static METHODS_{index}: &[PlatformMethod] = &[];")
         lines.append("")
 
+        if cls["dispatch"]:
+            values = ", ".join(f"{entry:#010x}" for entry in cls["dispatch"])
+            lines.append(f"static DISPATCH_{index}: &[u32] = &[{values}];")
+        else:
+            lines.append(f"static DISPATCH_{index}: &[u32] = &[];")
+        lines.append("")
+
     lines.append("pub static PLATFORM_CLASSES: &[PlatformClass] = &[")
     for index, cls in enumerate(classes):
         superclass = (
@@ -222,6 +258,7 @@ def main():
         lines.append(f"        get_raw_class: {cls['get_raw_class']:#010x},")
         lines.append(f"        fields: FIELDS_{index},")
         lines.append(f"        methods: METHODS_{index},")
+        lines.append(f"        dispatch: DISPATCH_{index},")
         lines.append("    },")
     lines.append("];")
     lines.append("")
@@ -248,6 +285,22 @@ def main():
     lines.append(
         "            .find(|method| method.name == name && method.descriptor == descriptor)"
     )
+    lines.append("    }")
+    lines.append("")
+    lines.append("    pub fn dispatch_method(&self, slot: u32) -> Option<&PlatformMethod> {")
+    lines.append("        let mut class = self;")
+    lines.append("        loop {")
+    lines.append("            if let Some(entry) = class.dispatch.get(slot as usize).copied()")
+    lines.append("                && entry != 0")
+    lines.append("            {")
+    lines.append("                return PLATFORM_CLASSES")
+    lines.append("                    .iter()")
+    lines.append("                    .flat_map(|candidate| candidate.methods)")
+    lines.append("                    .find(|method| method.entry == entry);")
+    lines.append("            }")
+    lines.append("")
+    lines.append("            class = platform_class(class.superclass?)?;")
+    lines.append("        }")
     lines.append("    }")
     lines.append("")
     lines.append(
@@ -310,6 +363,18 @@ def main():
     lines.append("    }")
     lines.append("")
     lines.append("    #[test]")
+    lines.append("    fn native_dispatch_tables_are_preserved() {")
+    lines.append('        let string = platform_class("java/lang/String").unwrap();')
+    lines.append("        assert_eq!(string.dispatch.len(), 36);")
+    lines.append('        assert_eq!(string.dispatch_method(16).unwrap().name, "compareTo");')
+    lines.append('        let clip = platform_class("org/kwis/msp/media/Clip").unwrap();')
+    lines.append("        assert_eq!(clip.dispatch.len(), 80);")
+    lines.append('        assert_eq!(clip.dispatch_method(32).unwrap().name, "availableDataSize");')
+    lines.append('        let socket = platform_class("org/kwis/msf/io/Socket").unwrap();')
+    lines.append("        assert!(socket.dispatch.is_empty());")
+    lines.append("    }")
+    lines.append("")
+    lines.append("    #[test]")
     lines.append("    fn interface_lookup_keeps_zero_slot() {")
     lines.append('        let class = platform_class("org/kwis/msf/io/Socket").unwrap();')
     lines.append(
@@ -325,9 +390,12 @@ def main():
 
     total_fields = sum(len(x["fields"]) for x in classes)
     total_methods = sum(len(x["methods"]) for x in classes)
+    dispatch_classes = sum(bool(x["dispatch"]) for x in classes)
+    dispatch_slots = sum(len(x["dispatch"]) for x in classes)
     print(
         f"generated {args.output}: "
-        f"{len(classes)} classes, {total_fields} fields, {total_methods} methods"
+        f"{len(classes)} classes, {total_fields} fields, {total_methods} methods, "
+        f"{dispatch_classes} dispatch tables, {dispatch_slots} dispatch slots"
     )
 
 

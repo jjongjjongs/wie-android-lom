@@ -31,7 +31,7 @@ use super::{
             vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
-        platform_slots::platform_method,
+        platform_metadata::platform_class,
     },
     stdlib::register_stdlib_svc_handler,
     svc_ids::InitSvcId,
@@ -954,41 +954,6 @@ async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, in
     Ok(a0)
 }
 
-/// Dispatch table slots the compiled code reaches by a fixed number, with the
-/// method each one turns out to be.
-///
-/// A class does not declare these - the platform is expected to provide them -
-/// so which method a slot means has to be worked out from what the caller does
-/// with it. Battle Monster branches through slot 10 of a `java/lang/Thread`
-/// immediately after constructing it from a `Runnable`, which is `start`, and
-/// nothing else a game does with a fresh thread fits.
-const KNOWN_DISPATCH_SLOTS: &[(&str, u32, &str, &str)] = &[
-    // `dt_org_kwis_msp_lcdui_Card` maps slot 0 to its canonical
-    // no-argument constructor. Unused ARM argument registers may still
-    // contain arbitrary values at this call site.
-    ("org/kwis/msp/lcdui/Card", 0, "<init>", "()V"),
-    ("java/lang/Thread", 10, "start", "()V"),
-    // `dt_java_lang_StringBuffer` names this one. A platform class's slots
-    // are numbered over *all* its virtual methods, and the table the
-    // application registers lists only the ones it imports, so the two agree
-    // on where a class's methods start and not on the order within.
-    ("java/lang/StringBuffer", 18, "append", "(Ljava/lang/String;)Ljava/lang/StringBuffer;"),
-    // Legend of Master reaches append(int) through platform dispatch slot 23.
-    ("java/lang/StringBuffer", 23, "append", "(I)Ljava/lang/StringBuffer;"),
-    // `dt_java_lang_String` maps slot 10 to String.length() and
-    // slot 33 to String.trim().
-    ("java/lang/String", 10, "length", "()I"),
-    ("java/lang/String", 11, "charAt", "(I)C"),
-    ("java/lang/String", 33, "trim", "()Ljava/lang/String;"),
-    ("java/lang/Class", 16, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;"),
-    ("java/io/ByteArrayInputStream", 11, "read", "([B)I"),
-    ("java/io/ByteArrayInputStream", 12, "read", "([BII)I"),
-    ("java/io/ByteArrayInputStream", 14, "available", "()I"),
-    ("java/io/ByteArrayInputStream", 15, "close", "()V"),
-    // Clip inherits BaseClip's virtual methods after Object slots 1..9.
-    ("org/kwis/msp/media/Clip", 12, "availableDataSize", "()I"),
-];
-
 /// Slots 1 to 9 of every dispatch table, which the platform fills in for the
 /// class whatever the class is.
 ///
@@ -1043,12 +1008,12 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
     // Resolve fixed native dispatch slots from the receiver's actual platform
     // class even when the application never imported that class or method.
     if let Some(receiver_class) = context.java_handles.get(this).map(|instance| instance.class_definition().name())
-        && let Some((name, descriptor)) = platform_method(&receiver_class, slot)
+        && let Some(method) = platform_class(&receiver_class).and_then(|class| class.dispatch_method(slot))
     {
         let member = ResolvedMember {
             class_name: receiver_class.clone(),
-            name: name.into(),
-            descriptor: descriptor.into(),
+            name: method.name.into(),
+            descriptor: method.descriptor.into(),
         };
 
         let handles = context.java_handles.clone();
@@ -1057,7 +1022,12 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
         return match method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await {
             Ok(result) => Ok(result),
             Err(error) => {
-                tracing::warn!("LGT {receiver_class}.{name}{descriptor} at slot {slot} failed: {error}");
+                tracing::warn!(
+                    "LGT {}.{}{} at slot {slot} failed: {error}",
+                    receiver_class,
+                    method.name,
+                    method.descriptor
+                );
                 Ok(0)
             }
         };
@@ -1079,14 +1049,11 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
         return Ok(0);
     };
 
-    if let Some((_, _, name, descriptor)) = KNOWN_DISPATCH_SLOTS
-        .iter()
-        .find(|(known_class, known_slot, _, _)| *known_class == class && *known_slot == slot)
-    {
+    if let Some(method) = platform_class(&class).and_then(|platform| platform.dispatch_method(slot)) {
         let member = ResolvedMember {
-            class_name: class,
-            name: (*name).into(),
-            descriptor: (*descriptor).into(),
+            class_name: class.clone(),
+            name: method.name.into(),
+            descriptor: method.descriptor.into(),
         };
 
         let handles = context.java_handles.clone();

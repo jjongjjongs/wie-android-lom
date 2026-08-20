@@ -29,6 +29,7 @@ pub struct PlatformClass {
     pub get_raw_class: u32,
     pub fields: &'static [PlatformField],
     pub methods: &'static [PlatformMethod],
+    pub dispatch: &'static [u32],
 }
 
 static FIELDS_0: &[PlatformField] = &[
@@ -46,6 +47,8 @@ static METHODS_0: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0027e364 },
 ];
 
+static DISPATCH_0: &[u32] = &[0x0027e364, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_1: &[PlatformField] = &[
     PlatformField { name: "REQUEST_MEDIA_CONTROL", descriptor: "I", flags: 0x00060019, slot: 0 },
     PlatformField { name: "RELEASED_MEDIA_CONTROL", descriptor: "I", flags: 0x00080019, slot: 1 },
@@ -54,6 +57,8 @@ static FIELDS_1: &[PlatformField] = &[
 static METHODS_1: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(ILjava/lang/String;)V", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_1: &[u32] = &[];
 
 static FIELDS_2: &[PlatformField] = &[
     PlatformField { name: "MDA_DEV_ATTRIBUTE_BGM_PLAY", descriptor: "I", flags: 0x00100019, slot: 0 },
@@ -71,6 +76,8 @@ static METHODS_2: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(II)V", flags: 0x00020009, slot: 65535, entry: 0x001bb384 },
 ];
 
+static DISPATCH_2: &[u32] = &[0x001bb37c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_3: &[PlatformField] = &[
     PlatformField { name: "OEMIME_ERROR", descriptor: "I", flags: 0x000a0019, slot: 0 },
     PlatformField { name: "OEMIME_CANCEL", descriptor: "I", flags: 0x000c0019, slot: 1 },
@@ -84,11 +91,15 @@ static METHODS_3: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(I)V", flags: 0x00010009, slot: 65535, entry: 0x001bbba4 },
 ];
 
+static DISPATCH_3: &[u32] = &[0x001bbb9c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_4: &[PlatformField] = &[];
 
 static METHODS_4: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyOEMInputEvent", descriptor: "(I)V", flags: 0x00020401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_4: &[u32] = &[];
 
 static FIELDS_5: &[PlatformField] = &[];
 
@@ -96,6 +107,8 @@ static METHODS_5: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0029794c },
     PlatformMethod { name: "sendCommand", descriptor: "(Ljava/lang/String;[B[B)I", flags: 0x00030009, slot: 65535, entry: 0x0029790c },
 ];
+
+static DISPATCH_5: &[u32] = &[0x0029794c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_6: &[PlatformField] = &[
     PlatformField { name: "listener", descriptor: "Lcom/lgt/QOSEventListener;", flags: 0x0000800c, slot: 0 },
@@ -107,6 +120,8 @@ static METHODS_6: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(II)V", flags: 0x00020009, slot: 65535, entry: 0x00254d44 },
 ];
 
+static DISPATCH_6: &[u32] = &[0x00254d3c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_7: &[PlatformField] = &[
     PlatformField { name: "FLOW_GRANTED", descriptor: "I", flags: 0x00060019, slot: 0 },
     PlatformField { name: "FLOW_RELEASED", descriptor: "I", flags: 0x00080019, slot: 1 },
@@ -117,6 +132,8 @@ static FIELDS_7: &[PlatformField] = &[
 static METHODS_7: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyQOSEvent", descriptor: "(IILjava/lang/Object;)V", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_7: &[u32] = &[];
 
 static FIELDS_8: &[PlatformField] = &[
     PlatformField { name: "REMOCON_POWERON", descriptor: "I", flags: 0x00060019, slot: 0 },
@@ -144,6 +161,8 @@ static METHODS_8: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(ILjava/lang/String;)Z", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_8: &[u32] = &[];
+
 static FIELDS_9: &[PlatformField] = &[
     PlatformField { name: "RANDOM_PLAY", descriptor: "I", flags: 0x00140019, slot: 0 },
     PlatformField { name: "SEQUENCE_PLAY", descriptor: "I", flags: 0x00160019, slot: 1 },
@@ -165,6 +184,8 @@ static METHODS_9: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(II)Z", flags: 0x00020009, slot: 65535, entry: 0x002550bc },
 ];
 
+static DISPATCH_9: &[u32] = &[0x002550b4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_10: &[PlatformField] = &[
     PlatformField { name: "listener", descriptor: "Lcom/lgt/RotateEventListener;", flags: 0x0000800c, slot: 0 },
 ];
@@ -175,6 +196,8 @@ static METHODS_10: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(I)Z", flags: 0x00010009, slot: 65535, entry: 0x00255b0c },
 ];
 
+static DISPATCH_10: &[u32] = &[0x00255b04, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_11: &[PlatformField] = &[
     PlatformField { name: "ROTATE_VERT", descriptor: "I", flags: 0x00060019, slot: 0 },
     PlatformField { name: "ROTATE_HORZ", descriptor: "I", flags: 0x00080019, slot: 1 },
@@ -183,6 +206,8 @@ static FIELDS_11: &[PlatformField] = &[
 static METHODS_11: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(I)Z", flags: 0x00020401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_11: &[u32] = &[];
 
 static FIELDS_12: &[PlatformField] = &[
     PlatformField { name: "listener", descriptor: "Lcom/lgt/TermResEventListener;", flags: 0x0000800c, slot: 0 },
@@ -194,11 +219,15 @@ static METHODS_12: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(I)Z", flags: 0x00010009, slot: 65535, entry: 0x00255d64 },
 ];
 
+static DISPATCH_12: &[u32] = &[0x00255d5c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_13: &[PlatformField] = &[];
 
 static METHODS_13: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(I)Z", flags: 0x00020401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_13: &[u32] = &[];
 
 static FIELDS_14: &[PlatformField] = &[
     PlatformField { name: "SUCCESS_LOCK", descriptor: "I", flags: 0x00070019, slot: 0 },
@@ -218,6 +247,8 @@ static METHODS_14: &[PlatformMethod] = &[
     PlatformMethod { name: "encryptData", descriptor: "([B)[B", flags: 0x00010109, slot: 65535, entry: 0x0028cdd0 },
     PlatformMethod { name: "decryptData", descriptor: "([B)[B", flags: 0x00010109, slot: 65535, entry: 0x0028cd6c },
 ];
+
+static DISPATCH_14: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_15: &[PlatformField] = &[
     PlatformField { name: "URL", descriptor: "Ljava/lang/String;", flags: 0x00008004, slot: 12 },
@@ -269,6 +300,8 @@ static METHODS_15: &[PlatformMethod] = &[
     PlatformMethod { name: "disableOEMDisplayArea", descriptor: "(I)I", flags: 0x00020001, slot: 102, entry: 0x0028d7d0 },
 ];
 
+static DISPATCH_15: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0028d4a8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0028f824, 0x0028e6b0, 0x0028d684, 0x0028d668, 0x0028d64c, 0x0028d630, 0x0028d614, 0x0028d5f8, 0x0028d5dc, 0x0028d5c0, 0x0028d5a4, 0x0028d588, 0x0028d56c, 0x0028d550, 0x0028d534, 0x0028d518, 0x0028d4fc, 0x0028d4e0, 0x0028d4c4, 0x0028d478, 0x0028d45c, 0x0028d890, 0x0028d7d0];
+
 static FIELDS_16: &[PlatformField] = &[
     PlatformField { name: "clip", descriptor: "Lcom/lgt/VAMClip;", flags: 0x00008004, slot: 0 },
     PlatformField { name: "listener", descriptor: "Lcom/lgt/VAMDownloaderListener;", flags: 0x00008004, slot: 1 },
@@ -299,6 +332,8 @@ static METHODS_16: &[PlatformMethod] = &[
     PlatformMethod { name: "checkParameter", descriptor: "(Lcom/lgt/VAMClip;)I", flags: 0x00010009, slot: 65535, entry: 0x00297eac },
 ];
 
+static DISPATCH_16: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00299140, 0x00297e70, 0x00299250, 0x00299024];
+
 static FIELDS_17: &[PlatformField] = &[
     PlatformField { name: "VAM_DOWNLOAD_PROGRESS", descriptor: "I", flags: 0x00060019, slot: 0 },
     PlatformField { name: "VAM_DOWNLOAD_CANCEL", descriptor: "I", flags: 0x00080019, slot: 1 },
@@ -308,6 +343,8 @@ static FIELDS_17: &[PlatformField] = &[
 static METHODS_17: &[PlatformMethod] = &[
     PlatformMethod { name: "handleEvent", descriptor: "(II)Z", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_17: &[u32] = &[];
 
 static FIELDS_18: &[PlatformField] = &[];
 
@@ -327,12 +364,16 @@ static METHODS_18: &[PlatformMethod] = &[
     PlatformMethod { name: "setRetryDownload", descriptor: "(Z)V", flags: 0x00020004, slot: 1, entry: 0x00290688 },
 ];
 
+static DISPATCH_18: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00291070, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002906b0, 0x00290688];
+
 static FIELDS_19: &[PlatformField] = &[];
 
 static METHODS_19: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(I)V", flags: 0x00020001, slot: 65535, entry: 0x00293448 },
     PlatformMethod { name: "getErrorCode", descriptor: "()I", flags: 0x00010001, slot: 12, entry: 0x0029342c },
 ];
+
+static DISPATCH_19: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0029342c];
 
 static FIELDS_20: &[PlatformField] = &[];
 
@@ -345,11 +386,15 @@ static METHODS_20: &[PlatformMethod] = &[
     PlatformMethod { name: "record", descriptor: "(Lcom/lgt/VAMClip;)Z", flags: 0x00010009, slot: 65535, entry: 0x0029353c },
 ];
 
+static DISPATCH_20: &[u32] = &[0x0029368c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_21: &[PlatformField] = &[];
 
 static METHODS_21: &[PlatformMethod] = &[
     PlatformMethod { name: "getPreferenceChInfo", descriptor: "()[Lcom/lgt/dmb/epg/DMBPreferenceCHInfo;", flags: 0x00000009, slot: 65535, entry: 0x00299814 },
 ];
+
+static DISPATCH_21: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_22: &[PlatformField] = &[];
 
@@ -361,6 +406,8 @@ static METHODS_22: &[PlatformMethod] = &[
     PlatformMethod { name: "setSid", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 13, entry: 0x00293774 },
 ];
 
+static DISPATCH_22: &[u32] = &[0x0029376c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00293a74, 0x00293964, 0x0029386c, 0x00293774];
+
 static FIELDS_23: &[PlatformField] = &[];
 
 static METHODS_23: &[PlatformMethod] = &[
@@ -369,6 +416,8 @@ static METHODS_23: &[PlatformMethod] = &[
     PlatformMethod { name: "setCurrentRegionCode", descriptor: "(I)I", flags: 0x00010109, slot: 65535, entry: 0x00299d88 },
     PlatformMethod { name: "getCurrentRegionCode", descriptor: "()I", flags: 0x00000109, slot: 65535, entry: 0x00299d28 },
 ];
+
+static DISPATCH_23: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_24: &[PlatformField] = &[];
 
@@ -381,6 +430,8 @@ static METHODS_24: &[PlatformMethod] = &[
     PlatformMethod { name: "setName", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 13, entry: 0x00293c2c },
 ];
 
+static DISPATCH_24: &[u32] = &[0x00293c24, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00293f2c, 0x00293e34, 0x00293d24, 0x00293c2c];
+
 static FIELDS_25: &[PlatformField] = &[];
 
 static METHODS_25: &[PlatformMethod] = &[
@@ -388,6 +439,8 @@ static METHODS_25: &[PlatformMethod] = &[
     PlatformMethod { name: "getRegistProgramList", descriptor: "()[Lcom/lgt/dmb/epg/DMBReservationInfo;", flags: 0x00000009, slot: 65535, entry: 0x0029ab50 },
     PlatformMethod { name: "clearRegistProgram", descriptor: "()I", flags: 0x00000009, slot: 65535, entry: 0x0029a89c },
 ];
+
+static DISPATCH_25: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_26: &[PlatformField] = &[
     PlatformField { name: "prgTime", descriptor: "Ljava/lang/String;", flags: 0x00008002, slot: 0 },
@@ -409,6 +462,8 @@ static METHODS_26: &[PlatformMethod] = &[
     PlatformMethod { name: "setProgramSid", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 17, entry: 0x0029423c },
 ];
 
+static DISPATCH_26: &[u32] = &[0x00294234, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00294854, 0x0029475c, 0x0029464c, 0x00294adc, 0x0029453c, 0x00294444, 0x00294334, 0x0029423c];
+
 static FIELDS_27: &[PlatformField] = &[
     PlatformField { name: "SOCKET_STREAM", descriptor: "I", flags: 0x00160019, slot: 0 },
     PlatformField { name: "SOCKET_DGRAM", descriptor: "I", flags: 0x00180019, slot: 1 },
@@ -428,11 +483,15 @@ static METHODS_27: &[PlatformMethod] = &[
     PlatformMethod { name: "getProfileID", descriptor: "()I", flags: 0x00010001, slot: 15, entry: 0x00295198 },
 ];
 
+static DISPATCH_27: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00295294, 0x00295258, 0x00295228, 0x002951f8, 0x002951c8, 0x00295198, 0x0029517c, 0x002952c4];
+
 static FIELDS_28: &[PlatformField] = &[];
 
 static METHODS_28: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyQOSEvent", descriptor: "(IILjava/lang/Object;)V", flags: 0x00040001, slot: 10, entry: 0x002955e4 },
 ];
+
+static DISPATCH_28: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002955e4];
 
 static FIELDS_29: &[PlatformField] = &[
     PlatformField { name: "ERR_ERROR", descriptor: "I", flags: 0x00130019, slot: 0 },
@@ -449,6 +508,8 @@ static METHODS_29: &[PlatformMethod] = &[
     PlatformMethod { name: "stop", descriptor: "()I", flags: 0x00010001, slot: 13, entry: 0x00295e14 },
     PlatformMethod { name: "isPlaying", descriptor: "()Z", flags: 0x00010001, slot: 14, entry: 0x00295df4 },
 ];
+
+static DISPATCH_29: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00295e94, 0x00295e74, 0x00295e34, 0x00295e14, 0x00295df4];
 
 static FIELDS_30: &[PlatformField] = &[
     PlatformField { name: "M_E_SUCCESS", descriptor: "I", flags: 0x00070019, slot: 0 },
@@ -507,11 +568,15 @@ static METHODS_30: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001bc798 },
 ];
 
+static DISPATCH_30: &[u32] = &[0x001bc798, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_31: &[PlatformField] = &[];
 
 static METHODS_31: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00148a78 },
 ];
+
+static DISPATCH_31: &[u32] = &[0x00148a78, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
 
 static FIELDS_32: &[PlatformField] = &[];
 
@@ -526,6 +591,8 @@ static METHODS_32: &[PlatformMethod] = &[
     PlatformMethod { name: "sizeOf", descriptor: "([BII)I", flags: 0x00040401, slot: 1, entry: 0x0014a608 },
 ];
 
+static DISPATCH_32: &[u32] = &[0x0014a650, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00151d3c, 0x001519c4, 0x00151884, 0x00151a1c, 0x0014a7f4, 0x0014a6fc, 0x0014a748, 0x0014a6bc, 0x0014a670, 0x0014a624, 0x0014a608];
+
 static FIELDS_33: &[PlatformField] = &[];
 
 static METHODS_33: &[PlatformMethod] = &[
@@ -536,11 +603,15 @@ static METHODS_33: &[PlatformMethod] = &[
     PlatformMethod { name: "sizeOf", descriptor: "([CII)I", flags: 0x00040401, slot: 1, entry: 0x0014a978 },
 ];
 
+static DISPATCH_33: &[u32] = &[0x0014a9c0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001523c4, 0x001521cc, 0x00152140, 0x00152168, 0x00152224, 0x0014aa14, 0x0014a9e0, 0x0014a994, 0x0014a978];
+
 static FIELDS_34: &[PlatformField] = &[];
 
 static METHODS_34: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010000, slot: 0, entry: 0x0017060c },
 ];
+
+static DISPATCH_34: &[u32] = &[0x0017060c, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
 
 static FIELDS_35: &[PlatformField] = &[];
 
@@ -558,6 +629,8 @@ static METHODS_35: &[PlatformMethod] = &[
     PlatformMethod { name: "init", descriptor: "()V", flags: 0x00010004, slot: 1, entry: 0x001706b4 },
 ];
 
+static DISPATCH_35: &[u32] = &[0x0014a650, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0017106c, 0x001519c4, 0x00170e80, 0x00170d80, 0x0014a7f4, 0x0014a6fc, 0x0014a748, 0x00170714, 0x0014a670, 0x00170764, 0x001706d4, 0x001709ec, 0x00170898, 0x001707fc, 0x001706b4];
+
 static FIELDS_36: &[PlatformField] = &[];
 
 static METHODS_36: &[PlatformMethod] = &[
@@ -569,6 +642,8 @@ static METHODS_36: &[PlatformMethod] = &[
     PlatformMethod { name: "sizeOf", descriptor: "([CII)I", flags: 0x00040001, slot: 1, entry: 0x001715cc },
 ];
 
+static DISPATCH_36: &[u32] = &[0x0014a9c0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00171894, 0x001521cc, 0x001716e8, 0x00152168, 0x0017160c, 0x0014aa14, 0x0014a9e0, 0x001719c4, 0x001715cc];
+
 static FIELDS_37: &[PlatformField] = &[];
 
 static METHODS_37: &[PlatformMethod] = &[
@@ -577,6 +652,8 @@ static METHODS_37: &[PlatformMethod] = &[
     PlatformMethod { name: "read", descriptor: "([CII)I", flags: 0x00040021, slot: 1, entry: 0x0014abe4 },
     PlatformMethod { name: "sizeOf", descriptor: "([BII)I", flags: 0x00040001, slot: 1, entry: 0x0014ab10 },
 ];
+
+static DISPATCH_37: &[u32] = &[0x0014ab28, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014ab48, 0x001519c4, 0x0014abe4, 0x00151a1c, 0x0014a7f4, 0x0014a6fc, 0x0014a748, 0x0014a6bc, 0x0014a670, 0x0014a624, 0x0014ab10];
 
 static FIELDS_38: &[PlatformField] = &[];
 
@@ -588,6 +665,8 @@ static METHODS_38: &[PlatformMethod] = &[
     PlatformMethod { name: "sizeOf", descriptor: "([CII)I", flags: 0x00040001, slot: 1, entry: 0x00176210 },
 ];
 
+static DISPATCH_38: &[u32] = &[0x00176228, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00176324, 0x001521cc, 0x001763cc, 0x00152168, 0x00176248, 0x0014aa14, 0x0014a9e0, 0x0014a994, 0x00176210];
+
 static FIELDS_39: &[PlatformField] = &[];
 
 static METHODS_39: &[PlatformMethod] = &[
@@ -597,11 +676,15 @@ static METHODS_39: &[PlatformMethod] = &[
     PlatformMethod { name: "readNumOfChars", descriptor: "([BI)I", flags: 0x00030004, slot: 1, entry: 0x00171b88 },
 ];
 
+static DISPATCH_39: &[u32] = &[0x00171e64, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00172214, 0x001519c4, 0x00170e80, 0x00171e9c, 0x0014a7f4, 0x0014a6fc, 0x0014a748, 0x00170714, 0x0014a670, 0x00170764, 0x001706d4, 0x00171b88, 0x00170898, 0x001707fc, 0x001706b4];
+
 static FIELDS_40: &[PlatformField] = &[];
 
 static METHODS_40: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0014aec4 },
 ];
+
+static DISPATCH_40: &[u32] = &[0x0014aec4, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00171894, 0x001521cc, 0x001716e8, 0x00152168, 0x0017160c, 0x0014aa14, 0x0014a9e0, 0x001719c4, 0x001715cc];
 
 static FIELDS_41: &[PlatformField] = &[];
 
@@ -616,6 +699,8 @@ static METHODS_41: &[PlatformMethod] = &[
     PlatformMethod { name: "sizeOf", descriptor: "([BII)I", flags: 0x00040001, slot: 1, entry: 0x0014b1a8 },
 ];
 
+static DISPATCH_41: &[u32] = &[0x0014b5b4, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00151d3c, 0x001519c4, 0x0014b308, 0x00151a1c, 0x0014a7f4, 0x0014afc0, 0x0014b2d0, 0x0014b298, 0x0014a670, 0x0014a624, 0x0014b1a8];
+
 static FIELDS_42: &[PlatformField] = &[];
 
 static METHODS_42: &[PlatformMethod] = &[
@@ -624,11 +709,15 @@ static METHODS_42: &[PlatformMethod] = &[
     PlatformMethod { name: "sizeOf", descriptor: "([CII)I", flags: 0x00040001, slot: 1, entry: 0x00172750 },
 ];
 
+static DISPATCH_42: &[u32] = &[0x00172730, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001523c4, 0x001521cc, 0x00172804, 0x00152168, 0x00152224, 0x0014aa14, 0x0014a9e0, 0x0014a994, 0x00172750];
+
 static FIELDS_43: &[PlatformField] = &[];
 
 static METHODS_43: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00172cc4 },
 ];
+
+static DISPATCH_43: &[u32] = &[0x00172cc4, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
 
 static FIELDS_44: &[PlatformField] = &[];
 
@@ -636,12 +725,16 @@ static METHODS_44: &[PlatformMethod] = &[
     PlatformMethod { name: "openPrim", descriptor: "(Ljava/lang/String;IZ)Ljavax/microedition/io/Connection;", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_44: &[u32] = &[];
+
 static FIELDS_45: &[PlatformField] = &[];
 
 static METHODS_45: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0014b6a0 },
     PlatformMethod { name: "write", descriptor: "(I)V", flags: 0x00020121, slot: 1, entry: 0x0014b758 },
 ];
+
+static DISPATCH_45: &[u32] = &[0x0014b6a0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014b758, 0x0014f8f8, 0x0014f950, 0x0014f8e8, 0x0014f8e0];
 
 static FIELDS_46: &[PlatformField] = &[];
 
@@ -655,12 +748,16 @@ static METHODS_46: &[PlatformMethod] = &[
     PlatformMethod { name: "open", descriptor: "(Ljava/lang/String;)I", flags: 0x00020102, slot: 1, entry: 0x0014c080 },
 ];
 
+static DISPATCH_46: &[u32] = &[0x0014b87c, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014b838, 0x0014f08c, 0x0014b924, 0x0014ef70, 0x0014b814, 0x0014ba2c, 0x0014ef10, 0x0014ee98, 0x0014ee50];
+
 static FIELDS_47: &[PlatformField] = &[];
 
 static METHODS_47: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00172e28 },
     PlatformMethod { name: "waitForIO", descriptor: "()V", flags: 0x00000109, slot: 65535, entry: 0x00172ec8 },
 ];
+
+static DISPATCH_47: &[u32] = &[0x00172e28, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
 
 static FIELDS_48: &[PlatformField] = &[];
 
@@ -673,6 +770,8 @@ static METHODS_48: &[PlatformMethod] = &[
     PlatformMethod { name: "copybytes2", descriptor: "([BLjava/lang/String;)V", flags: 0x00030001, slot: 15, entry: 0x0027ecb8 },
     PlatformMethod { name: "copybytes3", descriptor: "([BI[BI)V", flags: 0x00050001, slot: 16, entry: 0x0027eac0 },
 ];
+
+static DISPATCH_48: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027fc30, 0x0027edd4, 0x0027f570, 0x0027e98c, 0x0027ebb4, 0x0027ecb8, 0x0027eac0];
 
 static FIELDS_49: &[PlatformField] = &[];
 
@@ -688,6 +787,8 @@ static METHODS_49: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x00256000 },
 ];
 
+static DISPATCH_49: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002560b0, 0x00256058, 0x00256590, 0x002566ec, 0x00256020, 0x00256000, 0x00000000, 0x00000000, 0x0025603c];
+
 static FIELDS_50: &[PlatformField] = &[];
 
 static METHODS_50: &[PlatformMethod] = &[
@@ -700,6 +801,8 @@ static METHODS_50: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x002568ac },
 ];
 
+static DISPATCH_50: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00256b70, 0x00256978, 0x002568cc, 0x0025690c, 0x002568ac];
+
 static FIELDS_51: &[PlatformField] = &[];
 
 static METHODS_51: &[PlatformMethod] = &[
@@ -708,6 +811,8 @@ static METHODS_51: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 18, entry: 0x00256d7c },
 ];
 
+static DISPATCH_51: &[u32] = &[0x00256d5c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002573f8, 0x002572f8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00256d7c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_52: &[PlatformField] = &[];
 
 static METHODS_52: &[PlatformMethod] = &[
@@ -715,12 +820,16 @@ static METHODS_52: &[PlatformMethod] = &[
     PlatformMethod { name: "open", descriptor: "(Ljava/lang/String;I)V", flags: 0x00030404, slot: 10, entry: 0x001bc840 },
 ];
 
+static DISPATCH_52: &[u32] = &[0x001bc848, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001bc840];
+
 static FIELDS_53: &[PlatformField] = &[];
 
 static METHODS_53: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00257b7c },
     PlatformMethod { name: "findScheme", descriptor: "(Ljava/lang/String;)Lorg/kwis/msf/io/Socket;", flags: 0x00010009, slot: 65535, entry: 0x00257b84 },
 ];
+
+static DISPATCH_53: &[u32] = &[0x00257b7c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_54: &[PlatformField] = &[
     PlatformField { name: "STYLE_PLAIN", descriptor: "I", flags: 0x00100019, slot: 0 },
@@ -740,6 +849,8 @@ static METHODS_54: &[PlatformMethod] = &[
     PlatformMethod { name: "getDefaultFont", descriptor: "()Lorg/kwis/msp/lcdui/Font;", flags: 0x00000009, slot: 65535, entry: 0x002590a0 },
     PlatformMethod { name: "getFont", descriptor: "(II)Lorg/kwis/msp/lcdui/Font;", flags: 0x00020009, slot: 65535, entry: 0x00258fd0 },
 ];
+
+static DISPATCH_54: &[u32] = &[0x00258fc8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_55: &[PlatformField] = &[
     PlatformField { name: "saved_url", descriptor: "Ljava/lang/String;", flags: 0x00008004, slot: 0 },
@@ -811,6 +922,8 @@ static METHODS_55: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 50, entry: 0x001bd090 },
 ];
 
+static DISPATCH_55: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c047c, 0x001bcc30, 0x001bcc14, 0x001bd2b4, 0x001bd274, 0x001bd234, 0x001bd1f4, 0x001bd1b4, 0x001bdd7c, 0x001bcbf8, 0x001bdbb8, 0x001bd650, 0x001bcbc4, 0x001bd5ac, 0x001bcb8c, 0x001bcb54, 0x001bd558, 0x001bd524, 0x001bd4f0, 0x001bd498, 0x001bd444, 0x001bd3ec, 0x001bfe50, 0x001bd330, 0x001bfd58, 0x001c06a0, 0x001bdaf0, 0x001bda3c, 0x001bd158, 0x001bcb4c, 0x001bfb68, 0x001bf974, 0x001bca38, 0x001beb8c, 0x001be12c, 0x001bc948, 0x001bc92c, 0x001bc910, 0x001bc908, 0x001bc8ec, 0x001bd090];
+
 static FIELDS_56: &[PlatformField] = &[];
 
 static METHODS_56: &[PlatformMethod] = &[
@@ -821,6 +934,8 @@ static METHODS_56: &[PlatformMethod] = &[
     PlatformMethod { name: "skipFully", descriptor: "(Ljava/io/InputStream;I)V", flags: 0x00030002, slot: 1, entry: 0x001c08a4 },
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001c086c },
 ];
+
+static DISPATCH_56: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c105c, 0x00000000, 0x001c0954, 0x00000000, 0x001c0908, 0x001c086c, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_57: &[PlatformField] = &[];
 
@@ -834,6 +949,8 @@ static METHODS_57: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001c13ac },
 ];
 
+static DISPATCH_57: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c1580, 0x00000000, 0x001c14c0, 0x001c134c, 0x001c13ac, 0x001c1300, 0x001c12b4];
+
 static FIELDS_58: &[PlatformField] = &[];
 
 static METHODS_58: &[PlatformMethod] = &[
@@ -844,6 +961,8 @@ static METHODS_58: &[PlatformMethod] = &[
     PlatformMethod { name: "addBaseUrl", descriptor: "(Lcom/velox/HttpUrl;)V", flags: 0x00020001, slot: 1, entry: 0x001c1984 },
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 1, entry: 0x001c17c4 },
 ];
+
+static DISPATCH_58: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c17c4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c1944, 0x001c1984];
 
 static FIELDS_59: &[PlatformField] = &[];
 
@@ -856,6 +975,8 @@ static METHODS_59: &[PlatformMethod] = &[
     PlatformMethod { name: "read", descriptor: "()I", flags: 0x00010001, slot: 10, entry: 0x001c2274 },
 ];
 
+static DISPATCH_59: &[u32] = &[0x001c22d0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c2274, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c2290, 0x00000000, 0x00000000, 0x00000000, 0x001c22b4, 0x001c2298, 0x001c23a8];
+
 static FIELDS_60: &[PlatformField] = &[];
 
 static METHODS_60: &[PlatformMethod] = &[
@@ -867,6 +988,8 @@ static METHODS_60: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x002591f4 },
 ];
 
+static DISPATCH_60: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002594a0, 0x00000000, 0x002592e4, 0x00000000, 0x00259280, 0x002591f4, 0x00000000, 0x00000000, 0x00000000, 0x00259528];
+
 static FIELDS_61: &[PlatformField] = &[];
 
 static METHODS_61: &[PlatformMethod] = &[
@@ -877,6 +1000,8 @@ static METHODS_61: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001c23d0 },
     PlatformMethod { name: "isStream", descriptor: "()Z", flags: 0x00010001, slot: 1, entry: 0x001c23b4 },
 ];
+
+static DISPATCH_61: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c2658, 0x00000000, 0x001c245c, 0x00000000, 0x001c23d0, 0x001c25d8, 0x001c23b4];
 
 static FIELDS_62: &[PlatformField] = &[];
 
@@ -890,6 +1015,8 @@ static METHODS_62: &[PlatformMethod] = &[
     PlatformMethod { name: "size", descriptor: "()I", flags: 0x00010001, slot: 1, entry: 0x001c28b8 },
     PlatformMethod { name: "removeProperty", descriptor: "(Ljava/lang/String;)Ljava/lang/String;", flags: 0x00020021, slot: 1, entry: 0x001c2a44 },
 ];
+
+static DISPATCH_62: &[u32] = &[0x001c2f68, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c2d88, 0x001c2bc8, 0x001c2e4c, 0x001c29a4, 0x001c2904, 0x001c28b8, 0x001c2a44];
 
 static FIELDS_63: &[PlatformField] = &[
     PlatformField { name: "sockfd", descriptor: "I", flags: 0x00000000, slot: 0 },
@@ -925,6 +1052,8 @@ static METHODS_63: &[PlatformMethod] = &[
     PlatformMethod { name: "flush0", descriptor: "()V", flags: 0x00010101, slot: 28, entry: 0x001c31d8 },
 ];
 
+static DISPATCH_63: &[u32] = &[0x001c3688, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c39e0, 0x001c3924, 0x001c3868, 0x001c35d0, 0x001c37f4, 0x001c3770, 0x001c4188, 0x001c3d4c, 0x001c36b0, 0x001c3a4c, 0x001c355c, 0x001c34e8, 0x001c3474, 0x001c340c, 0x001c33a4, 0x001c333c, 0x001c32bc, 0x001c323c, 0x001c31d8];
+
 static FIELDS_64: &[PlatformField] = &[];
 
 static METHODS_64: &[PlatformMethod] = &[
@@ -946,9 +1075,13 @@ static METHODS_64: &[PlatformMethod] = &[
     PlatformMethod { name: "getSocketDiscripter", descriptor: "()I", flags: 0x00010001, slot: 24, entry: 0x001c56a8 },
 ];
 
+static DISPATCH_64: &[u32] = &[0x001c56a0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c5b50, 0x001c5aec, 0x001c5a88, 0x001c5684, 0x001c5a24, 0x001c59c0, 0x001c5960, 0x001c5900, 0x001c567c, 0x001c589c, 0x001c5838, 0x001c57d4, 0x001c5770, 0x001c570c, 0x001c56a8];
+
 static FIELDS_65: &[PlatformField] = &[];
 
 static METHODS_65: &[PlatformMethod] = &[];
+
+static DISPATCH_65: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_66: &[PlatformField] = &[];
 
@@ -959,11 +1092,15 @@ static METHODS_66: &[PlatformMethod] = &[
     PlatformMethod { name: "releaseMemory", descriptor: "(I)V", flags: 0x00010109, slot: 65535, entry: 0x001c5c54 },
 ];
 
+static DISPATCH_66: &[u32] = &[0x001c5d78, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_67: &[PlatformField] = &[];
 
 static METHODS_67: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00280e80 },
 ];
+
+static DISPATCH_67: &[u32] = &[0x00280e80, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_68: &[PlatformField] = &[];
 
@@ -979,11 +1116,15 @@ static METHODS_68: &[PlatformMethod] = &[
     PlatformMethod { name: "reset", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x00280fcc },
 ];
 
+static DISPATCH_68: &[u32] = &[0x00280f28, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002811bc, 0x002810cc, 0x00281048, 0x00280fcc, 0x00281108, 0x00280f68, 0x002811a0, 0x00281184];
+
 static FIELDS_69: &[PlatformField] = &[];
 
 static METHODS_69: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x002597c0 },
 ];
+
+static DISPATCH_69: &[u32] = &[0x002597c0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_70: &[PlatformField] = &[];
 
@@ -994,6 +1135,8 @@ static METHODS_70: &[PlatformMethod] = &[
     PlatformMethod { name: "getLengthInChars", descriptor: "([BII)I", flags: 0x00040001, slot: 1, entry: 0x00259c08 },
     PlatformMethod { name: "convertToChars", descriptor: "([BII)[C", flags: 0x00040021, slot: 1, entry: 0x002598c0 },
 ];
+
+static DISPATCH_70: &[u32] = &[0x00259880, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00259ac4, 0x00000000, 0x00259cf0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00259c08, 0x002598c0];
 
 static FIELDS_71: &[PlatformField] = &[];
 
@@ -1006,6 +1149,8 @@ static METHODS_71: &[PlatformMethod] = &[
     PlatformMethod { name: "convertToBytes", descriptor: "([CII)[B", flags: 0x00040021, slot: 1, entry: 0x001c5fa0 },
 ];
 
+static DISPATCH_71: &[u32] = &[0x001c660c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c6178, 0x00000000, 0x001c64b8, 0x00000000, 0x001c63dc, 0x00000000, 0x00000000, 0x00000000, 0x001c6330, 0x001c5fa0];
+
 static FIELDS_72: &[PlatformField] = &[];
 
 static METHODS_72: &[PlatformMethod] = &[
@@ -1017,17 +1162,23 @@ static METHODS_72: &[PlatformMethod] = &[
     PlatformMethod { name: "flush", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001c67b4 },
 ];
 
+static DISPATCH_72: &[u32] = &[0x001c6774, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c67b4, 0x001c67f4, 0x001c674c, 0x001c6850, 0x001c6834];
+
 static FIELDS_73: &[PlatformField] = &[];
 
 static METHODS_73: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010002, slot: 65535, entry: 0x00281364 },
 ];
 
+static DISPATCH_73: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_74: &[PlatformField] = &[];
 
 static METHODS_74: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0025a160 },
 ];
+
+static DISPATCH_74: &[u32] = &[0x0025a160, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_75: &[PlatformField] = &[];
 
@@ -1038,6 +1189,8 @@ static METHODS_75: &[PlatformMethod] = &[
     PlatformMethod { name: "getLengthInChars", descriptor: "([BII)I", flags: 0x00040001, slot: 1, entry: 0x0025a220 },
     PlatformMethod { name: "convertToChars", descriptor: "([BII)[C", flags: 0x00040021, slot: 1, entry: 0x0025a258 },
 ];
+
+static DISPATCH_75: &[u32] = &[0x0025a238, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025a430, 0x00000000, 0x0025a4cc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025a220, 0x0025a258];
 
 static FIELDS_76: &[PlatformField] = &[];
 
@@ -1050,11 +1203,15 @@ static METHODS_76: &[PlatformMethod] = &[
     PlatformMethod { name: "convertToBytes", descriptor: "([CII)[B", flags: 0x00040021, slot: 1, entry: 0x001c6944 },
 ];
 
+static DISPATCH_76: &[u32] = &[0x001c6924, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c6b1c, 0x00000000, 0x001c6ca0, 0x00000000, 0x001c6bc4, 0x00000000, 0x00000000, 0x00000000, 0x001c690c, 0x001c6944];
+
 static FIELDS_77: &[PlatformField] = &[];
 
 static METHODS_77: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00172ef8 },
 ];
+
+static DISPATCH_77: &[u32] = &[0x00172ef8, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
 
 static FIELDS_78: &[PlatformField] = &[
     PlatformField { name: "fd", descriptor: "I", flags: 0x00000004, slot: 0 },
@@ -1085,6 +1242,8 @@ static METHODS_78: &[PlatformMethod] = &[
     PlatformMethod { name: "SIOAvailable0", descriptor: "(I)I", flags: 0x00020104, slot: 33, entry: 0x0025a778 },
 ];
 
+static DISPATCH_78: &[u32] = &[0x0025aa28, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025af9c, 0x0025ae78, 0x0025ad54, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025acb4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025aa78, 0x0025ab58, 0x0025aadc, 0x0025abb8, 0x0025a9b8, 0x0025a948, 0x0025a8cc, 0x0025a850, 0x0025a7e4, 0x0025a778];
+
 static FIELDS_79: &[PlatformField] = &[
     PlatformField { name: "year", descriptor: "I", flags: 0x00000004, slot: 0 },
     PlatformField { name: "month", descriptor: "I", flags: 0x00000004, slot: 1 },
@@ -1100,11 +1259,15 @@ static METHODS_79: &[PlatformMethod] = &[
     PlatformMethod { name: "getMillisToGMT", descriptor: "(Ljava/lang/String;)J", flags: 0x00010009, slot: 65535, entry: 0x0025bf5c },
 ];
 
+static DISPATCH_79: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025bdcc];
+
 static FIELDS_80: &[PlatformField] = &[];
 
 static METHODS_80: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00296240 },
 ];
+
+static DISPATCH_80: &[u32] = &[0x00296240, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_81: &[PlatformField] = &[];
 
@@ -1115,12 +1278,16 @@ static METHODS_81: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyAPMDeactivated", descriptor: "(I)V", flags: 0x00010009, slot: 65535, entry: 0x00281d88 },
 ];
 
+static DISPATCH_81: &[u32] = &[0x00281de8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_82: &[PlatformField] = &[];
 
 static METHODS_82: &[PlatformMethod] = &[
     PlatformMethod { name: "getMessage", descriptor: "(II)Lorg/kwis/msf/io/Message;", flags: 0x00020009, slot: 65535, entry: 0x001c6f6c },
     PlatformMethod { name: "confirmMessage", descriptor: "(II)V", flags: 0x00020009, slot: 65535, entry: 0x001c6f30 },
 ];
+
+static DISPATCH_82: &[u32] = &[0x001c6f64, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_83: &[PlatformField] = &[
     PlatformField { name: "ESN", descriptor: "Ljava/lang/String;", flags: 0x000b8019, slot: 0 },
@@ -1154,6 +1321,8 @@ static METHODS_83: &[PlatformMethod] = &[
     PlatformMethod { name: "getSystemPropertyInt", descriptor: "(Ljava/lang/String;)I", flags: 0x00010009, slot: 65535, entry: 0x001c74d0 },
 ];
 
+static DISPATCH_83: &[u32] = &[0x001c7510, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_84: &[PlatformField] = &[];
 
 static METHODS_84: &[PlatformMethod] = &[
@@ -1167,6 +1336,8 @@ static METHODS_84: &[PlatformMethod] = &[
     PlatformMethod { name: "isStream", descriptor: "()Z", flags: 0x00010001, slot: 13, entry: 0x0025db40 },
     PlatformMethod { name: "getSocketDiscripter", descriptor: "()I", flags: 0x00010001, slot: 24, entry: 0x0025dbec },
 ];
+
+static DISPATCH_84: &[u32] = &[0x0025dbbc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025e29c, 0x00000000, 0x00000000, 0x0025db40, 0x00000000, 0x00000000, 0x0025e02c, 0x0025dccc, 0x0025e1dc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025dbec, 0x0025db8c, 0x0025db5c];
 
 static FIELDS_85: &[PlatformField] = &[];
 
@@ -1183,6 +1354,8 @@ static METHODS_85: &[PlatformMethod] = &[
     PlatformMethod { name: "markSupported", descriptor: "()Z", flags: 0x00010001, slot: 1, entry: 0x001c79e4 },
 ];
 
+static DISPATCH_85: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c7d2c, 0x001c7cd4, 0x001c7ba0, 0x001c7a58, 0x001c7b38, 0x001c7a30, 0x001c7a08, 0x001c7a00, 0x001c79e4];
+
 static FIELDS_86: &[PlatformField] = &[];
 
 static METHODS_86: &[PlatformMethod] = &[
@@ -1194,9 +1367,13 @@ static METHODS_86: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001c7e54 },
 ];
 
+static DISPATCH_86: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c80b0, 0x001c7e84, 0x001c7edc, 0x001c7e7c, 0x001c7e54];
+
 static FIELDS_87: &[PlatformField] = &[];
 
 static METHODS_87: &[PlatformMethod] = &[];
+
+static DISPATCH_87: &[u32] = &[];
 
 static FIELDS_88: &[PlatformField] = &[];
 
@@ -1215,6 +1392,8 @@ static METHODS_88: &[PlatformMethod] = &[
     PlatformMethod { name: "countTokens", descriptor: "()I", flags: 0x00010001, slot: 1, entry: 0x002964b0 },
 ];
 
+static DISPATCH_88: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0029642c, 0x0029653c, 0x002963e0, 0x002963bc, 0x00296398, 0x002964b0];
+
 static FIELDS_89: &[PlatformField] = &[
     PlatformField { name: "buf", descriptor: "[B", flags: 0x00008002, slot: 0 },
     PlatformField { name: "off", descriptor: "I", flags: 0x00000002, slot: 1 },
@@ -1230,11 +1409,15 @@ static METHODS_89: &[PlatformMethod] = &[
     PlatformMethod { name: "reset", descriptor: "()V", flags: 0x00010021, slot: 14, entry: 0x00296b7c },
 ];
 
+static DISPATCH_89: &[u32] = &[0x00296f2c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00296de0, 0x00296c44, 0x00296c9c, 0x00296bec, 0x00296b7c];
+
 static FIELDS_90: &[PlatformField] = &[];
 
 static METHODS_90: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0025eab8 },
 ];
+
+static DISPATCH_90: &[u32] = &[0x0025eab8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_91: &[PlatformField] = &[];
 
@@ -1242,6 +1425,8 @@ static METHODS_91: &[PlatformMethod] = &[
     PlatformMethod { name: "createImageFromResource", descriptor: "(I)Lorg/kwis/msp/lcdui/Image;", flags: 0x00020401, slot: 0, entry: 0x00000000 },
     PlatformMethod { name: "createImage", descriptor: "(III)Lorg/kwis/msp/lcdui/Image;", flags: 0x00040401, slot: 1, entry: 0x00000000 },
 ];
+
+static DISPATCH_91: &[u32] = &[];
 
 static FIELDS_92: &[PlatformField] = &[];
 
@@ -1251,11 +1436,15 @@ static METHODS_92: &[PlatformMethod] = &[
     PlatformMethod { name: "getImageWrapper", descriptor: "()Lcom/velox/wipijava/lcdui/ImageWrapper;", flags: 0x00000009, slot: 65535, entry: 0x001c834c },
 ];
 
+static DISPATCH_92: &[u32] = &[0x001c8344, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_93: &[PlatformField] = &[];
 
 static METHODS_93: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0025ec44 },
 ];
+
+static DISPATCH_93: &[u32] = &[0x0025ec44, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_94: &[PlatformField] = &[
     PlatformField { name: "buf", descriptor: "[B", flags: 0x00008004, slot: 0 },
@@ -1277,6 +1466,8 @@ static METHODS_94: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010021, slot: 15, entry: 0x0014d29c },
 ];
 
+static DISPATCH_94: &[u32] = &[0x0014ee90, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014d80c, 0x0014f08c, 0x0014d584, 0x0014d3e8, 0x0014d36c, 0x0014d29c, 0x0014d260, 0x0014d2fc, 0x0014d280];
+
 static FIELDS_95: &[PlatformField] = &[
     PlatformField { name: "buf", descriptor: "[B", flags: 0x00008004, slot: 0 },
     PlatformField { name: "count", descriptor: "I", flags: 0x00000004, slot: 1 },
@@ -1293,6 +1484,8 @@ static METHODS_95: &[PlatformMethod] = &[
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 4, entry: 0x0014daa4 },
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010021, slot: 14, entry: 0x0014d9b8 },
 ];
+
+static DISPATCH_95: &[u32] = &[0x0014d994, 0x00133ee4, 0x00133f18, 0x00133be8, 0x0014daa4, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014ddcc, 0x0014f8f8, 0x0014dbe4, 0x0014f8e8, 0x0014d9b8, 0x0014da28, 0x0014dae0, 0x0014d978];
 
 static FIELDS_96: &[PlatformField] = &[];
 
@@ -1312,6 +1505,8 @@ static METHODS_96: &[PlatformMethod] = &[
     PlatformMethod { name: "readDouble", descriptor: "()D", flags: 0x00010401, slot: 12, entry: 0x00000000 },
     PlatformMethod { name: "readUTF", descriptor: "()Ljava/lang/String;", flags: 0x00010401, slot: 13, entry: 0x00000000 },
 ];
+
+static DISPATCH_96: &[u32] = &[];
 
 static FIELDS_97: &[PlatformField] = &[
     PlatformField { name: "in", descriptor: "Ljava/io/InputStream;", flags: 0x00008004, slot: 0 },
@@ -1345,6 +1540,8 @@ static METHODS_97: &[PlatformMethod] = &[
     PlatformMethod { name: "markSupported", descriptor: "()Z", flags: 0x00010001, slot: 18, entry: 0x00173b1c },
 ];
 
+static DISPATCH_97: &[u32] = &[0x0014ee90, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00173da4, 0x00173d28, 0x00173cc0, 0x00173bf4, 0x00173ba8, 0x00173b68, 0x00173e80, 0x00173df0, 0x00173b1c, 0x00173c68, 0x0017419c, 0x00173f18, 0x00174148, 0x001740f4, 0x001740a8, 0x00173abc, 0x0017403c, 0x00173a90, 0x00173f90, 0x001739d4, 0x001739a0, 0x00173940, 0x00173920];
+
 static FIELDS_98: &[PlatformField] = &[];
 
 static METHODS_98: &[PlatformMethod] = &[
@@ -1362,6 +1559,8 @@ static METHODS_98: &[PlatformMethod] = &[
     PlatformMethod { name: "writeChars", descriptor: "(Ljava/lang/String;)V", flags: 0x00020401, slot: 11, entry: 0x00000000 },
     PlatformMethod { name: "writeUTF", descriptor: "(Ljava/lang/String;)V", flags: 0x00020401, slot: 12, entry: 0x00000000 },
 ];
+
+static DISPATCH_98: &[u32] = &[];
 
 static FIELDS_99: &[PlatformField] = &[
     PlatformField { name: "out", descriptor: "Ljava/io/OutputStream;", flags: 0x00008004, slot: 0 },
@@ -1385,6 +1584,8 @@ static METHODS_99: &[PlatformMethod] = &[
     PlatformMethod { name: "writeUTF", descriptor: "(Ljava/lang/String;)V", flags: 0x00020011, slot: 24, entry: 0x0014e410 },
 ];
 
+static DISPATCH_99: &[u32] = &[0x0014f8f0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014e884, 0x0014f8f8, 0x0014e820, 0x0014e7e0, 0x0014e7a0, 0x0014e734, 0x0014e700, 0x0014e6b0, 0x0014e660, 0x0014e5e4, 0x0014e4cc, 0x0014e48c, 0x0014e440, 0x0014e8d8, 0x0014e410];
+
 static FIELDS_100: &[PlatformField] = &[];
 
 static METHODS_100: &[PlatformMethod] = &[
@@ -1392,12 +1593,16 @@ static METHODS_100: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001745dc },
 ];
 
+static DISPATCH_100: &[u32] = &[0x0017460c, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_101: &[PlatformField] = &[];
 
 static METHODS_101: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0014ed90 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0014ed60 },
 ];
+
+static DISPATCH_101: &[u32] = &[0x0014ed90, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_102: &[PlatformField] = &[];
 
@@ -1414,6 +1619,8 @@ static METHODS_102: &[PlatformMethod] = &[
     PlatformMethod { name: "markSupported", descriptor: "()Z", flags: 0x00010001, slot: 18, entry: 0x0014ee50 },
 ];
 
+static DISPATCH_102: &[u32] = &[0x0014ee90, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014f318, 0x0014f08c, 0x0014f0e4, 0x0014ef70, 0x0014ee74, 0x0014ee6c, 0x0014ef10, 0x0014ee98, 0x0014ee50];
+
 static FIELDS_103: &[PlatformField] = &[];
 
 static METHODS_103: &[PlatformMethod] = &[
@@ -1429,6 +1636,8 @@ static METHODS_103: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 18, entry: 0x0014f454 },
 ];
 
+static DISPATCH_103: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014f5f4, 0x001519c4, 0x0014f704, 0x0014f574, 0x0014f51c, 0x0014f4e0, 0x0014f64c, 0x0014f494, 0x0014f454];
+
 static FIELDS_104: &[PlatformField] = &[
     PlatformField { name: "bytesTransferred", descriptor: "I", flags: 0x00000001, slot: 2 },
 ];
@@ -1437,6 +1646,8 @@ static METHODS_104: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00174708 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001746cc },
 ];
+
+static DISPATCH_104: &[u32] = &[0x00174708, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_105: &[PlatformField] = &[];
 
@@ -1449,6 +1660,8 @@ static METHODS_105: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 14, entry: 0x0014f8e0 },
 ];
 
+static DISPATCH_105: &[u32] = &[0x0014f8f0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014fa58, 0x0014f8f8, 0x0014f950, 0x0014f8e8, 0x0014f8e0];
+
 static FIELDS_106: &[PlatformField] = &[];
 
 static METHODS_106: &[PlatformMethod] = &[
@@ -1460,6 +1673,8 @@ static METHODS_106: &[PlatformMethod] = &[
     PlatformMethod { name: "flush", descriptor: "()V", flags: 0x00010001, slot: 15, entry: 0x0014fbc0 },
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 16, entry: 0x0014fb80 },
 ];
+
+static DISPATCH_106: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0014fc0c, 0x001521cc, 0x0014fd68, 0x00152168, 0x0014fc6c, 0x0014fbc0, 0x0014fb80];
 
 static FIELDS_107: &[PlatformField] = &[];
 
@@ -1492,6 +1707,8 @@ static METHODS_107: &[PlatformMethod] = &[
     PlatformMethod { name: "println", descriptor: "(Ljava/lang/Object;)V", flags: 0x00020001, slot: 35, entry: 0x0014ffe8 },
 ];
 
+static DISPATCH_107: &[u32] = &[0x0014f8f0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00151100, 0x0014f8f8, 0x00150f5c, 0x00151460, 0x00151294, 0x0014ffac, 0x0014ff8c, 0x00150a50, 0x001509cc, 0x0015098c, 0x0015094c, 0x0015090c, 0x001508cc, 0x0014ff5c, 0x00150a0c, 0x0015088c, 0x0014ff3c, 0x00150798, 0x001506a4, 0x001505b0, 0x001504b4, 0x001503c0, 0x001502c4, 0x001501d0, 0x001500dc, 0x0014ffe8];
+
 static FIELDS_108: &[PlatformField] = &[
     PlatformField { name: "lock", descriptor: "Ljava/lang/Object;", flags: 0x00008004, slot: 0 },
 ];
@@ -1510,12 +1727,16 @@ static METHODS_108: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010401, slot: 18, entry: 0x0015187c },
 ];
 
+static DISPATCH_108: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00151d3c, 0x001519c4, 0x00151884, 0x00151a1c, 0x001518bc, 0x001518a0, 0x00151934, 0x001518fc, 0x0015187c];
+
 static FIELDS_109: &[PlatformField] = &[];
 
 static METHODS_109: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00151e90 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00151e60 },
 ];
+
+static DISPATCH_109: &[u32] = &[0x00151e90, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_110: &[PlatformField] = &[];
 
@@ -1524,12 +1745,16 @@ static METHODS_110: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00151f50 },
 ];
 
+static DISPATCH_110: &[u32] = &[0x00151f80, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_111: &[PlatformField] = &[];
 
 static METHODS_111: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00152070 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00152040 },
 ];
+
+static DISPATCH_111: &[u32] = &[0x00152070, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_112: &[PlatformField] = &[
     PlatformField { name: "lock", descriptor: "Ljava/lang/Object;", flags: 0x00008004, slot: 2 },
@@ -1547,12 +1772,16 @@ static METHODS_112: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010401, slot: 16, entry: 0x00152130 },
 ];
 
+static DISPATCH_112: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001523c4, 0x001521cc, 0x00152140, 0x00152168, 0x00152224, 0x00152138, 0x00152130];
+
 static FIELDS_113: &[PlatformField] = &[];
 
 static METHODS_113: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00132f64 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00132f34 },
 ];
+
+static DISPATCH_113: &[u32] = &[0x00132f64, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_114: &[PlatformField] = &[];
 
@@ -1562,12 +1791,16 @@ static METHODS_114: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00133024 },
 ];
 
+static DISPATCH_114: &[u32] = &[0x00133054, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_115: &[PlatformField] = &[];
 
 static METHODS_115: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001331d0 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001331a0 },
 ];
+
+static DISPATCH_115: &[u32] = &[0x001331d0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_116: &[PlatformField] = &[
     PlatformField { name: "TRUE", descriptor: "Ljava/lang/Boolean;", flags: 0x00008019, slot: 0 },
@@ -1581,6 +1814,8 @@ static METHODS_116: &[PlatformMethod] = &[
     PlatformMethod { name: "hashCode", descriptor: "()I", flags: 0x00010001, slot: 2, entry: 0x00152618 },
     PlatformMethod { name: "equals", descriptor: "(Ljava/lang/Object;)Z", flags: 0x00020001, slot: 3, entry: 0x001526e4 },
 ];
+
+static DISPATCH_116: &[u32] = &[0x00133c14, 0x00133ee4, 0x00152618, 0x001526e4, 0x001527a4, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00152648];
 
 static FIELDS_117: &[PlatformField] = &[
     PlatformField { name: "MIN_VALUE", descriptor: "B", flags: 0x000e0019, slot: 0 },
@@ -1596,6 +1831,8 @@ static METHODS_117: &[PlatformMethod] = &[
     PlatformMethod { name: "hashCode", descriptor: "()I", flags: 0x00010001, slot: 2, entry: 0x001528c8 },
     PlatformMethod { name: "equals", descriptor: "(Ljava/lang/Object;)Z", flags: 0x00020001, slot: 3, entry: 0x0015294c },
 ];
+
+static DISPATCH_117: &[u32] = &[0x00133c14, 0x00133ee4, 0x001528c8, 0x0015294c, 0x00152a0c, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001528e4];
 
 static FIELDS_118: &[PlatformField] = &[
     PlatformField { name: "MIN_RADIX", descriptor: "I", flags: 0x00230019, slot: 0 },
@@ -1618,6 +1855,8 @@ static METHODS_118: &[PlatformMethod] = &[
     PlatformMethod { name: "digit", descriptor: "(CI)I", flags: 0x00020009, slot: 65535, entry: 0x00152bd4 },
 ];
 
+static DISPATCH_118: &[u32] = &[0x00133c14, 0x00133ee4, 0x00152cd4, 0x00152f98, 0x00153058, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00152cf0];
+
 static FIELDS_119: &[PlatformField] = &[];
 
 static METHODS_119: &[PlatformMethod] = &[
@@ -1632,6 +1871,8 @@ static METHODS_119: &[PlatformMethod] = &[
     PlatformMethod { name: "getResourceAsStream", descriptor: "(Ljava/lang/String;)Ljava/io/InputStream;", flags: 0x00020001, slot: 16, entry: 0x001332a0 },
 ];
 
+static DISPATCH_119: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x001334a8, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00133868, 0x00133824, 0x001337d0, 0x001336fc, 0x00133710, 0x00133724, 0x001332a0];
+
 static FIELDS_120: &[PlatformField] = &[];
 
 static METHODS_120: &[PlatformMethod] = &[
@@ -1639,12 +1880,16 @@ static METHODS_120: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00133614 },
 ];
 
+static DISPATCH_120: &[u32] = &[0x00133644, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_121: &[PlatformField] = &[];
 
 static METHODS_121: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001531a0 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00153170 },
 ];
+
+static DISPATCH_121: &[u32] = &[0x001531a0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_122: &[PlatformField] = &[
     PlatformField { name: "POSITIVE_INFINITY", descriptor: "D", flags: 0x00084019, slot: 0 },
@@ -1676,6 +1921,8 @@ static METHODS_122: &[PlatformMethod] = &[
     PlatformMethod { name: "longBitsToDouble", descriptor: "(J)D", flags: 0x00020109, slot: 65535, entry: 0x0015392c },
 ];
 
+static DISPATCH_122: &[u32] = &[0x00133c14, 0x00133ee4, 0x00153354, 0x00153484, 0x001536f0, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00153424, 0x001533ec, 0x001536c8, 0x001536a0, 0x00153680, 0x00153644, 0x00153624, 0x001533b8];
+
 static FIELDS_123: &[PlatformField] = &[];
 
 static METHODS_123: &[PlatformMethod] = &[
@@ -1683,12 +1930,16 @@ static METHODS_123: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001747d4 },
 ];
 
+static DISPATCH_123: &[u32] = &[0x00174804, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_124: &[PlatformField] = &[];
 
 static METHODS_124: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00153984 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00153954 },
 ];
+
+static DISPATCH_124: &[u32] = &[0x00153984, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_125: &[PlatformField] = &[];
 
@@ -1710,6 +1961,8 @@ static METHODS_125: &[PlatformMethod] = &[
     PlatformMethod { name: "longValue", descriptor: "()J", flags: 0x00010001, slot: 1, entry: 0x001543a0 },
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 1, entry: 0x001540a8 },
 ];
+
+static DISPATCH_125: &[u32] = &[0x00133c14, 0x00133ee4, 0x00133f18, 0x00133be8, 0x001540a8, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001562c0, 0x001545f4, 0x00155f64, 0x00153d64, 0x00155a68, 0x001556ac, 0x00155284, 0x00153a68, 0x001547b4, 0x001543a0];
 
 static FIELDS_126: &[PlatformField] = &[
     PlatformField { name: "POSITIVE_INFINITY", descriptor: "F", flags: 0x00080019, slot: 0 },
@@ -1742,6 +1995,8 @@ static METHODS_126: &[PlatformMethod] = &[
     PlatformMethod { name: "intBitsToFloat", descriptor: "(I)F", flags: 0x00010109, slot: 65535, entry: 0x00157130 },
 ];
 
+static DISPATCH_126: &[u32] = &[0x00133c14, 0x00133ee4, 0x00156c4c, 0x00156d20, 0x00156f1c, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00156cc8, 0x00156c98, 0x00156ef4, 0x00156ecc, 0x00156eac, 0x00156e70, 0x00156c7c, 0x00156e34];
+
 static FIELDS_127: &[PlatformField] = &[];
 
 static METHODS_127: &[PlatformMethod] = &[
@@ -1754,12 +2009,16 @@ static METHODS_127: &[PlatformMethod] = &[
     PlatformMethod { name: "floatValue", descriptor: "()F", flags: 0x00010001, slot: 13, entry: 0x00158d24 },
 ];
 
+static DISPATCH_127: &[u32] = &[0x00133c14, 0x00133ee4, 0x00133f18, 0x00133be8, 0x0015ba80, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00159094, 0x0015b558, 0x001593d8, 0x00158d24];
+
 static FIELDS_128: &[PlatformField] = &[];
 
 static METHODS_128: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0015d428 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0015d3f8 },
 ];
+
+static DISPATCH_128: &[u32] = &[0x0015d428, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_129: &[PlatformField] = &[];
 
@@ -1768,12 +2027,16 @@ static METHODS_129: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0015d4e8 },
 ];
 
+static DISPATCH_129: &[u32] = &[0x0015d518, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_130: &[PlatformField] = &[];
 
 static METHODS_130: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0015d608 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0015d5d8 },
 ];
+
+static DISPATCH_130: &[u32] = &[0x0015d608, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_131: &[PlatformField] = &[];
 
@@ -1782,12 +2045,16 @@ static METHODS_131: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0015d6c8 },
 ];
 
+static DISPATCH_131: &[u32] = &[0x0015d6f8, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_132: &[PlatformField] = &[];
 
 static METHODS_132: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0015d7e8 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0015d7b8 },
 ];
+
+static DISPATCH_132: &[u32] = &[0x0015d7e8, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_133: &[PlatformField] = &[];
 
@@ -1796,12 +2063,16 @@ static METHODS_133: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001339dc },
 ];
 
+static DISPATCH_133: &[u32] = &[0x00133a0c, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_134: &[PlatformField] = &[];
 
 static METHODS_134: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0015d8d8 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0015d8a8 },
 ];
+
+static DISPATCH_134: &[u32] = &[0x0015d8d8, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_135: &[PlatformField] = &[
     PlatformField { name: "MIN_VALUE", descriptor: "I", flags: 0x00130019, slot: 0 },
@@ -1830,12 +2101,16 @@ static METHODS_135: &[PlatformMethod] = &[
     PlatformMethod { name: "equals", descriptor: "(Ljava/lang/Object;)Z", flags: 0x00020001, slot: 3, entry: 0x0015e038 },
 ];
 
+static DISPATCH_135: &[u32] = &[0x00133c14, 0x00133ee4, 0x0015d994, 0x0015e038, 0x0015e0f8, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0015da2c, 0x0015da08, 0x0015d9ec, 0x0015d9b0, 0x0015e164, 0x0015e128];
+
 static FIELDS_136: &[PlatformField] = &[];
 
 static METHODS_136: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0015e950 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0015e920 },
 ];
+
+static DISPATCH_136: &[u32] = &[0x0015e950, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_137: &[PlatformField] = &[
     PlatformField { name: "MIN_VALUE", descriptor: "J", flags: 0x00124019, slot: 0 },
@@ -1855,6 +2130,8 @@ static METHODS_137: &[PlatformMethod] = &[
     PlatformMethod { name: "hashCode", descriptor: "()I", flags: 0x00010001, slot: 2, entry: 0x0015ea6c },
     PlatformMethod { name: "equals", descriptor: "(Ljava/lang/Object;)Z", flags: 0x00020001, slot: 3, entry: 0x0015eb8c },
 ];
+
+static DISPATCH_137: &[u32] = &[0x00133c14, 0x00133ee4, 0x0015ea6c, 0x0015eb8c, 0x0015ecb4, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0015eabc, 0x0015ed28, 0x0015ecec];
 
 static FIELDS_138: &[PlatformField] = &[
     PlatformField { name: "E", descriptor: "D", flags: 0x00124019, slot: 0 },
@@ -1884,12 +2161,16 @@ static METHODS_138: &[PlatformMethod] = &[
     PlatformMethod { name: "min", descriptor: "(DD)D", flags: 0x00040009, slot: 65535, entry: 0x0015fae8 },
 ];
 
+static DISPATCH_138: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
+
 static FIELDS_139: &[PlatformField] = &[];
 
 static METHODS_139: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00160210 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001601e0 },
 ];
+
+static DISPATCH_139: &[u32] = &[0x00160210, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_140: &[PlatformField] = &[];
 
@@ -1898,6 +2179,8 @@ static METHODS_140: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001602d0 },
 ];
 
+static DISPATCH_140: &[u32] = &[0x00160300, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_141: &[PlatformField] = &[];
 
 static METHODS_141: &[PlatformMethod] = &[
@@ -1905,12 +2188,16 @@ static METHODS_141: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00133acc },
 ];
 
+static DISPATCH_141: &[u32] = &[0x00133afc, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_142: &[PlatformField] = &[];
 
 static METHODS_142: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001603f0 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001603c0 },
 ];
+
+static DISPATCH_142: &[u32] = &[0x001603f0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_143: &[PlatformField] = &[];
 
@@ -1927,6 +2214,8 @@ static METHODS_143: &[PlatformMethod] = &[
     PlatformMethod { name: "wait", descriptor: "()V", flags: 0x00010011, slot: 9, entry: 0x00133bbc },
 ];
 
+static DISPATCH_143: &[u32] = &[0x00133c14, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
+
 static FIELDS_144: &[PlatformField] = &[];
 
 static METHODS_144: &[PlatformMethod] = &[
@@ -1934,11 +2223,15 @@ static METHODS_144: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001604b0 },
 ];
 
+static DISPATCH_144: &[u32] = &[0x001604e0, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_145: &[PlatformField] = &[];
 
 static METHODS_145: &[PlatformMethod] = &[
     PlatformMethod { name: "run", descriptor: "()V", flags: 0x00010401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_145: &[u32] = &[];
 
 static FIELDS_146: &[PlatformField] = &[];
 
@@ -1950,6 +2243,8 @@ static METHODS_146: &[PlatformMethod] = &[
     PlatformMethod { name: "gc", descriptor: "()V", flags: 0x00010101, slot: 13, entry: 0x00160770 },
 ];
 
+static DISPATCH_146: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00160644, 0x0016078c, 0x00160774, 0x00160770];
+
 static FIELDS_147: &[PlatformField] = &[];
 
 static METHODS_147: &[PlatformMethod] = &[
@@ -1957,12 +2252,16 @@ static METHODS_147: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00133fa8 },
 ];
 
+static DISPATCH_147: &[u32] = &[0x00133fd8, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_148: &[PlatformField] = &[];
 
 static METHODS_148: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001607e4 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001607b4 },
 ];
+
+static DISPATCH_148: &[u32] = &[0x001607e4, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_149: &[PlatformField] = &[
     PlatformField { name: "MIN_VALUE", descriptor: "S", flags: 0x000e0019, slot: 0 },
@@ -1978,6 +2277,8 @@ static METHODS_149: &[PlatformMethod] = &[
     PlatformMethod { name: "hashCode", descriptor: "()I", flags: 0x00010001, slot: 2, entry: 0x001608f8 },
     PlatformMethod { name: "equals", descriptor: "(Ljava/lang/Object;)Z", flags: 0x00020001, slot: 3, entry: 0x0016097c },
 ];
+
+static DISPATCH_149: &[u32] = &[0x00133c14, 0x00133ee4, 0x001608f8, 0x0016097c, 0x00160a3c, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00160914];
 
 static FIELDS_150: &[PlatformField] = &[];
 
@@ -2031,6 +2332,8 @@ static METHODS_150: &[PlatformMethod] = &[
     PlatformMethod { name: "intern", descriptor: "()Ljava/lang/String;", flags: 0x00010101, slot: 35, entry: 0x00137574 },
 ];
 
+static DISPATCH_150: &[u32] = &[0x00134370, 0x00133ee4, 0x00137440, 0x00137960, 0x00134140, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001342b4, 0x00137660, 0x001353a0, 0x00134274, 0x00134244, 0x001346ec, 0x001378d4, 0x001350c0, 0x0013782c, 0x0013420c, 0x0013468c, 0x001374fc, 0x0013748c, 0x001341cc, 0x00137504, 0x00134194, 0x001376b8, 0x00134158, 0x001375cc, 0x0013459c, 0x00134e8c, 0x00134ca4, 0x00134abc, 0x0013492c, 0x00134304, 0x00137574];
+
 static FIELDS_151: &[PlatformField] = &[];
 
 static METHODS_151: &[PlatformMethod] = &[
@@ -2069,6 +2372,8 @@ static METHODS_151: &[PlatformMethod] = &[
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010101, slot: 4, entry: 0x00137080 },
 ];
 
+static DISPATCH_151: &[u32] = &[0x001357bc, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00137080, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001357a0, 0x001357e0, 0x00135ec4, 0x00136c54, 0x00136a1c, 0x00136b18, 0x001368fc, 0x00136274, 0x00137204, 0x00135db8, 0x00135cb4, 0x00136234, 0x00135b9c, 0x00137138, 0x001361f4, 0x001361b4, 0x00136174, 0x001367a4, 0x00136688, 0x001360d4, 0x001364ac, 0x0013630c, 0x00136094, 0x00135a38, 0x00136054, 0x00136004, 0x00135fc4, 0x00135f74, 0x00135884, 0x00135780, 0x00135764];
+
 static FIELDS_152: &[PlatformField] = &[];
 
 static METHODS_152: &[PlatformMethod] = &[
@@ -2076,6 +2381,8 @@ static METHODS_152: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001372cc },
     PlatformMethod { name: "<init>", descriptor: "(I)V", flags: 0x00020001, slot: 65535, entry: 0x0013731c },
 ];
+
+static DISPATCH_152: &[u32] = &[0x001372fc, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_153: &[PlatformField] = &[
     PlatformField { name: "out", descriptor: "Ljava/io/PrintStream;", flags: 0x00008019, slot: 0 },
@@ -2090,6 +2397,8 @@ static METHODS_153: &[PlatformMethod] = &[
     PlatformMethod { name: "exit", descriptor: "(I)V", flags: 0x00010009, slot: 65535, entry: 0x00137a74 },
     PlatformMethod { name: "gc", descriptor: "()V", flags: 0x00000009, slot: 65535, entry: 0x00137a34 },
 ];
+
+static DISPATCH_153: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
 
 static FIELDS_154: &[PlatformField] = &[
     PlatformField { name: "MIN_PRIORITY", descriptor: "I", flags: 0x002b0019, slot: 0 },
@@ -2117,6 +2426,8 @@ static METHODS_154: &[PlatformMethod] = &[
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 4, entry: 0x00160c98 },
 ];
 
+static DISPATCH_154: &[u32] = &[0x00160e70, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00160c98, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001613c8, 0x001611ac, 0x00160bfc, 0x001612a0, 0x00160fd4, 0x00160be0, 0x0016117c, 0x0016103c];
+
 static FIELDS_155: &[PlatformField] = &[];
 
 static METHODS_155: &[PlatformMethod] = &[
@@ -2127,12 +2438,16 @@ static METHODS_155: &[PlatformMethod] = &[
     PlatformMethod { name: "printStackTrace", descriptor: "()V", flags: 0x00010001, slot: 11, entry: 0x00138160 },
 ];
 
+static DISPATCH_155: &[u32] = &[0x00138158, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
+
 static FIELDS_156: &[PlatformField] = &[];
 
 static METHODS_156: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00161670 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00161640 },
 ];
+
+static DISPATCH_156: &[u32] = &[0x00161670, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_157: &[PlatformField] = &[];
 
@@ -2141,11 +2456,15 @@ static METHODS_157: &[PlatformMethod] = &[
     PlatformMethod { name: "clear", descriptor: "()V", flags: 0x00010001, slot: 11, entry: 0x00161758 },
 ];
 
+static DISPATCH_157: &[u32] = &[0x00133c14, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00161778, 0x00161758];
+
 static FIELDS_158: &[PlatformField] = &[];
 
 static METHODS_158: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/Object;)V", flags: 0x00020001, slot: 65535, entry: 0x00161834 },
 ];
+
+static DISPATCH_158: &[u32] = &[0x00133c14, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00161778, 0x00161758];
 
 static FIELDS_159: &[PlatformField] = &[
     PlatformField { name: "ERA", descriptor: "I", flags: 0x00210019, slot: 0 },
@@ -2228,6 +2547,8 @@ static METHODS_159: &[PlatformMethod] = &[
     PlatformMethod { name: "set", descriptor: "(III)V", flags: 0x00040001, slot: 32, entry: 0x00162140 },
 ];
 
+static DISPATCH_159: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x001629d0, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00162c44, 0x00162b10, 0x001629c8, 0x001629c0, 0x001629a4, 0x00162988, 0x0016296c, 0x00162950, 0x00161a68, 0x001626f8, 0x00161a4c, 0x00161a30, 0x001627a4, 0x001619d0, 0x001619b4, 0x0016268c, 0x00161998, 0x00162620, 0x0016237c, 0x001620e4, 0x00161958, 0x00161910, 0x00162140];
+
 static FIELDS_160: &[PlatformField] = &[];
 
 static METHODS_160: &[PlatformMethod] = &[
@@ -2240,11 +2561,15 @@ static METHODS_160: &[PlatformMethod] = &[
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 4, entry: 0x001632b0 },
 ];
 
+static DISPATCH_160: &[u32] = &[0x00162f38, 0x00133ee4, 0x00162e7c, 0x00163650, 0x001632b0, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00162edc, 0x00162eb4];
+
 static FIELDS_161: &[PlatformField] = &[];
 
 static METHODS_161: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00163818 },
 ];
+
+static DISPATCH_161: &[u32] = &[0x00163818, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_162: &[PlatformField] = &[];
 
@@ -2252,6 +2577,8 @@ static METHODS_162: &[PlatformMethod] = &[
     PlatformMethod { name: "hasMoreElements", descriptor: "()Z", flags: 0x00010401, slot: 0, entry: 0x00000000 },
     PlatformMethod { name: "nextElement", descriptor: "()Ljava/lang/Object;", flags: 0x00010401, slot: 1, entry: 0x00000000 },
 ];
+
+static DISPATCH_162: &[u32] = &[];
 
 static FIELDS_163: &[PlatformField] = &[
     PlatformField { name: "BC", descriptor: "I", flags: 0x004d0019, slot: 0 },
@@ -2273,6 +2600,8 @@ static METHODS_163: &[PlatformMethod] = &[
     PlatformMethod { name: "isLeapYear", descriptor: "(I)Z", flags: 0x00020001, slot: 33, entry: 0x00164138 },
 ];
 
+static DISPATCH_163: &[u32] = &[0x00163c34, 0x00133ee4, 0x001647b0, 0x00164848, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00162c44, 0x00162b10, 0x00165b80, 0x00166664, 0x00163ad4, 0x00163a94, 0x001639d0, 0x001639ac, 0x00161a68, 0x001626f8, 0x00161a4c, 0x00161a30, 0x001627a4, 0x001619d0, 0x001619b4, 0x0016268c, 0x00161998, 0x00162620, 0x0016237c, 0x001620e4, 0x00161958, 0x00161910, 0x00162140, 0x00164138];
+
 static FIELDS_164: &[PlatformField] = &[];
 
 static METHODS_164: &[PlatformMethod] = &[
@@ -2292,6 +2621,8 @@ static METHODS_164: &[PlatformMethod] = &[
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010021, slot: 4, entry: 0x00167180 },
 ];
 
+static DISPATCH_164: &[u32] = &[0x0016715c, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00167180, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00167140, 0x0016711c, 0x001674ec, 0x00167460, 0x00167dcc, 0x00167c44, 0x00167abc, 0x00167ffc, 0x00167814, 0x00167634, 0x00167578];
+
 static FIELDS_165: &[PlatformField] = &[];
 
 static METHODS_165: &[PlatformMethod] = &[
@@ -2300,11 +2631,15 @@ static METHODS_165: &[PlatformMethod] = &[
     PlatformMethod { name: "nextElement", descriptor: "()Ljava/lang/Object;", flags: 0x00010001, slot: 1, entry: 0x00168410 },
 ];
 
+static DISPATCH_165: &[u32] = &[0x00133c14, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016832c, 0x00168410];
+
 static FIELDS_166: &[PlatformField] = &[];
 
 static METHODS_166: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010000, slot: 0, entry: 0x00168228 },
 ];
+
+static DISPATCH_166: &[u32] = &[0x00168228, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
 
 static FIELDS_167: &[PlatformField] = &[];
 
@@ -2312,6 +2647,8 @@ static METHODS_167: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0016861c },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001685ec },
 ];
+
+static DISPATCH_167: &[u32] = &[0x0016861c, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_168: &[PlatformField] = &[];
 
@@ -2326,6 +2663,8 @@ static METHODS_168: &[PlatformMethod] = &[
     PlatformMethod { name: "nextFloat", descriptor: "()F", flags: 0x00010001, slot: 15, entry: 0x001689fc },
     PlatformMethod { name: "nextDouble", descriptor: "()D", flags: 0x00010001, slot: 16, entry: 0x00168900 },
 ];
+
+static DISPATCH_168: &[u32] = &[0x001688c8, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00168d18, 0x00168bc8, 0x0016886c, 0x00168a34, 0x001687ac, 0x001689fc, 0x00168900];
 
 static FIELDS_169: &[PlatformField] = &[];
 
@@ -2342,6 +2681,8 @@ static METHODS_169: &[PlatformMethod] = &[
     PlatformMethod { name: "useDaylightTime", descriptor: "()Z", flags: 0x00010001, slot: 12, entry: 0x00168e90 },
 ];
 
+static DISPATCH_169: &[u32] = &[0x0016a244, 0x00133ee4, 0x001692d4, 0x001694c4, 0x0016a204, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00169348, 0x00168f7c, 0x00168e90, 0x0016a220, 0x0016a428, 0x00168fec, 0x00168f14, 0x00168eac];
+
 static FIELDS_170: &[PlatformField] = &[];
 
 static METHODS_170: &[PlatformMethod] = &[
@@ -2352,6 +2693,8 @@ static METHODS_170: &[PlatformMethod] = &[
     PlatformMethod { name: "empty", descriptor: "()Z", flags: 0x00010001, slot: 35, entry: 0x00169700 },
     PlatformMethod { name: "search", descriptor: "(Ljava/lang/Object;)I", flags: 0x00020021, slot: 36, entry: 0x00169784 },
 ];
+
+static DISPATCH_170: &[u32] = &[0x00169764, 0x00133ee4, 0x00133f18, 0x00133be8, 0x0016cd5c, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016de78, 0x0016e2d0, 0x0016d054, 0x0016d738, 0x0016cd1c, 0x0016cca8, 0x0016cc84, 0x0016cfd4, 0x0016cc44, 0x0016cc0c, 0x0016dc8c, 0x0016cbcc, 0x0016d9f0, 0x0016df80, 0x0016d918, 0x0016d838, 0x0016d5f4, 0x0016d440, 0x0016d278, 0x0016d1a8, 0x0016cf14, 0x0016d104, 0x0016972c, 0x00169844, 0x001698f4, 0x00169700, 0x00169784];
 
 static FIELDS_171: &[PlatformField] = &[];
 
@@ -2366,6 +2709,8 @@ static METHODS_171: &[PlatformMethod] = &[
     PlatformMethod { name: "fixUp", descriptor: "(I)V", flags: 0x00020002, slot: 1, entry: 0x00169e24 },
     PlatformMethod { name: "fixDown", descriptor: "(I)V", flags: 0x00020002, slot: 1, entry: 0x00169bd4 },
 ];
+
+static DISPATCH_171: &[u32] = &[0x0016a128, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016a054, 0x00169af0, 0x00169b50, 0x00169a74, 0x00169a50, 0x00169ff4];
 
 static FIELDS_172: &[PlatformField] = &[];
 
@@ -2384,6 +2729,8 @@ static METHODS_172: &[PlatformMethod] = &[
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 4, entry: 0x0016a204 },
 ];
 
+static DISPATCH_172: &[u32] = &[0x0016a244, 0x00133ee4, 0x00133f18, 0x00133be8, 0x0016a204, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016afac, 0x0016af90, 0x0016af74, 0x0016a220, 0x0016a428];
+
 static FIELDS_173: &[PlatformField] = &[];
 
 static METHODS_173: &[PlatformMethod] = &[
@@ -2397,6 +2744,8 @@ static METHODS_173: &[PlatformMethod] = &[
     PlatformMethod { name: "cancel", descriptor: "()V", flags: 0x00010001, slot: 16, entry: 0x0016b0e4 },
 ];
 
+static DISPATCH_173: &[u32] = &[0x0016b210, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016ba74, 0x0016b068, 0x0016b930, 0x0016b840, 0x0016b70c, 0x0016b624, 0x0016b0e4];
+
 static FIELDS_174: &[PlatformField] = &[];
 
 static METHODS_174: &[PlatformMethod] = &[
@@ -2406,6 +2755,8 @@ static METHODS_174: &[PlatformMethod] = &[
     PlatformMethod { name: "scheduledExecutionTime", descriptor: "()J", flags: 0x00010001, slot: 12, entry: 0x0016bc84 },
 ];
 
+static DISPATCH_174: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016beec, 0x0016be08, 0x0016bc84];
+
 static FIELDS_175: &[PlatformField] = &[];
 
 static METHODS_175: &[PlatformMethod] = &[
@@ -2413,6 +2764,8 @@ static METHODS_175: &[PlatformMethod] = &[
     PlatformMethod { name: "run", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x0016c9a0 },
     PlatformMethod { name: "mainLoop", descriptor: "()V", flags: 0x00010002, slot: 1, entry: 0x0016c02c },
 ];
+
+static DISPATCH_175: &[u32] = &[0x00160e70, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00160c98, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x001613c8, 0x0016c9a0, 0x00160bfc, 0x001612a0, 0x00160fd4, 0x00160be0, 0x0016117c, 0x0016103c];
 
 static FIELDS_176: &[PlatformField] = &[
     PlatformField { name: "elementData", descriptor: "[Ljava/lang/Object;", flags: 0x00008004, slot: 0 },
@@ -2449,6 +2802,8 @@ static METHODS_176: &[PlatformMethod] = &[
     PlatformMethod { name: "toString", descriptor: "()Ljava/lang/String;", flags: 0x00010021, slot: 4, entry: 0x0016cd5c },
 ];
 
+static DISPATCH_176: &[u32] = &[0x0016ccc4, 0x00133ee4, 0x00133f18, 0x00133be8, 0x0016cd5c, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016de78, 0x0016e2d0, 0x0016d054, 0x0016d738, 0x0016cd1c, 0x0016cca8, 0x0016cc84, 0x0016cfd4, 0x0016cc44, 0x0016cc0c, 0x0016dc8c, 0x0016cbcc, 0x0016d9f0, 0x0016df80, 0x0016d918, 0x0016d838, 0x0016d5f4, 0x0016d440, 0x0016d278, 0x0016d1a8, 0x0016cf14, 0x0016d104];
+
 static FIELDS_177: &[PlatformField] = &[];
 
 static METHODS_177: &[PlatformMethod] = &[
@@ -2457,11 +2812,15 @@ static METHODS_177: &[PlatformMethod] = &[
     PlatformMethod { name: "nextElement", descriptor: "()Ljava/lang/Object;", flags: 0x00010001, slot: 1, entry: 0x0016e5a8 },
 ];
 
+static DISPATCH_177: &[u32] = &[0x00133c14, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x0016e55c, 0x0016e5a8];
+
 static FIELDS_178: &[PlatformField] = &[];
 
 static METHODS_178: &[PlatformMethod] = &[
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_178: &[u32] = &[];
 
 static FIELDS_179: &[PlatformField] = &[];
 
@@ -2469,6 +2828,8 @@ static METHODS_179: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0016e910 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0016e8e0 },
 ];
+
+static DISPATCH_179: &[u32] = &[0x0016e910, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00138278, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc, 0x00138114, 0x00138160];
 
 static FIELDS_180: &[PlatformField] = &[
     PlatformField { name: "READ", descriptor: "I", flags: 0x003f0019, slot: 0 },
@@ -2486,6 +2847,8 @@ static METHODS_180: &[PlatformMethod] = &[
     PlatformMethod { name: "openOutputStream", descriptor: "(Ljava/lang/String;)Ljava/io/OutputStream;", flags: 0x00010009, slot: 65535, entry: 0x0016e9cc },
 ];
 
+static DISPATCH_180: &[u32] = &[0x00000000, 0x00133ee4, 0x00133f18, 0x00133be8, 0x00133d48, 0x00133f98, 0x00133f90, 0x00133f1c, 0x00133c1c, 0x00133bbc];
+
 static FIELDS_181: &[PlatformField] = &[];
 
 static METHODS_181: &[PlatformMethod] = &[
@@ -2493,6 +2856,8 @@ static METHODS_181: &[PlatformMethod] = &[
     PlatformMethod { name: "getEncoding", descriptor: "()Ljava/lang/String;", flags: 0x00010401, slot: 1, entry: 0x00000000 },
     PlatformMethod { name: "getLength", descriptor: "()J", flags: 0x00010401, slot: 2, entry: 0x00000000 },
 ];
+
+static DISPATCH_181: &[u32] = &[];
 
 static FIELDS_182: &[PlatformField] = &[];
 
@@ -2508,6 +2873,8 @@ static METHODS_182: &[PlatformMethod] = &[
     PlatformMethod { name: "reset", descriptor: "()V", flags: 0x00010401, slot: 8, entry: 0x00000000 },
 ];
 
+static DISPATCH_182: &[u32] = &[];
+
 static FIELDS_183: &[PlatformField] = &[];
 
 static METHODS_183: &[PlatformMethod] = &[
@@ -2521,12 +2888,16 @@ static METHODS_183: &[PlatformMethod] = &[
     PlatformMethod { name: "newDatagram", descriptor: "([BILjava/lang/String;)Ljavax/microedition/io/Datagram;", flags: 0x00040401, slot: 7, entry: 0x00000000 },
 ];
 
+static DISPATCH_183: &[u32] = &[];
+
 static FIELDS_184: &[PlatformField] = &[];
 
 static METHODS_184: &[PlatformMethod] = &[
     PlatformMethod { name: "openInputStream", descriptor: "()Ljava/io/InputStream;", flags: 0x00010401, slot: 0, entry: 0x00000000 },
     PlatformMethod { name: "openDataInputStream", descriptor: "()Ljava/io/DataInputStream;", flags: 0x00010401, slot: 1, entry: 0x00000000 },
 ];
+
+static DISPATCH_184: &[u32] = &[];
 
 static FIELDS_185: &[PlatformField] = &[];
 
@@ -2535,9 +2906,13 @@ static METHODS_185: &[PlatformMethod] = &[
     PlatformMethod { name: "openDataOutputStream", descriptor: "()Ljava/io/DataOutputStream;", flags: 0x00010401, slot: 1, entry: 0x00000000 },
 ];
 
+static DISPATCH_185: &[u32] = &[];
+
 static FIELDS_186: &[PlatformField] = &[];
 
 static METHODS_186: &[PlatformMethod] = &[];
+
+static DISPATCH_186: &[u32] = &[];
 
 static FIELDS_187: &[PlatformField] = &[];
 
@@ -2545,11 +2920,15 @@ static METHODS_187: &[PlatformMethod] = &[
     PlatformMethod { name: "acceptAndOpen", descriptor: "()Ljavax/microedition/io/StreamConnection;", flags: 0x00010401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_187: &[u32] = &[];
+
 static FIELDS_188: &[PlatformField] = &[];
 
 static METHODS_188: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyPrgDestroy", descriptor: "(I)V", flags: 0x00020401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_188: &[u32] = &[];
 
 static FIELDS_189: &[PlatformField] = &[
     PlatformField { name: "PRGTYPE_JAVAAPP", descriptor: "I", flags: 0x00350019, slot: 0 },
@@ -2597,12 +2976,16 @@ static METHODS_189: &[PlatformMethod] = &[
     PlatformMethod { name: "mExecute", descriptor: "(Ljava/lang/String;[Ljava/lang/String;)I", flags: 0x00020009, slot: 65535, entry: 0x0025f4d0 },
 ];
 
+static DISPATCH_189: &[u32] = &[0x0025f55c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_190: &[PlatformField] = &[];
 
 static METHODS_190: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x002616fc },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x002616ac },
 ];
+
+static DISPATCH_190: &[u32] = &[0x002616fc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_191: &[PlatformField] = &[];
 
@@ -2620,6 +3003,8 @@ static METHODS_191: &[PlatformMethod] = &[
     PlatformMethod { name: "resizeBuf0", descriptor: "([BI)[B", flags: 0x00020109, slot: 65535, entry: 0x001c864c },
     PlatformMethod { name: "destroyBuf0", descriptor: "([B)V", flags: 0x00010109, slot: 65535, entry: 0x001c85ec },
 ];
+
+static DISPATCH_191: &[u32] = &[0x001c8830, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_192: &[PlatformField] = &[
     PlatformField { name: "HEAD", descriptor: "Ljava/lang/String;", flags: 0x00068019, slot: 0 },
@@ -2698,6 +3083,8 @@ static METHODS_192: &[PlatformMethod] = &[
     PlatformMethod { name: "relocation", descriptor: "()Lorg/kwis/msf/io/HttpSocket;", flags: 0x00010401, slot: 25, entry: 0x00000000 },
 ];
 
+static DISPATCH_192: &[u32] = &[];
+
 static FIELDS_193: &[PlatformField] = &[
     PlatformField { name: "addr", descriptor: "Ljava/lang/String;", flags: 0x00008002, slot: 3 },
     PlatformField { name: "data", descriptor: "[B", flags: 0x00008002, slot: 4 },
@@ -2726,6 +3113,8 @@ static METHODS_193: &[PlatformMethod] = &[
     PlatformMethod { name: "setAddress", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 26, entry: 0x001c97fc },
 ];
 
+static DISPATCH_193: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001c99d4, 0x001c99b8, 0x001c9a94, 0x001c999c, 0x001c9a18, 0x001c9980, 0x001c9964, 0x001c9948, 0x001c9920, 0x001c98f8, 0x001c98dc, 0x001c98b4, 0x001c9898, 0x001c9870, 0x001c9854, 0x001c982c, 0x001c97fc];
+
 static FIELDS_194: &[PlatformField] = &[];
 
 static METHODS_194: &[PlatformMethod] = &[
@@ -2734,12 +3123,16 @@ static METHODS_194: &[PlatformMethod] = &[
     PlatformMethod { name: "disconnect", descriptor: "()V", flags: 0x00000109, slot: 65535, entry: 0x002617dc },
 ];
 
+static DISPATCH_194: &[u32] = &[0x00261898, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_195: &[PlatformField] = &[];
 
 static METHODS_195: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00281f48 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00281ef8 },
 ];
+
+static DISPATCH_195: &[u32] = &[0x00281f48, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_196: &[PlatformField] = &[];
 
@@ -2756,12 +3149,16 @@ static METHODS_196: &[PlatformMethod] = &[
     PlatformMethod { name: "getSocketDiscripter", descriptor: "()I", flags: 0x00010401, slot: 9, entry: 0x00000000 },
 ];
 
+static DISPATCH_196: &[u32] = &[];
+
 static FIELDS_197: &[PlatformField] = &[];
 
 static METHODS_197: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00261a58 },
     PlatformMethod { name: "find", descriptor: "(Ljava/lang/String;)Lorg/kwis/msf/io/Socket;", flags: 0x00010009, slot: 65535, entry: 0x00261a60 },
 ];
+
+static DISPATCH_197: &[u32] = &[0x00261a58, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_198: &[PlatformField] = &[];
 
@@ -2789,6 +3186,8 @@ static METHODS_198: &[PlatformMethod] = &[
     PlatformMethod { name: "getLastModified", descriptor: "()J", flags: 0x00010001, slot: 24, entry: 0x00282464 },
 ];
 
+static DISPATCH_198: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002857b4, 0x00284ed0, 0x00282d98, 0x00284b0c, 0x00284958, 0x00284758, 0x0028443c, 0x002842a8, 0x00283480, 0x002824f4, 0x0028391c, 0x002824d8, 0x002824bc, 0x0028249c, 0x00282464, 0x002833a0];
+
 static FIELDS_199: &[PlatformField] = &[];
 
 static METHODS_199: &[PlatformMethod] = &[
@@ -2796,12 +3195,16 @@ static METHODS_199: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001c9ff0 },
 ];
 
+static DISPATCH_199: &[u32] = &[0x001c9ff0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_200: &[PlatformField] = &[];
 
 static METHODS_200: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x001ca160 },
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001ca120 },
 ];
+
+static DISPATCH_200: &[u32] = &[0x001ca120, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_201: &[PlatformField] = &[
     PlatformField { name: "EQUIVALENT", descriptor: "I", flags: 0x00060019, slot: 0 },
@@ -2813,12 +3216,16 @@ static METHODS_201: &[PlatformMethod] = &[
     PlatformMethod { name: "compare", descriptor: "([B[B)I", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_201: &[u32] = &[];
+
 static FIELDS_202: &[PlatformField] = &[];
 
 static METHODS_202: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(I)V", flags: 0x00020001, slot: 65535, entry: 0x00261dc8 },
     PlatformMethod { name: "compare", descriptor: "([B[B)I", flags: 0x00030001, slot: 10, entry: 0x00261df0 },
 ];
+
+static DISPATCH_202: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00261df0];
 
 static FIELDS_203: &[PlatformField] = &[];
 
@@ -2827,11 +3234,15 @@ static METHODS_203: &[PlatformMethod] = &[
     PlatformMethod { name: "compare", descriptor: "([B[B)I", flags: 0x00030001, slot: 10, entry: 0x00282050 },
 ];
 
+static DISPATCH_203: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00282050];
+
 static FIELDS_204: &[PlatformField] = &[];
 
 static METHODS_204: &[PlatformMethod] = &[
     PlatformMethod { name: "filter", descriptor: "([B)Z", flags: 0x00020401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_204: &[u32] = &[];
 
 static FIELDS_205: &[PlatformField] = &[
     PlatformField { name: "offset", descriptor: "I", flags: 0x00000004, slot: 0 },
@@ -2843,6 +3254,8 @@ static METHODS_205: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(III)V", flags: 0x00040001, slot: 65535, entry: 0x002822d8 },
     PlatformMethod { name: "filter", descriptor: "([B)Z", flags: 0x00020001, slot: 10, entry: 0x002821d8 },
 ];
+
+static DISPATCH_205: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002821d8];
 
 static FIELDS_206: &[PlatformField] = &[];
 
@@ -2859,11 +3272,15 @@ static METHODS_206: &[PlatformMethod] = &[
     PlatformMethod { name: "setLockStatus", descriptor: "(I)I", flags: 0x00020001, slot: 19, entry: 0x002620cc },
 ];
 
+static DISPATCH_206: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0026207c, 0x00262060, 0x00262044, 0x00262028, 0x00262904, 0x00262848, 0x0026200c, 0x00262e3c, 0x00262224, 0x002620cc];
+
 static FIELDS_207: &[PlatformField] = &[];
 
 static METHODS_207: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010000, slot: 0, entry: 0x001ca3b4 },
 ];
+
+static DISPATCH_207: &[u32] = &[0x001ca3b4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_208: &[PlatformField] = &[
     PlatformField { name: "SEARCH_NAME", descriptor: "I", flags: 0x00750019, slot: 0 },
@@ -2911,11 +3328,15 @@ static METHODS_208: &[PlatformMethod] = &[
     PlatformMethod { name: "setLockStatus", descriptor: "(I)I", flags: 0x00020001, slot: 37, entry: 0x00263f78 },
 ];
 
+static DISPATCH_208: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002663f0, 0x00266274, 0x00266098, 0x00263380, 0x00263510, 0x00263b50, 0x00263abc, 0x002639c8, 0x00265f50, 0x002634c4, 0x00263478, 0x00265de4, 0x00265b0c, 0x00266f00, 0x00263364, 0x00263338, 0x002659c4, 0x00265760, 0x00265160, 0x002638a0, 0x00264f40, 0x00266adc, 0x00264ad8, 0x002667e8, 0x002645c4, 0x002643ec, 0x00264188, 0x00263f78, 0x00263c44];
+
 static FIELDS_209: &[PlatformField] = &[];
 
 static METHODS_209: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010000, slot: 0, entry: 0x001ca30c },
 ];
+
+static DISPATCH_209: &[u32] = &[0x001ca30c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_210: &[PlatformField] = &[];
 
@@ -2925,6 +3346,8 @@ static METHODS_210: &[PlatformMethod] = &[
     PlatformMethod { name: "before", descriptor: "()V", flags: 0x00000009, slot: 65535, entry: 0x00267bd4 },
     PlatformMethod { name: "alwaysOn", descriptor: "()V", flags: 0x00000009, slot: 65535, entry: 0x00267bb4 },
 ];
+
+static DISPATCH_210: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_211: &[PlatformField] = &[];
 
@@ -2940,6 +3363,8 @@ static METHODS_211: &[PlatformMethod] = &[
     PlatformMethod { name: "end0", descriptor: "()V", flags: 0x0000010c, slot: 65535, entry: 0x001ca4bc },
     PlatformMethod { name: "place0", descriptor: "(Ljava/lang/String;)V", flags: 0x0001010c, slot: 65535, entry: 0x001ca45c },
 ];
+
+static DISPATCH_211: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_212: &[PlatformField] = &[
     PlatformField { name: "MS_ASSISTED", descriptor: "I", flags: 0x00260019, slot: 0 },
@@ -2964,6 +3389,8 @@ static METHODS_212: &[PlatformMethod] = &[
     PlatformMethod { name: "setPDEPort", descriptor: "(I)V", flags: 0x00020001, slot: 19, entry: 0x001cae74 },
 ];
 
+static DISPATCH_212: &[u32] = &[0x001cacec, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001cacd0, 0x001cacb4, 0x001cac98, 0x001cac64, 0x001cac48, 0x001cb000, 0x001caf80, 0x001caf04, 0x001cabfc, 0x001cae74, 0x001cb588, 0x001cb558];
+
 static FIELDS_213: &[PlatformField] = &[];
 
 static METHODS_213: &[PlatformMethod] = &[
@@ -2971,11 +3398,15 @@ static METHODS_213: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x001cb5ac },
 ];
 
+static DISPATCH_213: &[u32] = &[0x001cb5ac, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_214: &[PlatformField] = &[];
 
 static METHODS_214: &[PlatformMethod] = &[
     PlatformMethod { name: "LocationInfoReceived", descriptor: "(Lorg/kwis/msp/handset/GPSLocationInfo;I)V", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_214: &[u32] = &[];
 
 static FIELDS_215: &[PlatformField] = &[];
 
@@ -2990,6 +3421,8 @@ static METHODS_215: &[PlatformMethod] = &[
     PlatformMethod { name: "getTimeStamp", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 17, entry: 0x001cb810 },
     PlatformMethod { name: "isValid", descriptor: "()Z", flags: 0x00010001, slot: 18, entry: 0x001cb6dc },
 ];
+
+static DISPATCH_215: &[u32] = &[0x001cb848, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001cb7e8, 0x001cb7c0, 0x001cb798, 0x001cb770, 0x001cb748, 0x001cb720, 0x001cb6f8, 0x001cb810, 0x001cb6dc];
 
 static FIELDS_216: &[PlatformField] = &[
     PlatformField { name: "REQUEST_ONCE", descriptor: "I", flags: 0x001c0019, slot: 0 },
@@ -3013,6 +3446,8 @@ static METHODS_216: &[PlatformMethod] = &[
     PlatformMethod { name: "destroy", descriptor: "(I)V", flags: 0x00010009, slot: 65535, entry: 0x001cbacc },
 ];
 
+static DISPATCH_216: &[u32] = &[0x001cbac4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_217: &[PlatformField] = &[];
 
 static METHODS_217: &[PlatformMethod] = &[
@@ -3021,6 +3456,8 @@ static METHODS_217: &[PlatformMethod] = &[
     PlatformMethod { name: "getFlipState", descriptor: "()I", flags: 0x00000009, slot: 65535, entry: 0x001cc358 },
     PlatformMethod { name: "bgmStop", descriptor: "()I", flags: 0x00000109, slot: 65535, entry: 0x001cd7a0 },
 ];
+
+static DISPATCH_217: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_218: &[PlatformField] = &[];
 
@@ -3034,6 +3471,8 @@ static METHODS_218: &[PlatformMethod] = &[
     PlatformMethod { name: "oemTouchEffect", descriptor: "()I", flags: 0x00000009, slot: 65535, entry: 0x001ce638 },
 ];
 
+static DISPATCH_218: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_219: &[PlatformField] = &[];
 
 static METHODS_219: &[PlatformMethod] = &[
@@ -3045,6 +3484,8 @@ static METHODS_219: &[PlatformMethod] = &[
     PlatformMethod { name: "getRecordIdAll", descriptor: "()[I", flags: 0x00010001, slot: 1, entry: 0x00268110 },
 ];
 
+static DISPATCH_219: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00268418, 0x002683d0, 0x00267fe4, 0x00268278, 0x00268110];
+
 static FIELDS_220: &[PlatformField] = &[];
 
 static METHODS_220: &[PlatformMethod] = &[
@@ -3053,6 +3494,8 @@ static METHODS_220: &[PlatformMethod] = &[
     PlatformMethod { name: "next", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 1, entry: 0x0026865c },
     PlatformMethod { name: "pushback", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 1, entry: 0x00268794 },
 ];
+
+static DISPATCH_220: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002685dc, 0x0026865c, 0x00268794];
 
 static FIELDS_221: &[PlatformField] = &[];
 
@@ -3064,6 +3507,8 @@ static METHODS_221: &[PlatformMethod] = &[
     PlatformMethod { name: "isValid", descriptor: "()Z", flags: 0x00010001, slot: 13, entry: 0x001ceb94 },
     PlatformMethod { name: "getLocationInfo", descriptor: "()I", flags: 0x00010011, slot: 14, entry: 0x001cec34 },
 ];
+
+static DISPATCH_221: &[u32] = &[0x001cec04, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001cebe8, 0x001cebcc, 0x001cebb0, 0x001ceb94, 0x001cec34];
 
 static FIELDS_222: &[PlatformField] = &[
     PlatformField { name: "destResName", descriptor: "Ljava/lang/String;", flags: 0x00008001, slot: 0 },
@@ -3078,6 +3523,8 @@ static FIELDS_222: &[PlatformField] = &[
 static METHODS_222: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0026895c },
 ];
+
+static DISPATCH_222: &[u32] = &[0x0026895c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_223: &[PlatformField] = &[
     PlatformField { name: "maxInputStream", descriptor: "I", flags: 0x00000004, slot: 0 },
@@ -3107,6 +3554,8 @@ static METHODS_223: &[PlatformMethod] = &[
     PlatformMethod { name: "tell", descriptor: "()I", flags: 0x00010001, slot: 23, entry: 0x001cf388 },
 ];
 
+static DISPATCH_223: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001cf4f0, 0x001cf328, 0x001cf418, 0x001cf2c8, 0x001d022c, 0x001d03a0, 0x001d0174, 0x001cff50, 0x001d02d0, 0x001cfe98, 0x001cfc68, 0x001cfb34, 0x001cfa44, 0x001cf388];
+
 static FIELDS_224: &[PlatformField] = &[];
 
 static METHODS_224: &[PlatformMethod] = &[
@@ -3115,6 +3564,8 @@ static METHODS_224: &[PlatformMethod] = &[
     PlatformMethod { name: "read", descriptor: "([BII)I", flags: 0x00040021, slot: 1, entry: 0x001d05d4 },
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001d056c },
 ];
+
+static DISPATCH_224: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001d0834, 0x00000000, 0x001d05d4, 0x00000000, 0x00000000, 0x001d056c, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_225: &[PlatformField] = &[];
 
@@ -3125,6 +3576,8 @@ static METHODS_225: &[PlatformMethod] = &[
     PlatformMethod { name: "flush", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001d0af0 },
     PlatformMethod { name: "close", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001d0a88 },
 ];
+
+static DISPATCH_225: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001d0c74, 0x00000000, 0x001d0b6c, 0x001d0af0, 0x001d0a88];
 
 static FIELDS_226: &[PlatformField] = &[
     PlatformField { name: "PRIVATE_ACCESS", descriptor: "I", flags: 0x00500019, slot: 0 },
@@ -3170,6 +3623,8 @@ static METHODS_226: &[PlatformMethod] = &[
     PlatformMethod { name: "getCounts", descriptor: "(Ljava/lang/String;I)I", flags: 0x00020109, slot: 65535, entry: 0x001d0f20 },
 ];
 
+static DISPATCH_226: &[u32] = &[0x001d0de0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_227: &[PlatformField] = &[
     PlatformField { name: "FILE_MEDIA_INSERT", descriptor: "I", flags: 0x00060019, slot: 0 },
     PlatformField { name: "FILE_MEDIA_REMOVE", descriptor: "I", flags: 0x00080019, slot: 1 },
@@ -3181,6 +3636,8 @@ static METHODS_227: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyFileSystem", descriptor: "(Ljava/lang/String;I)Z", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_227: &[u32] = &[];
+
 static FIELDS_228: &[PlatformField] = &[];
 
 static METHODS_228: &[PlatformMethod] = &[
@@ -3190,6 +3647,8 @@ static METHODS_228: &[PlatformMethod] = &[
     PlatformMethod { name: "write", descriptor: "([BII)I", flags: 0x00040001, slot: 12, entry: 0x001d5164 },
     PlatformMethod { name: "control", descriptor: "(Ljava/lang/String;[B[B)V", flags: 0x00040001, slot: 13, entry: 0x001d50b0 },
 ];
+
+static DISPATCH_228: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001d50f0, 0x001d51ec, 0x001d5164, 0x001d50b0];
 
 static FIELDS_229: &[PlatformField] = &[
     PlatformField { name: "destResName", descriptor: "Ljava/lang/String;", flags: 0x00008001, slot: 0 },
@@ -3202,6 +3661,8 @@ static FIELDS_229: &[PlatformField] = &[
 static METHODS_229: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00268a04 },
 ];
+
+static DISPATCH_229: &[u32] = &[0x00268a04, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_230: &[PlatformField] = &[
     PlatformField { name: "LOCKED", descriptor: "I", flags: 0x003a0019, slot: 0 },
@@ -3245,6 +3706,8 @@ static METHODS_230: &[PlatformMethod] = &[
     PlatformMethod { name: "copyStop", descriptor: "()I", flags: 0x00000009, slot: 65535, entry: 0x001d59f4 },
 ];
 
+static DISPATCH_230: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001d7188, 0x001d5bb0, 0x001d7104, 0x001d5b90, 0x001d7080, 0x001d5b70, 0x001d5b50, 0x001d6ffc, 0x001d6efc, 0x001d6e60, 0x001d6ddc, 0x001d6d18, 0x001d6c14, 0x001d6b90, 0x001d6b10, 0x001d6a50, 0x001d6994, 0x001d6828, 0x001d5b14];
+
 static FIELDS_231: &[PlatformField] = &[
     PlatformField { name: "M_E_NOTSUP", descriptor: "I", flags: 0x00110019, slot: 0 },
     PlatformField { name: "M_E_INVALID", descriptor: "I", flags: 0x00130019, slot: 1 },
@@ -3260,6 +3723,8 @@ static METHODS_231: &[PlatformMethod] = &[
     PlatformMethod { name: "getMaxMsgLength", descriptor: "(Ljava/lang/String;)I", flags: 0x00010009, slot: 65535, entry: 0x001db3f4 },
 ];
 
+static DISPATCH_231: &[u32] = &[0x001db434, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_232: &[PlatformField] = &[
     PlatformField { name: "SHORT_MESSAGE", descriptor: "I", flags: 0x000b0019, slot: 0 },
     PlatformField { name: "UNKNOWN", descriptor: "I", flags: 0x000d0019, slot: 1 },
@@ -3268,6 +3733,8 @@ static FIELDS_232: &[PlatformField] = &[
 static METHODS_232: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "([B)V", flags: 0x00020001, slot: 65535, entry: 0x001db6f4 },
 ];
+
+static DISPATCH_232: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_233: &[PlatformField] = &[];
 
@@ -3294,6 +3761,8 @@ static METHODS_233: &[PlatformMethod] = &[
     PlatformMethod { name: "getImageType", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 25, entry: 0x001dbfc4 },
 ];
 
+static DISPATCH_233: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001dc6ac, 0x001dd91c, 0x001dd80c, 0x001dd604, 0x001dc5c8, 0x001dd4b4, 0x001dd364, 0x001dd124, 0x001dde0c, 0x001dc790, 0x001dc440, 0x001dc324, 0x001dcb54, 0x001dc1ac, 0x001dc0c8, 0x001dbfc4];
+
 static FIELDS_234: &[PlatformField] = &[];
 
 static METHODS_234: &[PlatformMethod] = &[
@@ -3301,6 +3770,8 @@ static METHODS_234: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lcdui/AnimateImage;Lorg/kwis/msp/lcdui/Graphics;IIILorg/kwis/msp/lcdui/ImageObserver;)V", flags: 0x00070000, slot: 65535, entry: 0x001deab4 },
     PlatformMethod { name: "run", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x001deb84 },
 ];
+
+static DISPATCH_234: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001deb84, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_235: &[PlatformField] = &[];
 
@@ -3329,6 +3800,8 @@ static METHODS_235: &[PlatformMethod] = &[
     PlatformMethod { name: "pointAction", descriptor: "(Lorg/kwis/msp/lcdui/CandidateTouchWindow$MiniComponent;I)V", flags: 0x00030002, slot: 1, entry: 0x001e0054 },
 ];
 
+static DISPATCH_235: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001e20a8, 0x001df64c, 0x001e3088, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001e1174, 0x001e0ec4, 0x001e0bd4, 0x001e1d3c, 0x001df708, 0x001e1ef0, 0x001e0770, 0x001e0558, 0x001e0370];
+
 static FIELDS_236: &[PlatformField] = &[];
 
 static METHODS_236: &[PlatformMethod] = &[
@@ -3336,6 +3809,8 @@ static METHODS_236: &[PlatformMethod] = &[
     PlatformMethod { name: "paintComponent", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020001, slot: 1, entry: 0x001eb8fc },
     PlatformMethod { name: "paintComponent", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;C)V", flags: 0x00030001, slot: 1, entry: 0x001eb818 },
 ];
+
+static DISPATCH_236: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001eb8fc, 0x001eb818];
 
 static FIELDS_237: &[PlatformField] = &[];
 
@@ -3354,6 +3829,8 @@ static METHODS_237: &[PlatformMethod] = &[
     PlatformMethod { name: "paintComponent", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020401, slot: 1, entry: 0x001ebacc },
 ];
 
+static DISPATCH_237: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001ec208, 0x001ebb7c, 0x001ebb60, 0x001ec0f8, 0x001ebf40, 0x001ec158, 0x001ebda8, 0x001ebbe8, 0x001ebb38, 0x001ebad4, 0x001ebacc];
+
 static FIELDS_238: &[PlatformField] = &[];
 
 static METHODS_238: &[PlatformMethod] = &[
@@ -3362,6 +3839,8 @@ static METHODS_238: &[PlatformMethod] = &[
     PlatformMethod { name: "stop", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x00268aac },
 ];
 
+static DISPATCH_238: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00268af8, 0x00268aac];
+
 static FIELDS_239: &[PlatformField] = &[];
 
 static METHODS_239: &[PlatformMethod] = &[
@@ -3369,6 +3848,8 @@ static METHODS_239: &[PlatformMethod] = &[
     PlatformMethod { name: "getSYMBOLMode", descriptor: "()I", flags: 0x00010001, slot: 1, entry: 0x001ec3a4 },
     PlatformMethod { name: "getName", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 1, entry: 0x001ec388 },
 ];
+
+static DISPATCH_239: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001ec3a4, 0x001ec388];
 
 static FIELDS_240: &[PlatformField] = &[];
 
@@ -3386,6 +3867,8 @@ static METHODS_240: &[PlatformMethod] = &[
     PlatformMethod { name: "setSeletedIndex", descriptor: "(I)V", flags: 0x00020001, slot: 1, entry: 0x001ec4e4 },
 ];
 
+static DISPATCH_240: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001eca40, 0x00000000, 0x001ec77c, 0x001ec590, 0x001ec550, 0x00000000, 0x001ecd3c, 0x001ec528, 0x001ec50c, 0x001ec4e4];
+
 static FIELDS_241: &[PlatformField] = &[];
 
 static METHODS_241: &[PlatformMethod] = &[
@@ -3398,6 +3881,8 @@ static METHODS_241: &[PlatformMethod] = &[
     PlatformMethod { name: "keyNotify", descriptor: "(II)Z", flags: 0x00030004, slot: 17, entry: 0x0026aa94 },
 ];
 
+static DISPATCH_241: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0026aa94, 0x00000000, 0x0026a4ac, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0026a9a4, 0x0026a6f0, 0x00269950, 0x002695f0, 0x00268c14];
+
 static FIELDS_242: &[PlatformField] = &[];
 
 static METHODS_242: &[PlatformMethod] = &[
@@ -3405,6 +3890,8 @@ static METHODS_242: &[PlatformMethod] = &[
     PlatformMethod { name: "getSYMBOLMode", descriptor: "()I", flags: 0x00010001, slot: 1, entry: 0x002751d0 },
     PlatformMethod { name: "getName", descriptor: "()Ljava/lang/String;", flags: 0x00010001, slot: 1, entry: 0x002751b4 },
 ];
+
+static DISPATCH_242: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002751d0, 0x002751b4];
 
 static FIELDS_243: &[PlatformField] = &[
     PlatformField { name: "x", descriptor: "I", flags: 0x00000004, slot: 0 },
@@ -3438,6 +3925,8 @@ static METHODS_243: &[PlatformMethod] = &[
     PlatformMethod { name: "getDisplay", descriptor: "()Lorg/kwis/msp/lcdui/Display;", flags: 0x00010001, slot: 24, entry: 0x001ed3d4 },
 ];
 
+static DISPATCH_243: &[u32] = &[0x001ed580, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001ee268, 0x001edf9c, 0x001edeb4, 0x001eddd0, 0x001edce8, 0x001edc00, 0x001ed488, 0x001ed46c, 0x001ed450, 0x001eeb00, 0x001ed740, 0x001ed40c, 0x001ed5bc, 0x001ed3f0, 0x001ed3d4];
+
 static FIELDS_244: &[PlatformField] = &[
     PlatformField { name: "sMode", descriptor: "I", flags: 0x0000000c, slot: 1 },
     PlatformField { name: "kMode", descriptor: "I", flags: 0x00000004, slot: 0 },
@@ -3452,6 +3941,8 @@ static METHODS_244: &[PlatformMethod] = &[
     PlatformMethod { name: "initCompose0", descriptor: "()V", flags: 0x00010101, slot: 14, entry: 0x00275904 },
     PlatformMethod { name: "getProcessLength", descriptor: "()I", flags: 0x00010004, slot: 15, entry: 0x00275320 },
 ];
+
+static DISPATCH_244: &[u32] = &[0x00275374, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00275358, 0x00275920, 0x0027533c, 0x002757bc, 0x00275904, 0x00275320];
 
 static FIELDS_245: &[PlatformField] = &[
     PlatformField { name: "graphics", descriptor: "I", flags: 0x00000004, slot: 10 },
@@ -3500,6 +3991,8 @@ static METHODS_245: &[PlatformMethod] = &[
     PlatformMethod { name: "grabKey0", descriptor: "(II)V", flags: 0x00030101, slot: 48, entry: 0x001ef668 },
     PlatformMethod { name: "ungrabKey0", descriptor: "(I)V", flags: 0x00020101, slot: 49, entry: 0x001ef600 },
 ];
+
+static DISPATCH_245: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001f4904, 0x001f2450, 0x001f2138, 0x001f1734, 0x001f03d0, 0x001f0264, 0x001f1d2c, 0x001f0180, 0x001f41b4, 0x001ef14c, 0x001ef118, 0x001ef0fc, 0x001ef0e0, 0x001f3f80, 0x001ef00c, 0x001eef30, 0x001eef14, 0x001eeee0, 0x001eee88, 0x001f1b08, 0x001f195c, 0x001eff4c, 0x001efd98, 0x001f2c24, 0x001efb80, 0x001f0a20, 0x001f2740, 0x001f13f4, 0x001f130c, 0x001f0fb8, 0x001f0d74, 0x001eee30, 0x001eedd8, 0x001eed4c, 0x001eed1c, 0x001eecdc, 0x001eec88, 0x001efab0, 0x001ef668, 0x001ef600];
 
 static FIELDS_246: &[PlatformField] = &[
     PlatformField { name: "EVENT_SIZE", descriptor: "I", flags: 0x00540019, slot: 0 },
@@ -3580,6 +4073,8 @@ static METHODS_246: &[PlatformMethod] = &[
     PlatformMethod { name: "setSystemEventListener", descriptor: "(ILorg/kwis/msp/lcdui/SystemEventListener;)Z", flags: 0x00020029, slot: 65535, entry: 0x001f94e4 },
 ];
 
+static DISPATCH_246: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001f7eb0, 0x001f7ddc, 0x001f95fc];
+
 static FIELDS_247: &[PlatformField] = &[
     PlatformField { name: "FACE_MONOSPACE", descriptor: "I", flags: 0x00280019, slot: 0 },
     PlatformField { name: "FACE_PROPORTIONAL", descriptor: "I", flags: 0x002a0019, slot: 1 },
@@ -3639,6 +4134,8 @@ static METHODS_247: &[PlatformMethod] = &[
     PlatformMethod { name: "getFontEx", descriptor: "(Ljava/lang/String;IIII)Lorg/kwis/msp/lcdui/Font;", flags: 0x00050009, slot: 65535, entry: 0x001fafe0 },
     PlatformMethod { name: "getVFontList", descriptor: "()[Ljava/lang/String;", flags: 0x00000009, slot: 65535, entry: 0x001fa574 },
 ];
+
+static DISPATCH_247: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001fa7b4, 0x001fa780, 0x001fa74c, 0x001fa70c, 0x001fa6d8, 0x001fa6bc, 0x001fa6a0, 0x001fa680, 0x001fa65c, 0x001fa638, 0x001fa614, 0x001fa5e0, 0x001fa594];
 
 static FIELDS_248: &[PlatformField] = &[
     PlatformField { name: "BASELINE", descriptor: "I", flags: 0x003c0019, slot: 0 },
@@ -3705,6 +4202,8 @@ static METHODS_248: &[PlatformMethod] = &[
     PlatformMethod { name: "setEdgeColor", descriptor: "(I)V", flags: 0x00020001, slot: 58, entry: 0x001fd440 },
 ];
 
+static DISPATCH_248: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x001fe104, 0x001fe0b0, 0x001fe04c, 0x001fdff8, 0x001fdfa4, 0x001fdf44, 0x001fdee0, 0x001fde90, 0x001fde30, 0x001fddcc, 0x001fdd68, 0x001fdd14, 0x001fdcb0, 0x001fdc70, 0x001fdc48, 0x001fdc14, 0x001fdbe0, 0x001fdbac, 0x001fdb78, 0x001fdb44, 0x001fdb28, 0x001fe288, 0x001fdafc, 0x001fdad0, 0x001fda9c, 0x001fda68, 0x001fda34, 0x001fd9e0, 0x001fd9ac, 0x001fd960, 0x001fe190, 0x001fd92c, 0x001fd8f8, 0x001fd8b4, 0x001fd870, 0x001fd82c, 0x001fd7c4, 0x001fd75c, 0x001fd6f4, 0x001fd68c, 0x001fd628, 0x001fd5e4, 0x001fd598, 0x001fd564, 0x001fd530, 0x001fd4fc, 0x001fd4c8, 0x001fd474, 0x001fd440];
+
 static FIELDS_249: &[PlatformField] = &[
     PlatformField { name: "TRAN_ROT90", descriptor: "I", flags: 0x00850019, slot: 0 },
     PlatformField { name: "TRAN_ROT180", descriptor: "I", flags: 0x00870019, slot: 1 },
@@ -3749,9 +4248,13 @@ static METHODS_249: &[PlatformMethod] = &[
     PlatformMethod { name: "finalize", descriptor: "()V", flags: 0x00010104, slot: 22, entry: 0x00205ea8 },
 ];
 
+static DISPATCH_249: &[u32] = &[0x0020003c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00201944, 0x00200020, 0x00200004, 0x001fffdc, 0x001fffb4, 0x002016e0, 0x002015cc, 0x00200ce4, 0x00200874, 0x00200708, 0x001fff98, 0x001fff74, 0x00205ea8, 0x00203c2c, 0x00205c6c, 0x001fff34, 0x00202dd4];
+
 static FIELDS_250: &[PlatformField] = &[];
 
 static METHODS_250: &[PlatformMethod] = &[];
+
+static DISPATCH_250: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_251: &[PlatformField] = &[];
 
@@ -3762,12 +4265,16 @@ static METHODS_251: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lcdui/Image$1;)V", flags: 0x00020000, slot: 65535, entry: 0x00207b00 },
 ];
 
+static DISPATCH_251: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00207c78, 0x00207b28];
+
 static FIELDS_252: &[PlatformField] = &[];
 
 static METHODS_252: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lcdui/Image;Lorg/kwis/msp/lcdui/ImageObserver;)V", flags: 0x00030000, slot: 65535, entry: 0x00206004 },
     PlatformMethod { name: "markTime", descriptor: "(J)V", flags: 0x00030000, slot: 1, entry: 0x00205fac },
 ];
+
+static DISPATCH_252: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00205fac];
 
 static FIELDS_253: &[PlatformField] = &[
     PlatformField { name: "FRAME_END", descriptor: "I", flags: 0x00060019, slot: 0 },
@@ -3781,6 +4288,8 @@ static METHODS_253: &[PlatformMethod] = &[
     PlatformMethod { name: "notify", descriptor: "(Lorg/kwis/msp/lcdui/Image;I)V", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_253: &[u32] = &[];
+
 static FIELDS_254: &[PlatformField] = &[];
 
 static METHODS_254: &[PlatformMethod] = &[
@@ -3792,6 +4301,8 @@ static METHODS_254: &[PlatformMethod] = &[
     PlatformMethod { name: "run", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x00207548 },
     PlatformMethod { name: "updateList", descriptor: "()I", flags: 0x00010022, slot: 1, entry: 0x002064ac },
 ];
+
+static DISPATCH_254: &[u32] = &[0x0020624c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00207548, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020720c, 0x002062dc, 0x00206ed0, 0x00206b94];
 
 static FIELDS_255: &[PlatformField] = &[];
 
@@ -3809,11 +4320,15 @@ static METHODS_255: &[PlatformMethod] = &[
     PlatformMethod { name: "setSymbolPosition", descriptor: "(IIII)V", flags: 0x00050001, slot: 19, entry: 0x00209638 },
 ];
 
+static DISPATCH_255: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002097e0, 0x0020b5c0, 0x002090bc, 0x0020af4c, 0x00209094, 0x00209078, 0x00209040, 0x00209378, 0x00209714, 0x00209638, 0x0020ae84];
+
 static FIELDS_256: &[PlatformField] = &[];
 
 static METHODS_256: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyTextChanged", descriptor: "([CII)V", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_256: &[u32] = &[];
 
 static FIELDS_257: &[PlatformField] = &[
     PlatformField { name: "ACTIVE", descriptor: "I", flags: 0x001b0019, slot: 0 },
@@ -3842,11 +4357,15 @@ static METHODS_257: &[PlatformMethod] = &[
     PlatformMethod { name: "getState", descriptor: "()I", flags: 0x00010011, slot: 20, entry: 0x0020ce44 },
 ];
 
+static DISPATCH_257: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020cf08, 0x0020d07c, 0x0020cf00, 0x0020cef8, 0x0020d074, 0x0020cec0, 0x0020cea4, 0x0020ce88, 0x0020cf24, 0x0020ce60, 0x0020ce44];
+
 static FIELDS_258: &[PlatformField] = &[];
 
 static METHODS_258: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyEvent", descriptor: "(III)V", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_258: &[u32] = &[];
 
 static FIELDS_259: &[PlatformField] = &[];
 
@@ -3854,6 +4373,8 @@ static METHODS_259: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x0020d4c0 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x0020d470 },
 ];
+
+static DISPATCH_259: &[u32] = &[0x0020d4c0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_260: &[PlatformField] = &[];
 
@@ -3864,11 +4385,15 @@ static METHODS_260: &[PlatformMethod] = &[
     PlatformMethod { name: "destroyApp", descriptor: "(Z)V", flags: 0x00010009, slot: 65535, entry: 0x0020d5a8 },
 ];
 
+static DISPATCH_260: &[u32] = &[0x0020d5a0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_261: &[PlatformField] = &[];
 
 static METHODS_261: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010000, slot: 0, entry: 0x0020e45c },
 ];
+
+static DISPATCH_261: &[u32] = &[0x0020e45c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_262: &[PlatformField] = &[];
 
@@ -3877,11 +4402,15 @@ static METHODS_262: &[PlatformMethod] = &[
     PlatformMethod { name: "main", descriptor: "([Ljava/lang/String;)V", flags: 0x00010009, slot: 65535, entry: 0x002759ec },
 ];
 
+static DISPATCH_262: &[u32] = &[0x002759e4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_263: &[PlatformField] = &[];
 
 static METHODS_263: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/Runnable;II)V", flags: 0x00040000, slot: 65535, entry: 0x0020e554 },
 ];
+
+static DISPATCH_263: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_264: &[PlatformField] = &[];
 
@@ -3889,11 +4418,15 @@ static METHODS_264: &[PlatformMethod] = &[
     PlatformMethod { name: "notifySystemEvent", descriptor: "(IIII)V", flags: 0x00050401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_264: &[u32] = &[];
+
 static FIELDS_265: &[PlatformField] = &[];
 
 static METHODS_265: &[PlatformMethod] = &[
     PlatformMethod { name: "action", descriptor: "(Lorg/kwis/msp/lwc/Component;Ljava/lang/Object;)V", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_265: &[u32] = &[];
 
 static FIELDS_266: &[PlatformField] = &[];
 
@@ -3909,9 +4442,13 @@ static METHODS_266: &[PlatformMethod] = &[
     PlatformMethod { name: "isHorizonEnabled", descriptor: "()Z", flags: 0x00000109, slot: 65535, entry: 0x0020e9fc },
 ];
 
+static DISPATCH_266: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020ef28, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020f238, 0x00000000, 0x00000000, 0x00000000, 0x0020f0b0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020eac8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020ed8c, 0x0020ec7c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_267: &[PlatformField] = &[];
 
 static METHODS_267: &[PlatformMethod] = &[];
+
+static DISPATCH_267: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_268: &[PlatformField] = &[];
 
@@ -3920,6 +4457,8 @@ static METHODS_268: &[PlatformMethod] = &[
     PlatformMethod { name: "notifyEvent", descriptor: "(III)V", flags: 0x00040001, slot: 1, entry: 0x0020f52c },
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lwc/AnnunciatorComponent;Lorg/kwis/msp/lwc/AnnunciatorComponent$1;)V", flags: 0x00030000, slot: 65535, entry: 0x0020f4d4 },
 ];
+
+static DISPATCH_268: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020f52c];
 
 static FIELDS_269: &[PlatformField] = &[];
 
@@ -3939,11 +4478,15 @@ static METHODS_269: &[PlatformMethod] = &[
     PlatformMethod { name: "calcPreferredSize", descriptor: "(I)V", flags: 0x00020004, slot: 17, entry: 0x00275f7c },
 ];
 
+static DISPATCH_269: &[u32] = &[0x00276b7c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00275f7c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00276df4, 0x00000000, 0x00000000, 0x00000000, 0x00276c90, 0x00000000, 0x00000000, 0x0027749c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002767e0, 0x002766fc, 0x0027782c, 0x00276514, 0x00276430, 0x00276348, 0x002761bc];
+
 static FIELDS_270: &[PlatformField] = &[];
 
 static METHODS_270: &[PlatformMethod] = &[
     PlatformMethod { name: "changed", descriptor: "(Lorg/kwis/msp/lwc/Component;Ljava/lang/Object;)V", flags: 0x00030401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_270: &[u32] = &[];
 
 static FIELDS_271: &[PlatformField] = &[];
 
@@ -3958,6 +4501,8 @@ static METHODS_271: &[PlatformMethod] = &[
     PlatformMethod { name: "setChangeListener", descriptor: "(Lorg/kwis/msp/lwc/ChangeListener;Ljava/lang/Object;)V", flags: 0x00030021, slot: 55, entry: 0x0020fc74 },
 ];
 
+static DISPATCH_271: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00210144, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020feac, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0020f854, 0x002104b0, 0x002103cc, 0x0020fc74];
+
 static FIELDS_272: &[PlatformField] = &[];
 
 static METHODS_272: &[PlatformMethod] = &[
@@ -3966,6 +4511,8 @@ static METHODS_272: &[PlatformMethod] = &[
     PlatformMethod { name: "getSelectedCheckbox", descriptor: "()Lorg/kwis/msp/lwc/CheckboxComponent;", flags: 0x00010001, slot: 11, entry: 0x00210898 },
     PlatformMethod { name: "setChangeListener", descriptor: "(Lorg/kwis/msp/lwc/ChangeListener;Ljava/lang/Object;)V", flags: 0x00030021, slot: 12, entry: 0x00210c58 },
 ];
+
+static DISPATCH_272: &[u32] = &[0x00210980, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00210e90, 0x00210898, 0x00210c58, 0x00210a98];
 
 static FIELDS_273: &[PlatformField] = &[];
 
@@ -3988,6 +4535,8 @@ static METHODS_273: &[PlatformMethod] = &[
     PlatformMethod { name: "select", descriptor: "(I)V", flags: 0x00020001, slot: 53, entry: 0x002129e0 },
 ];
 
+static DISPATCH_273: &[u32] = &[0x00211670, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00211e34, 0x00211cc8, 0x00213470, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00213034, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00211a58, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00212c28, 0x00212588, 0x00212384, 0x002121fc, 0x00212118, 0x00212018, 0x00211f34, 0x00212dfc, 0x002129e0];
+
 static FIELDS_274: &[PlatformField] = &[];
 
 static METHODS_274: &[PlatformMethod] = &[
@@ -3996,12 +4545,16 @@ static METHODS_274: &[PlatformMethod] = &[
     PlatformMethod { name: "keyNotify", descriptor: "(II)Z", flags: 0x00030004, slot: 1, entry: 0x0021365c },
 ];
 
+static DISPATCH_274: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021365c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002136f4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_275: &[PlatformField] = &[];
 
 static METHODS_275: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lwc/ComboComponent;)V", flags: 0x00020000, slot: 65535, entry: 0x00213944 },
     PlatformMethod { name: "action", descriptor: "(Lorg/kwis/msp/lwc/Component;Ljava/lang/Object;)V", flags: 0x00030001, slot: 1, entry: 0x0021396c },
 ];
+
+static DISPATCH_275: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021396c];
 
 static FIELDS_276: &[PlatformField] = &[];
 
@@ -4016,6 +4569,8 @@ static METHODS_276: &[PlatformMethod] = &[
     PlatformMethod { name: "getNormalImage", descriptor: "()Lorg/kwis/msp/lcdui/Image;", flags: 0x00010001, slot: 12, entry: 0x00277bec },
     PlatformMethod { name: "getActiveImage", descriptor: "()Lorg/kwis/msp/lcdui/Image;", flags: 0x00010001, slot: 13, entry: 0x00277b04 },
 ];
+
+static DISPATCH_276: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00277db8, 0x00277cd0, 0x00277bec, 0x00277b04];
 
 static FIELDS_277: &[PlatformField] = &[];
 
@@ -4037,6 +4592,8 @@ static METHODS_277: &[PlatformMethod] = &[
     PlatformMethod { name: "paintContent", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020001, slot: 25, entry: 0x00214c1c },
 ];
 
+static DISPATCH_277: &[u32] = &[0x00215a10, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00214998, 0x00214a98, 0x00214890, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00214c1c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00214054, 0x00213e1c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002147ac, 0x00215ddc, 0x00215b54, 0x002158f0, 0x00215730, 0x002146c8, 0x0021451c, 0x00214348];
+
 static FIELDS_278: &[PlatformField] = &[
     PlatformField { name: "FOCUS_CHANGE", descriptor: "I", flags: 0x00060019, slot: 0 },
     PlatformField { name: "SELECT", descriptor: "I", flags: 0x00080019, slot: 1 },
@@ -4045,6 +4602,8 @@ static FIELDS_278: &[PlatformField] = &[
 static METHODS_278: &[PlatformMethod] = &[
     PlatformMethod { name: "commandAction", descriptor: "(Lorg/kwis/msp/lwc/Command;ILjava/lang/Object;)V", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_278: &[u32] = &[];
 
 static FIELDS_279: &[PlatformField] = &[
     PlatformField { name: "LAYOUT_LEFT", descriptor: "I", flags: 0x003e0019, slot: 0 },
@@ -4126,9 +4685,13 @@ static METHODS_279: &[PlatformMethod] = &[
     PlatformMethod { name: "getDisplay", descriptor: "()Lorg/kwis/msp/lcdui/Display;", flags: 0x00010001, slot: 44, entry: 0x002164b0 },
 ];
 
+static DISPATCH_279: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00216fd4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00216948, 0x0021692c, 0x00216908, 0x002168e4, 0x002167e4, 0x002167c8, 0x002167ac, 0x0021677c, 0x00216738, 0x002166e0, 0x0021669c, 0x00216664, 0x0021662c, 0x00216610, 0x002165f4, 0x00216a9c, 0x002165d4, 0x00216a18, 0x00216590, 0x00216588, 0x002169e0, 0x00216534, 0x00216518, 0x002164fc, 0x002164f4, 0x00216ee4, 0x00216e84, 0x00217244, 0x00216d84, 0x00216d00, 0x00216c20, 0x00216b40, 0x002169a4, 0x002164cc, 0x002164b0];
+
 static FIELDS_280: &[PlatformField] = &[];
 
 static METHODS_280: &[PlatformMethod] = &[];
+
+static DISPATCH_280: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00217710, 0x00217548, 0x00217450];
 
 static FIELDS_281: &[PlatformField] = &[
     PlatformField { name: "cmps", descriptor: "[Lorg/kwis/msp/lwc/Component;", flags: 0x00008004, slot: 14 },
@@ -4168,6 +4731,8 @@ static METHODS_281: &[PlatformMethod] = &[
     PlatformMethod { name: "getNumberOfComponent", descriptor: "()I", flags: 0x00010001, slot: 60, entry: 0x002178ec },
 ];
 
+static DISPATCH_281: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00218b34, 0x00000000, 0x00000000, 0x00000000, 0x00217bc4, 0x00000000, 0x00000000, 0x002179c8, 0x00000000, 0x00218874, 0x00217ae8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002198c4, 0x00217a14, 0x00219624, 0x00219298, 0x002191ac, 0x00218e8c, 0x00218e04, 0x00218d48, 0x002181a4, 0x0021806c, 0x002183ec, 0x00217b78, 0x00217960, 0x00217908, 0x00217a5c, 0x002178ec, 0x00217fc8, 0x00217e90, 0x00217c68];
+
 static FIELDS_282: &[PlatformField] = &[
     PlatformField { name: "MODE_TIME", descriptor: "I", flags: 0x007c0019, slot: 0 },
     PlatformField { name: "MODE_DATE", descriptor: "I", flags: 0x007e0019, slot: 1 },
@@ -4191,6 +4756,8 @@ static METHODS_282: &[PlatformMethod] = &[
     PlatformMethod { name: "getStringValue", descriptor: "(I)Ljava/lang/String;", flags: 0x00020001, slot: 51, entry: 0x0021b570 },
 ];
 
+static DISPATCH_282: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021a884, 0x0021a984, 0x0021c0dc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021a438, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021a14c, 0x00000000, 0x0021aaf4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021ae8c, 0x0021ada8, 0x0021acc0, 0x0021bc80, 0x0021ba08, 0x0021b7fc, 0x0021b570];
+
 static FIELDS_283: &[PlatformField] = &[];
 
 static METHODS_283: &[PlatformMethod] = &[
@@ -4204,6 +4771,8 @@ static METHODS_283: &[PlatformMethod] = &[
     PlatformMethod { name: "paintTime", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020002, slot: 1, entry: 0x0021c390 },
     PlatformMethod { name: "getLastDay", descriptor: "(II)I", flags: 0x00030002, slot: 1, entry: 0x0021c2ec },
 ];
+
+static DISPATCH_283: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021d1c4, 0x00000000, 0x0021c618, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021d358];
 
 static FIELDS_284: &[PlatformField] = &[
     PlatformField { name: "HIGH_LIGHT_COLOR", descriptor: "I", flags: 0x00110019, slot: 0 },
@@ -4236,6 +4805,8 @@ static METHODS_284: &[PlatformMethod] = &[
     PlatformMethod { name: "getHighLightColor", descriptor: "(I)I", flags: 0x00010009, slot: 65535, entry: 0x0021e148 },
 ];
 
+static DISPATCH_284: &[u32] = &[0x0021e140, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_285: &[PlatformField] = &[
     PlatformField { name: "TYPE_NONE", descriptor: "I", flags: 0x006a0019, slot: 0 },
     PlatformField { name: "TYPE_OK", descriptor: "I", flags: 0x006c0019, slot: 1 },
@@ -4267,12 +4838,16 @@ static METHODS_285: &[PlatformMethod] = &[
     PlatformMethod { name: "paintFrame", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020004, slot: 59, entry: 0x00279308 },
 ];
 
+static DISPATCH_285: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00279be8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00279308, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027a870, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027a04c, 0x00279dc0, 0x002796ec, 0x00279608, 0x0027abf8, 0x00279520];
+
 static FIELDS_286: &[PlatformField] = &[];
 
 static METHODS_286: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lwc/DialogComponent;)V", flags: 0x00020000, slot: 65535, entry: 0x0027b0a0 },
     PlatformMethod { name: "action", descriptor: "(Lorg/kwis/msp/lwc/Component;Ljava/lang/Object;)V", flags: 0x00030001, slot: 1, entry: 0x0027b0c8 },
 ];
+
+static DISPATCH_286: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027b0c8];
 
 static FIELDS_287: &[PlatformField] = &[];
 
@@ -4281,11 +4856,15 @@ static METHODS_287: &[PlatformMethod] = &[
     PlatformMethod { name: "run", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x0021e3a4 },
 ];
 
+static DISPATCH_287: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021e3a4];
+
 static FIELDS_288: &[PlatformField] = &[];
 
 static METHODS_288: &[PlatformMethod] = &[
     PlatformMethod { name: "eventNotify", descriptor: "(IIIILjava/lang/Object;)Z", flags: 0x00060401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_288: &[u32] = &[];
 
 static FIELDS_289: &[PlatformField] = &[
     PlatformField { name: "cmpScroll", descriptor: "Lorg/kwis/msp/lwc/ScrollbarComponent;", flags: 0x00008004, slot: 27 },
@@ -4313,11 +4892,15 @@ static METHODS_289: &[PlatformMethod] = &[
     PlatformMethod { name: "layoutChildVertical", descriptor: "()V", flags: 0x00010004, slot: 69, entry: 0x0021f600 },
 ];
 
+static DISPATCH_289: &[u32] = &[0x0021e668, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00220864, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00220750, 0x00000000, 0x00220ee4, 0x00220c50, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022039c, 0x0022021c, 0x00220520, 0x0021fe90, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0021e68c, 0x00221394, 0x002212ac, 0x00221130, 0x00221048, 0x0021fb88, 0x0021f600];
+
 static FIELDS_290: &[PlatformField] = &[];
 
 static METHODS_290: &[PlatformMethod] = &[
     PlatformMethod { name: "grabKeyNotify", descriptor: "(IILjava/lang/Object;)Z", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
+
+static DISPATCH_290: &[u32] = &[];
 
 static FIELDS_291: &[PlatformField] = &[
     PlatformField { name: "imgStr", descriptor: "Ljava/lang/String;", flags: 0x00008004, slot: 18 },
@@ -4341,6 +4924,8 @@ static METHODS_291: &[PlatformMethod] = &[
     PlatformMethod { name: "stop", descriptor: "()V", flags: 0x00010001, slot: 50, entry: 0x002218b4 },
 ];
 
+static DISPATCH_291: &[u32] = &[0x00222a44, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002223b0, 0x002224c0, 0x002222a0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00221cd4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00221b44, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00222718, 0x00222630, 0x00222d10, 0x00222b34, 0x002219f8, 0x002218b4];
+
 static FIELDS_292: &[PlatformField] = &[];
 
 static METHODS_292: &[PlatformMethod] = &[
@@ -4348,12 +4933,16 @@ static METHODS_292: &[PlatformMethod] = &[
     PlatformMethod { name: "notify", descriptor: "(Lorg/kwis/msp/lcdui/Image;I)V", flags: 0x00030001, slot: 1, entry: 0x00223384 },
 ];
 
+static DISPATCH_292: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00223384];
+
 static FIELDS_293: &[PlatformField] = &[];
 
 static METHODS_293: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lwc/TextComponent;)V", flags: 0x00020001, slot: 65535, entry: 0x0022347c },
     PlatformMethod { name: "notifyTextChanged", descriptor: "([CII)V", flags: 0x00040001, slot: 1, entry: 0x002234ac },
 ];
+
+static DISPATCH_293: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002234ac];
 
 static FIELDS_294: &[PlatformField] = &[
     PlatformField { name: "layout", descriptor: "I", flags: 0x00000004, slot: 14 },
@@ -4377,6 +4966,8 @@ static METHODS_294: &[PlatformMethod] = &[
     PlatformMethod { name: "paintContent", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020001, slot: 25, entry: 0x00225014 },
     PlatformMethod { name: "setLayout", descriptor: "(I)V", flags: 0x00020001, slot: 51, entry: 0x00224dfc },
 ];
+
+static DISPATCH_294: &[u32] = &[0x00224d04, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00224090, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00225014, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002247fc, 0x00224680, 0x00224598, 0x002244b0, 0x0022431c, 0x00224238, 0x00224dfc, 0x00223c1c];
 
 static FIELDS_295: &[PlatformField] = &[
     PlatformField { name: "SELECT_IMPLICIT", descriptor: "I", flags: 0x00720019, slot: 0 },
@@ -4410,6 +5001,8 @@ static METHODS_295: &[PlatformMethod] = &[
     PlatformMethod { name: "getPrevTraversalComponent", descriptor: "()Lorg/kwis/msp/lwc/Component;", flags: 0x00010004, slot: 54, entry: 0x00226640 },
 ];
 
+static DISPATCH_295: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00227348, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00228e48, 0x002285d4, 0x00228334, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00226800, 0x00226640, 0x002269c4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002291a0, 0x002280cc, 0x002263d0, 0x00227e9c, 0x00227c68, 0x002262e8, 0x00227a3c, 0x00229400, 0x00226de8, 0x00228c10, 0x002289dc, 0x0022767c, 0x00226fdc, 0x00226124, 0x0022603c];
+
 static FIELDS_296: &[PlatformField] = &[];
 
 static METHODS_296: &[PlatformMethod] = &[
@@ -4419,6 +5012,8 @@ static METHODS_296: &[PlatformMethod] = &[
     PlatformMethod { name: "setState", descriptor: "(Z)V", flags: 0x00020001, slot: 53, entry: 0x0022994c },
     PlatformMethod { name: "getState", descriptor: "()Z", flags: 0x00010001, slot: 54, entry: 0x00229864 },
 ];
+
+static DISPATCH_296: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002297cc, 0x0022994c, 0x00229864, 0x002297e8];
 
 static FIELDS_297: &[PlatformField] = &[];
 
@@ -4439,6 +5034,8 @@ static METHODS_297: &[PlatformMethod] = &[
     PlatformMethod { name: "setChangeListener", descriptor: "(Lorg/kwis/msp/lwc/ChangeListener;Ljava/lang/Object;)V", flags: 0x00030021, slot: 52, entry: 0x0027c228 },
 ];
 
+static DISPATCH_297: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027b53c, 0x0027b62c, 0x0027b454, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027c824, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027c460, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027be34, 0x0027bd4c, 0x0027bb58, 0x0027b988, 0x0027cd44, 0x0027b8a0, 0x0027b7b8, 0x0027c228];
+
 static FIELDS_298: &[PlatformField] = &[];
 
 static METHODS_298: &[PlatformMethod] = &[
@@ -4454,6 +5051,8 @@ static METHODS_298: &[PlatformMethod] = &[
     PlatformMethod { name: "showNotify", descriptor: "(Z)V", flags: 0x00020004, slot: 16, entry: 0x0022a3f0 },
     PlatformMethod { name: "getComponent", descriptor: "()Lorg/kwis/msp/lwc/ContainerComponent;", flags: 0x00010001, slot: 25, entry: 0x0022a308 },
 ];
+
+static DISPATCH_298: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022a3f0, 0x0022a868, 0x0022a5e4, 0x0022aa78, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022a308];
 
 static FIELDS_299: &[PlatformField] = &[
     PlatformField { name: "HORIZONTAL", descriptor: "I", flags: 0x00590019, slot: 0 },
@@ -4485,6 +5084,8 @@ static METHODS_299: &[PlatformMethod] = &[
     PlatformMethod { name: "getPreferredHeight", descriptor: "(I)I", flags: 0x00020001, slot: 19, entry: 0x0022b644 },
     PlatformMethod { name: "getPreferredWidth", descriptor: "()I", flags: 0x00010001, slot: 20, entry: 0x0022b524 },
 ];
+
+static DISPATCH_299: &[u32] = &[0x0022b4dc, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022b7b0, 0x0022b644, 0x0022b524, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022bd60, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022bb88, 0x0022b8c8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022ce30, 0x0022d260, 0x0022cd48, 0x0022cba4, 0x0022cabc, 0x0022c8e8, 0x0022c800, 0x0022c600, 0x0022c518, 0x0022c394, 0x0022c2ac, 0x0022c128, 0x0022c040, 0x0022bee0];
 
 static FIELDS_300: &[PlatformField] = &[
     PlatformField { name: "cd", descriptor: "Lorg/kwis/msp/lcdui/Card;", flags: 0x00008004, slot: 24 },
@@ -4538,6 +5139,8 @@ static METHODS_300: &[PlatformMethod] = &[
     PlatformMethod { name: "controlInset", descriptor: "(Z)V", flags: 0x00020004, slot: 58, entry: 0x0022e1f8 },
 ];
 
+static DISPATCH_300: &[u32] = &[0x0022e1c0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0022fa38, 0x0022f9ec, 0x0022f9a0, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00230924, 0x00000000, 0x00000000, 0x0022e84c, 0x0022dfd4, 0x0022f80c, 0x00000000, 0x0022fe44, 0x002321b4, 0x002302dc, 0x0022f6fc, 0x00000000, 0x00000000, 0x0022edf8, 0x00000000, 0x00000000, 0x00233620, 0x00233438, 0x00000000, 0x00000000, 0x00232ecc, 0x002330d8, 0x00000000, 0x00000000, 0x0022f1a0, 0x0022f094, 0x00000000, 0x00000000, 0x00000000, 0x0022e1f8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0023005c, 0x0022ff48, 0x00233230, 0x0022f614, 0x0022f530, 0x0022f394, 0x00232c48, 0x0022f2ac, 0x0022eedc, 0x0022ec08, 0x00232580, 0x0022ea30];
+
 static FIELDS_301: &[PlatformField] = &[
     PlatformField { name: "isWide", descriptor: "Z", flags: 0x00000004, slot: 38 },
 ];
@@ -4560,12 +5163,16 @@ static METHODS_301: &[PlatformMethod] = &[
     PlatformMethod { name: "focusNotify", descriptor: "(Z)V", flags: 0x00020001, slot: 31, entry: 0x00233f6c },
 ];
 
+static DISPATCH_301: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002351a8, 0x00000000, 0x00000000, 0x00000000, 0x00235510, 0x00235604, 0x00236308, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002345e8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00233f6c, 0x00234b2c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00235be0, 0x002341c4, 0x00000000, 0x00000000, 0x00236424, 0x00235910, 0x00000000, 0x00234990, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00233c90, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00233dcc];
+
 static FIELDS_302: &[PlatformField] = &[];
 
 static METHODS_302: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lwc/TextBoxComponent;)V", flags: 0x00020000, slot: 65535, entry: 0x00236944 },
     PlatformMethod { name: "action", descriptor: "(Lorg/kwis/msp/lwc/Component;Ljava/lang/Object;)V", flags: 0x00030001, slot: 1, entry: 0x0023696c },
 ];
+
+static DISPATCH_302: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0023696c];
 
 static FIELDS_303: &[PlatformField] = &[
     PlatformField { name: "CONSTRAINT_ANY", descriptor: "I", flags: 0x00a20019, slot: 0 },
@@ -4604,6 +5211,8 @@ static METHODS_303: &[PlatformMethod] = &[
     PlatformMethod { name: "keyNotify", descriptor: "(II)Z", flags: 0x00030001, slot: 32, entry: 0x00241b10 },
 ];
 
+static DISPATCH_303: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00242400, 0x00241b10, 0x00000000, 0x00242234, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00243444, 0x00243a94, 0x0024335c, 0x00243994, 0x00242b48, 0x002427c4, 0x002426dc, 0x0024209c, 0x00241fb4, 0x00241a14, 0x00241948, 0x00236bd8, 0x00241884, 0x00236f10, 0x00236ba0, 0x00236d40, 0x00236d00, 0x00236c74, 0x00241680];
+
 static FIELDS_304: &[PlatformField] = &[];
 
 static METHODS_304: &[PlatformMethod] = &[
@@ -4612,6 +5221,8 @@ static METHODS_304: &[PlatformMethod] = &[
     PlatformMethod { name: "paint", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020004, slot: 1, entry: 0x00243ed8 },
     PlatformMethod { name: "paintMode", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;I)V", flags: 0x00030002, slot: 1, entry: 0x00243d98 },
 ];
+
+static DISPATCH_304: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00243ed8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00243f9c];
 
 static FIELDS_305: &[PlatformField] = &[
     PlatformField { name: "tShell", descriptor: "Lorg/kwis/msp/lwc/ShellComponent;", flags: 0x00008004, slot: 42 },
@@ -4634,12 +5245,16 @@ static METHODS_305: &[PlatformMethod] = &[
     PlatformMethod { name: "configure", descriptor: "(IIIII)V", flags: 0x00060001, slot: 14, entry: 0x002440b0 },
 ];
 
+static DISPATCH_305: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002440b0, 0x00000000, 0x00000000, 0x00000000, 0x00244a28, 0x002448b8, 0x00244b10, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00245a94, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002442b0, 0x00244510, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00244170, 0x00000000, 0x00000000, 0x00000000, 0x002460d0, 0x00244c48, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0024410c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0024586c, 0x00244358];
+
 static FIELDS_306: &[PlatformField] = &[];
 
 static METHODS_306: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lwc/TextFieldComponent;)V", flags: 0x00020000, slot: 65535, entry: 0x00246528 },
     PlatformMethod { name: "action", descriptor: "(Lorg/kwis/msp/lwc/Component;Ljava/lang/Object;)V", flags: 0x00030001, slot: 1, entry: 0x00246550 },
 ];
+
+static DISPATCH_306: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00246550];
 
 static FIELDS_307: &[PlatformField] = &[];
 
@@ -4648,6 +5263,8 @@ static METHODS_307: &[PlatformMethod] = &[
     PlatformMethod { name: "keyNotify", descriptor: "(II)Z", flags: 0x00030001, slot: 1, entry: 0x00246a48 },
     PlatformMethod { name: "setWide", descriptor: "(ZLorg/kwis/msp/lwc/ActionListener;)V", flags: 0x00030004, slot: 1, entry: 0x0024692c },
 ];
+
+static DISPATCH_307: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00246a48, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0024692c];
 
 static FIELDS_308: &[PlatformField] = &[
     PlatformField { name: "DEFAULT_LAYOUT", descriptor: "I", flags: 0x0023001c, slot: 0 },
@@ -4669,6 +5286,8 @@ static METHODS_308: &[PlatformMethod] = &[
     PlatformMethod { name: "paintChar", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;Z)V", flags: 0x00030004, slot: 24, entry: 0x00246d24 },
 ];
 
+static DISPATCH_308: &[u32] = &[0x00247d54, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00246e98, 0x00246e60, 0x00246e38, 0x00246e1c, 0x00246de4, 0x00247024, 0x00246dc8, 0x00246da0, 0x00246fb8, 0x00246d84, 0x00246f40, 0x00247078, 0x00246d68, 0x00247198, 0x00246d24];
+
 static FIELDS_309: &[PlatformField] = &[];
 
 static METHODS_309: &[PlatformMethod] = &[
@@ -4677,6 +5296,8 @@ static METHODS_309: &[PlatformMethod] = &[
     PlatformMethod { name: "keyNotify", descriptor: "(II)Z", flags: 0x00030001, slot: 1, entry: 0x0024801c },
     PlatformMethod { name: "setWide", descriptor: "(ZLorg/kwis/msp/lwc/ActionListener;)V", flags: 0x00030004, slot: 1, entry: 0x00247eac },
 ];
+
+static DISPATCH_309: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0024801c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00247eac];
 
 static FIELDS_310: &[PlatformField] = &[
     PlatformField { name: "DEFAULT_DELAY", descriptor: "I", flags: 0x00000001, slot: 14 },
@@ -4697,12 +5318,16 @@ static METHODS_310: &[PlatformMethod] = &[
     PlatformMethod { name: "paintContent", descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V", flags: 0x00020001, slot: 25, entry: 0x00248418 },
 ];
 
+static DISPATCH_310: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00248880, 0x00248a30, 0x00248764, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00248418, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002493f8, 0x002495d4, 0x00248e48, 0x00248d60, 0x00249250, 0x00248ba0];
+
 static FIELDS_311: &[PlatformField] = &[];
 
 static METHODS_311: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Lorg/kwis/msp/lwc/TickerComponent;Lorg/kwis/msp/lwc/TickerComponent;)V", flags: 0x00030000, slot: 65535, entry: 0x002497b4 },
     PlatformMethod { name: "run", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x002497d8 },
 ];
+
+static DISPATCH_311: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002497d8];
 
 static FIELDS_312: &[PlatformField] = &[
     PlatformField { name: "MH_MDACTRL_GET_MEDIA_TIME", descriptor: "I", flags: 0x0000000c, slot: 0 },
@@ -4902,6 +5527,8 @@ static METHODS_312: &[PlatformMethod] = &[
     PlatformMethod { name: "mediaInfoEx0", descriptor: "(Ljava/lang/String;I)I", flags: 0x0002010c, slot: 65535, entry: 0x0024a984 },
 ];
 
+static DISPATCH_312: &[u32] = &[0x0024a958, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0024c57c, 0x0024a8f8, 0x0024a8c4, 0x0024a898, 0x0024a86c, 0x0024a800, 0x0024a794, 0x0024a728, 0x0024a6bc, 0x0024c384, 0x0024c20c, 0x0024c0b4, 0x0024a66c, 0x0024a61c, 0x0024a5cc, 0x0024a5a0, 0x0024ba54, 0x0024a560, 0x0024b998, 0x0024bf54, 0x0024bdf4, 0x0024a53c, 0x0024a518, 0x0024a4ec, 0x0024a4d0, 0x0024c620, 0x0024b8d4, 0x0024bae0, 0x0024a47c, 0x0024a43c, 0x0024a408, 0x0024a3d4, 0x0024a390, 0x0024a344, 0x0024a2f8, 0x0024a2c4, 0x0024a290, 0x0024a25c, 0x0024a228, 0x0024a1f4, 0x0024a1c0, 0x0024a18c, 0x0024a158, 0x0024a124, 0x0024a0f0, 0x0024a0bc, 0x0024a088, 0x0024b6a0, 0x0024b624, 0x0024b5a8, 0x0024b52c, 0x0024b4ac, 0x0024b42c, 0x0024b3ac, 0x0024b330, 0x0024b2b4, 0x0024b238, 0x0024b1cc, 0x0024aff4, 0x0024af88, 0x0024a9f4];
+
 static FIELDS_313: &[PlatformField] = &[
     PlatformField { name: "DETECT", descriptor: "I", flags: 0x006d001c, slot: 0 },
     PlatformField { name: "MODEL", descriptor: "I", flags: 0x006f001c, slot: 1 },
@@ -4948,6 +5575,8 @@ static METHODS_313: &[PlatformMethod] = &[
     PlatformMethod { name: "setVolume", descriptor: "(I)Z", flags: 0x00020001, slot: 88, entry: 0x0024e804 },
 ];
 
+static DISPATCH_313: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002504ac, 0x00250430, 0x0025039c, 0x0024e938, 0x0024f22c, 0x0024f1ec, 0x0024f110, 0x0024e8b4, 0x0024ecd4, 0x0024e88c, 0x0024ec40, 0x0024e864, 0x0024eadc, 0x0024ea48, 0x00250328, 0x002502cc, 0x0024e840, 0x0024e804];
+
 static FIELDS_314: &[PlatformField] = &[];
 
 static METHODS_314: &[PlatformMethod] = &[
@@ -4969,11 +5598,15 @@ static METHODS_314: &[PlatformMethod] = &[
     PlatformMethod { name: "free", descriptor: "()V", flags: 0x00010001, slot: 12, entry: 0x0025087c },
 ];
 
+static DISPATCH_314: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025087c, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00250964, 0x002509b4, 0x00250d00, 0x00250bb8, 0x00250ad8, 0x00250940, 0x002508ec, 0x002508c4, 0x0025089c];
+
 static FIELDS_315: &[PlatformField] = &[];
 
 static METHODS_315: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00251510 },
 ];
+
+static DISPATCH_315: &[u32] = &[0x00251510, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_316: &[PlatformField] = &[];
 
@@ -4994,6 +5627,8 @@ static METHODS_316: &[PlatformMethod] = &[
     PlatformMethod { name: "reconnect", descriptor: "()V", flags: 0x00010001, slot: 1, entry: 0x0027d104 },
 ];
 
+static DISPATCH_316: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0027d038, 0x0027da78, 0x0027cfec, 0x0027ddf8, 0x0027dcd0, 0x0027cfd0, 0x0027d2c0, 0x0027d104];
+
 static FIELDS_317: &[PlatformField] = &[
     PlatformField { name: "mode", descriptor: "I", flags: 0x00000001, slot: 0 },
     PlatformField { name: "modeName", descriptor: "Ljava/lang/String;", flags: 0x00008001, slot: 1 },
@@ -5006,6 +5641,8 @@ static METHODS_317: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x002518b8 },
 ];
 
+static DISPATCH_317: &[u32] = &[0x002518b8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_318: &[PlatformField] = &[
     PlatformField { name: "numBand", descriptor: "I", flags: 0x00000001, slot: 0 },
     PlatformField { name: "bandNameInfo", descriptor: "[Ljava/lang/String;", flags: 0x00008001, slot: 1 },
@@ -5015,6 +5652,8 @@ static FIELDS_318: &[PlatformField] = &[
 static METHODS_318: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00251960 },
 ];
+
+static DISPATCH_318: &[u32] = &[0x00251960, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_319: &[PlatformField] = &[
     PlatformField { name: "MH_MDARECSOURCE_INTMIC", descriptor: "I", flags: 0x00060019, slot: 0 },
@@ -5056,6 +5695,8 @@ static FIELDS_319: &[PlatformField] = &[
 
 static METHODS_319: &[PlatformMethod] = &[];
 
+static DISPATCH_319: &[u32] = &[];
+
 static FIELDS_320: &[PlatformField] = &[];
 
 static METHODS_320: &[PlatformMethod] = &[
@@ -5063,12 +5704,16 @@ static METHODS_320: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00251f14 },
 ];
 
+static DISPATCH_320: &[u32] = &[0x00251f64, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_321: &[PlatformField] = &[];
 
 static METHODS_321: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010001, slot: 0, entry: 0x00252094 },
     PlatformMethod { name: "<init>", descriptor: "(Ljava/lang/String;)V", flags: 0x00020001, slot: 65535, entry: 0x00252044 },
 ];
+
+static DISPATCH_321: &[u32] = &[0x00252094, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_322: &[PlatformField] = &[
     PlatformField { name: "ERROR", descriptor: "I", flags: 0x00060019, slot: 0 },
@@ -5093,6 +5738,8 @@ static METHODS_322: &[PlatformMethod] = &[
     PlatformMethod { name: "playerUpdate", descriptor: "(Lorg/kwis/msp/media/BaseClip;II)V", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_322: &[u32] = &[];
+
 static FIELDS_323: &[PlatformField] = &[];
 
 static METHODS_323: &[PlatformMethod] = &[
@@ -5108,6 +5755,8 @@ static METHODS_323: &[PlatformMethod] = &[
     PlatformMethod { name: "record", descriptor: "(Lorg/kwis/msp/media/BaseClip;)Z", flags: 0x00010009, slot: 65535, entry: 0x002524e0 },
     PlatformMethod { name: "record", descriptor: "(Lorg/kwis/msp/media/Clip;)Z", flags: 0x00010009, slot: 65535, entry: 0x00252428 },
 ];
+
+static DISPATCH_323: &[u32] = &[0x002524d8, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_324: &[PlatformField] = &[
     PlatformField { name: "ERROR", descriptor: "I", flags: 0x00060019, slot: 0 },
@@ -5126,6 +5775,8 @@ static METHODS_324: &[PlatformMethod] = &[
     PlatformMethod { name: "playerUpdate", descriptor: "(Lorg/kwis/msp/media/BaseClip;II)V", flags: 0x00040401, slot: 0, entry: 0x00000000 },
 ];
 
+static DISPATCH_324: &[u32] = &[];
+
 static FIELDS_325: &[PlatformField] = &[];
 
 static METHODS_325: &[PlatformMethod] = &[
@@ -5142,6 +5793,8 @@ static METHODS_325: &[PlatformMethod] = &[
     PlatformMethod { name: "playUpdate", descriptor: "(II)Z", flags: 0x00030001, slot: 35, entry: 0x00252d40 },
 ];
 
+static DISPATCH_325: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00252d70, 0x00000000, 0x00252d40, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0025351c, 0x002531b8, 0x00253050, 0x00252ee8, 0x00252e80];
+
 static FIELDS_326: &[PlatformField] = &[];
 
 static METHODS_326: &[PlatformMethod] = &[
@@ -5149,6 +5802,8 @@ static METHODS_326: &[PlatformMethod] = &[
     PlatformMethod { name: "on", descriptor: "(II)V", flags: 0x00020009, slot: 65535, entry: 0x002539b4 },
     PlatformMethod { name: "off", descriptor: "()V", flags: 0x00000009, slot: 65535, entry: 0x0025398c },
 ];
+
+static DISPATCH_326: &[u32] = &[0x002539e4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_327: &[PlatformField] = &[];
 
@@ -5170,6 +5825,8 @@ static METHODS_327: &[PlatformMethod] = &[
     PlatformMethod { name: "setVolume", descriptor: "(I)Z", flags: 0x00020001, slot: 88, entry: 0x00253ab4 },
     PlatformMethod { name: "setPosition", descriptor: "(I)Z", flags: 0x00020001, slot: 96, entry: 0x00253c44 },
 ];
+
+static DISPATCH_327: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00253b34, 0x00000000, 0x00253b04, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00253ae4, 0x00253ab4, 0x002542e8, 0x0025419c, 0x002540ec, 0x0025403c, 0x00253f8c, 0x00253e24, 0x00253cbc, 0x00253c44];
 
 static FIELDS_328: &[PlatformField] = &[
     PlatformField { name: "VOLTYPE_VOICE", descriptor: "I", flags: 0x000d0019, slot: 0 },
@@ -5196,6 +5853,8 @@ static METHODS_328: &[PlatformMethod] = &[
     PlatformMethod { name: "setDefaultVolume", descriptor: "(II)V", flags: 0x00020009, slot: 65535, entry: 0x00254768 },
     PlatformMethod { name: "getDefaultVolume", descriptor: "(I)I", flags: 0x00010009, slot: 65535, entry: 0x002546ec },
 ];
+
+static DISPATCH_328: &[u32] = &[0x002546e4, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_329: &[PlatformField] = &[
     PlatformField { name: "handsetModelName", descriptor: "[B", flags: 0x00008002, slot: 0 },
@@ -5230,12 +5889,16 @@ static METHODS_329: &[PlatformMethod] = &[
     PlatformMethod { name: "getpacketZoneID", descriptor: "()S", flags: 0x00010001, slot: 22, entry: 0x002971ac },
 ];
 
+static DISPATCH_329: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x002973e0, 0x00297314, 0x002972c4, 0x002972a8, 0x0029728c, 0x00297270, 0x00297254, 0x00297238, 0x0029721c, 0x00297200, 0x002971e4, 0x002971c8, 0x002971ac];
+
 static FIELDS_330: &[PlatformField] = &[];
 
 static METHODS_330: &[PlatformMethod] = &[
     PlatformMethod { name: "SetBillcommGWIP", descriptor: "(Ljava/lang/String;)Z", flags: 0x00010009, slot: 65535, entry: 0x0028873c },
     PlatformMethod { name: "GetBillCommGWIP", descriptor: "()Ljava/lang/String;", flags: 0x00000009, slot: 65535, entry: 0x002886f4 },
 ];
+
+static DISPATCH_330: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_331: &[PlatformField] = &[
     PlatformField { name: "IMAGE_TYPE_JPEG", descriptor: "I", flags: 0x000c0019, slot: 0 },
@@ -5255,6 +5918,8 @@ static METHODS_331: &[PlatformMethod] = &[
     PlatformMethod { name: "getResizedData", descriptor: "()[B", flags: 0x00010001, slot: 12, entry: 0x002888dc },
     PlatformMethod { name: "getResizedType", descriptor: "()I", flags: 0x00010001, slot: 13, entry: 0x002888c0 },
 ];
+
+static DISPATCH_331: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00288964, 0x002888f8, 0x002888dc, 0x002888c0];
 
 static FIELDS_332: &[PlatformField] = &[
     PlatformField { name: "EXT_EXIT", descriptor: "Ljava/lang/String;", flags: 0x00078019, slot: 0 },
@@ -5286,11 +5951,15 @@ static METHODS_332: &[PlatformMethod] = &[
     PlatformMethod { name: "appExecutor", descriptor: "(Ljava/lang/String;Ljava/lang/String;[[B)I", flags: 0x00030009, slot: 65535, entry: 0x0028954c },
 ];
 
+static DISPATCH_332: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_333: &[PlatformField] = &[];
 
 static METHODS_333: &[PlatformMethod] = &[
     PlatformMethod { name: "getSYSTheme", descriptor: "()Lwec/SYSTheme;", flags: 0x00000009, slot: 65535, entry: 0x0028a65c },
 ];
+
+static DISPATCH_333: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_334: &[PlatformField] = &[
     PlatformField { name: "ASSIGN_OK", descriptor: "I", flags: 0x00000009, slot: 0 },
@@ -5342,11 +6011,15 @@ static METHODS_334: &[PlatformMethod] = &[
     PlatformMethod { name: "getAssignedItem", descriptor: "(II)[I", flags: 0x00030001, slot: 28, entry: 0x0028a830 },
 ];
 
+static DISPATCH_334: &[u32] = &[0x0028ab50, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0028ab30, 0x0028ab10, 0x0028aaf0, 0x0028aad0, 0x0028aaa0, 0x0028aa80, 0x0028aa60, 0x0028aa40, 0x0028aa20, 0x0028a9f0, 0x0028a9c0, 0x0028a980, 0x0028a950, 0x0028a920, 0x0028a8f0, 0x0028a8c0, 0x0028a8a0, 0x0028a860, 0x0028a830];
+
 static FIELDS_335: &[PlatformField] = &[];
 
 static METHODS_335: &[PlatformMethod] = &[
     PlatformMethod { name: "<init>", descriptor: "()V", flags: 0x00010004, slot: 65535, entry: 0x0028b3dc },
 ];
+
+static DISPATCH_335: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 static FIELDS_336: &[PlatformField] = &[];
 
@@ -5354,12 +6027,16 @@ static METHODS_336: &[PlatformMethod] = &[
     PlatformMethod { name: "encode", descriptor: "(Ljava/lang/String;)Ljava/lang/String;", flags: 0x00010009, slot: 65535, entry: 0x0028c14c },
 ];
 
+static DISPATCH_336: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
+
 static FIELDS_337: &[PlatformField] = &[];
 
 static METHODS_337: &[PlatformMethod] = &[
     PlatformMethod { name: "registerAt", descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/util/Date;)Z", flags: 0x00030009, slot: 65535, entry: 0x0028c760 },
     PlatformMethod { name: "cancel", descriptor: "(Ljava/lang/String;Ljava/lang/String;)V", flags: 0x00020009, slot: 65535, entry: 0x0028c728 },
 ];
+
+static DISPATCH_337: &[u32] = &[0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000];
 
 pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
@@ -5370,6 +6047,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0027e36c,
         fields: FIELDS_0,
         methods: METHODS_0,
+        dispatch: DISPATCH_0,
     },
     PlatformClass {
         name: "com/lgt/MediaDeviceEventListener",
@@ -5379,6 +6057,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001baf5c,
         fields: FIELDS_1,
         methods: METHODS_1,
+        dispatch: DISPATCH_1,
     },
     PlatformClass {
         name: "com/lgt/MediaDeviceManager",
@@ -5388,6 +6067,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001bb448,
         fields: FIELDS_2,
         methods: METHODS_2,
+        dispatch: DISPATCH_2,
     },
     PlatformClass {
         name: "com/lgt/OEMIME",
@@ -5397,6 +6077,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001bbc20,
         fields: FIELDS_3,
         methods: METHODS_3,
+        dispatch: DISPATCH_3,
     },
     PlatformClass {
         name: "com/lgt/OEMIMEListener",
@@ -5406,6 +6087,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001bbcc8,
         fields: FIELDS_4,
         methods: METHODS_4,
+        dispatch: DISPATCH_4,
     },
     PlatformClass {
         name: "com/lgt/OEMSystem",
@@ -5415,6 +6097,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00297954,
         fields: FIELDS_5,
         methods: METHODS_5,
+        dispatch: DISPATCH_5,
     },
     PlatformClass {
         name: "com/lgt/QOSEventHandler",
@@ -5424,6 +6107,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00254dbc,
         fields: FIELDS_6,
         methods: METHODS_6,
+        dispatch: DISPATCH_6,
     },
     PlatformClass {
         name: "com/lgt/QOSEventListener",
@@ -5433,6 +6117,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00254ef0,
         fields: FIELDS_7,
         methods: METHODS_7,
+        dispatch: DISPATCH_7,
     },
     PlatformClass {
         name: "com/lgt/RemoconEventListener",
@@ -5442,6 +6127,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001bc0ac,
         fields: FIELDS_8,
         methods: METHODS_8,
+        dispatch: DISPATCH_8,
     },
     PlatformClass {
         name: "com/lgt/RemoconHandler",
@@ -5451,6 +6137,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00255520,
         fields: FIELDS_9,
         methods: METHODS_9,
+        dispatch: DISPATCH_9,
     },
     PlatformClass {
         name: "com/lgt/RotateEventHandler",
@@ -5460,6 +6147,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00255b80,
         fields: FIELDS_10,
         methods: METHODS_10,
+        dispatch: DISPATCH_10,
     },
     PlatformClass {
         name: "com/lgt/RotateEventListener",
@@ -5469,6 +6157,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00255c88,
         fields: FIELDS_11,
         methods: METHODS_11,
+        dispatch: DISPATCH_11,
     },
     PlatformClass {
         name: "com/lgt/TermResEventHandler",
@@ -5478,6 +6167,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00255dd8,
         fields: FIELDS_12,
         methods: METHODS_12,
+        dispatch: DISPATCH_12,
     },
     PlatformClass {
         name: "com/lgt/TermResEventListener",
@@ -5487,6 +6177,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00255e94,
         fields: FIELDS_13,
         methods: METHODS_13,
+        dispatch: DISPATCH_13,
     },
     PlatformClass {
         name: "com/lgt/Util",
@@ -5496,6 +6187,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0028d060,
         fields: FIELDS_14,
         methods: METHODS_14,
+        dispatch: DISPATCH_14,
     },
     PlatformClass {
         name: "com/lgt/VAMClip",
@@ -5505,6 +6197,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002904c0,
         fields: FIELDS_15,
         methods: METHODS_15,
+        dispatch: DISPATCH_15,
     },
     PlatformClass {
         name: "com/lgt/VAMDownloader",
@@ -5514,6 +6207,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0029970c,
         fields: FIELDS_16,
         methods: METHODS_16,
+        dispatch: DISPATCH_16,
     },
     PlatformClass {
         name: "com/lgt/VAMDownloaderListener",
@@ -5523,6 +6217,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002905e8,
         fields: FIELDS_17,
         methods: METHODS_17,
+        dispatch: DISPATCH_17,
     },
     PlatformClass {
         name: "com/lgt/VAMDownloaderNetwork",
@@ -5532,6 +6227,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0029338c,
         fields: FIELDS_18,
         methods: METHODS_18,
+        dispatch: DISPATCH_18,
     },
     PlatformClass {
         name: "com/lgt/VAMException",
@@ -5541,6 +6237,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0029349c,
         fields: FIELDS_19,
         methods: METHODS_19,
+        dispatch: DISPATCH_19,
     },
     PlatformClass {
         name: "com/lgt/VAMPlayer",
@@ -5550,6 +6247,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002936cc,
         fields: FIELDS_20,
         methods: METHODS_20,
+        dispatch: DISPATCH_20,
     },
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBPreference",
@@ -5559,6 +6257,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00299bbc,
         fields: FIELDS_21,
         methods: METHODS_21,
+        dispatch: DISPATCH_21,
     },
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBPreferenceCHInfo",
@@ -5568,6 +6267,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00293b84,
         fields: FIELDS_22,
         methods: METHODS_22,
+        dispatch: DISPATCH_22,
     },
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBRegion",
@@ -5577,6 +6277,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0029a508,
         fields: FIELDS_23,
         methods: METHODS_23,
+        dispatch: DISPATCH_23,
     },
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBRegionInfo",
@@ -5586,6 +6287,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00294194,
         fields: FIELDS_24,
         methods: METHODS_24,
+        dispatch: DISPATCH_24,
     },
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBReservation",
@@ -5595,6 +6297,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0029af80,
         fields: FIELDS_25,
         methods: METHODS_25,
+        dispatch: DISPATCH_25,
     },
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBReservationInfo",
@@ -5604,6 +6307,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00294d3c,
         fields: FIELDS_26,
         methods: METHODS_26,
+        dispatch: DISPATCH_26,
     },
     PlatformClass {
         name: "com/lgt/qos/QOSFlow",
@@ -5613,6 +6317,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00295404,
         fields: FIELDS_27,
         methods: METHODS_27,
+        dispatch: DISPATCH_27,
     },
     PlatformClass {
         name: "com/lgt/qos/QOSFlowManager",
@@ -5622,6 +6327,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0029599c,
         fields: FIELDS_28,
         methods: METHODS_28,
+        dispatch: DISPATCH_28,
     },
     PlatformClass {
         name: "com/lgt/tts/TTS",
@@ -5631,6 +6337,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00295f98,
         fields: FIELDS_29,
         methods: METHODS_29,
+        dispatch: DISPATCH_29,
     },
     PlatformClass {
         name: "com/lgt/wipijava/constants/ErrorConstants",
@@ -5640,6 +6347,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001bc7a0,
         fields: FIELDS_30,
         methods: METHODS_30,
+        dispatch: DISPATCH_30,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/Helper",
@@ -5649,6 +6357,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014a568,
         fields: FIELDS_31,
         methods: METHODS_31,
+        dispatch: DISPATCH_31,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/StreamReader",
@@ -5658,6 +6367,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014a8d8,
         fields: FIELDS_32,
         methods: METHODS_32,
+        dispatch: DISPATCH_32,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/StreamWriter",
@@ -5667,6 +6377,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014aa48,
         fields: FIELDS_33,
         methods: METHODS_33,
+        dispatch: DISPATCH_33,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/Conv",
@@ -5676,6 +6387,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00170614,
         fields: FIELDS_34,
         methods: METHODS_34,
+        dispatch: DISPATCH_34,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/Gen_Reader",
@@ -5685,6 +6397,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0017152c,
         fields: FIELDS_35,
         methods: METHODS_35,
+        dispatch: DISPATCH_35,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/Gen_Writer",
@@ -5694,6 +6407,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00171ae8,
         fields: FIELDS_36,
         methods: METHODS_36,
+        dispatch: DISPATCH_36,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/ISO8859_1_Reader",
@@ -5703,6 +6417,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014ae24,
         fields: FIELDS_37,
         methods: METHODS_37,
+        dispatch: DISPATCH_37,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/ISO8859_1_Writer",
@@ -5712,6 +6427,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001764cc,
         fields: FIELDS_38,
         methods: METHODS_38,
+        dispatch: DISPATCH_38,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/KSC5601_Reader",
@@ -5721,6 +6437,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00172690,
         fields: FIELDS_39,
         methods: METHODS_39,
+        dispatch: DISPATCH_39,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/KSC5601_Writer",
@@ -5730,6 +6447,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014aefc,
         fields: FIELDS_40,
         methods: METHODS_40,
+        dispatch: DISPATCH_40,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/UTF_8_Reader",
@@ -5739,6 +6457,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014b600,
         fields: FIELDS_41,
         methods: METHODS_41,
+        dispatch: DISPATCH_41,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/UTF_8_Writer",
@@ -5748,6 +6467,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00172a14,
         fields: FIELDS_42,
         methods: METHODS_42,
+        dispatch: DISPATCH_42,
     },
     PlatformClass {
         name: "com/sun/cldc/i18n/uclc/DefaultCaseConverter",
@@ -5757,6 +6477,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00172ccc,
         fields: FIELDS_43,
         methods: METHODS_43,
+        dispatch: DISPATCH_43,
     },
     PlatformClass {
         name: "com/sun/cldc/io/ConnectionBaseInterface",
@@ -5766,6 +6487,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00172d88,
         fields: FIELDS_44,
         methods: METHODS_44,
+        dispatch: DISPATCH_44,
     },
     PlatformClass {
         name: "com/sun/cldc/io/ConsoleOutputStream",
@@ -5775,6 +6497,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014b6c0,
         fields: FIELDS_45,
         methods: METHODS_45,
+        dispatch: DISPATCH_45,
     },
     PlatformClass {
         name: "com/sun/cldc/io/ResourceInputStream",
@@ -5784,6 +6507,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014bee4,
         fields: FIELDS_46,
         methods: METHODS_46,
+        dispatch: DISPATCH_46,
     },
     PlatformClass {
         name: "com/sun/cldc/io/Waiter",
@@ -5793,6 +6517,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00172e30,
         fields: FIELDS_47,
         methods: METHODS_47,
+        dispatch: DISPATCH_47,
     },
     PlatformClass {
         name: "com/velox/BillHeader",
@@ -5802,6 +6527,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00280c50,
         fields: FIELDS_48,
         methods: METHODS_48,
+        dispatch: DISPATCH_48,
     },
     PlatformClass {
         name: "com/velox/BillInputStream",
@@ -5811,6 +6537,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002567e8,
         fields: FIELDS_49,
         methods: METHODS_49,
+        dispatch: DISPATCH_49,
     },
     PlatformClass {
         name: "com/velox/BillOutputStream",
@@ -5820,6 +6547,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00256c64,
         fields: FIELDS_50,
         methods: METHODS_50,
+        dispatch: DISPATCH_50,
     },
     PlatformClass {
         name: "com/velox/BillSocketClass",
@@ -5829,6 +6557,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00257adc,
         fields: FIELDS_51,
         methods: METHODS_51,
+        dispatch: DISPATCH_51,
     },
     PlatformClass {
         name: "com/velox/BluetoothSocketInterface",
@@ -5838,6 +6567,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001bc850,
         fields: FIELDS_52,
         methods: METHODS_52,
+        dispatch: DISPATCH_52,
     },
     PlatformClass {
         name: "com/velox/ConnectionFactory",
@@ -5847,6 +6577,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00258db4,
         fields: FIELDS_53,
         methods: METHODS_53,
+        dispatch: DISPATCH_53,
     },
     PlatformClass {
         name: "com/velox/FontManager",
@@ -5856,6 +6587,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00259154,
         fields: FIELDS_54,
         methods: METHODS_54,
+        dispatch: DISPATCH_54,
     },
     PlatformClass {
         name: "com/velox/HttpSocketClass",
@@ -5865,6 +6597,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c07cc,
         fields: FIELDS_55,
         methods: METHODS_55,
+        dispatch: DISPATCH_55,
     },
     PlatformClass {
         name: "com/velox/HttpSocketClass$InnerInputStream",
@@ -5874,6 +6607,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c1214,
         fields: FIELDS_56,
         methods: METHODS_56,
+        dispatch: DISPATCH_56,
     },
     PlatformClass {
         name: "com/velox/HttpSocketClass$InnerOutputStream",
@@ -5883,6 +6617,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c16e4,
         fields: FIELDS_57,
         methods: METHODS_57,
+        dispatch: DISPATCH_57,
     },
     PlatformClass {
         name: "com/velox/HttpUrl",
@@ -5892,6 +6627,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c21d4,
         fields: FIELDS_58,
         methods: METHODS_58,
+        dispatch: DISPATCH_58,
     },
     PlatformClass {
         name: "com/velox/InnerEventsInputStream",
@@ -5901,6 +6637,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c2310,
         fields: FIELDS_59,
         methods: METHODS_59,
+        dispatch: DISPATCH_59,
     },
     PlatformClass {
         name: "com/velox/InnerSerialInputStream",
@@ -5910,6 +6647,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00259624,
         fields: FIELDS_60,
         methods: METHODS_60,
+        dispatch: DISPATCH_60,
     },
     PlatformClass {
         name: "com/velox/InnerSerialOutputStream",
@@ -5919,6 +6657,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c2818,
         fields: FIELDS_61,
         methods: METHODS_61,
+        dispatch: DISPATCH_61,
     },
     PlatformClass {
         name: "com/velox/Properties",
@@ -5928,6 +6667,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c3008,
         fields: FIELDS_62,
         methods: METHODS_62,
+        dispatch: DISPATCH_62,
     },
     PlatformClass {
         name: "com/velox/SocketClass",
@@ -5937,6 +6677,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c4418,
         fields: FIELDS_63,
         methods: METHODS_63,
+        dispatch: DISPATCH_63,
     },
     PlatformClass {
         name: "com/velox/SocketModel",
@@ -5946,6 +6687,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c5bb4,
         fields: FIELDS_64,
         methods: METHODS_64,
+        dispatch: DISPATCH_64,
     },
     PlatformClass {
         name: "com/velox/TestBillSocketClass",
@@ -5955,6 +6697,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00259720,
         fields: FIELDS_65,
         methods: METHODS_65,
+        dispatch: DISPATCH_65,
     },
     PlatformClass {
         name: "com/velox/Util",
@@ -5964,6 +6707,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c5d80,
         fields: FIELDS_66,
         methods: METHODS_66,
+        dispatch: DISPATCH_66,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/CaseConverter",
@@ -5973,6 +6717,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00280e88,
         fields: FIELDS_67,
         methods: METHODS_67,
+        dispatch: DISPATCH_67,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/Decoder",
@@ -5982,6 +6727,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002812a4,
         fields: FIELDS_68,
         methods: METHODS_68,
+        dispatch: DISPATCH_68,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/EUC_KR/CaseConverter",
@@ -5991,6 +6737,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002597e0,
         fields: FIELDS_69,
         methods: METHODS_69,
+        dispatch: DISPATCH_69,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/EUC_KR/Decoder",
@@ -6000,6 +6747,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025a060,
         fields: FIELDS_70,
         methods: METHODS_70,
+        dispatch: DISPATCH_70,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/EUC_KR/Encoder",
@@ -6009,6 +6757,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c664c,
         fields: FIELDS_71,
         methods: METHODS_71,
+        dispatch: DISPATCH_71,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/Encoder",
@@ -6018,6 +6767,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c686c,
         fields: FIELDS_72,
         methods: METHODS_72,
+        dispatch: DISPATCH_72,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/EncodingManager",
@@ -6027,6 +6777,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00281ce8,
         fields: FIELDS_73,
         methods: METHODS_73,
+        dispatch: DISPATCH_73,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/ISO8859_1/CaseConverter",
@@ -6036,6 +6787,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025a180,
         fields: FIELDS_74,
         methods: METHODS_74,
+        dispatch: DISPATCH_74,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/ISO8859_1/Decoder",
@@ -6045,6 +6797,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025a608,
         fields: FIELDS_75,
         methods: METHODS_75,
+        dispatch: DISPATCH_75,
     },
     PlatformClass {
         name: "com/velox/alpha/encoding/ISO8859_1/Encoder",
@@ -6054,6 +6807,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c6da0,
         fields: FIELDS_76,
         methods: METHODS_76,
+        dispatch: DISPATCH_76,
     },
     PlatformClass {
         name: "com/velox/cldc/Config",
@@ -6063,6 +6817,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00172fa4,
         fields: FIELDS_77,
         methods: METHODS_77,
+        dispatch: DISPATCH_77,
     },
     PlatformClass {
         name: "com/velox/comm",
@@ -6072,6 +6827,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025b4b8,
         fields: FIELDS_78,
         methods: METHODS_78,
+        dispatch: DISPATCH_78,
     },
     PlatformClass {
         name: "com/velox/dateformat/DateFormat",
@@ -6081,6 +6837,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025d7f4,
         fields: FIELDS_79,
         methods: METHODS_79,
+        dispatch: DISPATCH_79,
     },
     PlatformClass {
         name: "com/velox/lgte/Config",
@@ -6090,6 +6847,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002962f0,
         fields: FIELDS_80,
         methods: METHODS_80,
+        dispatch: DISPATCH_80,
     },
     PlatformClass {
         name: "com/velox/oem/PlatformUtil",
@@ -6099,6 +6857,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00281df0,
         fields: FIELDS_81,
         methods: METHODS_81,
+        dispatch: DISPATCH_81,
     },
     PlatformClass {
         name: "com/velox/oem/SmsPicker",
@@ -6108,6 +6867,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c7178,
         fields: FIELDS_82,
         methods: METHODS_82,
+        dispatch: DISPATCH_82,
     },
     PlatformClass {
         name: "com/velox/oem/Telephony",
@@ -6117,6 +6877,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c7944,
         fields: FIELDS_83,
         methods: METHODS_83,
+        dispatch: DISPATCH_83,
     },
     PlatformClass {
         name: "com/velox/sms",
@@ -6126,6 +6887,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025e5f0,
         fields: FIELDS_84,
         methods: METHODS_84,
+        dispatch: DISPATCH_84,
     },
     PlatformClass {
         name: "com/velox/sockInputStream",
@@ -6135,6 +6897,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c7db4,
         fields: FIELDS_85,
         methods: METHODS_85,
+        dispatch: DISPATCH_85,
     },
     PlatformClass {
         name: "com/velox/sockOutputStream",
@@ -6144,6 +6907,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c81a4,
         fields: FIELDS_86,
         methods: METHODS_86,
+        dispatch: DISPATCH_86,
     },
     PlatformClass {
         name: "com/velox/util/Sharable",
@@ -6153,6 +6917,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0017304c,
         fields: FIELDS_87,
         methods: METHODS_87,
+        dispatch: DISPATCH_87,
     },
     PlatformClass {
         name: "com/velox/util/StringTokenizer",
@@ -6162,6 +6927,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00296a68,
         fields: FIELDS_88,
         methods: METHODS_88,
+        dispatch: DISPATCH_88,
     },
     PlatformClass {
         name: "com/velox/util/zip/Inflater",
@@ -6171,6 +6937,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00296f60,
         fields: FIELDS_89,
         methods: METHODS_89,
+        dispatch: DISPATCH_89,
     },
     PlatformClass {
         name: "com/velox/wipijava/Config",
@@ -6180,6 +6947,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025eb68,
         fields: FIELDS_90,
         methods: METHODS_90,
+        dispatch: DISPATCH_90,
     },
     PlatformClass {
         name: "com/velox/wipijava/lcdui/ImageWrapper",
@@ -6189,6 +6957,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c827c,
         fields: FIELDS_91,
         methods: METHODS_91,
+        dispatch: DISPATCH_91,
     },
     PlatformClass {
         name: "com/velox/wipijava/lcdui/ImageWrapperFactory",
@@ -6198,6 +6967,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c84a4,
         fields: FIELDS_92,
         methods: METHODS_92,
+        dispatch: DISPATCH_92,
     },
     PlatformClass {
         name: "com/velox/wipijava/lcdui/InnerEventConstant",
@@ -6207,6 +6977,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0025ec4c,
         fields: FIELDS_93,
         methods: METHODS_93,
+        dispatch: DISPATCH_93,
     },
     PlatformClass {
         name: "java/io/ByteArrayInputStream",
@@ -6216,6 +6987,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014d8d8,
         fields: FIELDS_94,
         methods: METHODS_94,
+        dispatch: DISPATCH_94,
     },
     PlatformClass {
         name: "java/io/ByteArrayOutputStream",
@@ -6225,6 +6997,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014e060,
         fields: FIELDS_95,
         methods: METHODS_95,
+        dispatch: DISPATCH_95,
     },
     PlatformClass {
         name: "java/io/DataInput",
@@ -6234,6 +7007,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014e268,
         fields: FIELDS_96,
         methods: METHODS_96,
+        dispatch: DISPATCH_96,
     },
     PlatformClass {
         name: "java/io/DataInputStream",
@@ -6243,6 +7017,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0017453c,
         fields: FIELDS_97,
         methods: METHODS_97,
+        dispatch: DISPATCH_97,
     },
     PlatformClass {
         name: "java/io/DataOutput",
@@ -6252,6 +7027,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014e370,
         fields: FIELDS_98,
         methods: METHODS_98,
+        dispatch: DISPATCH_98,
     },
     PlatformClass {
         name: "java/io/DataOutputStream",
@@ -6261,6 +7037,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014ecc0,
         fields: FIELDS_99,
         methods: METHODS_99,
+        dispatch: DISPATCH_99,
     },
     PlatformClass {
         name: "java/io/EOFException",
@@ -6270,6 +7047,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0017462c,
         fields: FIELDS_100,
         methods: METHODS_100,
+        dispatch: DISPATCH_100,
     },
     PlatformClass {
         name: "java/io/IOException",
@@ -6279,6 +7057,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014edb0,
         fields: FIELDS_101,
         methods: METHODS_101,
+        dispatch: DISPATCH_101,
     },
     PlatformClass {
         name: "java/io/InputStream",
@@ -6288,6 +7067,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014f334,
         fields: FIELDS_102,
         methods: METHODS_102,
+        dispatch: DISPATCH_102,
     },
     PlatformClass {
         name: "java/io/InputStreamReader",
@@ -6297,6 +7077,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014f840,
         fields: FIELDS_103,
         methods: METHODS_103,
+        dispatch: DISPATCH_103,
     },
     PlatformClass {
         name: "java/io/InterruptedIOException",
@@ -6306,6 +7087,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00174734,
         fields: FIELDS_104,
         methods: METHODS_104,
+        dispatch: DISPATCH_104,
     },
     PlatformClass {
         name: "java/io/OutputStream",
@@ -6315,6 +7097,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014fa60,
         fields: FIELDS_105,
         methods: METHODS_105,
+        dispatch: DISPATCH_105,
     },
     PlatformClass {
         name: "java/io/OutputStreamWriter",
@@ -6324,6 +7107,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0014fe9c,
         fields: FIELDS_106,
         methods: METHODS_106,
+        dispatch: DISPATCH_106,
     },
     PlatformClass {
         name: "java/io/PrintStream",
@@ -6333,6 +7117,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001517b8,
         fields: FIELDS_107,
         methods: METHODS_107,
+        dispatch: DISPATCH_107,
     },
     PlatformClass {
         name: "java/io/Reader",
@@ -6342,6 +7127,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00151dc0,
         fields: FIELDS_108,
         methods: METHODS_108,
+        dispatch: DISPATCH_108,
     },
     PlatformClass {
         name: "java/io/UTFDataFormatException",
@@ -6351,6 +7137,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00151eb0,
         fields: FIELDS_109,
         methods: METHODS_109,
+        dispatch: DISPATCH_109,
     },
     PlatformClass {
         name: "java/io/UnavailableException",
@@ -6360,6 +7147,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00151fa0,
         fields: FIELDS_110,
         methods: METHODS_110,
+        dispatch: DISPATCH_110,
     },
     PlatformClass {
         name: "java/io/UnsupportedEncodingException",
@@ -6369,6 +7157,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00152090,
         fields: FIELDS_111,
         methods: METHODS_111,
+        dispatch: DISPATCH_111,
     },
     PlatformClass {
         name: "java/io/Writer",
@@ -6378,6 +7167,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015257c,
         fields: FIELDS_112,
         methods: METHODS_112,
+        dispatch: DISPATCH_112,
     },
     PlatformClass {
         name: "java/lang/ArithmeticException",
@@ -6387,6 +7177,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00132f84,
         fields: FIELDS_113,
         methods: METHODS_113,
+        dispatch: DISPATCH_113,
     },
     PlatformClass {
         name: "java/lang/ArrayIndexOutOfBoundsException",
@@ -6396,6 +7187,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00133100,
         fields: FIELDS_114,
         methods: METHODS_114,
+        dispatch: DISPATCH_114,
     },
     PlatformClass {
         name: "java/lang/ArrayStoreException",
@@ -6405,6 +7197,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001331f0,
         fields: FIELDS_115,
         methods: METHODS_115,
+        dispatch: DISPATCH_115,
     },
     PlatformClass {
         name: "java/lang/Boolean",
@@ -6414,6 +7207,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001527dc,
         fields: FIELDS_116,
         methods: METHODS_116,
+        dispatch: DISPATCH_116,
     },
     PlatformClass {
         name: "java/lang/Byte",
@@ -6423,6 +7217,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00152aa4,
         fields: FIELDS_117,
         methods: METHODS_117,
+        dispatch: DISPATCH_117,
     },
     PlatformClass {
         name: "java/lang/Character",
@@ -6432,6 +7227,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001530d0,
         fields: FIELDS_118,
         methods: METHODS_118,
+        dispatch: DISPATCH_118,
     },
     PlatformClass {
         name: "java/lang/Class",
@@ -6441,6 +7237,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00133574,
         fields: FIELDS_119,
         methods: METHODS_119,
+        dispatch: DISPATCH_119,
     },
     PlatformClass {
         name: "java/lang/ClassCastException",
@@ -6450,6 +7247,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00133664,
         fields: FIELDS_120,
         methods: METHODS_120,
+        dispatch: DISPATCH_120,
     },
     PlatformClass {
         name: "java/lang/ClassNotFoundException",
@@ -6459,6 +7257,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001531c0,
         fields: FIELDS_121,
         methods: METHODS_121,
+        dispatch: DISPATCH_121,
     },
     PlatformClass {
         name: "java/lang/Double",
@@ -6468,6 +7267,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00153874,
         fields: FIELDS_122,
         methods: METHODS_122,
+        dispatch: DISPATCH_122,
     },
     PlatformClass {
         name: "java/lang/Error",
@@ -6477,6 +7277,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00174824,
         fields: FIELDS_123,
         methods: METHODS_123,
+        dispatch: DISPATCH_123,
     },
     PlatformClass {
         name: "java/lang/Exception",
@@ -6486,6 +7287,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001539a4,
         fields: FIELDS_124,
         methods: METHODS_124,
+        dispatch: DISPATCH_124,
     },
     PlatformClass {
         name: "java/lang/FDBigInt",
@@ -6495,6 +7297,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00156af0,
         fields: FIELDS_125,
         methods: METHODS_125,
+        dispatch: DISPATCH_125,
     },
     PlatformClass {
         name: "java/lang/Float",
@@ -6504,6 +7307,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00157094,
         fields: FIELDS_126,
         methods: METHODS_126,
+        dispatch: DISPATCH_126,
     },
     PlatformClass {
         name: "java/lang/FloatingDecimal",
@@ -6513,6 +7317,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015d358,
         fields: FIELDS_127,
         methods: METHODS_127,
+        dispatch: DISPATCH_127,
     },
     PlatformClass {
         name: "java/lang/IllegalAccessException",
@@ -6522,6 +7327,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015d448,
         fields: FIELDS_128,
         methods: METHODS_128,
+        dispatch: DISPATCH_128,
     },
     PlatformClass {
         name: "java/lang/IllegalArgumentException",
@@ -6531,6 +7337,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015d538,
         fields: FIELDS_129,
         methods: METHODS_129,
+        dispatch: DISPATCH_129,
     },
     PlatformClass {
         name: "java/lang/IllegalMonitorStateException",
@@ -6540,6 +7347,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015d628,
         fields: FIELDS_130,
         methods: METHODS_130,
+        dispatch: DISPATCH_130,
     },
     PlatformClass {
         name: "java/lang/IllegalStateException",
@@ -6549,6 +7357,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015d718,
         fields: FIELDS_131,
         methods: METHODS_131,
+        dispatch: DISPATCH_131,
     },
     PlatformClass {
         name: "java/lang/IllegalThreadStateException",
@@ -6558,6 +7367,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015d808,
         fields: FIELDS_132,
         methods: METHODS_132,
+        dispatch: DISPATCH_132,
     },
     PlatformClass {
         name: "java/lang/IndexOutOfBoundsException",
@@ -6567,6 +7377,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00133a2c,
         fields: FIELDS_133,
         methods: METHODS_133,
+        dispatch: DISPATCH_133,
     },
     PlatformClass {
         name: "java/lang/InstantiationException",
@@ -6576,6 +7387,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015d8f8,
         fields: FIELDS_134,
         methods: METHODS_134,
+        dispatch: DISPATCH_134,
     },
     PlatformClass {
         name: "java/lang/Integer",
@@ -6585,6 +7397,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015e880,
         fields: FIELDS_135,
         methods: METHODS_135,
+        dispatch: DISPATCH_135,
     },
     PlatformClass {
         name: "java/lang/InterruptedException",
@@ -6594,6 +7407,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015e970,
         fields: FIELDS_136,
         methods: METHODS_136,
+        dispatch: DISPATCH_136,
     },
     PlatformClass {
         name: "java/lang/Long",
@@ -6603,6 +7417,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0015f5dc,
         fields: FIELDS_137,
         methods: METHODS_137,
+        dispatch: DISPATCH_137,
     },
     PlatformClass {
         name: "java/lang/Math",
@@ -6612,6 +7427,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00160020,
         fields: FIELDS_138,
         methods: METHODS_138,
+        dispatch: DISPATCH_138,
     },
     PlatformClass {
         name: "java/lang/NegativeArraySizeException",
@@ -6621,6 +7437,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00160230,
         fields: FIELDS_139,
         methods: METHODS_139,
+        dispatch: DISPATCH_139,
     },
     PlatformClass {
         name: "java/lang/NoClassDefFoundError",
@@ -6630,6 +7447,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00160320,
         fields: FIELDS_140,
         methods: METHODS_140,
+        dispatch: DISPATCH_140,
     },
     PlatformClass {
         name: "java/lang/NullPointerException",
@@ -6639,6 +7457,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00133b1c,
         fields: FIELDS_141,
         methods: METHODS_141,
+        dispatch: DISPATCH_141,
     },
     PlatformClass {
         name: "java/lang/NumberFormatException",
@@ -6648,6 +7467,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00160410,
         fields: FIELDS_142,
         methods: METHODS_142,
+        dispatch: DISPATCH_142,
     },
     PlatformClass {
         name: "java/lang/Object",
@@ -6657,6 +7477,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00133e4c,
         fields: FIELDS_143,
         methods: METHODS_143,
+        dispatch: DISPATCH_143,
     },
     PlatformClass {
         name: "java/lang/OutOfMemoryError",
@@ -6666,6 +7487,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00160500,
         fields: FIELDS_144,
         methods: METHODS_144,
+        dispatch: DISPATCH_144,
     },
     PlatformClass {
         name: "java/lang/Runnable",
@@ -6675,6 +7497,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001605a8,
         fields: FIELDS_145,
         methods: METHODS_145,
+        dispatch: DISPATCH_145,
     },
     PlatformClass {
         name: "java/lang/Runtime",
@@ -6684,6 +7507,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001606d8,
         fields: FIELDS_146,
         methods: METHODS_146,
+        dispatch: DISPATCH_146,
     },
     PlatformClass {
         name: "java/lang/RuntimeException",
@@ -6693,6 +7517,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00133ff8,
         fields: FIELDS_147,
         methods: METHODS_147,
+        dispatch: DISPATCH_147,
     },
     PlatformClass {
         name: "java/lang/SecurityException",
@@ -6702,6 +7527,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00160804,
         fields: FIELDS_148,
         methods: METHODS_148,
+        dispatch: DISPATCH_148,
     },
     PlatformClass {
         name: "java/lang/Short",
@@ -6711,6 +7537,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00160ad4,
         fields: FIELDS_149,
         methods: METHODS_149,
+        dispatch: DISPATCH_149,
     },
     PlatformClass {
         name: "java/lang/String",
@@ -6720,6 +7547,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001356c4,
         fields: FIELDS_150,
         methods: METHODS_150,
+        dispatch: DISPATCH_150,
     },
     PlatformClass {
         name: "java/lang/StringBuffer",
@@ -6729,6 +7557,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00136fe8,
         fields: FIELDS_151,
         methods: METHODS_151,
+        dispatch: DISPATCH_151,
     },
     PlatformClass {
         name: "java/lang/StringIndexOutOfBoundsException",
@@ -6738,6 +7567,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001373a8,
         fields: FIELDS_152,
         methods: METHODS_152,
+        dispatch: DISPATCH_152,
     },
     PlatformClass {
         name: "java/lang/System",
@@ -6747,6 +7577,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00137ba0,
         fields: FIELDS_153,
         methods: METHODS_153,
+        dispatch: DISPATCH_153,
     },
     PlatformClass {
         name: "java/lang/Thread",
@@ -6756,6 +7587,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00161208,
         fields: FIELDS_154,
         methods: METHODS_154,
+        dispatch: DISPATCH_154,
     },
     PlatformClass {
         name: "java/lang/Throwable",
@@ -6765,6 +7597,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00138360,
         fields: FIELDS_155,
         methods: METHODS_155,
+        dispatch: DISPATCH_155,
     },
     PlatformClass {
         name: "java/lang/VirtualMachineError",
@@ -6774,6 +7607,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00161690,
         fields: FIELDS_156,
         methods: METHODS_156,
+        dispatch: DISPATCH_156,
     },
     PlatformClass {
         name: "java/lang/ref/Reference",
@@ -6783,6 +7617,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00161794,
         fields: FIELDS_157,
         methods: METHODS_157,
+        dispatch: DISPATCH_157,
     },
     PlatformClass {
         name: "java/lang/ref/WeakReference",
@@ -6792,6 +7627,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00161870,
         fields: FIELDS_158,
         methods: METHODS_158,
+        dispatch: DISPATCH_158,
     },
     PlatformClass {
         name: "java/util/Calendar",
@@ -6801,6 +7637,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00162de0,
         fields: FIELDS_159,
         methods: METHODS_159,
+        dispatch: DISPATCH_159,
     },
     PlatformClass {
         name: "java/util/Date",
@@ -6810,6 +7647,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00163778,
         fields: FIELDS_160,
         methods: METHODS_160,
+        dispatch: DISPATCH_160,
     },
     PlatformClass {
         name: "java/util/EmptyStackException",
@@ -6819,6 +7657,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00163838,
         fields: FIELDS_161,
         methods: METHODS_161,
+        dispatch: DISPATCH_161,
     },
     PlatformClass {
         name: "java/util/Enumeration",
@@ -6828,6 +7667,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00163910,
         fields: FIELDS_162,
         methods: METHODS_162,
+        dispatch: DISPATCH_162,
     },
     PlatformClass {
         name: "java/util/GregorianCalendar",
@@ -6837,6 +7677,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00167058,
         fields: FIELDS_163,
         methods: METHODS_163,
+        dispatch: DISPATCH_163,
     },
     PlatformClass {
         name: "java/util/Hashtable",
@@ -6846,6 +7687,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00168188,
         fields: FIELDS_164,
         methods: METHODS_164,
+        dispatch: DISPATCH_164,
     },
     PlatformClass {
         name: "java/util/Hashtable$HashtableEnumerator",
@@ -6855,6 +7697,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016854c,
         fields: FIELDS_165,
         methods: METHODS_165,
+        dispatch: DISPATCH_165,
     },
     PlatformClass {
         name: "java/util/HashtableEntry",
@@ -6864,6 +7707,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00168230,
         fields: FIELDS_166,
         methods: METHODS_166,
+        dispatch: DISPATCH_166,
     },
     PlatformClass {
         name: "java/util/NoSuchElementException",
@@ -6873,6 +7717,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016863c,
         fields: FIELDS_167,
         methods: METHODS_167,
+        dispatch: DISPATCH_167,
     },
     PlatformClass {
         name: "java/util/Random",
@@ -6882,6 +7727,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00168df4,
         fields: FIELDS_168,
         methods: METHODS_168,
+        dispatch: DISPATCH_168,
     },
     PlatformClass {
         name: "java/util/SimpleTimeZone",
@@ -6891,6 +7737,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00169660,
         fields: FIELDS_169,
         methods: METHODS_169,
+        dispatch: DISPATCH_169,
     },
     PlatformClass {
         name: "java/util/Stack",
@@ -6900,6 +7747,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001699b0,
         fields: FIELDS_170,
         methods: METHODS_170,
+        dispatch: DISPATCH_170,
     },
     PlatformClass {
         name: "java/util/TaskQueue",
@@ -6909,6 +7757,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016a168,
         fields: FIELDS_171,
         methods: METHODS_171,
+        dispatch: DISPATCH_171,
     },
     PlatformClass {
         name: "java/util/TimeZone",
@@ -6918,6 +7767,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016afc8,
         fields: FIELDS_172,
         methods: METHODS_172,
+        dispatch: DISPATCH_172,
     },
     PlatformClass {
         name: "java/util/Timer",
@@ -6927,6 +7777,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016bb58,
         fields: FIELDS_173,
         methods: METHODS_173,
+        dispatch: DISPATCH_173,
     },
     PlatformClass {
         name: "java/util/TimerTask",
@@ -6936,6 +7787,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016bf24,
         fields: FIELDS_174,
         methods: METHODS_174,
+        dispatch: DISPATCH_174,
     },
     PlatformClass {
         name: "java/util/TimerThread",
@@ -6945,6 +7797,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016cb2c,
         fields: FIELDS_175,
         methods: METHODS_175,
+        dispatch: DISPATCH_175,
     },
     PlatformClass {
         name: "java/util/Vector",
@@ -6954,6 +7807,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016e48c,
         fields: FIELDS_176,
         methods: METHODS_176,
+        dispatch: DISPATCH_176,
     },
     PlatformClass {
         name: "java/util/VectorEnumerator",
@@ -6963,6 +7817,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016e798,
         fields: FIELDS_177,
         methods: METHODS_177,
+        dispatch: DISPATCH_177,
     },
     PlatformClass {
         name: "javax/microedition/io/Connection",
@@ -6972,6 +7827,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016e840,
         fields: FIELDS_178,
         methods: METHODS_178,
+        dispatch: DISPATCH_178,
     },
     PlatformClass {
         name: "javax/microedition/io/ConnectionNotFoundException",
@@ -6981,6 +7837,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016e930,
         fields: FIELDS_179,
         methods: METHODS_179,
+        dispatch: DISPATCH_179,
     },
     PlatformClass {
         name: "javax/microedition/io/Connector",
@@ -6990,6 +7847,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016f920,
         fields: FIELDS_180,
         methods: METHODS_180,
+        dispatch: DISPATCH_180,
     },
     PlatformClass {
         name: "javax/microedition/io/ContentConnection",
@@ -6999,6 +7857,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016fa18,
         fields: FIELDS_181,
         methods: METHODS_181,
+        dispatch: DISPATCH_181,
     },
     PlatformClass {
         name: "javax/microedition/io/Datagram",
@@ -7008,6 +7867,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016fb50,
         fields: FIELDS_182,
         methods: METHODS_182,
+        dispatch: DISPATCH_182,
     },
     PlatformClass {
         name: "javax/microedition/io/DatagramConnection",
@@ -7017,6 +7877,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016fca8,
         fields: FIELDS_183,
         methods: METHODS_183,
+        dispatch: DISPATCH_183,
     },
     PlatformClass {
         name: "javax/microedition/io/InputConnection",
@@ -7026,6 +7887,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016fd80,
         fields: FIELDS_184,
         methods: METHODS_184,
+        dispatch: DISPATCH_184,
     },
     PlatformClass {
         name: "javax/microedition/io/OutputConnection",
@@ -7035,6 +7897,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016fe58,
         fields: FIELDS_185,
         methods: METHODS_185,
+        dispatch: DISPATCH_185,
     },
     PlatformClass {
         name: "javax/microedition/io/StreamConnection",
@@ -7044,6 +7907,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016fef8,
         fields: FIELDS_186,
         methods: METHODS_186,
+        dispatch: DISPATCH_186,
     },
     PlatformClass {
         name: "javax/microedition/io/StreamConnectionNotifier",
@@ -7053,6 +7917,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0016ffb4,
         fields: FIELDS_187,
         methods: METHODS_187,
+        dispatch: DISPATCH_187,
     },
     PlatformClass {
         name: "org/kwis/msf/core/DestroyEventListener",
@@ -7062,6 +7927,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c854c,
         fields: FIELDS_188,
         methods: METHODS_188,
+        dispatch: DISPATCH_188,
     },
     PlatformClass {
         name: "org/kwis/msf/core/Kernel",
@@ -7071,6 +7937,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0026081c,
         fields: FIELDS_189,
         methods: METHODS_189,
+        dispatch: DISPATCH_189,
     },
     PlatformClass {
         name: "org/kwis/msf/core/ProgramExitException",
@@ -7080,6 +7947,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0026173c,
         fields: FIELDS_190,
         methods: METHODS_190,
+        dispatch: DISPATCH_190,
     },
     PlatformClass {
         name: "org/kwis/msf/core/Shared",
@@ -7089,6 +7957,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c88d4,
         fields: FIELDS_191,
         methods: METHODS_191,
+        dispatch: DISPATCH_191,
     },
     PlatformClass {
         name: "org/kwis/msf/io/HttpSocket",
@@ -7098,6 +7967,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c975c,
         fields: FIELDS_192,
         methods: METHODS_192,
+        dispatch: DISPATCH_192,
     },
     PlatformClass {
         name: "org/kwis/msf/io/Message",
@@ -7107,6 +7977,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c9dd4,
         fields: FIELDS_193,
         methods: METHODS_193,
+        dispatch: DISPATCH_193,
     },
     PlatformClass {
         name: "org/kwis/msf/io/Network",
@@ -7116,6 +7987,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002618a0,
         fields: FIELDS_194,
         methods: METHODS_194,
+        dispatch: DISPATCH_194,
     },
     PlatformClass {
         name: "org/kwis/msf/io/SchemeNotFoundException",
@@ -7125,6 +7997,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00281f88,
         fields: FIELDS_195,
         methods: METHODS_195,
+        dispatch: DISPATCH_195,
     },
     PlatformClass {
         name: "org/kwis/msf/io/Socket",
@@ -7134,6 +8007,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001c9f50,
         fields: FIELDS_196,
         methods: METHODS_196,
+        dispatch: DISPATCH_196,
     },
     PlatformClass {
         name: "org/kwis/msf/io/URL",
@@ -7143,6 +8017,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00261c00,
         fields: FIELDS_197,
         methods: METHODS_197,
+        dispatch: DISPATCH_197,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataBase",
@@ -7152,6 +8027,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00286e34,
         fields: FIELDS_198,
         methods: METHODS_198,
+        dispatch: DISPATCH_198,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataBaseException",
@@ -7161,6 +8037,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ca080,
         fields: FIELDS_199,
         methods: METHODS_199,
+        dispatch: DISPATCH_199,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataBaseRecordException",
@@ -7170,6 +8047,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ca1b0,
         fields: FIELDS_200,
         methods: METHODS_200,
+        dispatch: DISPATCH_200,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataComparator",
@@ -7179,6 +8057,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00261d28,
         fields: FIELDS_201,
         methods: METHODS_201,
+        dispatch: DISPATCH_201,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataComparatorInteger",
@@ -7188,6 +8067,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00261f6c,
         fields: FIELDS_202,
         methods: METHODS_202,
+        dispatch: DISPATCH_202,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataComparatorString",
@@ -7197,6 +8077,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00282138,
         fields: FIELDS_203,
         methods: METHODS_203,
+        dispatch: DISPATCH_203,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataFilter",
@@ -7206,6 +8087,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ca26c,
         fields: FIELDS_204,
         methods: METHODS_204,
+        dispatch: DISPATCH_204,
     },
     PlatformClass {
         name: "org/kwis/msp/db/DataFilterInteger",
@@ -7215,6 +8097,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002823c8,
         fields: FIELDS_205,
         methods: METHODS_205,
+        dispatch: DISPATCH_205,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/Address",
@@ -7224,6 +8107,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002630f0,
         fields: FIELDS_206,
         methods: METHODS_206,
+        dispatch: DISPATCH_206,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/Address$FieldElement",
@@ -7233,6 +8117,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ca3bc,
         fields: FIELDS_207,
         methods: METHODS_207,
+        dispatch: DISPATCH_207,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/AddressBook",
@@ -7242,6 +8127,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00267990,
         fields: FIELDS_208,
         methods: METHODS_208,
+        dispatch: DISPATCH_208,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/AddressBook$FieldInfo",
@@ -7251,6 +8137,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ca314,
         fields: FIELDS_209,
         methods: METHODS_209,
+        dispatch: DISPATCH_209,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/BackLight",
@@ -7260,6 +8147,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00267c4c,
         fields: FIELDS_210,
         methods: METHODS_210,
+        dispatch: DISPATCH_210,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/Call",
@@ -7269,6 +8157,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ca868,
         fields: FIELDS_211,
         methods: METHODS_211,
+        dispatch: DISPATCH_211,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/GPSConfig",
@@ -7278,6 +8167,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001cb4c0,
         fields: FIELDS_212,
         methods: METHODS_212,
+        dispatch: DISPATCH_212,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/GPSException",
@@ -7287,6 +8177,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001cb63c,
         fields: FIELDS_213,
         methods: METHODS_213,
+        dispatch: DISPATCH_213,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/GPSListener",
@@ -7296,6 +8187,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00267ef8,
         fields: FIELDS_214,
         methods: METHODS_214,
+        dispatch: DISPATCH_214,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/GPSLocationInfo",
@@ -7305,6 +8197,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001cb8f0,
         fields: FIELDS_215,
         methods: METHODS_215,
+        dispatch: DISPATCH_215,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/GPSProvider",
@@ -7314,6 +8207,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001cc0a0,
         fields: FIELDS_216,
         methods: METHODS_216,
+        dispatch: DISPATCH_216,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/HandsetProperty",
@@ -7323,6 +8217,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001cd934,
         fields: FIELDS_217,
         methods: METHODS_217,
+        dispatch: DISPATCH_217,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/LED",
@@ -7332,6 +8227,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ce730,
         fields: FIELDS_218,
         methods: METHODS_218,
+        dispatch: DISPATCH_218,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/RecordTable",
@@ -7341,6 +8237,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0026853c,
         fields: FIELDS_219,
         methods: METHODS_219,
+        dispatch: DISPATCH_219,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/SimpleTokenizer",
@@ -7350,6 +8247,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002688bc,
         fields: FIELDS_220,
         methods: METHODS_220,
+        dispatch: DISPATCH_220,
     },
     PlatformClass {
         name: "org/kwis/msp/handset/StationLocationInfo",
@@ -7359,6 +8257,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001cedd0,
         fields: FIELDS_221,
         methods: METHODS_221,
+        dispatch: DISPATCH_221,
     },
     PlatformClass {
         name: "org/kwis/msp/io/ClipCmdInfo",
@@ -7368,6 +8267,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00268964,
         fields: FIELDS_222,
         methods: METHODS_222,
+        dispatch: DISPATCH_222,
     },
     PlatformClass {
         name: "org/kwis/msp/io/File",
@@ -7377,6 +8277,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001d0478,
         fields: FIELDS_223,
         methods: METHODS_223,
+        dispatch: DISPATCH_223,
     },
     PlatformClass {
         name: "org/kwis/msp/io/FileInputStream",
@@ -7386,6 +8287,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001d0994,
         fields: FIELDS_224,
         methods: METHODS_224,
+        dispatch: DISPATCH_224,
     },
     PlatformClass {
         name: "org/kwis/msp/io/FileOutputStream",
@@ -7395,6 +8297,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001d0cec,
         fields: FIELDS_225,
         methods: METHODS_225,
+        dispatch: DISPATCH_225,
     },
     PlatformClass {
         name: "org/kwis/msp/io/FileSystem",
@@ -7404,6 +8307,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001d31d8,
         fields: FIELDS_226,
         methods: METHODS_226,
+        dispatch: DISPATCH_226,
     },
     PlatformClass {
         name: "org/kwis/msp/io/FileSystemListener",
@@ -7413,6 +8317,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001d3320,
         fields: FIELDS_227,
         methods: METHODS_227,
+        dispatch: DISPATCH_227,
     },
     PlatformClass {
         name: "org/kwis/msp/io/IODevice",
@@ -7422,6 +8327,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001d5274,
         fields: FIELDS_228,
         methods: METHODS_228,
+        dispatch: DISPATCH_228,
     },
     PlatformClass {
         name: "org/kwis/msp/io/ResizeCmdInfo",
@@ -7431,6 +8337,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00268a0c,
         fields: FIELDS_229,
         methods: METHODS_229,
+        dispatch: DISPATCH_229,
     },
     PlatformClass {
         name: "org/kwis/msp/io/ResourceGroup",
@@ -7440,6 +8347,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001d751c,
         fields: FIELDS_230,
         methods: METHODS_230,
+        dispatch: DISPATCH_230,
     },
     PlatformClass {
         name: "org/kwis/msp/io/SMS",
@@ -7449,6 +8357,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001db608,
         fields: FIELDS_231,
         methods: METHODS_231,
+        dispatch: DISPATCH_231,
     },
     PlatformClass {
         name: "org/kwis/msp/io/SMSMessage",
@@ -7458,6 +8367,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001db870,
         fields: FIELDS_232,
         methods: METHODS_232,
+        dispatch: DISPATCH_232,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/AnimateImage",
@@ -7467,6 +8377,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001dea14,
         fields: FIELDS_233,
         methods: METHODS_233,
+        dispatch: DISPATCH_233,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/AnimateImage$AniImagePlayer",
@@ -7476,6 +8387,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001df57c,
         fields: FIELDS_234,
         methods: METHODS_234,
+        dispatch: DISPATCH_234,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow",
@@ -7485,6 +8397,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001eb778,
         fields: FIELDS_235,
         methods: METHODS_235,
+        dispatch: DISPATCH_235,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$BtnLabel",
@@ -7494,6 +8407,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001eba2c,
         fields: FIELDS_236,
         methods: METHODS_236,
+        dispatch: DISPATCH_236,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$MiniComponent",
@@ -7503,6 +8417,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ec2e8,
         fields: FIELDS_237,
         methods: METHODS_237,
+        dispatch: DISPATCH_237,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$RepeatTimer",
@@ -7512,6 +8427,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00268b78,
         fields: FIELDS_238,
         methods: METHODS_238,
+        dispatch: DISPATCH_238,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$SYMBOLData",
@@ -7521,6 +8437,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ec3f8,
         fields: FIELDS_239,
         methods: METHODS_239,
+        dispatch: DISPATCH_239,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$SymbolList",
@@ -7530,6 +8447,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001ed2c8,
         fields: FIELDS_240,
         methods: METHODS_240,
+        dispatch: DISPATCH_240,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateWindow",
@@ -7539,6 +8457,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00275114,
         fields: FIELDS_241,
         methods: METHODS_241,
+        dispatch: DISPATCH_241,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateWindow$SYMBOLData",
@@ -7548,6 +8467,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00275224,
         fields: FIELDS_242,
         methods: METHODS_242,
+        dispatch: DISPATCH_242,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Card",
@@ -7557,6 +8477,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001eeb08,
         fields: FIELDS_243,
         methods: METHODS_243,
+        dispatch: DISPATCH_243,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/CharSet",
@@ -7566,6 +8487,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0027586c,
         fields: FIELDS_244,
         methods: METHODS_244,
+        dispatch: DISPATCH_244,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Display",
@@ -7575,6 +8497,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001f4d7c,
         fields: FIELDS_245,
         methods: METHODS_245,
+        dispatch: DISPATCH_245,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/EventQueue",
@@ -7584,6 +8507,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001f9f28,
         fields: FIELDS_246,
         methods: METHODS_246,
+        dispatch: DISPATCH_246,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Font",
@@ -7593,6 +8517,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001fb69c,
         fields: FIELDS_247,
         methods: METHODS_247,
+        dispatch: DISPATCH_247,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Graphics",
@@ -7602,6 +8527,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x001fe334,
         fields: FIELDS_248,
         methods: METHODS_248,
+        dispatch: DISPATCH_248,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Image",
@@ -7611,6 +8537,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00205f0c,
         fields: FIELDS_249,
         methods: METHODS_249,
+        dispatch: DISPATCH_249,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Image$1",
@@ -7620,6 +8547,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00275944,
         fields: FIELDS_250,
         methods: METHODS_250,
+        dispatch: DISPATCH_250,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Image$ImageWrapperImpl",
@@ -7629,6 +8557,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00207d5c,
         fields: FIELDS_251,
         methods: METHODS_251,
+        dispatch: DISPATCH_251,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/ImageElement",
@@ -7638,6 +8567,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00206058,
         fields: FIELDS_252,
         methods: METHODS_252,
+        dispatch: DISPATCH_252,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/ImageObserver",
@@ -7647,6 +8577,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002061ac,
         fields: FIELDS_253,
         methods: METHODS_253,
+        dispatch: DISPATCH_253,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/ImageReader",
@@ -7656,6 +8587,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00207a60,
         fields: FIELDS_254,
         methods: METHODS_254,
+        dispatch: DISPATCH_254,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/InputMethodHandler",
@@ -7665,6 +8597,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020c8b0,
         fields: FIELDS_255,
         methods: METHODS_255,
+        dispatch: DISPATCH_255,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/InputMethodListener",
@@ -7674,6 +8607,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020cd38,
         fields: FIELDS_256,
         methods: METHODS_256,
+        dispatch: DISPATCH_256,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Jlet",
@@ -7683,6 +8617,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020d328,
         fields: FIELDS_257,
         methods: METHODS_257,
+        dispatch: DISPATCH_257,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/JletEventListener",
@@ -7692,6 +8627,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020d3d0,
         fields: FIELDS_258,
         methods: METHODS_258,
+        dispatch: DISPATCH_258,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/JletStateChangeException",
@@ -7701,6 +8637,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020d500,
         fields: FIELDS_259,
         methods: METHODS_259,
+        dispatch: DISPATCH_259,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/JletWrapper",
@@ -7710,6 +8647,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020d8c8,
         fields: FIELDS_260,
         methods: METHODS_260,
+        dispatch: DISPATCH_260,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/LockObject",
@@ -7719,6 +8657,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020e4b4,
         fields: FIELDS_261,
         methods: METHODS_261,
+        dispatch: DISPATCH_261,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/Main",
@@ -7728,6 +8667,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00275e3c,
         fields: FIELDS_262,
         methods: METHODS_262,
+        dispatch: DISPATCH_262,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/RunnableElement",
@@ -7737,6 +8677,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020e58c,
         fields: FIELDS_263,
         methods: METHODS_263,
+        dispatch: DISPATCH_263,
     },
     PlatformClass {
         name: "org/kwis/msp/lcdui/SystemEventListener",
@@ -7746,6 +8687,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020e634,
         fields: FIELDS_264,
         methods: METHODS_264,
+        dispatch: DISPATCH_264,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ActionListener",
@@ -7755,6 +8697,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020e6dc,
         fields: FIELDS_265,
         methods: METHODS_265,
+        dispatch: DISPATCH_265,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/AnnunciatorComponent",
@@ -7764,6 +8707,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020f434,
         fields: FIELDS_266,
         methods: METHODS_266,
+        dispatch: DISPATCH_266,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/AnnunciatorComponent$1",
@@ -7773,6 +8717,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00275edc,
         fields: FIELDS_267,
         methods: METHODS_267,
+        dispatch: DISPATCH_267,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/AnnunciatorComponent$AnnunciatorEventListener",
@@ -7782,6 +8727,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020f5ec,
         fields: FIELDS_268,
         methods: METHODS_268,
+        dispatch: DISPATCH_268,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ButtonComponent",
@@ -7791,6 +8737,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00277a64,
         fields: FIELDS_269,
         methods: METHODS_269,
+        dispatch: DISPATCH_269,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ChangeListener",
@@ -7800,6 +8747,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0020f720,
         fields: FIELDS_270,
         methods: METHODS_270,
+        dispatch: DISPATCH_270,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/CheckboxComponent",
@@ -7809,6 +8757,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00210738,
         fields: FIELDS_271,
         methods: METHODS_271,
+        dispatch: DISPATCH_271,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/CheckboxGroup",
@@ -7818,6 +8767,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00211564,
         fields: FIELDS_272,
         methods: METHODS_272,
+        dispatch: DISPATCH_272,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ComboComponent",
@@ -7827,6 +8777,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00213588,
         fields: FIELDS_273,
         methods: METHODS_273,
+        dispatch: DISPATCH_273,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ComboComponent$ComboPopup",
@@ -7836,6 +8787,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002138a4,
         fields: FIELDS_274,
         methods: METHODS_274,
+        dispatch: DISPATCH_274,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ComboComponent$MyActionListener",
@@ -7845,6 +8797,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00213b40,
         fields: FIELDS_275,
         methods: METHODS_275,
+        dispatch: DISPATCH_275,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/Command",
@@ -7854,6 +8807,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00278dd0,
         fields: FIELDS_276,
         methods: METHODS_276,
+        dispatch: DISPATCH_276,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/CommandBarComponent",
@@ -7863,6 +8817,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00216010,
         fields: FIELDS_277,
         methods: METHODS_277,
+        dispatch: DISPATCH_277,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/CommandListener",
@@ -7872,6 +8827,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00216104,
         fields: FIELDS_278,
         methods: METHODS_278,
+        dispatch: DISPATCH_278,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/Component",
@@ -7881,6 +8837,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002173b0,
         fields: FIELDS_279,
         methods: METHODS_279,
+        dispatch: DISPATCH_279,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ConstraintChecker",
@@ -7890,6 +8847,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0021784c,
         fields: FIELDS_280,
         methods: METHODS_280,
+        dispatch: DISPATCH_280,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ContainerComponent",
@@ -7899,6 +8857,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00219d4c,
         fields: FIELDS_281,
         methods: METHODS_281,
+        dispatch: DISPATCH_281,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/DateFieldComponent",
@@ -7908,6 +8867,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0021c1f4,
         fields: FIELDS_282,
         methods: METHODS_282,
+        dispatch: DISPATCH_282,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/DateFieldComponent$EditCard",
@@ -7917,6 +8877,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0021dd34,
         fields: FIELDS_283,
         methods: METHODS_283,
+        dispatch: DISPATCH_283,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/Decorator",
@@ -7926,6 +8887,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0021e2dc,
         fields: FIELDS_284,
         methods: METHODS_284,
+        dispatch: DISPATCH_284,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/DialogComponent",
@@ -7935,6 +8897,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0027b000,
         fields: FIELDS_285,
         methods: METHODS_285,
+        dispatch: DISPATCH_285,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/DialogComponent$DialogActionListener",
@@ -7944,6 +8907,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0027b248,
         fields: FIELDS_286,
         methods: METHODS_286,
+        dispatch: DISPATCH_286,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/DialogComponent$DisplayTimeControl",
@@ -7953,6 +8917,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0021e454,
         fields: FIELDS_287,
         methods: METHODS_287,
+        dispatch: DISPATCH_287,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/EventListener",
@@ -7962,6 +8927,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0021e510,
         fields: FIELDS_288,
         methods: METHODS_288,
+        dispatch: DISPATCH_288,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/FormComponent",
@@ -7971,6 +8937,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002216a4,
         fields: FIELDS_289,
         methods: METHODS_289,
+        dispatch: DISPATCH_289,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/GrabKeyListener",
@@ -7980,6 +8947,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00221760,
         fields: FIELDS_290,
         methods: METHODS_290,
+        dispatch: DISPATCH_290,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ImageComponent",
@@ -7989,6 +8957,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002232bc,
         fields: FIELDS_291,
         methods: METHODS_291,
+        dispatch: DISPATCH_291,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ImageComponent$1",
@@ -7998,6 +8967,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002233dc,
         fields: FIELDS_292,
         methods: METHODS_292,
+        dispatch: DISPATCH_292,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/InputListener",
@@ -8007,6 +8977,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00223b10,
         fields: FIELDS_293,
         methods: METHODS_293,
+        dispatch: DISPATCH_293,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/LabelComponent",
@@ -8016,6 +8987,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00225c28,
         fields: FIELDS_294,
         methods: METHODS_294,
+        dispatch: DISPATCH_294,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ListComponent",
@@ -8025,6 +8997,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0022972c,
         fields: FIELDS_295,
         methods: METHODS_295,
+        dispatch: DISPATCH_295,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ListItemComponent",
@@ -8034,6 +9007,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0022a160,
         fields: FIELDS_296,
         methods: METHODS_296,
+        dispatch: DISPATCH_296,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ProgressComponent",
@@ -8043,6 +9017,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0027cf34,
         fields: FIELDS_297,
         methods: METHODS_297,
+        dispatch: DISPATCH_297,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ProxyCard",
@@ -8052,6 +9027,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0022b39c,
         fields: FIELDS_298,
         methods: METHODS_298,
+        dispatch: DISPATCH_298,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ScrollbarComponent",
@@ -8061,6 +9037,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0022dec8,
         fields: FIELDS_299,
         methods: METHODS_299,
+        dispatch: DISPATCH_299,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/ShellComponent",
@@ -8070,6 +9047,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00233934,
         fields: FIELDS_300,
         methods: METHODS_300,
+        dispatch: DISPATCH_300,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextBoxComponent",
@@ -8079,6 +9057,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002368a4,
         fields: FIELDS_301,
         methods: METHODS_301,
+        dispatch: DISPATCH_301,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextBoxComponent$Action",
@@ -8088,6 +9067,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00236ae0,
         fields: FIELDS_302,
         methods: METHODS_302,
+        dispatch: DISPATCH_302,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextComponent",
@@ -8097,6 +9077,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00243ca4,
         fields: FIELDS_303,
         methods: METHODS_303,
+        dispatch: DISPATCH_303,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextComponent$ModeViewer",
@@ -8106,6 +9087,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00244010,
         fields: FIELDS_304,
         methods: METHODS_304,
+        dispatch: DISPATCH_304,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFieldComponent",
@@ -8115,6 +9097,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00246488,
         fields: FIELDS_305,
         methods: METHODS_305,
+        dispatch: DISPATCH_305,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFieldComponent$Action",
@@ -8124,6 +9107,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0024688c,
         fields: FIELDS_306,
         methods: METHODS_306,
+        dispatch: DISPATCH_306,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFieldComponent$TextPopup",
@@ -8133,6 +9117,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00246c38,
         fields: FIELDS_307,
         methods: METHODS_307,
+        dispatch: DISPATCH_307,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFormatProcessor",
@@ -8142,6 +9127,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00247e0c,
         fields: FIELDS_308,
         methods: METHODS_308,
+        dispatch: DISPATCH_308,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TextPopup",
@@ -8151,6 +9137,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0024820c,
         fields: FIELDS_309,
         methods: METHODS_309,
+        dispatch: DISPATCH_309,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TickerComponent",
@@ -8160,6 +9147,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00249714,
         fields: FIELDS_310,
         methods: METHODS_310,
+        dispatch: DISPATCH_310,
     },
     PlatformClass {
         name: "org/kwis/msp/lwc/TickerComponent$RunTicker",
@@ -8169,6 +9157,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002498b0,
         fields: FIELDS_311,
         methods: METHODS_311,
+        dispatch: DISPATCH_311,
     },
     PlatformClass {
         name: "org/kwis/msp/media/BaseClip",
@@ -8178,6 +9167,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0024c704,
         fields: FIELDS_312,
         methods: METHODS_312,
+        dispatch: DISPATCH_312,
     },
     PlatformClass {
         name: "org/kwis/msp/media/Camera",
@@ -8187,6 +9177,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002507dc,
         fields: FIELDS_313,
         methods: METHODS_313,
+        dispatch: DISPATCH_313,
     },
     PlatformClass {
         name: "org/kwis/msp/media/Clip",
@@ -8196,6 +9187,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00251470,
         fields: FIELDS_314,
         methods: METHODS_314,
+        dispatch: DISPATCH_314,
     },
     PlatformClass {
         name: "org/kwis/msp/media/ClipManager",
@@ -8205,6 +9197,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00251818,
         fields: FIELDS_315,
         methods: METHODS_315,
+        dispatch: DISPATCH_315,
     },
     PlatformClass {
         name: "org/kwis/msp/media/DataSource",
@@ -8214,6 +9207,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0027e1b8,
         fields: FIELDS_316,
         methods: METHODS_316,
+        dispatch: DISPATCH_316,
     },
     PlatformClass {
         name: "org/kwis/msp/media/EqualizerInfo",
@@ -8223,6 +9217,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002518c0,
         fields: FIELDS_317,
         methods: METHODS_317,
+        dispatch: DISPATCH_317,
     },
     PlatformClass {
         name: "org/kwis/msp/media/LevelMeterInfo",
@@ -8232,6 +9227,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00251968,
         fields: FIELDS_318,
         methods: METHODS_318,
+        dispatch: DISPATCH_318,
     },
     PlatformClass {
         name: "org/kwis/msp/media/MediaConstants",
@@ -8241,6 +9237,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00251e74,
         fields: FIELDS_319,
         methods: METHODS_319,
+        dispatch: DISPATCH_319,
     },
     PlatformClass {
         name: "org/kwis/msp/media/MediaUnavailableException",
@@ -8250,6 +9247,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00251fa4,
         fields: FIELDS_320,
         methods: METHODS_320,
+        dispatch: DISPATCH_320,
     },
     PlatformClass {
         name: "org/kwis/msp/media/MediaUnsupportedException",
@@ -8259,6 +9257,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002520d4,
         fields: FIELDS_321,
         methods: METHODS_321,
+        dispatch: DISPATCH_321,
     },
     PlatformClass {
         name: "org/kwis/msp/media/PlayListener",
@@ -8268,6 +9267,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00252388,
         fields: FIELDS_322,
         methods: METHODS_322,
+        dispatch: DISPATCH_322,
     },
     PlatformClass {
         name: "org/kwis/msp/media/Player",
@@ -8277,6 +9277,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00252aac,
         fields: FIELDS_323,
         methods: METHODS_323,
+        dispatch: DISPATCH_323,
     },
     PlatformClass {
         name: "org/kwis/msp/media/PlayerListener",
@@ -8286,6 +9287,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00252ca0,
         fields: FIELDS_324,
         methods: METHODS_324,
+        dispatch: DISPATCH_324,
     },
     PlatformClass {
         name: "org/kwis/msp/media/StillClip",
@@ -8295,6 +9297,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00253880,
         fields: FIELDS_325,
         methods: METHODS_325,
+        dispatch: DISPATCH_325,
     },
     PlatformClass {
         name: "org/kwis/msp/media/Vibrator",
@@ -8304,6 +9307,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002539ec,
         fields: FIELDS_326,
         methods: METHODS_326,
+        dispatch: DISPATCH_326,
     },
     PlatformClass {
         name: "org/kwis/msp/media/VideoClip",
@@ -8313,6 +9317,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00254434,
         fields: FIELDS_327,
         methods: METHODS_327,
+        dispatch: DISPATCH_327,
     },
     PlatformClass {
         name: "org/kwis/msp/media/Volume",
@@ -8322,6 +9327,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00254ac8,
         fields: FIELDS_328,
         methods: METHODS_328,
+        dispatch: DISPATCH_328,
     },
     PlatformClass {
         name: "wec/DMInfo",
@@ -8331,6 +9337,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00297500,
         fields: FIELDS_329,
         methods: METHODS_329,
+        dispatch: DISPATCH_329,
     },
     PlatformClass {
         name: "wec/GatewayIP",
@@ -8340,6 +9347,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00288794,
         fields: FIELDS_330,
         methods: METHODS_330,
+        dispatch: DISPATCH_330,
     },
     PlatformClass {
         name: "wec/ImageResize",
@@ -8349,6 +9357,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x002889d8,
         fields: FIELDS_331,
         methods: METHODS_331,
+        dispatch: DISPATCH_331,
     },
     PlatformClass {
         name: "wec/OEMAppExecutor",
@@ -8358,6 +9367,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x00289928,
         fields: FIELDS_332,
         methods: METHODS_332,
+        dispatch: DISPATCH_332,
     },
     PlatformClass {
         name: "wec/OEMDevice",
@@ -8367,6 +9377,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0028a6b8,
         fields: FIELDS_333,
         methods: METHODS_333,
+        dispatch: DISPATCH_333,
     },
     PlatformClass {
         name: "wec/SYSTheme",
@@ -8376,6 +9387,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0028ab58,
         fields: FIELDS_334,
         methods: METHODS_334,
+        dispatch: DISPATCH_334,
     },
     PlatformClass {
         name: "wec/SYSThemeImpl",
@@ -8385,6 +9397,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0028b3e4,
         fields: FIELDS_335,
         methods: METHODS_335,
+        dispatch: DISPATCH_335,
     },
     PlatformClass {
         name: "wec/URLEncoder",
@@ -8394,6 +9407,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0028c5a8,
         fields: FIELDS_336,
         methods: METHODS_336,
+        dispatch: DISPATCH_336,
     },
     PlatformClass {
         name: "wec/WakeupTimer",
@@ -8403,6 +9417,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
         get_raw_class: 0x0028c988,
         fields: FIELDS_337,
         methods: METHODS_337,
+        dispatch: DISPATCH_337,
     },
 ];
 
@@ -8423,6 +9438,22 @@ impl PlatformClass {
         self.methods
             .iter()
             .find(|method| method.name == name && method.descriptor == descriptor)
+    }
+
+    pub fn dispatch_method(&self, slot: u32) -> Option<&PlatformMethod> {
+        let mut class = self;
+        loop {
+            if let Some(entry) = class.dispatch.get(slot as usize).copied()
+                && entry != 0
+            {
+                return PLATFORM_CLASSES
+                    .iter()
+                    .flat_map(|candidate| candidate.methods)
+                    .find(|method| method.entry == entry);
+            }
+
+            class = platform_class(class.superclass?)?;
+        }
     }
 
     pub fn virtual_method(&self, name: &str, descriptor: &str) -> Option<&PlatformMethod> {
@@ -8472,6 +9503,18 @@ mod tests {
         let class = platform_class("org/kwis/msp/media/Clip").unwrap();
         let method = class.virtual_method("availableDataSize", "()I").unwrap();
         assert_eq!(method.slot, 32);
+    }
+
+    #[test]
+    fn native_dispatch_tables_are_preserved() {
+        let string = platform_class("java/lang/String").unwrap();
+        assert_eq!(string.dispatch.len(), 36);
+        assert_eq!(string.dispatch_method(16).unwrap().name, "compareTo");
+        let clip = platform_class("org/kwis/msp/media/Clip").unwrap();
+        assert_eq!(clip.dispatch.len(), 80);
+        assert_eq!(clip.dispatch_method(32).unwrap().name, "availableDataSize");
+        let socket = platform_class("org/kwis/msf/io/Socket").unwrap();
+        assert!(socket.dispatch.is_empty());
     }
 
     #[test]

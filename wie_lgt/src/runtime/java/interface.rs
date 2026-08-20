@@ -37,13 +37,9 @@ pub const JAVA_STATIC_METHOD_SVC_BASE: u32 = 0x2000;
 /// dispatch table, so the receiver arrives in the first word.
 pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x6000;
 
-/// Slots every dispatch table has room for, declared or not.
-pub const DISPATCH_TABLE_SLOTS: u32 = 96;
-
-/// Where a class's own virtual methods start in its dispatch table. Slot 0 is
-/// the class's `<init>` and slots 1 to 9 are `java/lang/Object`'s, in every
-/// `dt_` in `liblgt_system.so`.
-pub const FIRST_CLASS_SLOT: u32 = 10;
+/// Maximum native platform dispatch-table slot count extracted from
+/// `liblgt_system.so`. The largest `dt_*` contains slots 0 through 102.
+pub const DISPATCH_TABLE_SLOTS: u32 = 103;
 
 /// Classes that can have their own reserved block of unknown-slot ids. One
 /// past the last is the fallback table's index.
@@ -447,13 +443,10 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 
 /// Builds one dispatch table.
 ///
-/// A class's own methods start at [`FIRST_CLASS_SLOT`], because the ten slots
-/// before them belong to `<init>` and `java/lang/Object` in every table the
-/// platform builds. Getting that wrong is not caught by anything the runtime
-/// can see on its own - the slots it hands out and the table it builds stay
-/// consistent with each other - but the compiled code also emits fixed slot
-/// numbers for methods the platform is expected to provide, and those are
-/// numbered from the real layout.
+/// The imported methods are installed at the native slots resolved from the
+/// platform metadata. The compiled code also emits fixed slot numbers for
+/// methods the platform is expected to provide, so the generated dispatch
+/// layout must preserve those native slot numbers exactly.
 ///
 /// Every table is the same size whatever the class declares, because a class
 /// gets called at slots it never mentions: Battle Monster branches through

@@ -6,6 +6,5 @@ pub mod handles;
 pub mod interface;
 pub mod method_bridge;
 pub mod platform_metadata;
-pub mod platform_slots;
 
 pub use interface::get_java_interface_method;
