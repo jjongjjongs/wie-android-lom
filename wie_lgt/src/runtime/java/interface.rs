@@ -70,7 +70,8 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport10)?,
         0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport11)?,
         0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport23)?,
-        0x13 | 0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
+        0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaResolveOne)?,
+        0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk9)?,
         0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk11)?,
         0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE1)?,
@@ -93,6 +94,245 @@ pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u3
 /// application imports, then fills the output arrays so the compiled code can
 /// reach them.
 #[allow(clippy::too_many_arguments)]
+fn read_resolve_member(core: &ArmCore, table: u32, index: u32) -> Result<Option<(String, String)>> {
+    let row = table + index * 8;
+    let name: u32 = read_generic(core, row)?;
+    let descriptor: u32 = read_generic(core, row + 4)?;
+
+    if name == 0 || descriptor == 0 {
+        return Ok(None);
+    }
+
+    let name = read_null_terminated_string_bytes(core, name)?;
+    let descriptor = read_null_terminated_string_bytes(core, descriptor)?;
+
+    Ok(Some((
+        String::from_utf8_lossy(&name).into(),
+        String::from_utf8_lossy(&descriptor).into(),
+    )))
+}
+
+fn write_continuation_slot(core: &mut ArmCore, output: u32, index: u32) -> Result<()> {
+    let previous = output
+        .checked_add(index * 2)
+        .and_then(|address| address.checked_sub(2))
+        .ok_or_else(|| wie_util::WieError::FatalError(alloc::format!(
+            "Invalid LGT continuation slot {index} at {output:#x}"
+        )))?;
+    let slot: u16 = read_generic(core, previous)?;
+    write_generic(core, output + index * 2, slot.wrapping_add(1))
+}
+
+fn resolve_field_group(
+    core: &mut ArmCore,
+    class: &AppClass,
+    table: u32,
+    output: u32,
+    start: u32,
+    count: u32,
+    want_static: bool,
+) -> Result<()> {
+    for index in start..start + count {
+        let Some((name, descriptor)) = read_resolve_member(core, table, index)? else {
+            write_continuation_slot(core, output, index)?;
+            continue;
+        };
+
+        let member = class.members.iter().find(|member| {
+            member.is_field()
+                && member.name() == name
+                && member.descriptor() == descriptor
+                && ((member.flags() & 0x8) != 0) == want_static
+        });
+
+        let Some(member) = member else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_one could not resolve {} field {}.{}:{}",
+                if want_static { "static" } else { "instance" },
+                class.name,
+                name,
+                descriptor
+            )));
+        };
+
+        write_generic(core, output + index * 2, member.slot() as u16)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_virtual_member(
+    core: &ArmCore,
+    app_classes: &Mutex<Vec<AppClass>>,
+    image_ranges: &[(u32, u32)],
+    first: &AppClass,
+    name: &str,
+    descriptor: &str,
+) -> Option<u32> {
+    let mut current = first.clone();
+
+    for _ in 0..MAX_CLASS_DEPTH {
+        if let Some(member) = current.members.iter().find(|member| {
+            member.is_method()
+                && member.name() == name
+                && member.descriptor() == descriptor
+                && (member.slot() as u16 as i16) > 0
+        }) {
+            return Some(member.slot());
+        }
+
+        let superclass = current.superclass.as_deref()?;
+
+        if let Some(class) = app_classes.lock().iter().find(|class| class.name == superclass).cloned() {
+            current = class;
+            continue;
+        }
+
+        current = app_classes::find_class(core, image_ranges, superclass)?;
+    }
+
+    None
+}
+
+/// Import `0x13`, native `vm_resolve_one`.
+///
+/// Unlike import `0x14`, its first argument is one 24-byte class-entry and its
+/// second argument is the application's already-linked `class_shared` root.
+#[allow(clippy::too_many_arguments)]
+pub async fn java_resolve_one(
+    core: &mut ArmCore,
+    app_classes: &Mutex<Vec<AppClass>>,
+    image_ranges: &[(u32, u32)],
+    class_entry: u32,
+    class_shared: u32,
+    fields: u32,
+    static_fields: u32,
+    virtual_methods: u32,
+    interface_methods: u32,
+    static_methods: u32,
+    field_offsets: u32,
+    static_field_offsets: u32,
+    virtual_method_offsets: u32,
+    interface_method_offsets: u32,
+    static_method_offsets: u32,
+) -> Result<()> {
+    let class = app_classes::parse_class_root(core, class_shared)?;
+
+    let field_start: u16 = read_generic(core, class_entry + 4)?;
+    let field_count: u16 = read_generic(core, class_entry + 6)?;
+    let static_field_start: u16 = read_generic(core, class_entry + 8)?;
+    let static_field_count: u16 = read_generic(core, class_entry + 10)?;
+    let virtual_method_start: u16 = read_generic(core, class_entry + 12)?;
+    let virtual_method_count: u16 = read_generic(core, class_entry + 14)?;
+    let interface_method_start: u16 = read_generic(core, class_entry + 16)?;
+    let interface_method_count: u16 = read_generic(core, class_entry + 18)?;
+    let static_method_start: u16 = read_generic(core, class_entry + 20)?;
+    let static_method_count: u16 = read_generic(core, class_entry + 22)?;
+
+    resolve_field_group(
+        core,
+        &class,
+        fields,
+        field_offsets,
+        field_start.into(),
+        field_count.into(),
+        false,
+    )?;
+    resolve_field_group(
+        core,
+        &class,
+        static_fields,
+        static_field_offsets,
+        static_field_start.into(),
+        static_field_count.into(),
+        true,
+    )?;
+
+    let virtual_start = u32::from(virtual_method_start);
+    for index in virtual_start..virtual_start + u32::from(virtual_method_count) {
+        let Some((name, descriptor)) = read_resolve_member(core, virtual_methods, index)? else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "Blank LGT virtual-method import row {index}"
+            )));
+        };
+
+        let Some(slot) = resolve_virtual_member(core, app_classes, image_ranges, &class, &name, &descriptor) else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_one could not resolve virtual method {}.{}{}",
+                class.name,
+                name,
+                descriptor
+            )));
+        };
+
+        write_generic(core, virtual_method_offsets + index * 2, slot as u16)?;
+    }
+
+    let interface_start = u32::from(interface_method_start);
+    for index in interface_start..interface_start + u32::from(interface_method_count) {
+        let Some((name, descriptor)) = read_resolve_member(core, interface_methods, index)? else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "Blank LGT interface-method import row {index}"
+            )));
+        };
+
+        let Some(member) = class.members.iter().find(|member| {
+            member.is_method() && member.name() == name && member.descriptor() == descriptor
+        }) else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_one could not resolve interface method {}.{}{}",
+                class.name,
+                name,
+                descriptor
+            )));
+        };
+
+        write_generic(core, interface_method_offsets + index * 2, member.slot() as u16)?;
+    }
+
+    let static_start = u32::from(static_method_start);
+    let static_end = static_start + u32::from(static_method_count);
+    let mut index = static_start;
+    while index < static_end {
+        let Some((name, descriptor)) = read_resolve_member(core, static_methods, index)? else {
+            // Native vm_resolve_one treats a blank static-method row as the
+            // class metadata's get_class/get_raw_class pair and consumes two
+            // consecutive output words.
+            write_generic(core, static_method_offsets + index * 4, class.get_class)?;
+            if index + 1 < static_end {
+                write_generic(core, static_method_offsets + (index + 1) * 4, class.get_raw_class)?;
+            }
+            index += 2;
+            continue;
+        };
+
+        let Some(member) = class.members.iter().find(|member| {
+            member.is_method() && member.name() == name && member.descriptor() == descriptor
+        }) else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_one could not resolve static method {}.{}{}",
+                class.name,
+                name,
+                descriptor
+            )));
+        };
+
+        let Some(entry) = member.entry() else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_one selected non-method {}.{}{}",
+                class.name,
+                name,
+                descriptor
+            )));
+        };
+
+        write_generic(core, static_method_offsets + index * 4, entry)?;
+        index += 1;
+    }
+
+    Ok(())
+}
+
 pub async fn java_load_classes(
     core: &mut ArmCore,
     handles: &JavaHandles,

@@ -74,16 +74,20 @@ const MAX_MEMBERS: u32 = 8192;
 /// Applications register a few dozen classes.
 const MAX_CLASSES: u32 = 4096;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AppMember {
     Field {
         name: String,
         descriptor: String,
+        flags: u32,
         slot: u32,
     },
     Method {
         name: String,
         descriptor: String,
+        flags: u32,
+        /// Native dispatch/interface slot from row +0x10.
+        slot: u32,
         /// Address of the compiled code, in ARM mode.
         entry: u32,
         /// Argument words the compiled code expects, `this` included.
@@ -103,11 +107,40 @@ impl AppMember {
             AppMember::Field { descriptor, .. } | AppMember::Method { descriptor, .. } => descriptor,
         }
     }
+
+    pub fn flags(&self) -> u32 {
+        match self {
+            AppMember::Field { flags, .. } | AppMember::Method { flags, .. } => *flags,
+        }
+    }
+
+    pub fn slot(&self) -> u32 {
+        match self {
+            AppMember::Field { slot, .. } | AppMember::Method { slot, .. } => *slot,
+        }
+    }
+
+    pub fn entry(&self) -> Option<u32> {
+        match self {
+            AppMember::Method { entry, .. } => Some(*entry),
+            AppMember::Field { .. } => None,
+        }
+    }
+
+    pub fn is_field(&self) -> bool {
+        matches!(self, AppMember::Field { .. })
+    }
+
+    pub fn is_method(&self) -> bool {
+        matches!(self, AppMember::Method { .. })
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppClass {
     pub root: u32,
+    pub get_class: u32,
+    pub get_raw_class: u32,
     pub name: String,
     pub superclass: Option<String>,
     pub interfaces: Vec<String>,
@@ -197,6 +230,7 @@ where
         fields.push(AppMember::Field {
             name,
             descriptor,
+            flags: read_generic(reader, row + 0xc)?,
             slot: read_generic(reader, row + FIELD_SLOT_OFFSET)?,
         });
 
@@ -232,6 +266,8 @@ where
         methods.push(AppMember::Method {
             name,
             descriptor,
+            flags,
+            slot: read_generic(reader, row + 0x10)?,
             entry: read_generic(reader, row + METHOD_ENTRY_OFFSET)?,
             argument_words: flags >> 16,
         });
@@ -300,12 +336,23 @@ where
 
     Ok(AppClass {
         root,
+        get_class: read_generic(reader, metadata + 0x30)?,
+        get_raw_class: read_generic(reader, metadata + 0x34)?,
         name,
         superclass,
         interfaces,
         members,
         declared_members: declared_members.into(),
     })
+}
+
+/// Parses one application class from the native `class_shared` root supplied by
+/// `vm_resolve_one` (Java import 0x13).
+pub fn parse_class_root<R>(reader: &R, root: u32) -> Result<AppClass>
+where
+    R: ?Sized + ByteRead,
+{
+    parse_class(reader, root)
 }
 
 /// Whether `root` looks like a class root: the metadata block sits directly
@@ -621,6 +668,8 @@ mod tests {
         let start_app = AppMember::Method {
             name: "startApp".to_string(),
             descriptor: "([Ljava/lang/String;)V".to_string(),
+            flags: 0,
+            slot: 0,
             entry: 0x1118,
             argument_words: 2,
         };
@@ -629,6 +678,8 @@ mod tests {
         let pause_app = AppMember::Method {
             name: "pauseApp".to_string(),
             descriptor: "()V".to_string(),
+            flags: 0,
+            slot: 0,
             entry: 0x1248,
             argument_words: 1,
         };
@@ -637,6 +688,8 @@ mod tests {
         let static_like = AppMember::Method {
             name: "main".to_string(),
             descriptor: "()V".to_string(),
+            flags: 0,
+            slot: 0,
             entry: 0x2000,
             argument_words: 0,
         };

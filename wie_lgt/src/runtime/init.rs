@@ -26,7 +26,8 @@ use super::{
         interface::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE,
             JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain,
-            java_import_11, java_import_23, java_load_classes, java_unk0, java_unk9, java_unk11, java_unk12, primitive_element_size,
+            java_import_11, java_import_23, java_load_classes, java_resolve_one, java_unk0, java_unk9, java_unk11, java_unk12,
+            primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
@@ -432,6 +433,30 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             context.app_classes.lock().extend(parsed);
 
             index.write(core, lr)
+        }
+        InitSvcId::JavaResolveOne => {
+            let arguments: Vec<u32> = (0..12).map(|index| core.read_param(index)).collect::<Result<_>>()?;
+
+            java_resolve_one(
+                core,
+                &context.app_classes,
+                context.image_ranges.as_ref(),
+                arguments[0],
+                arguments[1],
+                arguments[2],
+                arguments[3],
+                arguments[4],
+                arguments[5],
+                arguments[6],
+                arguments[7],
+                arguments[8],
+                arguments[9],
+                arguments[10],
+                arguments[11],
+            )
+            .await?;
+
+            ().write(core, lr)
         }
         InitSvcId::JavaLoadClasses => {
             let arguments: Vec<u32> = (0..11).map(|index| core.read_param(index)).collect::<Result<_>>()?;
