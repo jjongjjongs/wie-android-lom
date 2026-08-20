@@ -14,6 +14,7 @@ use crate::runtime::{
         class_table::{ClassTable, OutputArrays},
         compiled_class::{self, CompiledContext},
         handles::JavaHandles,
+        platform_slots::platform_slot,
     },
     svc_ids::InitSvcId,
 };
@@ -34,10 +35,10 @@ pub const JAVA_STATIC_METHOD_SVC_BASE: u32 = 0x2000;
 
 /// One SVC id per row of the virtual method table. The stub sits in a class's
 /// dispatch table, so the receiver arrives in the first word.
-pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x4000;
+pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x6000;
 
 /// Slots every dispatch table has room for, declared or not.
-pub const DISPATCH_TABLE_SLOTS: u32 = 64;
+pub const DISPATCH_TABLE_SLOTS: u32 = 96;
 
 /// Where a class's own virtual methods start in its dispatch table. Slot 0 is
 /// the class's `<init>` and slots 1 to 9 are `java/lang/Object`'s, in every
@@ -49,15 +50,15 @@ pub const FIRST_CLASS_SLOT: u32 = 10;
 pub const MAX_DISPATCH_CLASSES: u32 = 63;
 
 /// One SVC id per (class, slot) pair a dispatch table does not account for.
-pub const JAVA_UNKNOWN_SLOT_SVC_BASE: u32 = 0x5000;
+pub const JAVA_UNKNOWN_SLOT_SVC_BASE: u32 = 0x8000;
 
 /// One SVC id per row of the static method table that carries no descriptor.
 /// The compiled code calls these too, so they cannot be left null.
-pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x3000;
+pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x4000;
 
 /// Upper bound on rows, so a table that fails to parse cannot run off the end
 /// of its SVC range.
-pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x1000;
+pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x2000;
 
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
     let method = match function_index {
@@ -161,7 +162,7 @@ pub async fn java_load_classes(
 ///
 /// so the table needs a leading word before its entries, and every instance
 /// needs to point at one.
-fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
+fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable, slots: &[Option<u32>]) -> Result<()> {
     if table.classes.len() as u32 > MAX_DISPATCH_CLASSES {
         return Err(wie_util::WieError::FatalError(alloc::format!(
             "LGT class table has {} classes, more than the {MAX_DISPATCH_CLASSES} with reserved dispatch slots",
@@ -175,12 +176,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
             (class.virtual_method_start, class.virtual_method_count)
         };
 
-        let first_slot = if table.classes[index as usize].name == "org/kwis/msp/media/Clip" {
-            FIRST_CLASS_SLOT + 3
-        } else {
-            FIRST_CLASS_SLOT
-        };
-        let vtable = build_dispatch_table(core, index, start, count, first_slot)?;
+        let vtable = build_dispatch_table(core, index, start, count, slots)?;
 
         // Eight bytes is the smallest allocation that reads back distinctly;
         // nothing inspects the contents, the address is the identity.
@@ -201,7 +197,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 
     // Objects of a class the application never declared still get called on,
     // so they need a table too.
-    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0, FIRST_CLASS_SLOT)?;
+    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0, slots)?;
     handles.set_fallback_dispatch_table(fallback);
 
     tracing::debug!("LGT fallback dispatch table at {fallback:#x}");
@@ -225,15 +221,15 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 /// short table leaves that slot zero and the branch goes to address zero, so
 /// the slots a class does not declare are filled with stubs that report what
 /// was called instead.
-fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32, first_slot: u32) -> Result<u32> {
+fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32, slots: &[Option<u32>]) -> Result<u32> {
     let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
     write_generic(core, vtable, 0u32)?;
 
     for slot in 0..DISPATCH_TABLE_SLOTS {
-        let declared = slot.checked_sub(first_slot).filter(|index| *index < count);
+        let row = (start..start + count).find(|row| slots.get(*row as usize).copied().flatten() == Some(slot));
 
-        let svc = if let Some(index) = declared {
-            JAVA_VIRTUAL_METHOD_SVC_BASE + start + index
+        let svc = if let Some(row) = row {
+            JAVA_VIRTUAL_METHOD_SVC_BASE + row
         } else {
             JAVA_UNKNOWN_SLOT_SVC_BASE + class_index * DISPATCH_TABLE_SLOTS + slot
         };
@@ -243,6 +239,24 @@ fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count:
     }
 
     Ok(vtable)
+}
+
+/// Native dispatch slot for each imported virtual-method row.
+///
+/// The application's import order is only a subset of a platform class's full
+/// method table, so use the slot layout extracted from `liblgt_system.so` when
+/// available. The relative-order fallback remains only for classes not yet
+/// covered by the extracted platform table.
+fn assign_virtual_slots(table: &ClassTable) -> Vec<Option<u32>> {
+    (0..table.virtual_methods.len() as u32)
+        .map(|row| {
+            let member = table.virtual_methods[row as usize].as_ref()?;
+            let class = table.class_name(member.class_index);
+            let index = table.virtual_slot(row)?;
+
+            Some(platform_slot(class, &member.name, &member.descriptor).unwrap_or(FIRST_CLASS_SLOT + index))
+        })
+        .collect()
 }
 
 /// Publishes the table into the arrays the compiled code reads.
@@ -282,6 +296,8 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         tracing::trace!("LGT static method[{index}] {description} -> {stub:#x}");
     }
 
+    let slots = assign_virtual_slots(table);
+
     // Virtual methods are dispatched through the receiver, so the array holds
     // the slot to index its vtable with rather than an address. The compiled
     // code reads it with `ldrsh`, so the entries are signed halfwords.
@@ -289,24 +305,14 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         let Some(member) = table.virtual_methods[index as usize].as_ref() else {
             continue;
         };
-        let Some(slot) = table.virtual_slot(index) else { continue };
-        let class_name = table.class_name(member.class_index);
-
-        // Clip extends BaseClip. Object occupies slots 1..9 and BaseClip
-        // occupies slots 10..12, so Clip's own methods begin at slot 13.
-        let first_slot = if class_name == "org/kwis/msp/media/Clip" {
-            FIRST_CLASS_SLOT + 3
-        } else {
-            FIRST_CLASS_SLOT
-        };
-        let slot = slot + first_slot;
+        let Some(slot) = slots[index as usize] else { continue };
 
         write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
 
         tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
     }
 
-    build_dispatch_tables(core, handles, table)?;
+    build_dispatch_tables(core, handles, table, &slots)?;
 
     // Imported platform fields use the native VM's word-slot ABI. Rows beyond
     // the imported field table are also used by the application's AOT object

@@ -30,6 +30,7 @@ use super::{
             vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
+        platform_slots::platform_method,
     },
     stdlib::register_stdlib_svc_handler,
     svc_ids::InitSvcId,
@@ -999,6 +1000,29 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
         tracing::debug!("LGT java/lang/Object.{name}{descriptor} on {this:#x}, which has no instance");
 
         return Ok(0);
+    }
+
+    // Resolve fixed native dispatch slots from the receiver's actual platform
+    // class even when the application never imported that class or method.
+    if let Some(receiver_class) = context.java_handles.get(this).map(|instance| instance.class_definition().name())
+        && let Some((name, descriptor)) = platform_method(&receiver_class, slot)
+    {
+        let member = ResolvedMember {
+            class_name: receiver_class.clone(),
+            name: name.into(),
+            descriptor: descriptor.into(),
+        };
+
+        let handles = context.java_handles.clone();
+        let jvm = context.jvm.clone();
+
+        return match method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                tracing::warn!("LGT {receiver_class}.{name}{descriptor} at slot {slot} failed: {error}");
+                Ok(0)
+            }
+        };
     }
 
     let imported_class = context
