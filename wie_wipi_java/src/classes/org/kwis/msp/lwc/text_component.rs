@@ -95,7 +95,7 @@ impl TextComponent {
                 ),
                 JavaMethodProto::new(
                     "changeModeCard",
-                    "(I)V",
+                    "()V",
                     Self::change_mode_card,
                     Default::default(),
                 ),
@@ -793,7 +793,6 @@ impl TextComponent {
         jvm: &Jvm,
         _: &mut WieJvmContext,
         this: ClassInstanceRef<TextComponent>,
-        _mode: i32,
     ) -> JvmResult<()> {
         let mode_viewer: ClassInstanceRef<()> = jvm
             .get_field(
@@ -1812,10 +1811,8 @@ impl TextComponent {
                     .invoke_virtual(&this, "modeSetting", "(I)V", (mode,))
                     .await?;
 
-                let mode: i32 = jvm.get_field(&this, "iMode", "I").await?;
-
                 let _: () = jvm
-                    .invoke_virtual(&this, "changeModeCard", "(I)V", (mode,))
+                    .invoke_virtual(&this, "changeModeCard", "()V", ())
                     .await?;
             }
 

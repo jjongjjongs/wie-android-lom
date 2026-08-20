@@ -156,8 +156,8 @@ impl TextFieldComponentTextPopup {
             .invoke_virtual(
                 &this,
                 "changeModeCard",
-                "(I)V",
-                (mode,),
+                "()V",
+                (),
             )
             .await?;
 
@@ -270,15 +270,12 @@ impl TextFieldComponentTextPopup {
                     )
                     .await?;
 
-                let mode: i32 =
-                    jvm.get_field(&this, "iMode", "I").await?;
-
                 let _: () = jvm
                     .invoke_virtual(
                         &this,
                         "changeModeCard",
-                        "(I)V",
-                        (mode,),
+                        "()V",
+                        (),
                     )
                     .await?;
 
