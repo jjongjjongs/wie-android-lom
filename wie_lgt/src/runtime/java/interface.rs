@@ -14,7 +14,7 @@ use crate::runtime::{
         class_table::{ClassTable, OutputArrays},
         compiled_class::{self, CompiledContext},
         handles::JavaHandles,
-        platform_slots::platform_slot,
+        platform_metadata::platform_class,
     },
     svc_ids::InitSvcId,
 };
@@ -487,22 +487,41 @@ fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count:
 /// method table, so use the slot layout extracted from `liblgt_system.so` when
 /// available. The relative-order fallback remains only for classes not yet
 /// covered by the extracted platform table.
-fn assign_virtual_slots(table: &ClassTable) -> Vec<Option<u32>> {
-    (0..table.virtual_methods.len() as u32)
-        .map(|row| {
-            let member = table.virtual_methods[row as usize].as_ref()?;
-            let class = table.class_name(member.class_index);
-            let index = table.virtual_slot(row)?;
+fn assign_virtual_slots(table: &ClassTable) -> Result<Vec<Option<u32>>> {
+    let mut slots = vec![None; table.virtual_methods.len()];
 
-            Some(platform_slot(class, &member.name, &member.descriptor).unwrap_or(FIRST_CLASS_SLOT + index))
-        })
-        .collect()
+    for (index, member) in table.virtual_methods.iter().enumerate() {
+        let Some(member) = member else {
+            continue;
+        };
+
+        let class_name = table.class_name(member.class_index);
+        let Some(class) = platform_class(class_name) else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_lists could not find platform class {class_name}"
+            )));
+        };
+
+        let Some(method) = class.virtual_method(&member.name, &member.descriptor) else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_lists could not resolve virtual method {}",
+                table.describe(member)
+            )));
+        };
+
+        slots[index] = Some(method.slot);
+    }
+
+    Ok(slots)
 }
 
-/// Publishes the table into the arrays the compiled code reads.
+/// Publishes the five native `vm_resolve_one` output groups for import `0x14`,
+/// then builds guest dispatch tables whose imported virtual slots point at the
+/// existing row-indexed JVM bridge stubs.
 ///
-/// Rows the application left blank are skipped: it reserves two at the head of
-/// every class's static method block, and what belongs there is not yet known.
+/// The native runtime resolves fields and methods from the selected platform
+/// class metadata. Virtual lookup follows the superclass chain and accepts only
+/// positive signed 16-bit slots; interface/static lookup is current-class only.
 fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
     if table.static_methods.len() as u32 > JAVA_METHOD_SVC_LIMIT {
         return Err(wie_util::WieError::FatalError(alloc::format!(
@@ -511,92 +530,198 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         )));
     }
 
-    for index in 0..table.static_methods.len() as u32 {
-        let (svc, description) = match &table.static_methods[index as usize] {
-            Some(member) => (JAVA_STATIC_METHOD_SVC_BASE + index, table.describe(member)),
-            // Every class reserves two rows at the head of its static method
-            // block, and the compiled code branches through them: an LGT
-            // constructor calls its class's first reserved row before the
-            // superclass constructor. Leaving them null turns that into a
-            // branch to address zero, so they get a stub that reports what it
-            // was called with. What they are meant to do is still unknown.
-            None => {
-                let (class, slot) = table
-                    .static_method_owner(index)
-                    .map(|(class, slot)| (class.name.as_str(), slot))
-                    .unwrap_or(("<unowned>", 0));
+    let mut field_bindings = Vec::new();
+    let mut highest_native_field_slot = None;
 
-                (JAVA_RESERVED_SLOT_SVC_BASE + index, alloc::format!("{class} reserved slot {slot}"))
-            }
+    for class in &table.classes {
+        let Some(platform) = platform_class(&class.name) else {
+            return Err(wie_util::WieError::FatalError(alloc::format!(
+                "LGT vm_resolve_lists could not find platform class {}",
+                class.name
+            )));
         };
 
-        let stub = core.make_svc_stub(SVC_CATEGORY_INIT, svc)?;
-        write_generic(core, table.outputs.static_method_offsets + index * 4, stub)?;
+        for index in class.field_start..class.field_start + class.field_count {
+            let Some(member) = table.fields.get(index as usize).and_then(|member| member.as_ref()) else {
+                write_continuation_slot(core, table.outputs.field_offsets, index)?;
+                continue;
+            };
 
-        tracing::trace!("LGT static method[{index}] {description} -> {stub:#x}");
+            let Some(field) = platform.field(&member.name, &member.descriptor, false) else {
+                return Err(wie_util::WieError::FatalError(alloc::format!(
+                    "LGT vm_resolve_lists could not resolve instance field {}",
+                    table.describe(member)
+                )));
+            };
+
+            write_generic(core, table.outputs.field_offsets + index * 2, field.slot as u16)?;
+            highest_native_field_slot =
+                Some(highest_native_field_slot.map_or(field.slot, |slot: u32| slot.max(field.slot)));
+
+            field_bindings.push(super::handles::JavaFieldBinding {
+                class_name: class.name.clone(),
+                name: member.name.clone(),
+                descriptor: member.descriptor.clone(),
+                slot: field.slot,
+            });
+        }
+
+        for index in class.static_field_start..class.static_field_start + class.static_field_count {
+            let Some(member) = table
+                .static_fields
+                .get(index as usize)
+                .and_then(|member| member.as_ref())
+            else {
+                write_continuation_slot(core, table.outputs.static_field_offsets, index)?;
+                continue;
+            };
+
+            let Some(field) = platform.field(&member.name, &member.descriptor, true) else {
+                return Err(wie_util::WieError::FatalError(alloc::format!(
+                    "LGT vm_resolve_lists could not resolve static field {}",
+                    table.describe(member)
+                )));
+            };
+
+            write_generic(
+                core,
+                table.outputs.static_field_offsets + index * 2,
+                field.slot as u16,
+            )?;
+        }
     }
 
-    let slots = assign_virtual_slots(table);
-
-    // Virtual methods are dispatched through the receiver, so the array holds
-    // the slot to index its vtable with rather than an address. The compiled
-    // code reads it with `ldrsh`, so the entries are signed halfwords.
-    for index in 0..table.virtual_methods.len() as u32 {
-        let Some(member) = table.virtual_methods[index as usize].as_ref() else {
+    let slots = assign_virtual_slots(table)?;
+    for (index, slot) in slots.iter().enumerate() {
+        let Some(slot) = slot else {
             continue;
         };
-        let Some(slot) = slots[index as usize] else { continue };
 
-        write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
+        write_generic(
+            core,
+            table.outputs.virtual_method_offsets + index as u32 * 2,
+            *slot as u16,
+        )?;
+    }
 
-        tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
+    for class in &table.classes {
+        let platform = platform_class(&class.name).expect("platform class checked above");
+
+        for index in
+            class.interface_method_start..class.interface_method_start + class.interface_method_count
+        {
+            let Some(member) = table
+                .interface_methods
+                .get(index as usize)
+                .and_then(|member| member.as_ref())
+            else {
+                return Err(wie_util::WieError::FatalError(alloc::format!(
+                    "Blank LGT interface-method import row {index}"
+                )));
+            };
+
+            let Some(method) = platform.method(&member.name, &member.descriptor) else {
+                return Err(wie_util::WieError::FatalError(alloc::format!(
+                    "LGT vm_resolve_lists could not resolve interface method {}",
+                    table.describe(member)
+                )));
+            };
+
+            write_generic(
+                core,
+                table.outputs.interface_method_offsets + index * 2,
+                method.slot as u16,
+            )?;
+        }
+
+        let mut index = class.static_method_start;
+        let end = index + class.static_method_count;
+        while index < end {
+            match table
+                .static_methods
+                .get(index as usize)
+                .and_then(|member| member.as_ref())
+            {
+                Some(member) => {
+                    if platform.method(&member.name, &member.descriptor).is_none() {
+                        return Err(wie_util::WieError::FatalError(alloc::format!(
+                            "LGT vm_resolve_lists could not resolve static method {}",
+                            table.describe(member)
+                        )));
+                    }
+
+                    let stub = core.make_svc_stub(
+                        SVC_CATEGORY_INIT,
+                        JAVA_STATIC_METHOD_SVC_BASE + index,
+                    )?;
+                    write_generic(
+                        core,
+                        table.outputs.static_method_offsets + index * 4,
+                        stub,
+                    )?;
+                    index += 1;
+                }
+                None => {
+                    // Native vm_resolve_one writes get_class/get_raw_class for this
+                    // two-row pair. WIE bridges those class accessors through the
+                    // existing reserved-row SVCs; their exact initialization
+                    // distinction is implemented separately.
+                    let first = core.make_svc_stub(
+                        SVC_CATEGORY_INIT,
+                        JAVA_RESERVED_SLOT_SVC_BASE + index,
+                    )?;
+                    write_generic(
+                        core,
+                        table.outputs.static_method_offsets + index * 4,
+                        first,
+                    )?;
+
+                    if index + 1 < end {
+                        let second = core.make_svc_stub(
+                            SVC_CATEGORY_INIT,
+                            JAVA_RESERVED_SLOT_SVC_BASE + index + 1,
+                        )?;
+                        write_generic(
+                            core,
+                            table.outputs.static_method_offsets + (index + 1) * 4,
+                            second,
+                        )?;
+                    }
+
+                    index += 2;
+                }
+            }
+        }
     }
 
     build_dispatch_tables(core, handles, table, &slots)?;
 
-    // Imported platform fields use the native VM's word-slot ABI. Rows beyond
-    // the imported field table are also used by the application's AOT object
-    // model, so keep those compatibility rows distinct from every native slot.
-    //
-    // The highest native slot currently established is TextComponent.iMode at
-    // slot 19. Compatibility rows therefore begin at slot 20.
+    // The imported native fields occupy their original word slots. AOT
+    // application code also indexes this output array beyond the platform
+    // import rows, so preserve that separate compatibility tail until the
+    // application-field path is moved off this array.
     let capacity = table.field_offset_capacity();
-    let compatibility_base = table
-        .fields
-        .iter()
-        .enumerate()
-        .filter_map(|(index, member)| member.as_ref().and_then(|_| table.native_field_slot(index as u32)))
-        .max()
-        .map(|slot| slot + 1)
-        .unwrap_or(0);
+    let compatibility_base = highest_native_field_slot.map(|slot| slot + 1).unwrap_or(0);
 
-    let mut field_bindings = Vec::new();
-
-    for row in 0..capacity {
-        let slot = match table.native_field_slot(row) {
-            Some(slot) => {
-                let member = table.fields[row as usize].as_ref().expect("resolved field row");
-
-                field_bindings.push(super::handles::JavaFieldBinding {
-                    class_name: table.class_name(member.class_index).into(),
-                    name: member.name.clone(),
-                    descriptor: member.descriptor.clone(),
-                    slot,
-                });
-
-                slot
-            }
-            None => compatibility_base + row,
-        };
-
-        write_generic(core, table.outputs.field_offsets + row * 2, slot as u16)?;
+    for row in table.fields.len() as u32..capacity {
+        write_generic(
+            core,
+            table.outputs.field_offsets + row * 2,
+            (compatibility_base + row) as u16,
+        )?;
     }
 
     handles.set_field_bindings(field_bindings);
     handles.set_field_slots(compatibility_base + capacity);
 
     tracing::debug!(
-        "LGT field slots: {capacity} rows, native base {compatibility_base}"
+        "LGT native platform resolver: {} classes, {} field rows, {} static-field rows, {} virtual rows, {} interface rows, {} static rows",
+        table.classes.len(),
+        table.fields.len(),
+        table.static_fields.len(),
+        table.virtual_methods.len(),
+        table.interface_methods.len(),
+        table.static_methods.len(),
     );
 
     Ok(())
