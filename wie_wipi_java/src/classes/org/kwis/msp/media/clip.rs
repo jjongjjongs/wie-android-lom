@@ -37,7 +37,6 @@ impl Clip {
                     Self::set_listener,
                     Default::default(),
                 ),
-                JavaMethodProto::new("setBuffer", "([BI)V", Self::set_buffer, Default::default()),
                 JavaMethodProto::new("getType", "()Ljava/lang/String;", Self::get_type, Default::default()),
                 JavaMethodProto::new("setPosition", "(I)Z", Self::set_position, Default::default()),
                 JavaMethodProto::new("getPosition", "()I", Self::get_position, Default::default()),
@@ -55,11 +54,12 @@ impl Clip {
         }
     }
 
-    async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, r#type: ClassInstanceRef<String>) -> JvmResult<()> {
+    async fn init(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, r#type: ClassInstanceRef<String>) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.media.Clip::<init>({this:?}, {type:?})");
 
-        let _: () = jvm.invoke_special(&this, "org/kwis/msp/media/BaseClip", "<init>", "()V", ()).await?;
-        jvm.put_field(&mut this, "type", "Ljava/lang/String;", r#type).await?;
+        let _: () = jvm
+            .invoke_special(&this, "org/kwis/msp/media/Clip", "<init>", "(Ljava/lang/String;I)V", (r#type, 0))
+            .await?;
 
         Ok(())
     }
@@ -73,7 +73,11 @@ impl Clip {
     ) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.media.Clip::<init>({this:?}, {type:?}, {resource_name:?})");
 
-        let class = jvm.invoke_virtual(&r#type, "getClass", "()Ljava/lang/Class;", ()).await?;
+        let _: () = jvm
+            .invoke_special(&this, "org/kwis/msp/media/Clip", "<init>", "(Ljava/lang/String;)V", (r#type.clone(),))
+            .await?;
+
+        let class = jvm.invoke_virtual(&this, "getClass", "()Ljava/lang/Class;", ()).await?;
         let resource_stream = jvm
             .invoke_virtual(
                 &class,
@@ -83,19 +87,12 @@ impl Clip {
             )
             .await?;
         let data = JavaIoInputStream::read_until_end(jvm, &resource_stream).await?;
+        let data_len = data.len();
 
-        let mut data_array = jvm.instantiate_array("B", data.len()).await?;
+        let mut data_array = jvm.instantiate_array("B", data_len).await?;
         jvm.store_array(&mut data_array, 0, cast_vec::<u8, i8>(data)).await?;
 
-        let _: () = jvm
-            .invoke_special(
-                &this,
-                "org/kwis/msp/media/Clip",
-                "<init>",
-                "(Ljava/lang/String;[B)V",
-                (r#type, data_array),
-            )
-            .await?;
+        let _: bool = jvm.invoke_virtual(&this, "setBuffer", "([BI)Z", (data_array, data_len as i32)).await?;
 
         Ok(())
     }
@@ -114,7 +111,7 @@ impl Clip {
             .await?;
         let length = jvm.array_length(&data).await?;
 
-        let _: () = jvm.invoke_virtual(&this, "setBuffer", "([BI)V", (data, length as i32)).await?;
+        let _: bool = jvm.invoke_virtual(&this, "setBuffer", "([BI)Z", (data, length as i32)).await?;
 
         Ok(())
     }
@@ -122,17 +119,19 @@ impl Clip {
     async fn init_with_data_size(
         jvm: &Jvm,
         _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
+        mut this: ClassInstanceRef<Self>,
         r#type: ClassInstanceRef<String>,
         size: i32,
     ) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.media.Clip::<init>({this:?}, {type:?}, {size})");
 
-        let data = jvm.instantiate_array("B", size as _).await?;
+        if size < 0 {
+            return Err(jvm.exception("java/lang/NegativeArraySizeException", "").await);
+        }
 
-        let _: () = jvm
-            .invoke_special(&this, "org/kwis/msp/media/Clip", "<init>", "(Ljava/lang/String;[B)V", (r#type, data))
-            .await?;
+        let _: () = jvm.invoke_special(&this, "org/kwis/msp/media/BaseClip", "<init>", "()V", ()).await?;
+        jvm.put_field(&mut this, "type", "Ljava/lang/String;", r#type).await?;
+        jvm.put_field(&mut this, "__wieBufferSize", "I", size).await?;
 
         Ok(())
     }
@@ -151,20 +150,6 @@ impl Clip {
 
     async fn set_listener(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, listener: ClassInstanceRef<PlayListener>) -> JvmResult<()> {
         tracing::warn!("stub org.kwis.msp.media.Clip::setListener({this:?}, {listener:?})");
-
-        Ok(())
-    }
-
-    async fn set_buffer(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-        buffer: ClassInstanceRef<Array<i8>>,
-        size: i32,
-    ) -> JvmResult<()> {
-        tracing::debug!("org.kwis.msp.media.Clip::setBuffer({this:?}, {buffer:?}, {size})");
-
-        let _: i32 = jvm.invoke_virtual(&this, "putData", "([BII)I", (buffer, 0, size)).await?;
 
         Ok(())
     }
@@ -219,7 +204,7 @@ mod test {
     use alloc::boxed::Box;
 
     use java_runtime::classes::java::lang::String;
-    use jvm::{ClassInstanceRef, runtime::JavaLangString};
+    use jvm::{ClassInstanceRef, JavaError, runtime::JavaLangString};
     use test_utils::run_jvm_test;
     use wie_util::Result;
 
@@ -271,6 +256,40 @@ mod test {
 
             assert_eq!(JavaLangString::to_rust_string(&jvm, &returned_string_type).await?, "audio/string");
             assert_eq!(JavaLangString::to_rust_string(&jvm, &returned_data_type).await?, "audio/data");
+
+            let mut second_data = jvm.instantiate_array("B", 2).await?;
+            jvm.store_array(&mut second_data, 0, [4i8, 5]).await?;
+
+            let second_set: bool = jvm
+                .invoke_virtual(&data_clip, "setBuffer", "([BI)Z", (second_data, 2))
+                .await?;
+            assert!(!second_set);
+
+            let string_type = JavaLangString::from_rust_string(&jvm, "audio/oversize").await?;
+            let oversize_clip: ClassInstanceRef<Clip> = jvm
+                .new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;)V", (string_type,))
+                .await?
+                .into();
+
+            let mut short_data = jvm.instantiate_array("B", 2).await?;
+            jvm.store_array(&mut short_data, 0, [6i8, 7]).await?;
+
+            let oversize_set: bool = jvm
+                .invoke_virtual(&oversize_clip, "setBuffer", "([BI)Z", (short_data, 5))
+                .await?;
+            assert!(oversize_set);
+
+            let stored_size: i32 = jvm.get_field(&oversize_clip, "__wieBufferSize", "I").await?;
+            assert_eq!(stored_size, 5);
+
+            let negative_type = JavaLangString::from_rust_string(&jvm, "audio/negative").await?;
+            let negative_result = jvm
+                .new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;I)V", (negative_type, -1))
+                .await;
+
+            let negative_exception = negative_result.expect_err("negative Clip size must throw");
+            let JavaError::JavaException(exception) = negative_exception;
+            assert!(jvm.is_instance(&*exception, "java/lang/NegativeArraySizeException"));
 
             Ok(())
         })

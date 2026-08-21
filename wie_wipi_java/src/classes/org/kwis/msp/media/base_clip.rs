@@ -18,11 +18,15 @@ impl BaseClip {
             interfaces: vec![],
             methods: vec![
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
+                JavaMethodProto::new("setBuffer", "([BI)Z", Self::set_buffer, Default::default()),
                 JavaMethodProto::new("putData", "([BII)I", Self::put_data, Default::default()),
                 JavaMethodProto::new("clearData", "()V", Self::clear_data, Default::default()),
                 JavaMethodProto::new("availableDataSize", "()I", Self::available_data_size, Default::default()),
             ],
-            fields: vec![JavaFieldProto::new("player", "Ljavax/microedition/media/Player;", Default::default())],
+            fields: vec![
+                JavaFieldProto::new("player", "Ljavax/microedition/media/Player;", Default::default()),
+                JavaFieldProto::new("__wieBufferSize", "I", Default::default()),
+            ],
             access_flags: Default::default(),
         }
     }
@@ -33,6 +37,37 @@ impl BaseClip {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
         Ok(())
+    }
+
+    async fn set_buffer(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        buffer: ClassInstanceRef<Array<i8>>,
+        size: i32,
+    ) -> JvmResult<bool> {
+        tracing::debug!("org.kwis.msp.media.BaseClip::setBuffer({this:?}, {buffer:?}, {size})");
+
+        let current_size: i32 = jvm.get_field(&this, "__wieBufferSize", "I").await?;
+        if current_size > 0 {
+            return Ok(false);
+        }
+
+        // Native dereferences the byte array here, so a null buffer must
+        // preserve the JVM's normal null-array failure.
+        let array_length = jvm.array_length(&buffer).await? as i32;
+        let data_size = core::cmp::min(array_length, size);
+
+        let result: i32 = jvm.invoke_virtual(&this, "putData", "([BII)I", (buffer, 0, data_size)).await?;
+        if result < 0 {
+            return Ok(false);
+        }
+
+        // Native stores the original requested size, while mediaSetBuffer0
+        // clamps only the byte count passed to the backend.
+        jvm.put_field(&mut this, "__wieBufferSize", "I", size).await?;
+
+        Ok(true)
     }
 
     async fn available_data_size(_jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
