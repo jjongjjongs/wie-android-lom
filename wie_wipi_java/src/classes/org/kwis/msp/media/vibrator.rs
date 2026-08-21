@@ -34,8 +34,10 @@ impl Vibrator {
         Ok(())
     }
 
-    async fn off(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.media.Vibrator::off()");
+    async fn off(_: &Jvm, context: &mut WieJvmContext) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.media.Vibrator::off()");
+
+        context.system().platform().vibrate(0, 0);
 
         Ok(())
     }
@@ -51,7 +53,7 @@ mod test {
     use crate::get_protos;
 
     #[test]
-    fn test_off_is_noop() -> Result<()> {
+    fn test_off_is_callable() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let _: () = jvm.invoke_static("org/kwis/msp/media/Vibrator", "off", "()V", ()).await?;
 

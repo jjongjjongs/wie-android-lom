@@ -308,6 +308,7 @@ final class AndroidAudioOutput {
 
         long durationMs = readLong(command, 2);
         if (durationMs <= 0) {
+            vibrator.cancel();
             return;
         }
 
