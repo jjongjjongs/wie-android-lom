@@ -1,10 +1,13 @@
-use alloc::vec;
+use alloc::{boxed::Box, sync::Arc, vec};
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
+use java_class_proto::{JavaFieldProto, JavaMethodProto, MethodBody};
+use jvm::{Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::media::Player;
+
+use crate::classes::org::kwis::msp::media::PlayListener;
 
 // not in reference, but called by some apps..
 // class org.kwis.msp.media.BaseClip
@@ -131,7 +134,7 @@ impl BaseClip {
 
     async fn media_play(
         jvm: &Jvm,
-        _: &mut WieJvmContext,
+        context: &mut WieJvmContext,
         this: ClassInstanceRef<Self>,
         repeat: bool,
     ) -> JvmResult<i32> {
@@ -144,7 +147,25 @@ impl BaseClip {
             return Ok(-9);
         }
 
-        let _: () = jvm.invoke_virtual(&player, "start", "(Z)V", (repeat,)).await?;
+        if player.class_definition().name() == "net/wie/SmafPlayer" {
+            let audio_handle: i32 = jvm.get_field(&player, "audioHandle", "I").await?;
+            let system = context.system();
+            let (completed, stopped) = system
+                .audio()
+                .play_with_completion(system, audio_handle as u32, repeat)
+                .unwrap();
+
+            context.spawn(
+                jvm,
+                Box::new(ClipCompletionRunner {
+                    clip: this,
+                    completed,
+                    stopped,
+                }),
+            )?;
+        } else {
+            let _: () = jvm.invoke_virtual(&player, "start", "(Z)V", (repeat,)).await?;
+        }
 
         Ok(0)
     }
@@ -209,4 +230,222 @@ impl BaseClip {
 
         Ok(())
     }
+}
+
+struct ClipCompletionRunner {
+    clip: ClassInstanceRef<BaseClip>,
+    completed: Arc<AtomicBool>,
+    stopped: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl MethodBody<JavaError, WieJvmContext> for ClipCompletionRunner {
+    async fn call(
+        &self,
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        _args: Box<[JavaValue]>,
+    ) -> Result<JavaValue, JavaError> {
+        jvm.attach_thread(None).await?;
+
+        while !self.completed.load(Ordering::Acquire) {
+            if self.stopped.load(Ordering::Relaxed) {
+                return Ok(JavaValue::Void);
+            }
+
+            context.system().sleep(1).await;
+        }
+
+        if self.stopped.load(Ordering::Relaxed) {
+            return Ok(JavaValue::Void);
+        }
+
+        let listener: ClassInstanceRef<PlayListener> = jvm
+            .get_field(
+                &self.clip,
+                "playListener",
+                "Lorg/kwis/msp/media/PlayListener;",
+            )
+            .await?;
+
+        if !listener.is_null() {
+            let _: () = jvm
+                .invoke_virtual(
+                    &listener,
+                    "playUpdate",
+                    "(Lorg/kwis/msp/media/Clip;II)V",
+                    (self.clip.clone(), 1i32, 0i32),
+                )
+                .await?;
+        }
+
+        Ok(JavaValue::Void)
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use alloc::{boxed::Box, vec, vec::Vec};
+
+    use java_class_proto::{JavaFieldProto, JavaMethodProto};
+    use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
+    use test_utils::run_jvm_test;
+    use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
+    use wie_util::Result;
+
+    use crate::{
+        classes::org::kwis::msp::media::{Clip, PlayListener},
+        get_protos,
+    };
+
+    struct CompletionListener;
+
+    impl CompletionListener {
+        fn as_proto() -> WieJavaClassProto {
+            WieJavaClassProto {
+                name: "test/CompletionListener",
+                parent_class: Some("java/lang/Object"),
+                interfaces: vec!["org/kwis/msp/media/PlayListener"],
+                methods: vec![
+                    JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
+                    JavaMethodProto::new(
+                        "playUpdate",
+                        "(Lorg/kwis/msp/media/Clip;II)V",
+                        Self::play_update,
+                        Default::default(),
+                    ),
+                ],
+                fields: vec![
+                    JavaFieldProto::new("count", "I", Default::default()),
+                    JavaFieldProto::new("event", "I", Default::default()),
+                    JavaFieldProto::new("param", "I", Default::default()),
+                    JavaFieldProto::new(
+                        "clip",
+                        "Lorg/kwis/msp/media/Clip;",
+                        Default::default(),
+                    ),
+                ],
+                access_flags: Default::default(),
+            }
+        }
+
+        async fn init(
+            jvm: &Jvm,
+            _: &mut WieJvmContext,
+            this: ClassInstanceRef<Self>,
+        ) -> JvmResult<()> {
+            jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ())
+                .await
+        }
+
+        async fn play_update(
+            jvm: &Jvm,
+            _: &mut WieJvmContext,
+            mut this: ClassInstanceRef<Self>,
+            clip: ClassInstanceRef<Clip>,
+            event: i32,
+            param: i32,
+        ) -> JvmResult<()> {
+            let count: i32 = jvm.get_field(&this, "count", "I").await?;
+            jvm.put_field(&mut this, "count", "I", count + 1).await?;
+            jvm.put_field(&mut this, "event", "I", event).await?;
+            jvm.put_field(&mut this, "param", "I", param).await?;
+            jvm.put_field(
+                &mut this,
+                "clip",
+                "Lorg/kwis/msp/media/Clip;",
+                clip,
+            )
+            .await
+        }
+    }
+
+    fn minimal_smaf() -> Vec<i8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"MMMD");
+        data.extend_from_slice(&27u32.to_be_bytes());
+        data.extend_from_slice(b"CNTI");
+        data.extend_from_slice(&5u32.to_be_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0, 0]);
+        data.extend_from_slice(b"XXXX");
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.into_iter().map(|x| x as i8).collect()
+    }
+
+    #[test]
+    fn test_natural_completion_calls_legacy_play_listener_once() -> Result<()> {
+        run_jvm_test(
+            Box::new([
+                wie_midp::get_protos().into(),
+                get_protos().into(),
+                [CompletionListener::as_proto()].into(),
+            ]),
+            |jvm| async move {
+                let r#type = JavaLangString::from_rust_string(&jvm, "audio/test").await?;
+                let bytes = minimal_smaf();
+                let mut data = jvm.instantiate_array("B", bytes.len()).await?;
+                jvm.store_array(&mut data, 0, bytes).await?;
+
+                let clip: ClassInstanceRef<Clip> = jvm
+                    .new_class(
+                        "org/kwis/msp/media/Clip",
+                        "(Ljava/lang/String;[B)V",
+                        (r#type, data),
+                    )
+                    .await?
+                    .into();
+
+                let listener: ClassInstanceRef<PlayListener> = jvm
+                    .new_class("test/CompletionListener", "()V", ())
+                    .await?
+                    .into();
+
+                let listener_state = listener.clone();
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &clip,
+                        "setListener",
+                        "(Lorg/kwis/msp/media/PlayListener;)V",
+                        (listener,),
+                    )
+                    .await?;
+
+                let result: i32 = jvm.invoke_virtual(&clip, "mediaPlay", "(Z)I", (false,)).await?;
+                assert_eq!(result, 0);
+
+                for _ in 0..100 {
+                    let count: i32 = jvm.get_field(&listener_state, "count", "I").await?;
+                    if count != 0 {
+                        break;
+                    }
+                    let _: () = jvm
+                        .invoke_static("java/lang/Thread", "yield", "()V", ())
+                        .await?;
+                }
+
+                let count: i32 = jvm.get_field(&listener_state, "count", "I").await?;
+                let event: i32 = jvm.get_field(&listener_state, "event", "I").await?;
+                let param: i32 = jvm.get_field(&listener_state, "param", "I").await?;
+                let callback_clip: ClassInstanceRef<Clip> = jvm
+                    .get_field(
+                        &listener_state,
+                        "clip",
+                        "Lorg/kwis/msp/media/Clip;",
+                    )
+                    .await?;
+
+                assert_eq!(count, 1);
+                assert_eq!(event, 1);
+                assert_eq!(param, 0);
+                assert_eq!(callback_clip.identity(), clip.identity());
+
+                Ok(())
+            },
+        )
+    }
+
 }
