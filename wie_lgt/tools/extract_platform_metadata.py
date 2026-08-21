@@ -10,6 +10,50 @@ def rust_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+DISPATCH_ONLY_METHODS = {
+    "java/lang/StringBuffer": [
+        ("setShared", "()V", 39, 0x00135780),
+        ("getValue", "()[C", 40, 0x00135764),
+    ],
+    "org/kwis/msp/lcdui/Display": [
+        ("serviceRepaints", "(Z)V", 33, 0x001F2C24),
+        ("repaint", "(Lorg/kwis/msp/lcdui/Card;)V", 34, 0x001EFB80),
+        ("repaint", "(Lorg/kwis/msp/lcdui/Card;IIII)V", 35, 0x001F0A20),
+        ("eventNotify", "(III)V", 36, 0x001F2740),
+        ("keyNotify", "(II)Z", 37, 0x001F13F4),
+        ("pointerNotify", "(III)Z", 38, 0x001F130C),
+        ("postCallSeriallyEvent", "()V", 39, 0x001F0FB8),
+        ("getFreeIndex", "()I", 40, 0x001F0D74),
+    ],
+    "org/kwis/msp/lcdui/Image": [
+        ("getDelay", "()I", 20, 0x001FFF98),
+        ("decodeNextFrame", "()I", 23, 0x00203C2C),
+        ("decodeFrame", "(I)Z", 24, 0x00205C6C),
+        ("getImageHandle", "()I", 25, 0x001FFF34),
+        ("loadImage0", "(Ljava/lang/String;)I", 26, 0x00202DD4),
+    ],
+    "org/kwis/msp/lcdui/JletWrapper": [
+        ("<init>", "()V", 0, 0x0020D5A0),
+    ],
+    "org/kwis/msp/lwc/TextBoxComponent": [
+        ("setString", "(Ljava/lang/String;I)V", 59, 0x00233C90),
+        ("controlPopup", "()V", 64, 0x00233DCC),
+    ],
+    "org/kwis/msp/lwc/TextComponent": [
+        ("replace", "(Ljava/lang/String;II)V", 54, 0x00241A14),
+        ("setConstraint", "(I)V", 55, 0x00241948),
+        ("controlCursor", "(III)V", 56, 0x00236BD8),
+        ("controlInputMethodHandler", "(I)V", 57, 0x00241884),
+        ("modeSetting", "(I)V", 58, 0x00236F10),
+        ("setString", "(Ljava/lang/String;I)V", 59, 0x00236BA0),
+        ("setSymbolPosition", "()V", 60, 0x00236D40),
+        ("changeModeCard", "()V", 61, 0x00236D00),
+        ("countModeYPos", "()I", 62, 0x00236C74),
+        ("calcViewPortArea", "()V", 63, 0x00241680),
+    ],
+}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("library", type=Path)
@@ -189,6 +233,14 @@ def main():
     lines.append("    pub entry: u32,")
     lines.append("}")
     lines.append("")
+    lines.append("#[derive(Debug, Clone, Copy)]")
+    lines.append("pub struct PlatformDispatchMethod {")
+    lines.append("    pub name: &'static str,")
+    lines.append("    pub descriptor: &'static str,")
+    lines.append("    pub slot: u32,")
+    lines.append("    pub entry: u32,")
+    lines.append("}")
+    lines.append("")
     lines.append("#[derive(Debug)]")
     lines.append("pub struct PlatformClass {")
     lines.append("    pub name: &'static str,")
@@ -198,6 +250,7 @@ def main():
     lines.append("    pub get_raw_class: u32,")
     lines.append("    pub fields: &'static [PlatformField],")
     lines.append("    pub methods: &'static [PlatformMethod],")
+    lines.append("    pub dispatch_methods: &'static [PlatformDispatchMethod],")
     lines.append("    pub dispatch: &'static [u32],")
     lines.append("}")
     lines.append("")
@@ -236,6 +289,29 @@ def main():
             lines.append(f"static METHODS_{index}: &[PlatformMethod] = &[];")
         lines.append("")
 
+        dispatch_only = DISPATCH_ONLY_METHODS.get(cls["name"], [])
+        if dispatch_only:
+            lines.append(f"static DISPATCH_METHODS_{index}: &[PlatformDispatchMethod] = &[")
+            for name, descriptor, slot, entry in dispatch_only:
+                if slot >= len(cls["dispatch"]) or cls["dispatch"][slot] != entry:
+                    raise ValueError(
+                        f"{cls['name']}: dispatch-only method {name}{descriptor} "
+                        f"slot {slot} expected {entry:#x}, got "
+                        f"{cls['dispatch'][slot] if slot < len(cls['dispatch']) else None}"
+                    )
+                lines.append(
+                    "    PlatformDispatchMethod { "
+                    f"name: {rust_string(name)}, "
+                    f"descriptor: {rust_string(descriptor)}, "
+                    f"slot: {slot}, "
+                    f"entry: {entry:#010x} "
+                    "},"
+                )
+            lines.append("];")
+        else:
+            lines.append(f"static DISPATCH_METHODS_{index}: &[PlatformDispatchMethod] = &[];")
+        lines.append("")
+
         if cls["dispatch"]:
             values = ", ".join(f"{entry:#010x}" for entry in cls["dispatch"])
             lines.append(f"static DISPATCH_{index}: &[u32] = &[{values}];")
@@ -258,6 +334,7 @@ def main():
         lines.append(f"        get_raw_class: {cls['get_raw_class']:#010x},")
         lines.append(f"        fields: FIELDS_{index},")
         lines.append(f"        methods: METHODS_{index},")
+        lines.append(f"        dispatch_methods: DISPATCH_METHODS_{index},")
         lines.append(f"        dispatch: DISPATCH_{index},")
         lines.append("    },")
     lines.append("];")
@@ -287,16 +364,25 @@ def main():
     )
     lines.append("    }")
     lines.append("")
-    lines.append("    pub fn dispatch_method(&self, slot: u32) -> Option<&PlatformMethod> {")
+    lines.append("    pub fn dispatch_method(&self, slot: u32) -> Option<(&'static str, &'static str)> {")
     lines.append("        let mut class = self;")
     lines.append("        loop {")
     lines.append("            if let Some(entry) = class.dispatch.get(slot as usize).copied()")
     lines.append("                && entry != 0")
     lines.append("            {")
-    lines.append("                return PLATFORM_CLASSES")
+    lines.append("                if let Some(method) = PLATFORM_CLASSES")
     lines.append("                    .iter()")
     lines.append("                    .flat_map(|candidate| candidate.methods)")
-    lines.append("                    .find(|method| method.entry == entry);")
+    lines.append("                    .find(|method| method.entry == entry)")
+    lines.append("                {")
+    lines.append("                    return Some((method.name, method.descriptor));")
+    lines.append("                }")
+    lines.append("")
+    lines.append("                return class")
+    lines.append("                    .dispatch_methods")
+    lines.append("                    .iter()")
+    lines.append("                    .find(|method| method.slot == slot && method.entry == entry)")
+    lines.append("                    .map(|method| (method.name, method.descriptor));")
     lines.append("            }")
     lines.append("")
     lines.append("            class = platform_class(class.superclass?)?;")
@@ -366,12 +452,41 @@ def main():
     lines.append("    fn native_dispatch_tables_are_preserved() {")
     lines.append('        let string = platform_class("java/lang/String").unwrap();')
     lines.append("        assert_eq!(string.dispatch.len(), 36);")
-    lines.append('        assert_eq!(string.dispatch_method(16).unwrap().name, "compareTo");')
+    lines.append('        assert_eq!(string.dispatch_method(16).unwrap().0, "compareTo");')
     lines.append('        let clip = platform_class("org/kwis/msp/media/Clip").unwrap();')
     lines.append("        assert_eq!(clip.dispatch.len(), 80);")
-    lines.append('        assert_eq!(clip.dispatch_method(32).unwrap().name, "availableDataSize");')
+    lines.append('        assert_eq!(clip.dispatch_method(32).unwrap().0, "availableDataSize");')
     lines.append('        let socket = platform_class("org/kwis/msf/io/Socket").unwrap();')
     lines.append("        assert!(socket.dispatch.is_empty());")
+    lines.append('        let display = platform_class("org/kwis/msp/lcdui/Display").unwrap();')
+    lines.append('        assert_eq!(display.dispatch_method(33), Some(("serviceRepaints", "(Z)V")));')
+    lines.append('        assert_eq!(display.dispatch_method(40), Some(("getFreeIndex", "()I")));')
+    lines.append("    }")
+    lines.append("")
+    lines.append("    #[test]")
+    lines.append("    fn dispatch_only_methods_are_resolved() {")
+    lines.append("        let cases = [")
+    for class_name, methods in DISPATCH_ONLY_METHODS.items():
+        for name, descriptor, slot, _entry in methods:
+            lines.append(
+                "            ("
+                f"{rust_string(class_name)}, "
+                f"{slot}, "
+                f"{rust_string(name)}, "
+                f"{rust_string(descriptor)}"
+                "),"
+            )
+    lines.append("        ];")
+    lines.append("")
+    lines.append("        assert_eq!(cases.len(), 28);")
+    lines.append("        for (class_name, slot, name, descriptor) in cases {")
+    lines.append("            let class = platform_class(class_name).unwrap();")
+    lines.append("            assert_eq!(")
+    lines.append("                class.dispatch_method(slot),")
+    lines.append("                Some((name, descriptor)),")
+    lines.append('                "{class_name} slot {slot}",')
+    lines.append("            );")
+    lines.append("        }")
     lines.append("    }")
     lines.append("")
     lines.append("    #[test]")

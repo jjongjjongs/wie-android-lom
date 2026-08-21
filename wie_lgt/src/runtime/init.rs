@@ -1143,12 +1143,13 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
     // Resolve fixed native dispatch slots from the receiver's actual platform
     // class even when the application never imported that class or method.
     if let Some(receiver_class) = context.java_handles.get(this).map(|instance| instance.class_definition().name())
-        && let Some(method) = platform_class(&receiver_class).and_then(|class| class.dispatch_method(slot))
+        && let Some((method_name, method_descriptor)) =
+            platform_class(&receiver_class).and_then(|class| class.dispatch_method(slot))
     {
         let member = ResolvedMember {
             class_name: receiver_class.clone(),
-            name: method.name.into(),
-            descriptor: method.descriptor.into(),
+            name: method_name.into(),
+            descriptor: method_descriptor.into(),
         };
 
         let handles = context.java_handles.clone();
@@ -1160,8 +1161,8 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
                 tracing::warn!(
                     "LGT {}.{}{} at slot {slot} failed: {error}",
                     receiver_class,
-                    method.name,
-                    method.descriptor
+                    method_name,
+                    method_descriptor
                 );
                 Ok(0)
             }
@@ -1210,11 +1211,13 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
         return Ok(0);
     };
 
-    if let Some(method) = platform_class(&class).and_then(|platform| platform.dispatch_method(slot)) {
+    if let Some((method_name, method_descriptor)) =
+        platform_class(&class).and_then(|platform| platform.dispatch_method(slot))
+    {
         let member = ResolvedMember {
             class_name: class.clone(),
-            name: method.name.into(),
-            descriptor: method.descriptor.into(),
+            name: method_name.into(),
+            descriptor: method_descriptor.into(),
         };
 
         let handles = context.java_handles.clone();
