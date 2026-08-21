@@ -228,6 +228,24 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             return Ok(());
         }
 
+        // Native Java-interface slot 0x57 is `vm_monitor_exit(object)`.
+        // It releases one level of the reentrant monitor acquired by slot
+        // 0x56 and throws IllegalMonitorStateException when the current
+        // thread does not own it.
+        if function_index == 0x57 {
+            let Some(instance) = context.java_handles.get(a0) else {
+                return Err(WieError::FatalError(format!("vm_monitor_exit({a0:#x}) names no JVM instance")));
+            };
+
+            tracing::trace!("vm_monitor_exit({a0:#x})");
+            if let Err(error) = context.jvm.monitor_exit(&instance).await {
+                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+            }
+
+            0u32.write(core, lr)?;
+            return Ok(());
+        }
+
         // `vm_alloc_save_point(depth)` takes an entry out of a per-thread pool
         // of 0x10c byte blocks and hands it back for the compiled code to
         // record its unwind state in; `vm_free_save_point` returns it. Zero
