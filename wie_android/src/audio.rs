@@ -26,7 +26,7 @@ use crate::{
 };
 use std::{
     ffi::c_void,
-    sync::atomic::{AtomicPtr, Ordering},
+    sync::atomic::{AtomicPtr, AtomicU8, Ordering},
 };
 
 const OPCODE_PLAY_WAVE: u8 = 1;
@@ -70,6 +70,15 @@ pub fn vibrate_command(duration_ms: u64, intensity: u8) -> Vec<u8> {
     command
 }
 
+fn scale_wave_volume(wave_data: &[i16], volume: u8) -> Vec<i16> {
+    let volume = volume.min(100);
+
+    wave_data
+        .iter()
+        .map(|sample| ((*sample as i32 * i32::from(volume)) / 100) as i16)
+        .collect()
+}
+
 fn play_wave_command(channel: u8, sampling_rate: u32, wave_data: &[i16]) -> Vec<u8> {
     let mut command = Vec::with_capacity(HEADER_LEN + wave_data.len() * 2);
 
@@ -101,25 +110,51 @@ pub fn stream_command(samples: &[i16]) -> Vec<u8> {
 
 pub struct AndroidAudioSink {
     shared: Shared,
+    master_volume: AtomicU8,
 }
 
 impl AndroidAudioSink {
     pub fn new(shared: Shared) -> Self {
-        Self { shared }
+        Self {
+            shared,
+            master_volume: AtomicU8::new(100),
+        }
     }
 }
 
 impl wie_backend::AudioSink for AndroidAudioSink {
+    fn set_master_volume(&self, volume: u8) {
+        let volume = volume.min(100);
+        self.master_volume.store(volume, Ordering::Relaxed);
+        self.shared.synth().set_master_volume(volume);
+    }
+
     fn play_wave(&self, channel: u8, sampling_rate: u32, wave_data: &[i16]) {
         if wave_data.is_empty() {
             return;
         }
 
-        if wave_callback_consumed(channel, sampling_rate, wave_data) {
+        let volume = self.master_volume.load(Ordering::Relaxed);
+        if volume == 0 {
             return;
         }
 
-        self.shared.push_audio(play_wave_command(channel, sampling_rate, wave_data));
+        if volume == 100 {
+            if wave_callback_consumed(channel, sampling_rate, wave_data) {
+                return;
+            }
+
+            self.shared.push_audio(play_wave_command(channel, sampling_rate, wave_data));
+            return;
+        }
+
+        let scaled = scale_wave_volume(wave_data, volume);
+
+        if wave_callback_consumed(channel, sampling_rate, &scaled) {
+            return;
+        }
+
+        self.shared.push_audio(play_wave_command(channel, sampling_rate, &scaled));
     }
 
     fn midi_note_on(&self, channel_id: u8, note: u8, velocity: u8) {
@@ -152,7 +187,7 @@ impl wie_backend::AudioSink for AndroidAudioSink {
 
 #[cfg(test)]
 mod tests {
-    use super::{HEADER_LEN, play_wave_command, vibrate_command};
+    use super::{HEADER_LEN, play_wave_command, scale_wave_volume, vibrate_command};
 
     #[test]
     fn play_wave_layout_matches_java_decoder() {
@@ -165,6 +200,15 @@ mod tests {
         assert_eq!(u32::from_le_bytes(command[6..10].try_into().unwrap()), 2);
         assert_eq!(command.len(), HEADER_LEN + 4);
         assert_eq!(i16::from_le_bytes(command[10..12].try_into().unwrap()), -2);
+    }
+
+    #[test]
+    fn wave_volume_preserves_wipi_endpoints_and_scales_middle() {
+        let input = [-30000, -10000, 10000, 30000];
+
+        assert_eq!(scale_wave_volume(&input, 0), [0, 0, 0, 0]);
+        assert_eq!(scale_wave_volume(&input, 50), [-15000, -5000, 5000, 15000]);
+        assert_eq!(scale_wave_volume(&input, 100), input);
     }
 
     #[test]

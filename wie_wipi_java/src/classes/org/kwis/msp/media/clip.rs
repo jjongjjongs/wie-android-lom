@@ -48,7 +48,6 @@ impl Clip {
                 JavaFieldProto::new("position", "I", Default::default()),
                 JavaFieldProto::new("stopTime", "I", Default::default()),
                 JavaFieldProto::new("type", "Ljava/lang/String;", Default::default()),
-                JavaFieldProto::new("volume", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -136,16 +135,15 @@ impl Clip {
         Ok(())
     }
 
-    async fn set_volume(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Clip>, level: i32) -> JvmResult<bool> {
+    async fn set_volume(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Clip>, level: i32) -> JvmResult<bool> {
         tracing::debug!("org.kwis.msp.media.Clip::setVolume({this:?}, {level})");
 
         if !(0..=100).contains(&level) {
             return Ok(false);
         }
 
-        jvm.put_field(&mut this, "volume", "I", level).await?;
-
-        Ok(true)
+        let result: i32 = jvm.invoke_virtual(&this, "mediaSetVolume", "(I)I", (level,)).await?;
+        Ok(result >= 0)
     }
 
     async fn set_listener(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, listener: ClassInstanceRef<PlayListener>) -> JvmResult<()> {
@@ -191,7 +189,7 @@ impl Clip {
     async fn get_volume(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.media.Clip::getVolume({this:?})");
 
-        jvm.get_field(&this, "volume", "I").await
+        jvm.invoke_virtual(&this, "mediaGetVolume", "()I", ()).await
     }
 
     pub async fn player(jvm: &Jvm, this: &ClassInstanceRef<Self>) -> JvmResult<ClassInstanceRef<Player>> {
@@ -299,14 +297,20 @@ mod test {
     fn test_volume_range_round_trip() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let r#type = JavaLangString::from_rust_string(&jvm, "audio/test").await?;
-            let clip: ClassInstanceRef<Clip> = jvm.new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;)V", (r#type,)).await?.into();
-            let second_type = JavaLangString::from_rust_string(&jvm, "audio/second").await?;
-            let second_clip: ClassInstanceRef<Clip> = jvm
-                .new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;)V", (second_type,))
+            let mut data = jvm.instantiate_array("B", 1).await?;
+            jvm.store_array(&mut data, 0, [0i8]).await?;
+            let clip: ClassInstanceRef<Clip> = jvm
+                .new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;[B)V", (r#type, data))
                 .await?
                 .into();
 
-            let second_initial_volume: i32 = jvm.invoke_virtual(&second_clip, "getVolume", "()I", ()).await?;
+            let second_type = JavaLangString::from_rust_string(&jvm, "audio/second").await?;
+            let mut second_data = jvm.instantiate_array("B", 1).await?;
+            jvm.store_array(&mut second_data, 0, [0i8]).await?;
+            let second_clip: ClassInstanceRef<Clip> = jvm
+                .new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;[B)V", (second_type, second_data))
+                .await?
+                .into();
 
             let minimum_set: bool = jvm.invoke_virtual(&clip, "setVolume", "(I)Z", (0,)).await?;
             let minimum_volume: i32 = jvm.invoke_virtual(&clip, "getVolume", "()I", ()).await?;
@@ -316,9 +320,7 @@ mod test {
             let volume_after_below_minimum: i32 = jvm.invoke_virtual(&clip, "getVolume", "()I", ()).await?;
             let above_maximum_set: bool = jvm.invoke_virtual(&clip, "setVolume", "(I)Z", (101,)).await?;
             let volume_after_above_maximum: i32 = jvm.invoke_virtual(&clip, "getVolume", "()I", ()).await?;
-            let second_final_volume: i32 = jvm.invoke_virtual(&second_clip, "getVolume", "()I", ()).await?;
 
-            assert_eq!(second_initial_volume, 0);
             assert!(minimum_set);
             assert_eq!(minimum_volume, 0);
             assert!(maximum_set);
@@ -327,7 +329,15 @@ mod test {
             assert_eq!(volume_after_below_minimum, 100);
             assert!(!above_maximum_set);
             assert_eq!(volume_after_above_maximum, 100);
-            assert_eq!(second_final_volume, 0);
+
+            // A separate valid Clip must keep independent backend state.
+            let second_set: bool = jvm.invoke_virtual(&second_clip, "setVolume", "(I)Z", (60,)).await?;
+            let second_after_set: i32 = jvm.invoke_virtual(&second_clip, "getVolume", "()I", ()).await?;
+            let first_after_second_set: i32 = jvm.invoke_virtual(&clip, "getVolume", "()I", ()).await?;
+
+            assert!(second_set);
+            assert_eq!(second_after_set, 60);
+            assert_eq!(first_after_second_set, 100);
 
             Ok(())
         })

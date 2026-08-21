@@ -107,6 +107,7 @@ pub struct Synth {
     channels: [Channel; MIDI_CHANNELS],
     voices: Vec<Slot>,
     bank: Bank,
+    master_volume: u8,
     /// Voices the running file has defined, so a title playing on stand ins
     /// rather than its own instruments is visible in the log.
     reported_voices: usize,
@@ -124,6 +125,7 @@ impl Synth {
             channels: [Channel::default(); MIDI_CHANNELS],
             voices: Vec::with_capacity(MAX_VOICES),
             bank: Bank::new(),
+            master_volume: 127,
             reported_voices: 0,
         }
     }
@@ -150,7 +152,7 @@ impl Synth {
             SAMPLE_RATE,
         );
 
-        let (left_q15, right_q15) = gains(&state, velocity);
+        let (left_q15, right_q15) = gains(&state, velocity, self.master_volume);
         let slot = Slot {
             channel,
             note,
@@ -270,6 +272,14 @@ impl Synth {
         self.reported_voices = 0;
     }
 
+    pub fn set_master_volume(&mut self, volume: u8) {
+        self.master_volume = ((u16::from(volume.min(100)) * 127) / 100) as u8;
+
+        for channel in 0..MIDI_CHANNELS {
+            self.refresh_gains(channel as u8);
+        }
+    }
+
     pub fn sounding(&self) -> bool {
         !self.voices.is_empty()
     }
@@ -314,21 +324,18 @@ impl Synth {
         let Some(state) = self.channels.get(channel as usize).copied() else {
             return;
         };
+        let master_volume = self.master_volume;
 
         for slot in self.voices.iter_mut().filter(|x| x.channel == channel) {
-            let (left, right) = gains(&state, slot.velocity);
+            let (left, right) = gains(&state, slot.velocity, master_volume);
             slot.left_q15 = left;
             slot.right_q15 = right;
         }
     }
 }
 
-/// Master volume is not something a sequence sets, so it stays wide open and
-/// the mix is left to the file's own levels.
-const MASTER_VOLUME: u8 = 127;
-
-fn gains(state: &Channel, velocity: u8) -> (i32, i32) {
-    stereo_gain_q15(state.volume, state.expression, velocity, MASTER_VOLUME, state.pan)
+fn gains(state: &Channel, velocity: u8, master_volume: u8) -> (i32, i32) {
+    stereo_gain_q15(state.volume, state.expression, velocity, master_volume, state.pan)
 }
 
 /// Plays a whole `.mmf` through the synthesiser and returns the result as a
@@ -408,7 +415,7 @@ fn wav(samples: &[i16]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHANNELS, MAX_VOICES, SAMPLE_RATE, Synth, modulation_depth};
+    use super::{CHANNELS, MAX_VOICES, SAMPLE_RATE, Channel, Synth, modulation_depth};
 
     /// A four operator voice, as one of the library's own files sends it.
     const VOICE: &[u8] = &[
@@ -439,6 +446,33 @@ mod tests {
 
         assert_eq!(rendered.len() % CHANNELS, 0);
         assert!(rendered.iter().any(|x| *x != 0), "every sample was zero");
+    }
+
+    #[test]
+    fn master_volume_scales_wipi_range_without_rewriting_channel_volume() {
+        let mut muted = Synth::new();
+        muted.set_master_volume(0);
+        muted.note_on(0, 69, 100);
+        let muted_audio = run(&mut muted, 20);
+        assert!(muted_audio.iter().all(|x| *x == 0));
+
+        let mut quiet = Synth::new();
+        quiet.set_master_volume(50);
+        quiet.note_on(0, 69, 100);
+        let quiet_audio = run(&mut quiet, 20);
+
+        let mut loud = Synth::new();
+        loud.set_master_volume(100);
+        loud.note_on(0, 69, 100);
+        let loud_audio = run(&mut loud, 20);
+
+        let quiet_peak = quiet_audio.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0);
+        let loud_peak = loud_audio.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0);
+
+        assert!(quiet_peak > 0);
+        assert!(quiet_peak < loud_peak);
+        assert_eq!(quiet.channels[0].volume, Channel::default().volume);
+        assert_eq!(loud.channels[0].volume, Channel::default().volume);
     }
 
     #[test]

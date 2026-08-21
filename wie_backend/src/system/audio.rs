@@ -4,7 +4,7 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use smaf_player::{SmafEvent, parse_smaf};
 
@@ -24,6 +24,7 @@ enum AudioFile {
 pub struct Audio {
     sink: Arc<Box<dyn AudioSink>>,
     files: BTreeMap<AudioHandle, AudioFile>,
+    volumes: BTreeMap<AudioHandle, Arc<AtomicU8>>,
     playing: BTreeMap<AudioHandle, Arc<AtomicBool>>,
     last_audio_handle: AudioHandle,
 }
@@ -33,6 +34,7 @@ impl Audio {
         Self {
             sink: Arc::new(sink),
             files: BTreeMap::new(),
+            volumes: BTreeMap::new(),
             playing: BTreeMap::new(),
             last_audio_handle: 0,
         }
@@ -43,6 +45,7 @@ impl Audio {
 
         self.last_audio_handle += 1;
         self.files.insert(audio_handle, AudioFile::Smaf(data.to_vec()));
+        self.volumes.insert(audio_handle, Arc::new(AtomicU8::new(100)));
 
         Ok(audio_handle)
     }
@@ -63,8 +66,10 @@ impl Audio {
             Some(AudioFile::Smaf(data)) => SmafPlayer::new(data),
             None => return Err(AudioError::InvalidHandle),
         };
+        let volume = self.volumes.get(&audio_handle).ok_or(AudioError::InvalidHandle)?.clone();
 
         self.stop(audio_handle);
+        self.sink.set_master_volume(volume.load(Ordering::Relaxed));
 
         let mut system_clone = system.clone();
         let sink_clone = self.sink.clone();
@@ -94,6 +99,24 @@ impl Audio {
         self.playing.contains_key(&audio_handle)
     }
 
+    pub fn set_volume(&mut self, audio_handle: AudioHandle, volume: u8) -> Result<(), AudioError> {
+        let state = self.volumes.get(&audio_handle).ok_or(AudioError::InvalidHandle)?;
+        state.store(volume.min(100), Ordering::Relaxed);
+
+        if self.playing.contains_key(&audio_handle) {
+            self.sink.set_master_volume(volume.min(100));
+        }
+
+        Ok(())
+    }
+
+    pub fn get_volume(&self, audio_handle: AudioHandle) -> Result<u8, AudioError> {
+        self.volumes
+            .get(&audio_handle)
+            .map(|state| state.load(Ordering::Relaxed))
+            .ok_or(AudioError::InvalidHandle)
+    }
+
     pub fn stop(&mut self, audio_handle: AudioHandle) {
         if let Some(stop_flag) = self.playing.remove(&audio_handle) {
             stop_flag.store(true, Ordering::Relaxed);
@@ -106,6 +129,7 @@ impl Audio {
         if self.files.remove(&audio_handle).is_none() {
             return Err(AudioError::InvalidHandle);
         }
+        self.volumes.remove(&audio_handle);
 
         Ok(())
     }

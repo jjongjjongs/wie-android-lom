@@ -1,4 +1,5 @@
 pub trait AudioSink: Sync + Send {
+    fn set_master_volume(&self, _volume: u8) {}
     fn play_wave(&self, channel: u8, sampling_rate: u32, wave_data: &[i16]);
     fn midi_note_on(&self, channel_id: u8, note: u8, velocity: u8);
     fn midi_note_off(&self, channel_id: u8, note: u8, velocity: u8);

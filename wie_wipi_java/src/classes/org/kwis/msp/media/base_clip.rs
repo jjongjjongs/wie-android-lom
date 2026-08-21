@@ -23,6 +23,8 @@ impl BaseClip {
                 JavaMethodProto::new("putData", "([BII)I", Self::put_data, Default::default()),
                 JavaMethodProto::new("mediaPlay", "(Z)I", Self::media_play, Default::default()),
                 JavaMethodProto::new("mediaStop", "()I", Self::media_stop, Default::default()),
+                JavaMethodProto::new("mediaGetVolume", "()I", Self::media_get_volume, Default::default()),
+                JavaMethodProto::new("mediaSetVolume", "(I)I", Self::media_set_volume, Default::default()),
                 JavaMethodProto::new("clearData", "()V", Self::clear_data, Default::default()),
                 JavaMethodProto::new("availableDataSize", "()I", Self::available_data_size, Default::default()),
             ],
@@ -155,6 +157,37 @@ impl BaseClip {
         let _: () = jvm.invoke_virtual(&player, "stop", "()V", ()).await?;
 
         Ok(0)
+    }
+
+    async fn media_get_volume(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.media.BaseClip::mediaGetVolume({this:?})");
+
+        let player: ClassInstanceRef<Player> =
+            jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
+
+        if player.is_null() {
+            return Ok(-9);
+        }
+
+        jvm.invoke_virtual(&player, "getVolume", "()I", ()).await
+    }
+
+    async fn media_set_volume(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        volume: i32,
+    ) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.media.BaseClip::mediaSetVolume({this:?}, {volume})");
+
+        let player: ClassInstanceRef<Player> =
+            jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
+
+        if player.is_null() {
+            return Ok(-9);
+        }
+
+        jvm.invoke_virtual(&player, "setVolume", "(I)I", (volume,)).await
     }
 
     async fn clear_data(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> JvmResult<()> {
