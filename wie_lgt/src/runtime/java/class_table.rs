@@ -77,11 +77,13 @@ pub struct OutputArrays {
 
 pub struct ClassTable {
     pub classes: Vec<JavaClass>,
-    /// Per class: the dispatch table an instance points at, or zero when the
-    /// class declares no virtual methods.
+    /// Per class: the guest-visible class_shared identity carried in dispatch
+    /// table word zero and in java/lang/Class's native data block.
+    pub class_roots: Vec<u32>,
+    /// Per class: the dispatch table an instance points at.
     pub vtables: Vec<u32>,
-    /// Per class: the token the class's first reserved static row hands back,
-    /// which `vm_instantiate` turns into an instance.
+    /// Per class: the activated java/lang/Class-shaped object returned by the
+    /// reserved get_class/get_raw_class rows.
     pub class_objects: Vec<u32>,
     /// `None` where the application left a row blank, which it does for the
     /// slots reserved at the head of each class's static method block.
@@ -165,6 +167,7 @@ impl ClassTable {
 
         let mut table = Self {
             classes: Vec::with_capacity(count as usize),
+            class_roots: Vec::new(),
             vtables: Vec::new(),
             class_objects: Vec::new(),
             static_methods: Vec::new(),
@@ -272,6 +275,12 @@ impl ClassTable {
     /// The class a token from a reserved row belongs to.
     pub fn class_of_object(&self, class_object: u32) -> Option<u32> {
         self.class_objects.iter().position(|x| *x == class_object).map(|x| x as u32)
+    }
+
+    /// The imported platform class represented by a synthetic class_shared
+    /// identity.
+    pub fn class_of_root(&self, root: u32) -> Option<u32> {
+        self.class_roots.iter().position(|x| *x == root).map(|x| x as u32)
     }
 
     /// The class whose static method block contains `index`, and the row's

@@ -5,7 +5,7 @@ use spin::Mutex;
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use wie_core_arm::{Allocator, ArmCore};
 use wie_jvm_support::JvmSupport;
-use wie_util::{ByteRead, Result, read_generic, read_null_terminated_string_bytes, write_generic};
+use wie_util::{ByteRead, ByteWrite, Result, read_generic, read_null_terminated_string_bytes, write_generic};
 
 use crate::runtime::{
     SVC_CATEGORY_INIT,
@@ -406,35 +406,68 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
         )));
     }
 
+    // Native class identity is carried in dispatch-table word zero. Platform
+    // classes do not have their original liblgt_system.so class_shared objects
+    // in guest memory, so give each imported class a stable synthetic identity.
+    for index in 0..table.classes.len() as u32 {
+        let root = Allocator::alloc(core, 4)?;
+        write_generic(core, root, index)?;
+        table.class_roots.push(root);
+    }
+
     for index in 0..table.classes.len() as u32 {
         let (start, count) = {
             let class = &table.classes[index as usize];
             (class.virtual_method_start, class.virtual_method_count)
         };
+        let root = table.class_roots[index as usize];
 
-        let vtable = build_dispatch_table(core, index, start, count, slots)?;
-
-        // Eight bytes is the smallest allocation that reads back distinctly;
-        // nothing inspects the contents, the address is the identity.
-        let class_object = Allocator::alloc(core, 8)?;
-        write_generic(core, class_object, 0u32)?;
-        write_generic(core, class_object + 4, index)?;
+        let vtable = build_dispatch_table(core, index, root, start, count, slots)?;
 
         handles.set_dispatch_table(&table.classes[index as usize].name, vtable);
-
-        tracing::trace!(
-            "LGT class {} -> object {class_object:#x}, dispatch table {vtable:#x} ({count} declared slots)",
-            table.classes[index as usize].name
-        );
-
         table.vtables.push(vtable);
-        table.class_objects.push(class_object);
     }
 
     // Objects of a class the application never declared still get called on,
     // so they need a table too.
-    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0, slots)?;
+    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0, 0, slots)?;
     handles.set_fallback_dispatch_table(fallback);
+
+    // Native get_class/get_raw_class return an activated java/lang/Class
+    // object. Its +8 word points at a data block whose +8 word is the
+    // represented class_shared:
+    //
+    //   class_object + 8 -> data
+    //   data + 8         -> class_shared
+    //
+    // Preserve exactly the part of that ABI the compiled application reads.
+    let class_dispatch = table
+        .classes
+        .iter()
+        .position(|class| class.name == "java/lang/Class")
+        .and_then(|index| table.vtables.get(index).copied())
+        .unwrap_or(fallback);
+
+    for index in 0..table.classes.len() as u32 {
+        let root = table.class_roots[index as usize];
+        let vtable = table.vtables[index as usize];
+
+        let data = Allocator::alloc(core, 12)?;
+        core.write_bytes(data, &[0; 12])?;
+        write_generic(core, data + 8, root)?;
+
+        let class_object = Allocator::alloc(core, 12)?;
+        write_generic(core, class_object, class_dispatch)?;
+        write_generic(core, class_object + 4, 0u32)?;
+        write_generic(core, class_object + 8, data)?;
+
+        tracing::trace!(
+            "LGT class {} -> root {root:#x}, object {class_object:#x}, dispatch table {vtable:#x}",
+            table.classes[index as usize].name
+        );
+
+        table.class_objects.push(class_object);
+    }
 
     tracing::debug!("LGT fallback dispatch table at {fallback:#x}");
 
@@ -454,9 +487,16 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 /// short table leaves that slot zero and the branch goes to address zero, so
 /// the slots a class does not declare are filled with stubs that report what
 /// was called instead.
-fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32, slots: &[Option<u32>]) -> Result<u32> {
+fn build_dispatch_table(
+    core: &mut ArmCore,
+    class_index: u32,
+    class_root: u32,
+    start: u32,
+    count: u32,
+    slots: &[Option<u32>],
+) -> Result<u32> {
     let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
-    write_generic(core, vtable, 0u32)?;
+    write_generic(core, vtable, class_root)?;
 
     for slot in 0..DISPATCH_TABLE_SLOTS {
         let row = (start..start + count).find(|row| slots.get(*row as usize).copied().flatten() == Some(slot));
@@ -987,6 +1027,8 @@ pub struct ArrayClassInfo {
     pub element_class: u32,
     pub atype: u32,
     pub element_size: u32,
+    /// Dispatch table whose word zero is this array class's identity.
+    pub vtable: u32,
 }
 
 /// Array classes handed out by `vm_get_array_class`, mapped to their complete
@@ -1025,16 +1067,16 @@ pub fn primitive_element_size(atype: u32) -> Option<u32> {
 /// of its own here, so it dispatches through the fallback table like anything
 /// else the application never declared.
 pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClasses, class: u32, length: u32) -> Result<u32> {
-    let element_size = match array_class.lock().get(&class).copied() {
-        Some(info) => info.element_size,
+    let (element_size, vtable) = match array_class.lock().get(&class).copied() {
+        Some(info) => (info.element_size, info.vtable),
         None => {
             tracing::warn!("vm_instantiate_array({class:#x}, {length}) names no array class; assuming references");
 
-            REFERENCE_SIZE
+            (REFERENCE_SIZE, handles.fallback_dispatch_table())
         }
     };
 
-    let array = handles.allocate_array(handles.fallback_dispatch_table(), length, element_size)?;
+    let array = handles.allocate_array(vtable, length, element_size)?;
 
     tracing::debug!("vm_instantiate_array({class:#x}, {length}) -> {array:#x}, {element_size} bytes an element");
 

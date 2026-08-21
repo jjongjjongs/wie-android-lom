@@ -1,15 +1,16 @@
 use alloc::{collections::BTreeMap, format, sync::Arc, vec, vec::Vec};
+use alloc::string::String;
 use core::mem::size_of;
 
 use elf::{ElfBytes, endian::AnyEndian};
 
-use jvm::Jvm;
+use jvm::{JavaType, Jvm};
 use spin::Mutex;
 use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
-use wie_util::{ByteWrite, Result, WieError, read_generic, write_generic};
+use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
 
 use crate::relocation::{
     R_ARM_ABS32, R_ARM_CALL, R_ARM_JUMP24, R_ARM_NONE, R_ARM_PC24, R_ARM_RABS32, R_ARM_RBASE, R_ARM_REL32, R_ARM_RPC24, R_ARM_RREL32, R_ARM_THM_CALL,
@@ -182,6 +183,16 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         let a3 = core.read_param(3)?;
 
         tracing::warn!("lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+        // Native Java-interface slot 0x12 is
+        // `vm_class_is_assignable_to(source_class_shared, target_class_shared)`.
+        // LoM normalizes both object and java/lang/Class operands to this exact
+        // identity layer before entering the import.
+        if function_index == 0x12 {
+            let assignable = class_is_assignable_to(core, context, a0, a1).await?;
+            u32::from(assignable).write(core, lr)?;
+            return Ok(());
+        }
+
         // `vm_check_stack_overflow(words)`, which the compiled code calls at
         // the head of every method with the frame it is about to use. It was
         // read as an allocator, which meant a heap allocation per call whose
@@ -729,6 +740,122 @@ fn platform_superclass_dispatch_table(context: &InitSvcContext, root: u32) -> u3
     context.java_handles.fallback_dispatch_table()
 }
 
+fn primitive_array_descriptor(atype: u32) -> Option<char> {
+    Some(match atype {
+        4 => 'Z',
+        5 => 'C',
+        6 => 'F',
+        7 => 'D',
+        8 => 'B',
+        9 => 'S',
+        10 => 'I',
+        11 => 'J',
+        _ => return None,
+    })
+}
+
+fn class_identity_name(context: &InitSvcContext, root: u32) -> Option<String> {
+    if root == 0 {
+        return None;
+    }
+
+    if let Some(name) = context
+        .app_classes
+        .lock()
+        .iter()
+        .find(|class| class.root == root)
+        .map(|class| class.name.clone())
+    {
+        return Some(name);
+    }
+
+    if let Some(name) = context.imported_classes.lock().as_ref().and_then(|table| {
+        let index = table.class_of_root(root)?;
+        table.classes.get(index as usize).map(|class| class.name.clone())
+    }) {
+        return Some(name);
+    }
+
+    let array = context.array_classes.lock().get(&root).copied()?;
+
+    let prefix = "[".repeat(array.dimensions as usize);
+
+    if array.element_class != 0 {
+        let element = class_identity_name(context, array.element_class)?;
+
+        if element.starts_with('[') {
+            Some(format!("{prefix}{element}"))
+        } else {
+            Some(format!("{prefix}L{element};"))
+        }
+    } else {
+        primitive_array_descriptor(array.atype).map(|descriptor| format!("{prefix}{descriptor}"))
+    }
+}
+
+/// The actual class whose hierarchy RustJava must know before an assignability
+/// test. Array identities use JVM descriptors, so peel every `[` and the
+/// object-descriptor `L...;` wrapper. Primitive array components need no class
+/// registration.
+fn class_identity_bridge_name(name: &str) -> Option<&str> {
+    let mut name = name;
+
+    while let Some(component) = name.strip_prefix('[') {
+        name = component;
+    }
+
+    if let Some(class) = name.strip_prefix('L').and_then(|name| name.strip_suffix(';')) {
+        return Some(class);
+    }
+
+    match name {
+        "Z" | "B" | "C" | "S" | "I" | "J" | "F" | "D" => None,
+        _ => Some(name),
+    }
+}
+
+async fn class_is_assignable_to(core: &ArmCore, context: &mut InitSvcContext, source_root: u32, target_root: u32) -> Result<bool> {
+    if source_root == target_root {
+        return Ok(true);
+    }
+
+    let source = class_identity_name(context, source_root).ok_or_else(|| {
+        WieError::FatalError(format!(
+            "vm_class_is_assignable_to source {source_root:#x} names no application, platform, or array class"
+        ))
+    })?;
+    let target = class_identity_name(context, target_root).ok_or_else(|| {
+        WieError::FatalError(format!(
+            "vm_class_is_assignable_to target {target_root:#x} names no application, platform, or array class"
+        ))
+    })?;
+
+    // Application classes only exist in the AOT image until they are bridged
+    // into RustJava. For an array, bridge its reference component rather than
+    // the array descriptor itself: RustJava's array assignability recurses into
+    // that component class.
+    for identity in [&source, &target] {
+        let Some(class_name) = class_identity_bridge_name(identity) else {
+            continue;
+        };
+
+        bridge_class_chain(
+            &context.jvm,
+            core,
+            &context.java_handles,
+            &context.app_classes,
+            &context.image_ranges,
+            class_name,
+        )
+        .await;
+    }
+
+    Ok(context.jvm.is_type_assignable(
+        &JavaType::from_class_name(&source),
+        &JavaType::from_class_name(&target),
+    ))
+}
+
 /// `vm_get_array_class(dimensions, element_class, atype)`.
 ///
 /// The platform builds the array's descriptor from these three - `dimensions`
@@ -767,9 +894,21 @@ fn get_array_class(core: &mut ArmCore, context: &InitSvcContext, dimensions: u32
         return Ok(class);
     }
 
+    // The token itself is the synthetic array class_shared identity.
     let class = Allocator::alloc(core, 8)?;
     write_generic(core, class, element_size)?;
     write_generic(core, class + 4, dimensions)?;
+
+    // Arrays still need the fallback method entries, but their dispatch-table
+    // word zero must identify their own array class for instanceof/aastore and
+    // other native class tests.
+    let vtable_size = (DISPATCH_TABLE_SLOTS + 1) * 4;
+    let fallback = context.java_handles.fallback_dispatch_table();
+    let vtable = Allocator::alloc(core, vtable_size)?;
+    let mut dispatch = vec![0u8; vtable_size as usize];
+    core.read_bytes(fallback, &mut dispatch)?;
+    core.write_bytes(vtable, &dispatch)?;
+    write_generic(core, vtable, class)?;
 
     context.array_classes.lock().insert(
         class,
@@ -778,6 +917,7 @@ fn get_array_class(core: &mut ArmCore, context: &InitSvcContext, dimensions: u32
             element_class,
             atype,
             element_size,
+            vtable,
         },
     );
 
@@ -1548,4 +1688,33 @@ async fn java_unk7(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -
     tracing::warn!("java_unk7({a0:#x}, {a1:#x}, {a2:#x})");
 
     Ok(0)
+}
+
+#[cfg(test)]
+mod slot12_class_identity_tests {
+    use super::class_identity_bridge_name;
+
+    #[test]
+    fn bridge_name_keeps_plain_classes() {
+        assert_eq!(class_identity_bridge_name("f"), Some("f"));
+        assert_eq!(
+            class_identity_bridge_name("java/lang/String"),
+            Some("java/lang/String")
+        );
+    }
+
+    #[test]
+    fn bridge_name_extracts_reference_array_component() {
+        assert_eq!(
+            class_identity_bridge_name("[Ljava/lang/String;"),
+            Some("java/lang/String")
+        );
+        assert_eq!(class_identity_bridge_name("[[Lf;"), Some("f"));
+    }
+
+    #[test]
+    fn bridge_name_skips_primitive_array_component() {
+        assert_eq!(class_identity_bridge_name("[I"), None);
+        assert_eq!(class_identity_bridge_name("[[B"), None);
+    }
 }
