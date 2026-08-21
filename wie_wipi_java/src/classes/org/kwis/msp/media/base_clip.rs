@@ -30,6 +30,11 @@ impl BaseClip {
             ],
             fields: vec![
                 JavaFieldProto::new("player", "Ljavax/microedition/media/Player;", Default::default()),
+                JavaFieldProto::new(
+                    "playListener",
+                    "Lorg/kwis/msp/media/PlayListener;",
+                    Default::default(),
+                ),
                 JavaFieldProto::new("__wieBufferSize", "I", Default::default()),
             ],
             access_flags: Default::default(),

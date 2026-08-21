@@ -146,10 +146,21 @@ impl Clip {
         Ok(result >= 0)
     }
 
-    async fn set_listener(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, listener: ClassInstanceRef<PlayListener>) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.media.Clip::setListener({this:?}, {listener:?})");
+    async fn set_listener(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        listener: ClassInstanceRef<PlayListener>,
+    ) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.media.Clip::setListener({this:?}, {listener:?})");
 
-        Ok(())
+        jvm.put_field(
+            &mut this,
+            "playListener",
+            "Lorg/kwis/msp/media/PlayListener;",
+            listener,
+        )
+        .await
     }
 
     async fn get_type(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<ClassInstanceRef<String>> {
@@ -199,14 +210,123 @@ impl Clip {
 
 #[cfg(test)]
 mod test {
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, vec};
 
+    use java_class_proto::JavaMethodProto;
     use java_runtime::classes::java::lang::String;
-    use jvm::{ClassInstanceRef, JavaError, runtime::JavaLangString};
+    use jvm::{ClassInstanceRef, JavaError, Jvm, Result as JvmResult, runtime::JavaLangString};
     use test_utils::run_jvm_test;
+    use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
     use wie_util::Result;
 
-    use crate::{classes::org::kwis::msp::media::Clip, get_protos};
+    use crate::{
+        classes::org::kwis::msp::media::{Clip, PlayListener},
+        get_protos,
+    };
+
+    struct TestPlayListener;
+
+    impl TestPlayListener {
+        fn as_proto() -> WieJavaClassProto {
+            WieJavaClassProto {
+                name: "test/TestPlayListener",
+                parent_class: Some("java/lang/Object"),
+                interfaces: vec!["org/kwis/msp/media/PlayListener"],
+                methods: vec![JavaMethodProto::new(
+                    "<init>",
+                    "()V",
+                    Self::init,
+                    Default::default(),
+                )],
+                fields: vec![],
+                access_flags: Default::default(),
+            }
+        }
+
+        async fn init(
+            jvm: &Jvm,
+            _: &mut WieJvmContext,
+            this: ClassInstanceRef<Self>,
+        ) -> JvmResult<()> {
+            jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ())
+                .await
+        }
+    }
+
+    #[test]
+    fn test_set_listener_stores_and_clears_play_listener() -> Result<()> {
+        run_jvm_test(
+            Box::new([
+                wie_midp::get_protos().into(),
+                get_protos().into(),
+                [TestPlayListener::as_proto()].into(),
+            ]),
+            |jvm| async move {
+                let r#type = JavaLangString::from_rust_string(&jvm, "audio/test").await?;
+                let clip: ClassInstanceRef<Clip> = jvm
+                    .new_class(
+                        "org/kwis/msp/media/Clip",
+                        "(Ljava/lang/String;)V",
+                        (r#type,),
+                    )
+                    .await?
+                    .into();
+
+                let listener: ClassInstanceRef<PlayListener> = jvm
+                    .new_class("test/TestPlayListener", "()V", ())
+                    .await?
+                    .into();
+
+                let initial: ClassInstanceRef<PlayListener> = jvm
+                    .get_field(
+                        &clip,
+                        "playListener",
+                        "Lorg/kwis/msp/media/PlayListener;",
+                    )
+                    .await?;
+                assert!(initial.is_null());
+
+                let _: () = jvm
+                    .invoke_virtual(
+                        &clip,
+                        "setListener",
+                        "(Lorg/kwis/msp/media/PlayListener;)V",
+                        (listener,),
+                    )
+                    .await?;
+
+                let stored: ClassInstanceRef<PlayListener> = jvm
+                    .get_field(
+                        &clip,
+                        "playListener",
+                        "Lorg/kwis/msp/media/PlayListener;",
+                    )
+                    .await?;
+                assert!(!stored.is_null());
+
+                let null_listener = ClassInstanceRef::<PlayListener>::new(None);
+                let _: () = jvm
+                    .invoke_virtual(
+                        &clip,
+                        "setListener",
+                        "(Lorg/kwis/msp/media/PlayListener;)V",
+                        (null_listener,),
+                    )
+                    .await?;
+
+                let cleared: ClassInstanceRef<PlayListener> = jvm
+                    .get_field(
+                        &clip,
+                        "playListener",
+                        "Lorg/kwis/msp/media/PlayListener;",
+                    )
+                    .await?;
+                assert!(cleared.is_null());
+
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn test_position_and_stop_time_round_trip() -> Result<()> {
