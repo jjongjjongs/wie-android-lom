@@ -12,6 +12,7 @@ use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
 use wie_util::{
     ByteRead, ByteWrite, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic,
+    write_null_terminated_string_bytes,
 };
 
 use crate::relocation::{
@@ -47,6 +48,55 @@ type JavaClassTables = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
 /// Compiled classes the application registered, published by import `0x07`.
 type AppClasses = Arc<Mutex<Vec<AppClass>>>;
 type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
+/// DLET process-local properties. Each entry is `(value, size)`, matching the
+/// native local-data node's `+0x0c` value and `+0x10` size fields.
+type DletProperties = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
+
+fn dlet_set_process_local_property(
+    properties: &DletProperties,
+    applet: u32,
+    property: u32,
+    value: u32,
+    size: u32,
+) -> Result<u32> {
+    // LoM uses the process-local form (applet == 0) with scalar properties
+    // (size == 0). Native dprocess_set_local_data stores `value` directly in
+    // the node and returns zero.
+    if applet != 0 || size != 0 {
+        return Err(WieError::FatalError(format!(
+            "Unsupported DLET property write: applet={applet:#x}, property={property}, value={value:#x}, size={size}"
+        )));
+    }
+
+    properties.lock().insert(property, (value, size));
+
+    Ok(0)
+}
+
+fn dlet_get_process_local_property(
+    core: &mut ArmCore,
+    properties: &DletProperties,
+    applet: u32,
+    property: u32,
+    output: u32,
+) -> Result<u32> {
+    // Native dlet_get_property(0, ...) resolves the current process. LoM only
+    // uses that process-local form.
+    if applet != 0 || output == 0 {
+        return Ok(u32::MAX);
+    }
+
+    match properties.lock().get(&property).copied() {
+        Some((value, size)) => {
+            write_generic(core, output, value)?;
+            Ok(size)
+        }
+        // Native dprocess_get_local_data returns -2002 when no node exists for
+        // the requested property.
+        None => Ok((-2002i32) as u32),
+    }
+}
+
 type ImportFunctionCache = Arc<Mutex<BTreeMap<(u32, u32), u32>>>;
 type UnresolvedImportCallCounts = Arc<Mutex<BTreeMap<(u32, u32), u64>>>;
 /// Platform classes the application imports, published by import `0x14`.
@@ -76,6 +126,7 @@ struct InitSvcContext {
     image_ranges: ImageRanges,
     java_class_tables: JavaClassTables,
     java_activated_classes: JavaActivatedClasses,
+    dlet_properties: DletProperties,
     import_function_cache: ImportFunctionCache,
     unresolved_import_call_counts: UnresolvedImportCallCounts,
     /// Array classes handed out by `vm_get_array_class`, to the size of one of
@@ -94,6 +145,7 @@ fn register_init_svc_handler(
     jvm: &Jvm,
     image_ranges: ImageRanges,
     save_points: &SavePointState,
+    dlet_properties: DletProperties,
 ) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
@@ -111,6 +163,7 @@ fn register_init_svc_handler(
             image_ranges,
             java_class_tables: Default::default(),
             java_activated_classes: Default::default(),
+            dlet_properties,
             import_function_cache: Default::default(),
             unresolved_import_call_counts: Default::default(),
             array_classes: Default::default(),
@@ -441,8 +494,22 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         )
         .await?
         .write(core, lr),
-        InitSvcId::Unk0 => EmulatedFunction::call(&unk0, core, &mut ()).await?.write(core, lr),
-        InitSvcId::JavaUnk7 => EmulatedFunction::call(&java_unk7, core, &mut ()).await?.write(core, lr),
+        InitSvcId::DletSetProperty => dlet_set_process_local_property(
+            &context.dlet_properties,
+            core.read_param(0)?,
+            core.read_param(1)?,
+            core.read_param(2)?,
+            core.read_param(3)?,
+        )?
+        .write(core, lr),
+        InitSvcId::DletGetProperty => dlet_get_process_local_property(
+            core,
+            &context.dlet_properties,
+            core.read_param(0)?,
+            core.read_param(1)?,
+            core.read_param(2)?,
+        )?
+        .write(core, lr),
         InitSvcId::JavaUnk1 => EmulatedFunction::call(&java_unk1, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk2 => EmulatedFunction::call(&java_unk2, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaUnk3 => EmulatedFunction::call(&java_unk3, core, &mut ()).await?.write(core, lr),
@@ -1676,13 +1743,36 @@ async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContex
     method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await
 }
 
-pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], _main_class_name: Option<&str>) -> Result<()> {
+pub async fn load_native(
+    core: &mut ArmCore,
+    system: &mut System,
+    jvm: &Jvm,
+    data: &[u8],
+    jar_filename: &str,
+    _main_class_name: Option<&str>,
+) -> Result<()> {
     let (entrypoint, image_ranges) = load_executable(core, data)?;
     let save_points = SavePointState::default();
 
+    // Native dlet_main derives property 200 by removing the 11-byte
+    // `:binary.mod` suffix from the loaded module path. WIE already has the
+    // exact JAR filename, so publish the equivalent guest C-string directly.
+    let jar_filename_ptr = Allocator::alloc(core, jar_filename.len() as u32 + 1)?;
+    write_null_terminated_string_bytes(core, jar_filename_ptr, jar_filename.as_bytes())?;
+
+    let dlet_properties: DletProperties = Default::default();
+    dlet_properties.lock().insert(200, (jar_filename_ptr, 0));
+
     register_wipic_svc_handler(core, system, jvm)?;
     register_stdlib_svc_handler(core, system, &save_points)?;
-    register_init_svc_handler(core, system, jvm, Arc::new(image_ranges), &save_points)?;
+    register_init_svc_handler(
+        core,
+        system,
+        jvm,
+        Arc::new(image_ranges),
+        &save_points,
+        dlet_properties,
+    )?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
     let ptr_init_param_2 = Allocator::alloc(core, size_of::<InitParam2>() as u32)?;
@@ -1771,8 +1861,8 @@ async fn get_import_function(
         core.make_svc_stub(stdlib_category, function_index)?
     } else {
         match (import_table, function_index) {
-            (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::Unk0)?,
-            (0x1f8, 0x17) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk7)?,
+            (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::DletSetProperty)?,
+            (0x1f8, 0x17) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::DletGetProperty)?,
             (0x1fc, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk1)?,
             (0x1ff, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk2)?,
             (0x201, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk3)?,
@@ -2108,12 +2198,6 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u3
     Ok((elf.ehdr.e_entry as u32, ranges))
 }
 
-async fn unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<()> {
-    tracing::warn!("clet_unk0({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-
-    Ok(())
-}
-
 async fn java_unk1(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
     tracing::warn!("java_unk1({a0:#x}, {a1:#x}, {a2:#x})");
 
@@ -2132,10 +2216,75 @@ async fn java_unk3(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -
     Ok(())
 }
 
-async fn java_unk7(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<u32> {
-    tracing::warn!("java_unk7({a0:#x}, {a1:#x}, {a2:#x})");
+#[cfg(test)]
+mod dlet_property_tests {
+    use wie_core_arm::{Allocator, ArmCore};
+    use wie_util::{read_generic, write_generic};
 
-    Ok(0)
+    use super::{DletProperties, dlet_get_process_local_property, dlet_set_process_local_property};
+
+    fn core() -> ArmCore {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+        core
+    }
+
+    #[test]
+    fn scalar_property_round_trip_matches_native_size_zero_contract() {
+        let mut core = core();
+        let properties: DletProperties = Default::default();
+        let output = Allocator::alloc(&mut core, 4).unwrap();
+
+        write_generic(&mut core, output, 0xdead_beefu32).unwrap();
+
+        assert_eq!(
+            dlet_set_process_local_property(&properties, 0, 200, 0x1234_5678, 0).unwrap(),
+            0
+        );
+        assert_eq!(
+            dlet_get_process_local_property(&mut core, &properties, 0, 200, output).unwrap(),
+            0
+        );
+
+        let value: u32 = read_generic(&core, output).unwrap();
+        assert_eq!(value, 0x1234_5678);
+    }
+
+    #[test]
+    fn missing_property_returns_native_minus_2002_without_touching_output() {
+        let mut core = core();
+        let properties: DletProperties = Default::default();
+        let output = Allocator::alloc(&mut core, 4).unwrap();
+
+        write_generic(&mut core, output, 0xfeed_faceu32).unwrap();
+
+        assert_eq!(
+            dlet_get_process_local_property(&mut core, &properties, 0, 999, output).unwrap(),
+            (-2002i32) as u32
+        );
+
+        let value: u32 = read_generic(&core, output).unwrap();
+        assert_eq!(value, 0xfeed_face);
+    }
+
+    #[test]
+    fn invalid_process_local_arguments_match_native_failure_shape() {
+        let mut core = core();
+        let properties: DletProperties = Default::default();
+        let output = Allocator::alloc(&mut core, 4).unwrap();
+
+        assert_eq!(
+            dlet_get_process_local_property(&mut core, &properties, 1, 200, output).unwrap(),
+            u32::MAX
+        );
+        assert_eq!(
+            dlet_get_process_local_property(&mut core, &properties, 0, 200, 0).unwrap(),
+            u32::MAX
+        );
+
+        assert!(dlet_set_process_local_property(&properties, 1, 200, 1, 0).is_err());
+        assert!(dlet_set_process_local_property(&properties, 0, 200, 1, 4).is_err());
+    }
 }
 
 #[cfg(test)]

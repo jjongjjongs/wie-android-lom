@@ -5,8 +5,8 @@ use wie_core_arm::SvcId;
 pub enum InitSvcId {
     GetImportTable = 0,
     GetImportFunction = 1,
-    Unk0 = 2,
-    JavaUnk7 = 3,
+    DletSetProperty = 2,
+    DletGetProperty = 3,
     JavaUnk1 = 4,
     JavaUnk2 = 5,
     JavaUnk3 = 6,
@@ -40,8 +40,8 @@ impl TryFrom<SvcId> for InitSvcId {
         Ok(match value.0 {
             0 => Self::GetImportTable,
             1 => Self::GetImportFunction,
-            2 => Self::Unk0,
-            3 => Self::JavaUnk7,
+            2 => Self::DletSetProperty,
+            3 => Self::DletGetProperty,
             4 => Self::JavaUnk1,
             5 => Self::JavaUnk2,
             6 => Self::JavaUnk3,

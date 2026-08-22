@@ -157,7 +157,7 @@ impl LgtEmulator {
 
         apply_offline_auth_patch(&aid, &mut binary_mod);
 
-        load_native(core, system, &jvm, &binary_mod, main_class_name.as_deref()).await?;
+        load_native(core, system, &jvm, &binary_mod, &jar_filename, main_class_name.as_deref()).await?;
 
         Ok(())
     }
