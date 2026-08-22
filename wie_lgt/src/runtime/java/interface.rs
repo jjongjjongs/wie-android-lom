@@ -64,8 +64,8 @@ pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x2000;
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
     let method = match function_index {
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::CldcModuleActivate)?,
-        0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk12)?,
-        0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk5)?,
+        0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmUnregisterClasses)?,
+        0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRegisterClasses)?,
         0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport09)?,
         0x0e => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport0e)?,
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport10)?,
@@ -81,7 +81,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaResolveOne)?,
         0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAddClasspath)?,
-        0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk11)?,
+        0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRunMainClass)?,
         0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE1)?,
         0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE2)?,
         _ => {
@@ -835,7 +835,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
 /// KTF uses. The named class is one of the application's own compiled classes,
 /// so a bridge is registered for it before `Main` is entered.
 #[allow(clippy::too_many_arguments)]
-pub async fn java_unk11(
+pub async fn vm_run_main_class(
     core: &mut ArmCore,
     jvm: &mut Jvm,
     handles: &JavaHandles,

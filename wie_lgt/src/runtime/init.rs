@@ -31,7 +31,7 @@ use super::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
             bridge_class_chain,
-            java_import_11, java_load_classes, java_resolve_one, java_unk11,
+            java_import_11, java_load_classes, java_resolve_one, vm_run_main_class,
             primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
         },
@@ -472,12 +472,6 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             return Ok(());
         }
 
-        if function_index == 0x83 {
-            tracing::warn!("LGT import 0x83 unimplemented: a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}, lr={lr:#x}");
-            0u32.write(core, lr)?;
-            return Ok(());
-        }
-
         0u32.write(core, lr)?;
         return Ok(());
     }
@@ -528,7 +522,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // Native Java interface import 0x06 is
         // `vm_unregister_classes(index)`. Import 0x07 returns this index when
         // the application's compiled classes are registered.
-        InitSvcId::JavaInterfaceUnk12 => {
+        InitSvcId::VmUnregisterClasses => {
             let index = core.read_param(0)?;
             let registered = context.java_class_tables.lock().remove(&index);
 
@@ -555,7 +549,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // root[count] }`. This is the other half of the class model: import
         // 0x14 declares what the application needs from the platform, this
         // declares what it brings.
-        InitSvcId::JavaInterfaceUnk5 => {
+        InitSvcId::VmRegisterClasses => {
             let classes = core.read_param(0)?;
             let runtime_table = core.read_param(1)?;
             let mut tables = context.java_class_tables.lock();
@@ -637,7 +631,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // Import 0x83: run a Java main class. The first two parameters name
         // the class, which is always `org/kwis/msp/lcdui/Main`; the argument
         // vector is what actually selects the application's Jlet.
-        InitSvcId::JavaUnk11 => {
+        InitSvcId::VmRunMainClass => {
             let argc = core.read_param(2)?;
             let argv = core.read_param(3)?;
 
@@ -645,7 +639,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let image_ranges = context.image_ranges.clone();
             let java_handles = context.java_handles.clone();
 
-            java_unk11(core, jvm, &java_handles, &app_classes, &image_ranges, argc, argv)
+            vm_run_main_class(core, jvm, &java_handles, &app_classes, &image_ranges, argc, argv)
                 .await?
                 .write(core, lr)
         }
