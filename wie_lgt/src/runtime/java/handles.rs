@@ -104,6 +104,10 @@ impl JavaHandles {
         self.dispatch_tables.lock().insert(class.into(), vtable);
     }
 
+    pub fn dispatch_table(&self, class: &str) -> Option<u32> {
+        self.dispatch_tables.lock().get(class).copied()
+    }
+
     /// Records the table to give instances of anything else.
     pub fn set_fallback_dispatch_table(&self, vtable: u32) {
         self.fallback_dispatch_table.store(vtable, Ordering::SeqCst);

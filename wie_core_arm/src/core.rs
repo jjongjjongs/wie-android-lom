@@ -43,6 +43,7 @@ struct ProfileState {
 pub(crate) struct ArmCoreInner {
     pub(crate) engine: Box<dyn ArmEngine>,
     last_thread_id: ThreadId,
+    current_thread_id: Option<ThreadId>,
     threads: BTreeMap<ThreadId, ThreadState>,
     svc_handlers: BTreeMap<u32, Arc<Box<dyn RegisteredFunction>>>,
     svc_stubs: BTreeMap<(u32, u32), u32>,
@@ -98,6 +99,7 @@ impl ArmCore {
         let inner = ArmCoreInner {
             engine,
             last_thread_id: 0,
+            current_thread_id: None,
             threads: BTreeMap::new(),
             svc_handlers: BTreeMap::new(),
             svc_stubs: BTreeMap::new(),
@@ -207,6 +209,14 @@ impl ArmCore {
         let inner = self.inner.lock();
 
         inner.threads.keys().cloned().collect()
+    }
+
+    /// Thread whose register context is currently loaded into the ARM engine.
+    ///
+    /// `None` is the bootstrap/native-loader context, before execution enters
+    /// an `ArmCoreThreadWrapper`.
+    pub fn current_thread_id(&self) -> Option<ThreadId> {
+        self.inner.lock().current_thread_id
     }
 
     fn sample_profile(&self) {
@@ -683,11 +693,17 @@ impl RunFunctionResult<()> for () {
 pub struct ThreadContextGuard {
     core: ArmCore,
     thread_id: ThreadId,
+    previous_thread_id: Option<ThreadId>,
 }
 
 impl ThreadContextGuard {
     pub fn new(mut core: ArmCore, thread_id: ThreadId) -> Self {
-        let context = core.inner.lock().threads.get(&thread_id).unwrap().context.clone(); // TODO we might not need clone
+        let (context, previous_thread_id) = {
+            let mut inner = core.inner.lock();
+            let context = inner.threads.get(&thread_id).unwrap().context.clone(); // TODO we might not need clone
+            let previous_thread_id = inner.current_thread_id.replace(thread_id);
+            (context, previous_thread_id)
+        };
         core.restore_context(&context);
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -695,7 +711,11 @@ impl ThreadContextGuard {
             debug.on_thread_entered(thread_id);
         }
 
-        Self { core, thread_id }
+        Self {
+            core,
+            thread_id,
+            previous_thread_id,
+        }
     }
 }
 
@@ -705,6 +725,7 @@ impl Drop for ThreadContextGuard {
 
         let mut inner = self.core.inner.lock();
         inner.threads.get_mut(&self.thread_id).unwrap().context = context;
+        inner.current_thread_id = self.previous_thread_id;
         drop(inner);
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -722,6 +743,70 @@ mod tests {
         *seen_id = Some(id.0);
 
         Ok(())
+    }
+
+    #[test]
+    fn thread_wrapper_exposes_current_thread_only_while_polled() {
+        use core::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Poll},
+        };
+        use alloc::sync::Arc;
+        use futures_test::task::new_count_waker;
+        use spin::Mutex;
+
+        struct TwoPollFuture {
+            core: ArmCore,
+            seen: Arc<Mutex<Vec<Option<ThreadId>>>>,
+            first: bool,
+        }
+
+        impl Future for TwoPollFuture {
+            type Output = Result<()>;
+
+            fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+                self.seen.lock().push(self.core.current_thread_id());
+
+                if self.first {
+                    self.first = false;
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Ok(()))
+                }
+            }
+        }
+
+        let mut core = ArmCore::new(false, None).unwrap();
+        crate::Allocator::init(&mut core).unwrap();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+
+        let future_core = core.clone();
+        let future_observed = observed.clone();
+        let mut wrapper = Box::pin(
+            core.run_in_thread(move || TwoPollFuture {
+                core: future_core,
+                seen: future_observed,
+                first: true,
+            })
+            .unwrap(),
+        );
+
+        assert_eq!(core.current_thread_id(), None);
+
+        let (waker, _) = new_count_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(matches!(wrapper.as_mut().poll(&mut cx), Poll::Pending));
+        assert_eq!(core.current_thread_id(), None);
+
+        assert!(matches!(wrapper.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+        assert_eq!(core.current_thread_id(), None);
+
+        let seen = observed.lock();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].is_some());
+        assert_eq!(seen[1], seen[0]);
     }
 
     #[test]

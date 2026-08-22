@@ -1,5 +1,6 @@
 pub mod init;
 mod java;
+mod savepoint;
 mod stdlib;
 mod svc_ids;
 mod wipi_c;

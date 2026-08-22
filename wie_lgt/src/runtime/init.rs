@@ -4,13 +4,15 @@ use core::mem::size_of;
 
 use elf::{ElfBytes, endian::AnyEndian};
 
-use jvm::{JavaType, Jvm};
+use jvm::{JavaType, Jvm, runtime::JavaLangString};
 use spin::Mutex;
 use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
-use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
+use wie_util::{
+    ByteRead, ByteWrite, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic,
+};
 
 use crate::relocation::{
     R_ARM_ABS32, R_ARM_CALL, R_ARM_JUMP24, R_ARM_NONE, R_ARM_PC24, R_ARM_RABS32, R_ARM_RBASE, R_ARM_REL32, R_ARM_RPC24, R_ARM_RREL32, R_ARM_THM_CALL,
@@ -27,13 +29,14 @@ use super::{
         interface::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE,
             JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain,
-            java_import_11, java_import_23, java_load_classes, java_resolve_one, java_unk0, java_unk9, java_unk11, java_unk12,
+            java_import_11, java_load_classes, java_resolve_one, java_unk0, java_unk9, java_unk11, java_unk12,
             primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
         platform_metadata::platform_class,
     },
+    savepoint::SavePointState,
     stdlib::register_stdlib_svc_handler,
     svc_ids::InitSvcId,
     wipi_c::register_wipic_svc_handler,
@@ -47,13 +50,10 @@ type ImportFunctionCache = Arc<Mutex<BTreeMap<(u32, u32), u32>>>;
 type UnresolvedImportCallCounts = Arc<Mutex<BTreeMap<(u32, u32), u64>>>;
 /// Platform classes the application imports, published by import `0x14`.
 type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
+type SyntheticClasses = Arc<Mutex<BTreeMap<u32, String>>>;
 
 const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
 const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
-
-/// Bytes one `vm_alloc_save_point` entry takes, which is the stride of the
-/// pool the platform hands them out of.
-const SAVE_POINT_SIZE: u32 = 0x10c;
 
 /// Where a class's metadata keeps its dispatch table and how many slots that
 /// table has.
@@ -80,9 +80,20 @@ struct InitSvcContext {
     /// Array classes handed out by `vm_get_array_class`, to the size of one of
     /// their elements.
     array_classes: ArrayClasses,
+    save_points: SavePointState,
+    /// Platform classes not explicitly imported by the application but whose
+    /// identity must still cross the compiled/native boundary (notably VM-
+    /// created exception subclasses).
+    synthetic_classes: SyntheticClasses,
 }
 
-fn register_init_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm, image_ranges: ImageRanges) -> Result<()> {
+fn register_init_svc_handler(
+    core: &mut ArmCore,
+    system: &System,
+    jvm: &Jvm,
+    image_ranges: ImageRanges,
+    save_points: &SavePointState,
+) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
     core.register_svc_handler(
@@ -102,6 +113,8 @@ fn register_init_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm, ima
             import_function_cache: Default::default(),
             unresolved_import_call_counts: Default::default(),
             array_classes: Default::default(),
+            save_points: save_points.clone(),
+            synthetic_classes: Default::default(),
         },
     )
 }
@@ -246,25 +259,19 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             return Ok(());
         }
 
-        // `vm_alloc_save_point(depth)` takes an entry out of a per-thread pool
-        // of 0x10c byte blocks and hands it back for the compiled code to
-        // record its unwind state in; `vm_free_save_point` returns it. Zero
-        // means the pool is exhausted, and an application that reads zero goes
-        // down its out-of-memory path - which is what Legend of Master was
-        // doing, several thousand instructions before the point where it
-        // looked like something else had gone wrong.
+        // Native save points form a per-thread linked chain. `depth` selects
+        // where in that chain an entry is inserted/removed; depth zero is the
+        // current exception target.
         if function_index == 0x1f {
-            let save_point = Allocator::alloc(core, SAVE_POINT_SIZE)?;
-            core.write_bytes(save_point, &[0; SAVE_POINT_SIZE as usize])?;
-
+            let save_point = context.save_points.alloc(core, a0)?;
             tracing::debug!("vm_alloc_save_point({a0}) -> {save_point:#x}");
-
             save_point.write(core, lr)?;
             return Ok(());
         }
         if function_index == 0x20 {
-            tracing::debug!("vm_free_save_point({a0:#x})");
-            0u32.write(core, lr)?;
+            let save_point = context.save_points.free(core, a0)?;
+            tracing::debug!("vm_free_save_point({a0}) -> {save_point:#x}");
+            save_point.write(core, lr)?;
             return Ok(());
         }
         if function_index == 0x0b {
@@ -554,7 +561,61 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 .write(core, lr)
         }
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
-        InitSvcId::JavaImport23 => EmulatedFunction::call(&java_import_23, core, &mut ()).await?.write(core, lr),
+        // Native Java-interface 0x23 is
+        // vm_throw_array_index_out_of_bounds_exception(message). It constructs
+        // a real AIOOBE object, pops the current save point, then
+        // longjmp(save_point, exception_object).
+        InitSvcId::JavaImport23 => {
+            let message = core.read_param(1)?;
+            let class_name = "java/lang/ArrayIndexOutOfBoundsException";
+            let vtable = synthetic_platform_vtable(core, context, class_name)?;
+
+            // `JavaHandles::insert` chooses a guest vtable by JVM class name.
+            context.java_handles.set_dispatch_table(class_name, vtable);
+
+            let mut exception = match context.jvm.instantiate_class(class_name).await {
+                Ok(exception) => exception,
+                Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+            };
+
+            // Native vm_throw_array_index_out_of_bounds_exception preserves r1
+            // as an optional NUL-terminated message. The common throw helper
+            // instantiates a Java String and stores it directly in the
+            // exception's first data slot; it does not run a Throwable
+            // constructor. RustJava exposes that slot as detailMessage.
+            if message != 0 {
+                let message_bytes = read_null_terminated_string_bytes(core, message)?;
+                // Native vm_instantiate_string zero-extends each input byte
+                // directly into one UTF-16 Java char. It performs no UTF-8 or
+                // local-code decoding; vm_instantiate_string_from_local_code is
+                // the separate conversion path.
+                let message: String = message_bytes.iter().map(|&byte| char::from(byte)).collect();
+                let java_message = match JavaLangString::from_rust_string(&context.jvm, &message).await {
+                    Ok(message) => message,
+                    Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+                };
+
+                if let Err(error) = context
+                    .jvm
+                    .put_field(
+                        &mut exception,
+                        "detailMessage",
+                        "Ljava/lang/String;",
+                        java_message,
+                    )
+                    .await
+                {
+                    return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+                }
+            }
+
+            let exception = context.java_handles.address_of(exception)?;
+
+            tracing::debug!(
+                "vm_throw_array_index_out_of_bounds_exception({message:#x}) -> longjmp({exception:#x})"
+            );
+            context.save_points.throw(core, exception)
+        }
         InitSvcId::JavaImportE1 => {
             let class = imported_class_token(context, "java/lang/String")
                 .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
@@ -772,6 +833,56 @@ fn primitive_array_descriptor(atype: u32) -> Option<char> {
     })
 }
 
+fn synthetic_platform_vtable(core: &mut ArmCore, context: &InitSvcContext, class_name: &str) -> Result<u32> {
+    if let Some((&root, _)) = context
+        .synthetic_classes
+        .lock()
+        .iter()
+        .find(|(_, name)| name.as_str() == class_name)
+    {
+        let vtable = context
+            .java_handles
+            .dispatch_table(class_name)
+            .ok_or_else(|| WieError::FatalError(format!("Synthetic class {class_name} root {root:#x} has no dispatch table")))?;
+        return Ok(vtable);
+    }
+
+    let base_vtable = {
+        let classes = context.imported_classes.lock();
+        let table = classes
+            .as_ref()
+            .ok_or_else(|| WieError::FatalError("Platform classes are not loaded".into()))?;
+        let index = table
+            .classes
+            .iter()
+            .position(|class| class.name == "java/lang/Exception")
+            .ok_or_else(|| WieError::FatalError("java/lang/Exception is not imported".into()))?;
+
+        *table
+            .vtables
+            .get(index)
+            .ok_or_else(|| WieError::FatalError("java/lang/Exception has no dispatch table".into()))?
+    };
+
+    // Preserve java/lang/Exception's callable slots, changing only vtable word
+    // zero to the VM-created subclass identity.
+    let root = Allocator::alloc(core, 4)?;
+    write_generic(core, root, 0u32)?;
+
+    let size = 4 + DISPATCH_TABLE_SLOTS * 4;
+    let vtable = Allocator::alloc(core, size)?;
+    for offset in (0..size).step_by(4) {
+        let value: u32 = read_generic(core, base_vtable + offset)?;
+        write_generic(core, vtable + offset, value)?;
+    }
+    write_generic(core, vtable, root)?;
+
+    context.synthetic_classes.lock().insert(root, class_name.into());
+    context.java_handles.set_dispatch_table(class_name, vtable);
+
+    Ok(vtable)
+}
+
 fn class_identity_name(context: &InitSvcContext, root: u32) -> Option<String> {
     if root == 0 {
         return None;
@@ -791,6 +902,10 @@ fn class_identity_name(context: &InitSvcContext, root: u32) -> Option<String> {
         let index = table.class_of_root(root)?;
         table.classes.get(index as usize).map(|class| class.name.clone())
     }) {
+        return Some(name);
+    }
+
+    if let Some(name) = context.synthetic_classes.lock().get(&root).cloned() {
         return Some(name);
     }
 
@@ -1253,9 +1368,11 @@ async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContex
 
 pub async fn load_native(core: &mut ArmCore, system: &mut System, jvm: &Jvm, data: &[u8], _main_class_name: Option<&str>) -> Result<()> {
     let (entrypoint, image_ranges) = load_executable(core, data)?;
+    let save_points = SavePointState::default();
+
     register_wipic_svc_handler(core, system, jvm)?;
-    register_stdlib_svc_handler(core, system)?;
-    register_init_svc_handler(core, system, jvm, Arc::new(image_ranges))?;
+    register_stdlib_svc_handler(core, system, &save_points)?;
+    register_init_svc_handler(core, system, jvm, Arc::new(image_ranges), &save_points)?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
     let ptr_init_param_2 = Allocator::alloc(core, size_of::<InitParam2>() as u32)?;

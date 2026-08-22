@@ -8,11 +8,25 @@ use wie_util::{ByteWrite, Result, read_generic, read_null_terminated_string_byte
 
 use wie_wipi_c::api::kernel::format_varargs;
 
-use crate::runtime::{SVC_CATEGORY_STDLIB, svc_ids::StdlibSvcId};
+use crate::runtime::{SVC_CATEGORY_STDLIB, savepoint::SavePointState, svc_ids::StdlibSvcId};
 
-pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System) -> Result<()> {
-    async fn handle_stdlib_svc(core: &mut ArmCore, system: &mut System, id: SvcId) -> Result<()> {
+#[derive(Clone)]
+struct StdlibSvcContext {
+    system: System,
+    save_points: SavePointState,
+}
+
+pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System, save_points: &SavePointState) -> Result<()> {
+    async fn handle_stdlib_svc(core: &mut ArmCore, context: &mut StdlibSvcContext, id: SvcId) -> Result<()> {
         let (_, lr) = core.read_pc_lr()?;
+
+        // Kernel table 1 / function 0x32 is libc setjmp. The guest passes the
+        // 0x10c-byte block returned by vm_alloc_save_point as its jmp_buf.
+        if id.0 == 0x32 {
+            let save_point = core.read_param(0)?;
+            context.save_points.capture(core, save_point, lr)?;
+            return 0u32.write(core, lr);
+        }
 
         match id.0 {
             x if x == StdlibSvcId::Printf as u32 => EmulatedFunction::call(&printf, core, &mut ()).await?.write(core, lr),
@@ -29,7 +43,7 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System) -> Resul
             x if x == StdlibSvcId::Memmove as u32 => EmulatedFunction::call(&stdlib::memmove, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memcmp as u32 => EmulatedFunction::call(&stdlib::memcmp, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memset as u32 => EmulatedFunction::call(&stdlib::memset, core, &mut ()).await?.write(core, lr),
-            x if x == StdlibSvcId::Time as u32 => EmulatedFunction::call(&time, core, system).await?.write(core, lr),
+            x if x == StdlibSvcId::Time as u32 => EmulatedFunction::call(&time, core, &mut context.system).await?.write(core, lr),
             x if x == StdlibSvcId::Localtime as u32 => EmulatedFunction::call(&localtime, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Atexit as u32 => EmulatedFunction::call(&atexit, core, &mut ()).await?.write(core, lr),
             // An unrecognised import is reported and returns zero, the way
@@ -49,7 +63,14 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System) -> Resul
         }
     }
 
-    core.register_svc_handler(SVC_CATEGORY_STDLIB, handle_stdlib_svc, system)
+    core.register_svc_handler(
+        SVC_CATEGORY_STDLIB,
+        handle_stdlib_svc,
+        &StdlibSvcContext {
+            system: system.clone(),
+            save_points: save_points.clone(),
+        },
+    )
 }
 
 async fn strncpy(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, size: u32) -> Result<()> {
