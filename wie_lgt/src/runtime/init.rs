@@ -31,7 +31,7 @@ use super::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
             bridge_class_chain,
-            java_import_11, java_load_classes, java_resolve_one, java_unk0, java_unk9, java_unk11,
+            java_import_11, java_load_classes, java_resolve_one, java_unk9, java_unk11,
             primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
         },
@@ -519,7 +519,12 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         InitSvcId::WipiJavaModuleActivate | InitSvcId::LgteModuleActivate => 0u32.write(core, lr),
         // Native bankon_lib_module_activate is itself a zero-return no-op.
         InitSvcId::BankonModuleActivate => 0u32.write(core, lr),
-        InitSvcId::JavaInterfaceUnk0 => EmulatedFunction::call(&java_unk0, core, &mut ()).await?.write(core, lr),
+        // Native CLDC import 0x03 is `cldc_module_activate`. The native runtime
+        // registers per-dprocess VM state here, then activates its built-in
+        // classes. WIE already owns one JVM/context for this emulated process;
+        // application class registration/loading follows through imports
+        // 0x07/0x14, so no additional process-local state is required here.
+        InitSvcId::CldcModuleActivate => 0u32.write(core, lr),
         // Native Java interface import 0x06 is
         // `vm_unregister_classes(index)`. Import 0x07 returns this index when
         // the application's compiled classes are registered.

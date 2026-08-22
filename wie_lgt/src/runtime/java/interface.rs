@@ -63,7 +63,7 @@ pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x2000;
 
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
     let method = match function_index {
-        0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk0)?,
+        0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::CldcModuleActivate)?,
         0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk12)?,
         0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk5)?,
         0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport09)?,
@@ -91,11 +91,6 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
     };
 
     Ok(method)
-}
-
-pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
-    tracing::warn!("java_unk0({a0:#x}, {a1:#x}, {a2:#x})");
-    Ok(())
 }
 
 /// Import `0x14`. Reads the tables describing every platform class the
