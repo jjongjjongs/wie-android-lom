@@ -31,7 +31,7 @@ use super::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
             bridge_class_chain,
-            java_import_11, java_load_classes, java_resolve_one, java_unk9, java_unk11,
+            java_import_11, java_load_classes, java_resolve_one, java_unk11,
             primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
         },
@@ -628,7 +628,12 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             ().write(core, lr)
         }
-        InitSvcId::JavaUnk9 => EmulatedFunction::call(&java_unk9, core, &mut ()).await?.write(core, lr),
+        // Native CLDC import 0x82 is `vm_add_classpath(path)`. LoM passes
+        // DLET property 200, which names the same JAR WIE already supplied to
+        // `JvmSupport::new_jvm` as its class source before native startup.
+        // Native stores this path in VM property 1007; duplicating that
+        // bookkeeping is unnecessary in WIE, so activation succeeds here.
+        InitSvcId::VmAddClasspath => 0u32.write(core, lr),
         // Import 0x83: run a Java main class. The first two parameters name
         // the class, which is always `org/kwis/msp/lcdui/Main`; the argument
         // vector is what actually selects the application's Jlet.

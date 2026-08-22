@@ -80,7 +80,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x64 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport64)?,
         0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaResolveOne)?,
         0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
-        0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk9)?,
+        0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAddClasspath)?,
         0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk11)?,
         0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE1)?,
         0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE2)?,
@@ -826,12 +826,6 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         table.interface_methods.len(),
         table.static_methods.len(),
     );
-
-    Ok(())
-}
-
-pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
-    tracing::warn!("java_unk9({a0:#x})");
 
     Ok(())
 }
