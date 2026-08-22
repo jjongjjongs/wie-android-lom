@@ -569,6 +569,119 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 .write(core, lr)
         }
         InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
+        // Native Java-interface 0x21 is vm_throw_exception(exception).
+        // The native routine frees save-point depth zero and longjmps with the
+        // supplied exception object. A null exception is replaced with a new
+        // java/lang/NullPointerException before the throw.
+        InitSvcId::JavaImport21 => {
+            let exception = core.read_param(0)?;
+
+            if exception != 0 {
+                tracing::debug!("vm_throw_exception({exception:#x}) -> longjmp");
+                return context.save_points.throw(core, exception);
+            }
+
+            let class_name = "java/lang/NullPointerException";
+            let vtable = synthetic_platform_vtable(core, context, class_name)?;
+            context.java_handles.set_dispatch_table(class_name, vtable);
+
+            let exception = match context.jvm.instantiate_class(class_name).await {
+                Ok(exception) => exception,
+                Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+            };
+            let exception = context.java_handles.address_of(exception)?;
+
+            tracing::debug!("vm_throw_exception(0) -> NullPointerException {exception:#x} -> longjmp");
+            context.save_points.throw(core, exception)
+        }
+        // Native Java-interface 0x22 is
+        // vm_throw_null_pointer_exception(message). The wrapper preserves r0
+        // as its optional NUL-terminated message and forwards the NPE class to
+        // throw_exception_with_class_and_message.
+        InitSvcId::JavaImport22 => {
+            let message = core.read_param(0)?;
+            let class_name = "java/lang/NullPointerException";
+            let vtable = synthetic_platform_vtable(core, context, class_name)?;
+
+            context.java_handles.set_dispatch_table(class_name, vtable);
+
+            let mut exception = match context.jvm.instantiate_class(class_name).await {
+                Ok(exception) => exception,
+                Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+            };
+
+            if message != 0 {
+                let message_bytes = read_null_terminated_string_bytes(core, message)?;
+                let message: String = message_bytes.iter().map(|&byte| char::from(byte)).collect();
+                let java_message = match JavaLangString::from_rust_string(&context.jvm, &message).await {
+                    Ok(message) => message,
+                    Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+                };
+
+                if let Err(error) = context
+                    .jvm
+                    .put_field(
+                        &mut exception,
+                        "detailMessage",
+                        "Ljava/lang/String;",
+                        java_message,
+                    )
+                    .await
+                {
+                    return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+                }
+            }
+
+            let exception = context.java_handles.address_of(exception)?;
+
+            tracing::debug!(
+                "vm_throw_null_pointer_exception({message:#x}) -> longjmp({exception:#x})"
+            );
+            context.save_points.throw(core, exception)
+        }
+        // Native Java-interface 0x25 is
+        // vm_throw_arithmetic_exception(message), with the same message ABI.
+        InitSvcId::JavaImport25 => {
+            let message = core.read_param(0)?;
+            let class_name = "java/lang/ArithmeticException";
+            let vtable = synthetic_platform_vtable(core, context, class_name)?;
+
+            context.java_handles.set_dispatch_table(class_name, vtable);
+
+            let mut exception = match context.jvm.instantiate_class(class_name).await {
+                Ok(exception) => exception,
+                Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+            };
+
+            if message != 0 {
+                let message_bytes = read_null_terminated_string_bytes(core, message)?;
+                let message: String = message_bytes.iter().map(|&byte| char::from(byte)).collect();
+                let java_message = match JavaLangString::from_rust_string(&context.jvm, &message).await {
+                    Ok(message) => message,
+                    Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+                };
+
+                if let Err(error) = context
+                    .jvm
+                    .put_field(
+                        &mut exception,
+                        "detailMessage",
+                        "Ljava/lang/String;",
+                        java_message,
+                    )
+                    .await
+                {
+                    return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+                }
+            }
+
+            let exception = context.java_handles.address_of(exception)?;
+
+            tracing::debug!(
+                "vm_throw_arithmetic_exception({message:#x}) -> longjmp({exception:#x})"
+            );
+            context.save_points.throw(core, exception)
+        }
         // Native Java-interface 0x23 is
         // vm_throw_array_index_out_of_bounds_exception(message). It constructs
         // a real AIOOBE object, pops the current save point, then
