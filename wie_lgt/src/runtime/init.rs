@@ -510,9 +510,15 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             core.read_param(2)?,
         )?
         .write(core, lr),
-        InitSvcId::JavaUnk1 => EmulatedFunction::call(&java_unk1, core, &mut ()).await?.write(core, lr),
-        InitSvcId::JavaUnk2 => EmulatedFunction::call(&java_unk2, core, &mut ()).await?.write(core, lr),
-        InitSvcId::JavaUnk3 => EmulatedFunction::call(&java_unk3, core, &mut ()).await?.write(core, lr),
+        // Native WIPI-Java and LGTE activation publish their already
+        // registered class tables into a process-local visibility table.
+        // WIE has no equivalent visibility gate: the complete native platform
+        // class set is always available through `platform_class`. Exact native
+        // class-table comparison covers all 106 WIPI-Java and 17 LGTE nonzero
+        // class slots, so no additional activation state is required here.
+        InitSvcId::WipiJavaModuleActivate | InitSvcId::LgteModuleActivate => 0u32.write(core, lr),
+        // Native bankon_lib_module_activate is itself a zero-return no-op.
+        InitSvcId::BankonModuleActivate => 0u32.write(core, lr),
         InitSvcId::JavaInterfaceUnk0 => EmulatedFunction::call(&java_unk0, core, &mut ()).await?.write(core, lr),
         InitSvcId::JavaInterfaceUnk12 => EmulatedFunction::call(&java_unk12, core, &mut ()).await?.write(core, lr),
         // Import 0x07. The application registers its *own* classes - the ones
@@ -1863,9 +1869,9 @@ async fn get_import_function(
         match (import_table, function_index) {
             (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::DletSetProperty)?,
             (0x1f8, 0x17) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::DletGetProperty)?,
-            (0x1fc, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk1)?,
-            (0x1ff, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk2)?,
-            (0x201, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk3)?,
+            (0x1fc, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::WipiJavaModuleActivate)?,
+            (0x1ff, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LgteModuleActivate)?,
+            (0x201, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::BankonModuleActivate)?,
             _ => {
                 if import_table > UNRESOLVED_IMPORT_FIELD_MASK || function_index > UNRESOLVED_IMPORT_FIELD_MASK {
                     return Err(WieError::FatalError(format!(
@@ -2196,24 +2202,6 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u3
     tracing::debug!("Entrypoint: {:#x}", elf.ehdr.e_entry);
 
     Ok((elf.ehdr.e_entry as u32, ranges))
-}
-
-async fn java_unk1(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
-    tracing::warn!("java_unk1({a0:#x}, {a1:#x}, {a2:#x})");
-
-    Ok(())
-}
-
-async fn java_unk2(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
-    tracing::warn!("java_unk2({a0:#x}, {a1:#x}, {a2:#x})");
-
-    Ok(())
-}
-
-async fn java_unk3(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
-    tracing::warn!("java_unk3({a0:#x}, {a1:#x}, {a2:#x})");
-
-    Ok(())
 }
 
 #[cfg(test)]
