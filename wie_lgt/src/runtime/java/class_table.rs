@@ -82,6 +82,9 @@ pub struct ClassTable {
     pub class_roots: Vec<u32>,
     /// Per class: the dispatch table an instance points at.
     pub vtables: Vec<u32>,
+    /// Per imported interface class: guest-visible interface dispatch table.
+    /// Zero means that class has no imported interface-method rows.
+    pub interface_vtables: Vec<u32>,
     /// Per class: the activated java/lang/Class-shaped object returned by the
     /// reserved get_class/get_raw_class rows.
     pub class_objects: Vec<u32>,
@@ -169,6 +172,7 @@ impl ClassTable {
             classes: Vec::with_capacity(count as usize),
             class_roots: Vec::new(),
             vtables: Vec::new(),
+            interface_vtables: Vec::new(),
             class_objects: Vec::new(),
             static_methods: Vec::new(),
             virtual_methods: Vec::new(),

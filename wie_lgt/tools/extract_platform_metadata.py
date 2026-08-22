@@ -210,6 +210,49 @@ def main():
 
     classes.sort(key=lambda x: x["name"])
 
+    # Native interface dispatch objects are exported as
+    # interface_<interface-class>_in_<implementor-class>.  Native symbol names
+    # encode '/' as '_' and '$' as '_00036'.  Resolve both sides against the
+    # class names recovered above instead of trying to split underscores,
+    # because underscores are otherwise ambiguous.
+    def native_class_symbol(name: str) -> str:
+        return name.replace("/", "_").replace("$", "_00036")
+
+    encoded_classes = {
+        native_class_symbol(cls["name"]): cls["name"]
+        for cls in classes
+    }
+    interfaces_by_class = {
+        cls["name"]: []
+        for cls in classes
+    }
+
+    for symbol in symbols:
+        if not symbol.startswith("interface_") or "_in_" not in symbol:
+            continue
+
+        body = symbol[len("interface_"):]
+        matches = []
+        for interface_encoded, interface_name in encoded_classes.items():
+            prefix = interface_encoded + "_in_"
+            if not body.startswith(prefix):
+                continue
+
+            implementor_name = encoded_classes.get(body[len(prefix):])
+            if implementor_name is not None:
+                matches.append((interface_name, implementor_name))
+
+        if len(matches) != 1:
+            raise ValueError(
+                f"Could not uniquely decode native interface relation {symbol}: {matches}"
+            )
+
+        interface_name, implementor_name = matches[0]
+        interfaces_by_class[implementor_name].append(interface_name)
+
+    for cls in classes:
+        cls["interfaces"] = sorted(set(interfaces_by_class[cls["name"]]))
+
     lines = []
     lines.append("//! Static metadata extracted from the original LGT `liblgt_system.so`.")
     lines.append("//!")
@@ -245,6 +288,7 @@ def main():
     lines.append("pub struct PlatformClass {")
     lines.append("    pub name: &'static str,")
     lines.append("    pub superclass: Option<&'static str>,")
+    lines.append("    pub interfaces: &'static [&'static str],")
     lines.append("    pub flags: u32,")
     lines.append("    pub get_class: u32,")
     lines.append("    pub get_raw_class: u32,")
@@ -327,8 +371,10 @@ def main():
             else "None"
         )
         lines.append("    PlatformClass {")
+        interfaces = ", ".join(rust_string(interface) for interface in cls["interfaces"])
         lines.append(f"        name: {rust_string(cls['name'])},")
         lines.append(f"        superclass: {superclass},")
+        lines.append(f"        interfaces: &[{interfaces}],")
         lines.append(f"        flags: {cls['flags']:#010x},")
         lines.append(f"        get_class: {cls['get_class']:#010x},")
         lines.append(f"        get_raw_class: {cls['get_raw_class']:#010x},")
@@ -485,6 +531,40 @@ def main():
     lines.append("                class.dispatch_method(slot),")
     lines.append("                Some((name, descriptor)),")
     lines.append('                "{class_name} slot {slot}",')
+    lines.append("            );")
+    lines.append("        }")
+    lines.append("    }")
+    lines.append("")
+    lines.append("    #[test]")
+    lines.append("    fn native_interface_relations_are_preserved() {")
+    lines.append("        let relation_count: usize = PLATFORM_CLASSES")
+    lines.append("            .iter()")
+    lines.append("            .map(|class| class.interfaces.len())")
+    lines.append("            .sum();")
+    lines.append("        assert_eq!(relation_count, 90);")
+    lines.append("")
+    lines.append('        let socket = "org/kwis/msf/io/Socket";')
+    lines.append("        let socket_implementor_count = PLATFORM_CLASSES")
+    lines.append("            .iter()")
+    lines.append("            .filter(|class| class.interfaces.contains(&socket))")
+    lines.append("            .count();")
+    lines.append("        assert_eq!(socket_implementor_count, 9);")
+    lines.append("")
+    lines.append("        for class_name in [")
+    lines.append('            "com/velox/BillSocketClass",')
+    lines.append('            "com/velox/BluetoothSocketInterface",')
+    lines.append('            "com/velox/HttpSocketClass",')
+    lines.append('            "com/velox/SocketClass",')
+    lines.append('            "com/velox/SocketModel",')
+    lines.append('            "com/velox/TestBillSocketClass",')
+    lines.append('            "com/velox/comm",')
+    lines.append('            "com/velox/sms",')
+    lines.append('            "org/kwis/msf/io/Socket",')
+    lines.append("        ] {")
+    lines.append("            let class = platform_class(class_name).unwrap();")
+    lines.append("            assert!(")
+    lines.append("                class.interfaces.contains(&socket),")
+    lines.append('                "{class_name} lost native Socket interface relation",')
     lines.append("            );")
     lines.append("        }")
     lines.append("    }")

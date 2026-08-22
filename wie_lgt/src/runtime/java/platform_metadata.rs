@@ -32,6 +32,7 @@ pub struct PlatformDispatchMethod {
 pub struct PlatformClass {
     pub name: &'static str,
     pub superclass: Option<&'static str>,
+    pub interfaces: &'static [&'static str],
     pub flags: u32,
     pub get_class: u32,
     pub get_raw_class: u32,
@@ -6761,6 +6762,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/FileSystemConstant",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0027e3c4,
         get_raw_class: 0x0027e36c,
@@ -6772,6 +6774,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/MediaDeviceEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/MediaDeviceEventListener"],
         flags: 0x00000601,
         get_class: 0x001bafb4,
         get_raw_class: 0x001baf5c,
@@ -6783,6 +6786,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/MediaDeviceManager",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001bb4a0,
         get_raw_class: 0x001bb448,
@@ -6794,6 +6798,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/OEMIME",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001bbc78,
         get_raw_class: 0x001bbc20,
@@ -6805,6 +6810,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/OEMIMEListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/OEMIMEListener"],
         flags: 0x00000601,
         get_class: 0x001bbd20,
         get_raw_class: 0x001bbcc8,
@@ -6816,6 +6822,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/OEMSystem",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002979ac,
         get_raw_class: 0x00297954,
@@ -6827,6 +6834,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/QOSEventHandler",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00254e14,
         get_raw_class: 0x00254dbc,
@@ -6838,6 +6846,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/QOSEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/QOSEventListener"],
         flags: 0x00000601,
         get_class: 0x00254f48,
         get_raw_class: 0x00254ef0,
@@ -6849,6 +6858,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/RemoconEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/RemoconEventListener"],
         flags: 0x00000601,
         get_class: 0x001bc104,
         get_raw_class: 0x001bc0ac,
@@ -6860,6 +6870,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/RemoconHandler",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00255578,
         get_raw_class: 0x00255520,
@@ -6871,6 +6882,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/RotateEventHandler",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00255bd8,
         get_raw_class: 0x00255b80,
@@ -6882,6 +6894,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/RotateEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/RotateEventListener"],
         flags: 0x00000601,
         get_class: 0x00255ce0,
         get_raw_class: 0x00255c88,
@@ -6893,6 +6906,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/TermResEventHandler",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00255e30,
         get_raw_class: 0x00255dd8,
@@ -6904,6 +6918,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/TermResEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/TermResEventListener"],
         flags: 0x00000601,
         get_class: 0x00255eec,
         get_raw_class: 0x00255e94,
@@ -6915,6 +6930,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/Util",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0028d0b8,
         get_raw_class: 0x0028d060,
@@ -6926,6 +6942,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/VAMClip",
         superclass: Some("org/kwis/msp/media/Clip"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00290518,
         get_raw_class: 0x002904c0,
@@ -6937,6 +6954,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/VAMDownloader",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00299764,
         get_raw_class: 0x0029970c,
@@ -6948,6 +6966,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/VAMDownloaderListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/VAMDownloaderListener"],
         flags: 0x00000601,
         get_class: 0x00290640,
         get_raw_class: 0x002905e8,
@@ -6959,6 +6978,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/VAMDownloaderNetwork",
         superclass: Some("java/lang/Thread"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000020,
         get_class: 0x002933e4,
         get_raw_class: 0x0029338c,
@@ -6970,6 +6990,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/VAMException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002934f4,
         get_raw_class: 0x0029349c,
@@ -6981,6 +7002,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/VAMPlayer",
         superclass: Some("org/kwis/msp/media/Player"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00293724,
         get_raw_class: 0x002936cc,
@@ -6992,6 +7014,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBPreference",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00299c14,
         get_raw_class: 0x00299bbc,
@@ -7003,6 +7026,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBPreferenceCHInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00293bdc,
         get_raw_class: 0x00293b84,
@@ -7014,6 +7038,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBRegion",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0029a560,
         get_raw_class: 0x0029a508,
@@ -7025,6 +7050,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBRegionInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002941ec,
         get_raw_class: 0x00294194,
@@ -7036,6 +7062,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBReservation",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0029afd8,
         get_raw_class: 0x0029af80,
@@ -7047,6 +7074,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/dmb/epg/DMBReservationInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00294d94,
         get_raw_class: 0x00294d3c,
@@ -7058,6 +7086,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/qos/QOSFlow",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0029545c,
         get_raw_class: 0x00295404,
@@ -7069,6 +7098,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/qos/QOSFlowManager",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/lgt/QOSEventListener"],
         flags: 0x00000021,
         get_class: 0x002959f4,
         get_raw_class: 0x0029599c,
@@ -7080,6 +7110,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/tts/TTS",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00295ff0,
         get_raw_class: 0x00295f98,
@@ -7091,6 +7122,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/lgt/wipijava/constants/ErrorConstants",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001bc7f8,
         get_raw_class: 0x001bc7a0,
@@ -7102,6 +7134,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/Helper",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014a5c0,
         get_raw_class: 0x0014a568,
@@ -7113,6 +7146,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/StreamReader",
         superclass: Some("java/io/Reader"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x0014a930,
         get_raw_class: 0x0014a8d8,
@@ -7124,6 +7158,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/StreamWriter",
         superclass: Some("java/io/Writer"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x0014aaa0,
         get_raw_class: 0x0014aa48,
@@ -7135,6 +7170,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/Conv",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0017066c,
         get_raw_class: 0x00170614,
@@ -7146,6 +7182,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/Gen_Reader",
         superclass: Some("com/sun/cldc/i18n/StreamReader"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00171584,
         get_raw_class: 0x0017152c,
@@ -7157,6 +7194,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/Gen_Writer",
         superclass: Some("com/sun/cldc/i18n/StreamWriter"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00171b40,
         get_raw_class: 0x00171ae8,
@@ -7168,6 +7206,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/ISO8859_1_Reader",
         superclass: Some("com/sun/cldc/i18n/StreamReader"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014ae7c,
         get_raw_class: 0x0014ae24,
@@ -7179,6 +7218,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/ISO8859_1_Writer",
         superclass: Some("com/sun/cldc/i18n/StreamWriter"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00176524,
         get_raw_class: 0x001764cc,
@@ -7190,6 +7230,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/KSC5601_Reader",
         superclass: Some("com/sun/cldc/i18n/j2me/Gen_Reader"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001726e8,
         get_raw_class: 0x00172690,
@@ -7201,6 +7242,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/KSC5601_Writer",
         superclass: Some("com/sun/cldc/i18n/j2me/Gen_Writer"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014af54,
         get_raw_class: 0x0014aefc,
@@ -7212,6 +7254,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/UTF_8_Reader",
         superclass: Some("com/sun/cldc/i18n/StreamReader"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014b658,
         get_raw_class: 0x0014b600,
@@ -7223,6 +7266,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/j2me/UTF_8_Writer",
         superclass: Some("com/sun/cldc/i18n/StreamWriter"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00172a6c,
         get_raw_class: 0x00172a14,
@@ -7234,6 +7278,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/i18n/uclc/DefaultCaseConverter",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00172d24,
         get_raw_class: 0x00172ccc,
@@ -7245,6 +7290,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/io/ConnectionBaseInterface",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/sun/cldc/io/ConnectionBaseInterface"],
         flags: 0x00000601,
         get_class: 0x00172de0,
         get_raw_class: 0x00172d88,
@@ -7256,6 +7302,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/io/ConsoleOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014b718,
         get_raw_class: 0x0014b6c0,
@@ -7267,6 +7314,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/io/ResourceInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014bf3c,
         get_raw_class: 0x0014bee4,
@@ -7278,6 +7326,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/sun/cldc/io/Waiter",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00172e88,
         get_raw_class: 0x00172e30,
@@ -7289,6 +7338,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/BillHeader",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00280ca8,
         get_raw_class: 0x00280c50,
@@ -7300,6 +7350,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/BillInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00256840,
         get_raw_class: 0x002567e8,
@@ -7311,6 +7362,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/BillOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00256cbc,
         get_raw_class: 0x00256c64,
@@ -7322,6 +7374,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/BillSocketClass",
         superclass: Some("com/velox/SocketClass"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000020,
         get_class: 0x00257b34,
         get_raw_class: 0x00257adc,
@@ -7333,6 +7386,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/BluetoothSocketInterface",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000421,
         get_class: 0x001bc8a8,
         get_raw_class: 0x001bc850,
@@ -7344,6 +7398,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/ConnectionFactory",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00258e0c,
         get_raw_class: 0x00258db4,
@@ -7355,6 +7410,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/FontManager",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002591ac,
         get_raw_class: 0x00259154,
@@ -7366,6 +7422,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/HttpSocketClass",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msf/io/HttpSocket", "org/kwis/msf/io/Socket"],
         flags: 0x00000021,
         get_class: 0x001c0824,
         get_raw_class: 0x001c07cc,
@@ -7377,6 +7434,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/HttpSocketClass$InnerInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001c126c,
         get_raw_class: 0x001c1214,
@@ -7388,6 +7446,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/HttpSocketClass$InnerOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001c173c,
         get_raw_class: 0x001c16e4,
@@ -7399,6 +7458,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/HttpUrl",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001c222c,
         get_raw_class: 0x001c21d4,
@@ -7410,6 +7470,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/InnerEventsInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c2368,
         get_raw_class: 0x001c2310,
@@ -7421,6 +7482,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/InnerSerialInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0025967c,
         get_raw_class: 0x00259624,
@@ -7432,6 +7494,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/InnerSerialOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001c2870,
         get_raw_class: 0x001c2818,
@@ -7443,6 +7506,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/Properties",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001c3060,
         get_raw_class: 0x001c3008,
@@ -7454,6 +7518,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/SocketClass",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000021,
         get_class: 0x001c4470,
         get_raw_class: 0x001c4418,
@@ -7465,6 +7530,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/SocketModel",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000421,
         get_class: 0x001c5c0c,
         get_raw_class: 0x001c5bb4,
@@ -7476,6 +7542,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/TestBillSocketClass",
         superclass: Some("com/velox/BillSocketClass"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000030,
         get_class: 0x00259778,
         get_raw_class: 0x00259720,
@@ -7487,6 +7554,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/Util",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c5dd8,
         get_raw_class: 0x001c5d80,
@@ -7498,6 +7566,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/CaseConverter",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00280ee0,
         get_raw_class: 0x00280e88,
@@ -7509,6 +7578,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/Decoder",
         superclass: Some("java/io/Reader"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x002812fc,
         get_raw_class: 0x002812a4,
@@ -7520,6 +7590,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/EUC_KR/CaseConverter",
         superclass: Some("com/velox/alpha/encoding/CaseConverter"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00259838,
         get_raw_class: 0x002597e0,
@@ -7531,6 +7602,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/EUC_KR/Decoder",
         superclass: Some("com/velox/alpha/encoding/Decoder"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025a0b8,
         get_raw_class: 0x0025a060,
@@ -7542,6 +7614,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/EUC_KR/Encoder",
         superclass: Some("com/velox/alpha/encoding/Encoder"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c66a4,
         get_raw_class: 0x001c664c,
@@ -7553,6 +7626,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/Encoder",
         superclass: Some("java/io/Writer"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x001c68c4,
         get_raw_class: 0x001c686c,
@@ -7564,6 +7638,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/EncodingManager",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00281d40,
         get_raw_class: 0x00281ce8,
@@ -7575,6 +7650,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/ISO8859_1/CaseConverter",
         superclass: Some("com/velox/alpha/encoding/CaseConverter"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025a1d8,
         get_raw_class: 0x0025a180,
@@ -7586,6 +7662,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/ISO8859_1/Decoder",
         superclass: Some("com/velox/alpha/encoding/Decoder"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025a660,
         get_raw_class: 0x0025a608,
@@ -7597,6 +7674,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/alpha/encoding/ISO8859_1/Encoder",
         superclass: Some("com/velox/alpha/encoding/Encoder"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c6df8,
         get_raw_class: 0x001c6da0,
@@ -7608,6 +7686,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/cldc/Config",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00172ffc,
         get_raw_class: 0x00172fa4,
@@ -7619,6 +7698,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/comm",
         superclass: Some("com/velox/SocketModel"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000021,
         get_class: 0x0025b510,
         get_raw_class: 0x0025b4b8,
@@ -7630,6 +7710,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/dateformat/DateFormat",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025d84c,
         get_raw_class: 0x0025d7f4,
@@ -7641,6 +7722,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/lgte/Config",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00296348,
         get_raw_class: 0x002962f0,
@@ -7652,6 +7734,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/oem/PlatformUtil",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00281e48,
         get_raw_class: 0x00281df0,
@@ -7663,6 +7746,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/oem/SmsPicker",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c71d0,
         get_raw_class: 0x001c7178,
@@ -7674,6 +7758,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/oem/Telephony",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c799c,
         get_raw_class: 0x001c7944,
@@ -7685,6 +7770,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/sms",
         superclass: Some("com/velox/SocketModel"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000021,
         get_class: 0x0025e648,
         get_raw_class: 0x0025e5f0,
@@ -7696,6 +7782,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/sockInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001c7e0c,
         get_raw_class: 0x001c7db4,
@@ -7707,6 +7794,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/sockOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001c81fc,
         get_raw_class: 0x001c81a4,
@@ -7718,6 +7806,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/util/Sharable",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/velox/util/Sharable"],
         flags: 0x00002601,
         get_class: 0x001730a4,
         get_raw_class: 0x0017304c,
@@ -7729,6 +7818,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/util/StringTokenizer",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/util/Enumeration"],
         flags: 0x00000021,
         get_class: 0x00296ac0,
         get_raw_class: 0x00296a68,
@@ -7740,6 +7830,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/util/zip/Inflater",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00296fb8,
         get_raw_class: 0x00296f60,
@@ -7751,6 +7842,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/wipijava/Config",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025ebc0,
         get_raw_class: 0x0025eb68,
@@ -7762,6 +7854,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/wipijava/lcdui/ImageWrapper",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/velox/wipijava/lcdui/ImageWrapper"],
         flags: 0x00000601,
         get_class: 0x001c82d4,
         get_raw_class: 0x001c827c,
@@ -7773,6 +7866,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/wipijava/lcdui/ImageWrapperFactory",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c84fc,
         get_raw_class: 0x001c84a4,
@@ -7784,6 +7878,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "com/velox/wipijava/lcdui/InnerEventConstant",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025eca4,
         get_raw_class: 0x0025ec4c,
@@ -7795,6 +7890,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/ByteArrayInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014d930,
         get_raw_class: 0x0014d8d8,
@@ -7806,6 +7902,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/ByteArrayOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014e0b8,
         get_raw_class: 0x0014e060,
@@ -7817,6 +7914,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/DataInput",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/io/DataInput"],
         flags: 0x00000601,
         get_class: 0x0014e2c0,
         get_raw_class: 0x0014e268,
@@ -7828,6 +7926,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/DataInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &["java/io/DataInput"],
         flags: 0x00000021,
         get_class: 0x00174594,
         get_raw_class: 0x0017453c,
@@ -7839,6 +7938,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/DataOutput",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/io/DataOutput"],
         flags: 0x00000601,
         get_class: 0x0014e3c8,
         get_raw_class: 0x0014e370,
@@ -7850,6 +7950,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/DataOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &["java/io/DataOutput"],
         flags: 0x00000021,
         get_class: 0x0014ed18,
         get_raw_class: 0x0014ecc0,
@@ -7861,6 +7962,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/EOFException",
         superclass: Some("java/io/IOException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00174684,
         get_raw_class: 0x0017462c,
@@ -7872,6 +7974,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/IOException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014ee08,
         get_raw_class: 0x0014edb0,
@@ -7883,6 +7986,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/InputStream",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x0014f38c,
         get_raw_class: 0x0014f334,
@@ -7894,6 +7998,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/InputStreamReader",
         superclass: Some("java/io/Reader"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014f898,
         get_raw_class: 0x0014f840,
@@ -7905,6 +8010,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/InterruptedIOException",
         superclass: Some("java/io/IOException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0017478c,
         get_raw_class: 0x00174734,
@@ -7916,6 +8022,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/OutputStream",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x0014fab8,
         get_raw_class: 0x0014fa60,
@@ -7927,6 +8034,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/OutputStreamWriter",
         superclass: Some("java/io/Writer"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0014fef4,
         get_raw_class: 0x0014fe9c,
@@ -7938,6 +8046,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/PrintStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00151810,
         get_raw_class: 0x001517b8,
@@ -7949,6 +8058,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/Reader",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x00151e18,
         get_raw_class: 0x00151dc0,
@@ -7960,6 +8070,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/UTFDataFormatException",
         superclass: Some("java/io/IOException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00151f08,
         get_raw_class: 0x00151eb0,
@@ -7971,6 +8082,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/UnavailableException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00151ff8,
         get_raw_class: 0x00151fa0,
@@ -7982,6 +8094,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/UnsupportedEncodingException",
         superclass: Some("java/io/IOException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001520e8,
         get_raw_class: 0x00152090,
@@ -7993,6 +8106,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/io/Writer",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x001525d4,
         get_raw_class: 0x0015257c,
@@ -8004,6 +8118,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/ArithmeticException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00132fdc,
         get_raw_class: 0x00132f84,
@@ -8015,6 +8130,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/ArrayIndexOutOfBoundsException",
         superclass: Some("java/lang/IndexOutOfBoundsException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00133158,
         get_raw_class: 0x00133100,
@@ -8026,6 +8142,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/ArrayStoreException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00133248,
         get_raw_class: 0x001331f0,
@@ -8037,6 +8154,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Boolean",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00152834,
         get_raw_class: 0x001527dc,
@@ -8048,6 +8166,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Byte",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00152afc,
         get_raw_class: 0x00152aa4,
@@ -8059,6 +8178,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Character",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00153128,
         get_raw_class: 0x001530d0,
@@ -8070,6 +8190,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Class",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x001335cc,
         get_raw_class: 0x00133574,
@@ -8081,6 +8202,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/ClassCastException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001336bc,
         get_raw_class: 0x00133664,
@@ -8092,6 +8214,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/ClassNotFoundException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00153218,
         get_raw_class: 0x001531c0,
@@ -8103,6 +8226,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Double",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x001538cc,
         get_raw_class: 0x00153874,
@@ -8114,6 +8238,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Error",
         superclass: Some("java/lang/Throwable"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0017487c,
         get_raw_class: 0x00174824,
@@ -8125,6 +8250,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Exception",
         superclass: Some("java/lang/Throwable"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001539fc,
         get_raw_class: 0x001539a4,
@@ -8136,6 +8262,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/FDBigInt",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00156b48,
         get_raw_class: 0x00156af0,
@@ -8147,6 +8274,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Float",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x001570ec,
         get_raw_class: 0x00157094,
@@ -8158,6 +8286,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/FloatingDecimal",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0015d3b0,
         get_raw_class: 0x0015d358,
@@ -8169,6 +8298,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/IllegalAccessException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0015d4a0,
         get_raw_class: 0x0015d448,
@@ -8180,6 +8310,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/IllegalArgumentException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0015d590,
         get_raw_class: 0x0015d538,
@@ -8191,6 +8322,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/IllegalMonitorStateException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0015d680,
         get_raw_class: 0x0015d628,
@@ -8202,6 +8334,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/IllegalStateException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0015d770,
         get_raw_class: 0x0015d718,
@@ -8213,6 +8346,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/IllegalThreadStateException",
         superclass: Some("java/lang/IllegalArgumentException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0015d860,
         get_raw_class: 0x0015d808,
@@ -8224,6 +8358,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/IndexOutOfBoundsException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00133a84,
         get_raw_class: 0x00133a2c,
@@ -8235,6 +8370,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/InstantiationException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0015d950,
         get_raw_class: 0x0015d8f8,
@@ -8246,6 +8382,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Integer",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x0015e8d8,
         get_raw_class: 0x0015e880,
@@ -8257,6 +8394,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/InterruptedException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0015e9c8,
         get_raw_class: 0x0015e970,
@@ -8268,6 +8406,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Long",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x0015f634,
         get_raw_class: 0x0015f5dc,
@@ -8279,6 +8418,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Math",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00160078,
         get_raw_class: 0x00160020,
@@ -8290,6 +8430,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/NegativeArraySizeException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00160288,
         get_raw_class: 0x00160230,
@@ -8301,6 +8442,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/NoClassDefFoundError",
         superclass: Some("java/lang/Error"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00160378,
         get_raw_class: 0x00160320,
@@ -8312,6 +8454,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/NullPointerException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00133b74,
         get_raw_class: 0x00133b1c,
@@ -8323,6 +8466,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/NumberFormatException",
         superclass: Some("java/lang/IllegalArgumentException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00160468,
         get_raw_class: 0x00160410,
@@ -8334,6 +8478,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Object",
         superclass: None,
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00133ea4,
         get_raw_class: 0x00133e4c,
@@ -8345,6 +8490,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/OutOfMemoryError",
         superclass: Some("java/lang/VirtualMachineError"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00160558,
         get_raw_class: 0x00160500,
@@ -8356,6 +8502,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Runnable",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000601,
         get_class: 0x00160600,
         get_raw_class: 0x001605a8,
@@ -8367,6 +8514,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Runtime",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00160730,
         get_raw_class: 0x001606d8,
@@ -8378,6 +8526,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/RuntimeException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00134050,
         get_raw_class: 0x00133ff8,
@@ -8389,6 +8538,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/SecurityException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0016085c,
         get_raw_class: 0x00160804,
@@ -8400,6 +8550,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Short",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00160b2c,
         get_raw_class: 0x00160ad4,
@@ -8411,6 +8562,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/String",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x0013571c,
         get_raw_class: 0x001356c4,
@@ -8422,6 +8574,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/StringBuffer",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00137040,
         get_raw_class: 0x00136fe8,
@@ -8433,6 +8586,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/StringIndexOutOfBoundsException",
         superclass: Some("java/lang/IndexOutOfBoundsException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00137400,
         get_raw_class: 0x001373a8,
@@ -8444,6 +8598,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/System",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x00137bf8,
         get_raw_class: 0x00137ba0,
@@ -8455,6 +8610,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Thread",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000021,
         get_class: 0x00161260,
         get_raw_class: 0x00161208,
@@ -8466,6 +8622,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/Throwable",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001383b8,
         get_raw_class: 0x00138360,
@@ -8477,6 +8634,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/VirtualMachineError",
         superclass: Some("java/lang/Error"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x001616e8,
         get_raw_class: 0x00161690,
@@ -8488,6 +8646,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/ref/Reference",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x001617ec,
         get_raw_class: 0x00161794,
@@ -8499,6 +8658,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/lang/ref/WeakReference",
         superclass: Some("java/lang/ref/Reference"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001618c8,
         get_raw_class: 0x00161870,
@@ -8510,6 +8670,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Calendar",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x00162e38,
         get_raw_class: 0x00162de0,
@@ -8521,6 +8682,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Date",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001637d0,
         get_raw_class: 0x00163778,
@@ -8532,6 +8694,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/EmptyStackException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00163890,
         get_raw_class: 0x00163838,
@@ -8543,6 +8706,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Enumeration",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/util/Enumeration"],
         flags: 0x00000601,
         get_class: 0x00163968,
         get_raw_class: 0x00163910,
@@ -8554,6 +8718,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/GregorianCalendar",
         superclass: Some("java/util/Calendar"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001670b0,
         get_raw_class: 0x00167058,
@@ -8565,6 +8730,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Hashtable",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001681e0,
         get_raw_class: 0x00168188,
@@ -8576,6 +8742,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Hashtable$HashtableEnumerator",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/util/Enumeration"],
         flags: 0x00000020,
         get_class: 0x001685a4,
         get_raw_class: 0x0016854c,
@@ -8587,6 +8754,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/HashtableEntry",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00168288,
         get_raw_class: 0x00168230,
@@ -8598,6 +8766,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/NoSuchElementException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00168694,
         get_raw_class: 0x0016863c,
@@ -8609,6 +8778,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Random",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00168e4c,
         get_raw_class: 0x00168df4,
@@ -8620,6 +8790,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/SimpleTimeZone",
         superclass: Some("java/util/TimeZone"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001696b8,
         get_raw_class: 0x00169660,
@@ -8631,6 +8802,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Stack",
         superclass: Some("java/util/Vector"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00169a08,
         get_raw_class: 0x001699b0,
@@ -8642,6 +8814,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/TaskQueue",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0016a1c0,
         get_raw_class: 0x0016a168,
@@ -8653,6 +8826,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/TimeZone",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x0016b020,
         get_raw_class: 0x0016afc8,
@@ -8664,6 +8838,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Timer",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0016bbb0,
         get_raw_class: 0x0016bb58,
@@ -8675,6 +8850,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/TimerTask",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000421,
         get_class: 0x0016bf7c,
         get_raw_class: 0x0016bf24,
@@ -8686,6 +8862,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/TimerThread",
         superclass: Some("java/lang/Thread"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000020,
         get_class: 0x0016cb84,
         get_raw_class: 0x0016cb2c,
@@ -8697,6 +8874,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/Vector",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0016e4e4,
         get_raw_class: 0x0016e48c,
@@ -8708,6 +8886,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "java/util/VectorEnumerator",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/util/Enumeration"],
         flags: 0x00000030,
         get_class: 0x0016e7f0,
         get_raw_class: 0x0016e798,
@@ -8719,6 +8898,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/Connection",
         superclass: Some("java/lang/Object"),
+        interfaces: &["javax/microedition/io/Connection"],
         flags: 0x00000601,
         get_class: 0x0016e898,
         get_raw_class: 0x0016e840,
@@ -8730,6 +8910,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/ConnectionNotFoundException",
         superclass: Some("java/io/IOException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0016e988,
         get_raw_class: 0x0016e930,
@@ -8741,6 +8922,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/Connector",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0016f978,
         get_raw_class: 0x0016f920,
@@ -8752,6 +8934,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/ContentConnection",
         superclass: Some("java/lang/Object"),
+        interfaces: &["javax/microedition/io/Connection", "javax/microedition/io/ContentConnection", "javax/microedition/io/InputConnection", "javax/microedition/io/OutputConnection", "javax/microedition/io/StreamConnection"],
         flags: 0x00000601,
         get_class: 0x0016fa70,
         get_raw_class: 0x0016fa18,
@@ -8763,6 +8946,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/Datagram",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/io/DataInput", "java/io/DataOutput", "javax/microedition/io/Datagram"],
         flags: 0x00000601,
         get_class: 0x0016fba8,
         get_raw_class: 0x0016fb50,
@@ -8774,6 +8958,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/DatagramConnection",
         superclass: Some("java/lang/Object"),
+        interfaces: &["javax/microedition/io/Connection", "javax/microedition/io/DatagramConnection"],
         flags: 0x00000601,
         get_class: 0x0016fd00,
         get_raw_class: 0x0016fca8,
@@ -8785,6 +8970,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/InputConnection",
         superclass: Some("java/lang/Object"),
+        interfaces: &["javax/microedition/io/Connection", "javax/microedition/io/InputConnection"],
         flags: 0x00000601,
         get_class: 0x0016fdd8,
         get_raw_class: 0x0016fd80,
@@ -8796,6 +8982,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/OutputConnection",
         superclass: Some("java/lang/Object"),
+        interfaces: &["javax/microedition/io/Connection", "javax/microedition/io/OutputConnection"],
         flags: 0x00000601,
         get_class: 0x0016feb0,
         get_raw_class: 0x0016fe58,
@@ -8807,6 +8994,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/StreamConnection",
         superclass: Some("java/lang/Object"),
+        interfaces: &["javax/microedition/io/Connection", "javax/microedition/io/InputConnection", "javax/microedition/io/OutputConnection", "javax/microedition/io/StreamConnection"],
         flags: 0x00000601,
         get_class: 0x0016ff50,
         get_raw_class: 0x0016fef8,
@@ -8818,6 +9006,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "javax/microedition/io/StreamConnectionNotifier",
         superclass: Some("java/lang/Object"),
+        interfaces: &["javax/microedition/io/Connection", "javax/microedition/io/StreamConnectionNotifier"],
         flags: 0x00000601,
         get_class: 0x0017000c,
         get_raw_class: 0x0016ffb4,
@@ -8829,6 +9018,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/core/DestroyEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msf/core/DestroyEventListener"],
         flags: 0x00000601,
         get_class: 0x001c85a4,
         get_raw_class: 0x001c854c,
@@ -8840,6 +9030,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/core/Kernel",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00260874,
         get_raw_class: 0x0026081c,
@@ -8851,6 +9042,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/core/ProgramExitException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00261794,
         get_raw_class: 0x0026173c,
@@ -8862,6 +9054,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/core/Shared",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c892c,
         get_raw_class: 0x001c88d4,
@@ -8873,6 +9066,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/io/HttpSocket",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msf/io/HttpSocket"],
         flags: 0x00000601,
         get_class: 0x001c97b4,
         get_raw_class: 0x001c975c,
@@ -8884,6 +9078,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/io/Message",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001c9e2c,
         get_raw_class: 0x001c9dd4,
@@ -8895,6 +9090,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/io/Network",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002618f8,
         get_raw_class: 0x002618a0,
@@ -8906,6 +9102,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/io/SchemeNotFoundException",
         superclass: Some("java/io/IOException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00281fe0,
         get_raw_class: 0x00281f88,
@@ -8917,6 +9114,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/io/Socket",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msf/io/Socket"],
         flags: 0x00000601,
         get_class: 0x001c9fa8,
         get_raw_class: 0x001c9f50,
@@ -8928,6 +9126,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msf/io/URL",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00261c58,
         get_raw_class: 0x00261c00,
@@ -8939,6 +9138,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataBase",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00286e8c,
         get_raw_class: 0x00286e34,
@@ -8950,6 +9150,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataBaseException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001ca0d8,
         get_raw_class: 0x001ca080,
@@ -8961,6 +9162,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataBaseRecordException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001ca208,
         get_raw_class: 0x001ca1b0,
@@ -8972,6 +9174,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataComparator",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/db/DataComparator"],
         flags: 0x00000601,
         get_class: 0x00261d80,
         get_raw_class: 0x00261d28,
@@ -8983,6 +9186,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataComparatorInteger",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/db/DataComparator"],
         flags: 0x00000021,
         get_class: 0x00261fc4,
         get_raw_class: 0x00261f6c,
@@ -8994,6 +9198,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataComparatorString",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/db/DataComparator"],
         flags: 0x00000021,
         get_class: 0x00282190,
         get_raw_class: 0x00282138,
@@ -9005,6 +9210,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataFilter",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/db/DataFilter"],
         flags: 0x00000601,
         get_class: 0x001ca2c4,
         get_raw_class: 0x001ca26c,
@@ -9016,6 +9222,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/db/DataFilterInteger",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/db/DataFilter"],
         flags: 0x00000021,
         get_class: 0x00282420,
         get_raw_class: 0x002823c8,
@@ -9027,6 +9234,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/Address",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00263148,
         get_raw_class: 0x002630f0,
@@ -9038,6 +9246,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/Address$FieldElement",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001ca414,
         get_raw_class: 0x001ca3bc,
@@ -9049,6 +9258,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/AddressBook",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002679e8,
         get_raw_class: 0x00267990,
@@ -9060,6 +9270,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/AddressBook$FieldInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001ca36c,
         get_raw_class: 0x001ca314,
@@ -9071,6 +9282,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/BackLight",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00267ca4,
         get_raw_class: 0x00267c4c,
@@ -9082,6 +9294,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/Call",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001ca8c0,
         get_raw_class: 0x001ca868,
@@ -9093,6 +9306,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/GPSConfig",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001cb518,
         get_raw_class: 0x001cb4c0,
@@ -9104,6 +9318,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/GPSException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001cb694,
         get_raw_class: 0x001cb63c,
@@ -9115,6 +9330,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/GPSListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/handset/GPSListener"],
         flags: 0x00000601,
         get_class: 0x00267f50,
         get_raw_class: 0x00267ef8,
@@ -9126,6 +9342,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/GPSLocationInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001cb948,
         get_raw_class: 0x001cb8f0,
@@ -9137,6 +9354,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/GPSProvider",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x001cc0f8,
         get_raw_class: 0x001cc0a0,
@@ -9148,6 +9366,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/HandsetProperty",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001cd98c,
         get_raw_class: 0x001cd934,
@@ -9159,6 +9378,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/LED",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001ce788,
         get_raw_class: 0x001ce730,
@@ -9170,6 +9390,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/RecordTable",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00268594,
         get_raw_class: 0x0026853c,
@@ -9181,6 +9402,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/SimpleTokenizer",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00268914,
         get_raw_class: 0x002688bc,
@@ -9192,6 +9414,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/handset/StationLocationInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001cee28,
         get_raw_class: 0x001cedd0,
@@ -9203,6 +9426,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/ClipCmdInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002689bc,
         get_raw_class: 0x00268964,
@@ -9214,6 +9438,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/File",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001d04d0,
         get_raw_class: 0x001d0478,
@@ -9225,6 +9450,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/FileInputStream",
         superclass: Some("java/io/InputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001d09ec,
         get_raw_class: 0x001d0994,
@@ -9236,6 +9462,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/FileOutputStream",
         superclass: Some("java/io/OutputStream"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001d0d44,
         get_raw_class: 0x001d0cec,
@@ -9247,6 +9474,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/FileSystem",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x001d3230,
         get_raw_class: 0x001d31d8,
@@ -9258,6 +9486,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/FileSystemListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/io/FileSystemListener"],
         flags: 0x00000601,
         get_class: 0x001d3378,
         get_raw_class: 0x001d3320,
@@ -9269,6 +9498,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/IODevice",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001d52cc,
         get_raw_class: 0x001d5274,
@@ -9280,6 +9510,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/ResizeCmdInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00268a64,
         get_raw_class: 0x00268a0c,
@@ -9291,6 +9522,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/ResourceGroup",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001d7574,
         get_raw_class: 0x001d751c,
@@ -9302,6 +9534,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/SMS",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001db660,
         get_raw_class: 0x001db608,
@@ -9313,6 +9546,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/io/SMSMessage",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001db8c8,
         get_raw_class: 0x001db870,
@@ -9324,6 +9558,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/AnimateImage",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001dea6c,
         get_raw_class: 0x001dea14,
@@ -9335,6 +9570,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/AnimateImage$AniImagePlayer",
         superclass: Some("java/lang/Thread"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000020,
         get_class: 0x001df5d4,
         get_raw_class: 0x001df57c,
@@ -9346,6 +9582,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow",
         superclass: Some("org/kwis/msp/lcdui/Card"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001eb7d0,
         get_raw_class: 0x001eb778,
@@ -9357,6 +9594,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$BtnLabel",
         superclass: Some("org/kwis/msp/lcdui/CandidateTouchWindow$MiniComponent"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001eba84,
         get_raw_class: 0x001eba2c,
@@ -9368,6 +9606,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$MiniComponent",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000420,
         get_class: 0x001ec340,
         get_raw_class: 0x001ec2e8,
@@ -9379,6 +9618,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$RepeatTimer",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000020,
         get_class: 0x00268bd0,
         get_raw_class: 0x00268b78,
@@ -9390,6 +9630,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$SYMBOLData",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001ec450,
         get_raw_class: 0x001ec3f8,
@@ -9401,6 +9642,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateTouchWindow$SymbolList",
         superclass: Some("org/kwis/msp/lcdui/CandidateTouchWindow$MiniComponent"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x001ed320,
         get_raw_class: 0x001ed2c8,
@@ -9412,6 +9654,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateWindow",
         superclass: Some("org/kwis/msp/lcdui/Card"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0027516c,
         get_raw_class: 0x00275114,
@@ -9423,6 +9666,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CandidateWindow$SYMBOLData",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0027527c,
         get_raw_class: 0x00275224,
@@ -9434,6 +9678,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Card",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x001eeb60,
         get_raw_class: 0x001eeb08,
@@ -9445,6 +9690,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/CharSet",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x002758c4,
         get_raw_class: 0x0027586c,
@@ -9456,6 +9702,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Display",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001f4dd4,
         get_raw_class: 0x001f4d7c,
@@ -9467,6 +9714,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/EventQueue",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001f9f80,
         get_raw_class: 0x001f9f28,
@@ -9478,6 +9726,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Font",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001fb6f4,
         get_raw_class: 0x001fb69c,
@@ -9489,6 +9738,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Graphics",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x001fe38c,
         get_raw_class: 0x001fe334,
@@ -9500,6 +9750,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Image",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00205f64,
         get_raw_class: 0x00205f0c,
@@ -9511,6 +9762,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Image$1",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0027599c,
         get_raw_class: 0x00275944,
@@ -9522,6 +9774,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Image$ImageWrapperImpl",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/velox/wipijava/lcdui/ImageWrapper"],
         flags: 0x00000020,
         get_class: 0x00207db4,
         get_raw_class: 0x00207d5c,
@@ -9533,6 +9786,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/ImageElement",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x002060b0,
         get_raw_class: 0x00206058,
@@ -9544,6 +9798,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/ImageObserver",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lcdui/ImageObserver"],
         flags: 0x00000601,
         get_class: 0x00206204,
         get_raw_class: 0x002061ac,
@@ -9555,6 +9810,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/ImageReader",
         superclass: Some("java/lang/Thread"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000020,
         get_class: 0x00207ab8,
         get_raw_class: 0x00207a60,
@@ -9566,6 +9822,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/InputMethodHandler",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0020c908,
         get_raw_class: 0x0020c8b0,
@@ -9577,6 +9834,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/InputMethodListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lcdui/InputMethodListener"],
         flags: 0x00000601,
         get_class: 0x0020cd90,
         get_raw_class: 0x0020cd38,
@@ -9588,6 +9846,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Jlet",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x0020d380,
         get_raw_class: 0x0020d328,
@@ -9599,6 +9858,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/JletEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lcdui/JletEventListener"],
         flags: 0x00000601,
         get_class: 0x0020d428,
         get_raw_class: 0x0020d3d0,
@@ -9610,6 +9870,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/JletStateChangeException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0020d558,
         get_raw_class: 0x0020d500,
@@ -9621,6 +9882,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/JletWrapper",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0020d920,
         get_raw_class: 0x0020d8c8,
@@ -9632,6 +9894,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/LockObject",
         superclass: Some("java/lang/Object"),
+        interfaces: &["com/velox/util/Sharable"],
         flags: 0x00002020,
         get_class: 0x0020e50c,
         get_raw_class: 0x0020e4b4,
@@ -9643,6 +9906,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/Main",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00275e94,
         get_raw_class: 0x00275e3c,
@@ -9654,6 +9918,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/RunnableElement",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0020e5e4,
         get_raw_class: 0x0020e58c,
@@ -9665,6 +9930,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lcdui/SystemEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lcdui/SystemEventListener"],
         flags: 0x00000601,
         get_class: 0x0020e68c,
         get_raw_class: 0x0020e634,
@@ -9676,6 +9942,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ActionListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/ActionListener"],
         flags: 0x00000601,
         get_class: 0x0020e734,
         get_raw_class: 0x0020e6dc,
@@ -9687,6 +9954,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/AnnunciatorComponent",
         superclass: Some("org/kwis/msp/lwc/ShellComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0020f48c,
         get_raw_class: 0x0020f434,
@@ -9698,6 +9966,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/AnnunciatorComponent$1",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00275f34,
         get_raw_class: 0x00275edc,
@@ -9709,6 +9978,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/AnnunciatorComponent$AnnunciatorEventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lcdui/JletEventListener"],
         flags: 0x00000020,
         get_class: 0x0020f644,
         get_raw_class: 0x0020f5ec,
@@ -9720,6 +9990,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ButtonComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00277abc,
         get_raw_class: 0x00277a64,
@@ -9731,6 +10002,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ChangeListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/ChangeListener"],
         flags: 0x00000601,
         get_class: 0x0020f778,
         get_raw_class: 0x0020f720,
@@ -9742,6 +10014,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/CheckboxComponent",
         superclass: Some("org/kwis/msp/lwc/LabelComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00210790,
         get_raw_class: 0x00210738,
@@ -9753,6 +10026,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/CheckboxGroup",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002115bc,
         get_raw_class: 0x00211564,
@@ -9764,6 +10038,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ComboComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002135e0,
         get_raw_class: 0x00213588,
@@ -9775,6 +10050,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ComboComponent$ComboPopup",
         superclass: Some("org/kwis/msp/lwc/ShellComponent"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x002138fc,
         get_raw_class: 0x002138a4,
@@ -9786,6 +10062,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ComboComponent$MyActionListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/ActionListener"],
         flags: 0x00000020,
         get_class: 0x00213b98,
         get_raw_class: 0x00213b40,
@@ -9797,6 +10074,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/Command",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00278e28,
         get_raw_class: 0x00278dd0,
@@ -9808,6 +10086,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/CommandBarComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00216068,
         get_raw_class: 0x00216010,
@@ -9819,6 +10098,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/CommandListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/CommandListener"],
         flags: 0x00000601,
         get_class: 0x0021615c,
         get_raw_class: 0x00216104,
@@ -9830,6 +10110,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/Component",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x00217408,
         get_raw_class: 0x002173b0,
@@ -9841,6 +10122,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ConstraintChecker",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x002178a4,
         get_raw_class: 0x0021784c,
@@ -9852,6 +10134,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ContainerComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x00219da4,
         get_raw_class: 0x00219d4c,
@@ -9863,6 +10146,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/DateFieldComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0021c24c,
         get_raw_class: 0x0021c1f4,
@@ -9874,6 +10158,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/DateFieldComponent$EditCard",
         superclass: Some("org/kwis/msp/lcdui/Card"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0021dd8c,
         get_raw_class: 0x0021dd34,
@@ -9885,6 +10170,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/Decorator",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0021e334,
         get_raw_class: 0x0021e2dc,
@@ -9896,6 +10182,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/DialogComponent",
         superclass: Some("org/kwis/msp/lwc/ShellComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0027b058,
         get_raw_class: 0x0027b000,
@@ -9907,6 +10194,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/DialogComponent$DialogActionListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/ActionListener"],
         flags: 0x00000020,
         get_class: 0x0027b2a0,
         get_raw_class: 0x0027b248,
@@ -9918,6 +10206,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/DialogComponent$DisplayTimeControl",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000020,
         get_class: 0x0021e4ac,
         get_raw_class: 0x0021e454,
@@ -9929,6 +10218,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/EventListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/EventListener"],
         flags: 0x00000601,
         get_class: 0x0021e568,
         get_raw_class: 0x0021e510,
@@ -9940,6 +10230,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/FormComponent",
         superclass: Some("org/kwis/msp/lwc/ContainerComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002216fc,
         get_raw_class: 0x002216a4,
@@ -9951,6 +10242,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/GrabKeyListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/GrabKeyListener"],
         flags: 0x00000601,
         get_class: 0x002217b8,
         get_raw_class: 0x00221760,
@@ -9962,6 +10254,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ImageComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00223314,
         get_raw_class: 0x002232bc,
@@ -9973,6 +10266,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ImageComponent$1",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lcdui/ImageObserver"],
         flags: 0x00000020,
         get_class: 0x00223434,
         get_raw_class: 0x002233dc,
@@ -9984,6 +10278,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/InputListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lcdui/InputMethodListener"],
         flags: 0x00000021,
         get_class: 0x00223b68,
         get_raw_class: 0x00223b10,
@@ -9995,6 +10290,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/LabelComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00225c80,
         get_raw_class: 0x00225c28,
@@ -10006,6 +10302,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ListComponent",
         superclass: Some("org/kwis/msp/lwc/FormComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00229784,
         get_raw_class: 0x0022972c,
@@ -10017,6 +10314,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ListItemComponent",
         superclass: Some("org/kwis/msp/lwc/LabelComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0022a1b8,
         get_raw_class: 0x0022a160,
@@ -10028,6 +10326,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ProgressComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0027cf8c,
         get_raw_class: 0x0027cf34,
@@ -10039,6 +10338,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ProxyCard",
         superclass: Some("org/kwis/msp/lcdui/Card"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0022b3f4,
         get_raw_class: 0x0022b39c,
@@ -10050,6 +10350,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ScrollbarComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0022df20,
         get_raw_class: 0x0022dec8,
@@ -10061,6 +10362,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/ShellComponent",
         superclass: Some("org/kwis/msp/lwc/ContainerComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0023398c,
         get_raw_class: 0x00233934,
@@ -10072,6 +10374,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextBoxComponent",
         superclass: Some("org/kwis/msp/lwc/TextComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002368fc,
         get_raw_class: 0x002368a4,
@@ -10083,6 +10386,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextBoxComponent$Action",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/ActionListener"],
         flags: 0x00000020,
         get_class: 0x00236b38,
         get_raw_class: 0x00236ae0,
@@ -10094,6 +10398,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x00243cfc,
         get_raw_class: 0x00243ca4,
@@ -10105,6 +10410,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextComponent$ModeViewer",
         superclass: Some("org/kwis/msp/lcdui/Card"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00244068,
         get_raw_class: 0x00244010,
@@ -10116,6 +10422,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFieldComponent",
         superclass: Some("org/kwis/msp/lwc/TextComponent"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002464e0,
         get_raw_class: 0x00246488,
@@ -10127,6 +10434,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFieldComponent$Action",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/lwc/ActionListener"],
         flags: 0x00000020,
         get_class: 0x002468e4,
         get_raw_class: 0x0024688c,
@@ -10138,6 +10446,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFieldComponent$TextPopup",
         superclass: Some("org/kwis/msp/lwc/TextBoxComponent"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00246c90,
         get_raw_class: 0x00246c38,
@@ -10149,6 +10458,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextFormatProcessor",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00247e64,
         get_raw_class: 0x00247e0c,
@@ -10160,6 +10470,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TextPopup",
         superclass: Some("org/kwis/msp/lwc/TextBoxComponent"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x00248264,
         get_raw_class: 0x0024820c,
@@ -10171,6 +10482,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TickerComponent",
         superclass: Some("org/kwis/msp/lwc/Component"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0024976c,
         get_raw_class: 0x00249714,
@@ -10182,6 +10494,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/lwc/TickerComponent$RunTicker",
         superclass: Some("java/lang/Object"),
+        interfaces: &["java/lang/Runnable"],
         flags: 0x00000020,
         get_class: 0x00249908,
         get_raw_class: 0x002498b0,
@@ -10193,6 +10506,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/BaseClip",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000421,
         get_class: 0x0024c75c,
         get_raw_class: 0x0024c704,
@@ -10204,6 +10518,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/Camera",
         superclass: Some("org/kwis/msp/media/BaseClip"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00250834,
         get_raw_class: 0x002507dc,
@@ -10215,6 +10530,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/Clip",
         superclass: Some("org/kwis/msp/media/BaseClip"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002514c8,
         get_raw_class: 0x00251470,
@@ -10226,6 +10542,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/ClipManager",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00251870,
         get_raw_class: 0x00251818,
@@ -10237,6 +10554,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/DataSource",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0027e210,
         get_raw_class: 0x0027e1b8,
@@ -10248,6 +10566,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/EqualizerInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00251918,
         get_raw_class: 0x002518c0,
@@ -10259,6 +10578,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/LevelMeterInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002519c0,
         get_raw_class: 0x00251968,
@@ -10270,6 +10590,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/MediaConstants",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/media/MediaConstants"],
         flags: 0x00000601,
         get_class: 0x00251ecc,
         get_raw_class: 0x00251e74,
@@ -10281,6 +10602,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/MediaUnavailableException",
         superclass: Some("java/lang/RuntimeException"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00251ffc,
         get_raw_class: 0x00251fa4,
@@ -10292,6 +10614,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/MediaUnsupportedException",
         superclass: Some("java/lang/Exception"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025212c,
         get_raw_class: 0x002520d4,
@@ -10303,6 +10626,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/PlayListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/media/PlayListener"],
         flags: 0x00000601,
         get_class: 0x002523e0,
         get_raw_class: 0x00252388,
@@ -10314,6 +10638,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/Player",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00252b04,
         get_raw_class: 0x00252aac,
@@ -10325,6 +10650,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/PlayerListener",
         superclass: Some("java/lang/Object"),
+        interfaces: &["org/kwis/msp/media/PlayerListener"],
         flags: 0x00000601,
         get_class: 0x00252cf8,
         get_raw_class: 0x00252ca0,
@@ -10336,6 +10662,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/StillClip",
         superclass: Some("org/kwis/msp/media/Camera"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002538d8,
         get_raw_class: 0x00253880,
@@ -10347,6 +10674,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/Vibrator",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00253a44,
         get_raw_class: 0x002539ec,
@@ -10358,6 +10686,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/VideoClip",
         superclass: Some("org/kwis/msp/media/Camera"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0025448c,
         get_raw_class: 0x00254434,
@@ -10369,6 +10698,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "org/kwis/msp/media/Volume",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00254b20,
         get_raw_class: 0x00254ac8,
@@ -10380,6 +10710,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/DMInfo",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00297558,
         get_raw_class: 0x00297500,
@@ -10391,6 +10722,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/GatewayIP",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x002887ec,
         get_raw_class: 0x00288794,
@@ -10402,6 +10734,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/ImageResize",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00288a30,
         get_raw_class: 0x002889d8,
@@ -10413,6 +10746,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/OEMAppExecutor",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x00289980,
         get_raw_class: 0x00289928,
@@ -10424,6 +10758,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/OEMDevice",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000031,
         get_class: 0x0028a710,
         get_raw_class: 0x0028a6b8,
@@ -10435,6 +10770,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/SYSTheme",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0028abb0,
         get_raw_class: 0x0028ab58,
@@ -10446,6 +10782,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/SYSThemeImpl",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000020,
         get_class: 0x0028b43c,
         get_raw_class: 0x0028b3e4,
@@ -10457,6 +10794,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/URLEncoder",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0028c600,
         get_raw_class: 0x0028c5a8,
@@ -10468,6 +10806,7 @@ pub static PLATFORM_CLASSES: &[PlatformClass] = &[
     PlatformClass {
         name: "wec/WakeupTimer",
         superclass: Some("java/lang/Object"),
+        interfaces: &[],
         flags: 0x00000021,
         get_class: 0x0028c9e0,
         get_raw_class: 0x0028c988,
@@ -10626,6 +10965,40 @@ mod tests {
                 class.dispatch_method(slot),
                 Some((name, descriptor)),
                 "{class_name} slot {slot}",
+            );
+        }
+    }
+
+    #[test]
+    fn native_interface_relations_are_preserved() {
+        let relation_count: usize = PLATFORM_CLASSES
+            .iter()
+            .map(|class| class.interfaces.len())
+            .sum();
+        assert_eq!(relation_count, 90);
+
+        let socket = "org/kwis/msf/io/Socket";
+        let socket_implementor_count = PLATFORM_CLASSES
+            .iter()
+            .filter(|class| class.interfaces.contains(&socket))
+            .count();
+        assert_eq!(socket_implementor_count, 9);
+
+        for class_name in [
+            "com/velox/BillSocketClass",
+            "com/velox/BluetoothSocketInterface",
+            "com/velox/HttpSocketClass",
+            "com/velox/SocketClass",
+            "com/velox/SocketModel",
+            "com/velox/TestBillSocketClass",
+            "com/velox/comm",
+            "com/velox/sms",
+            "org/kwis/msf/io/Socket",
+        ] {
+            let class = platform_class(class_name).unwrap();
+            assert!(
+                class.interfaces.contains(&socket),
+                "{class_name} lost native Socket interface relation",
             );
         }
     }

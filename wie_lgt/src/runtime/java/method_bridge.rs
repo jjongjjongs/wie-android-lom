@@ -60,6 +60,17 @@ impl ResolvedMember {
             descriptor: member.descriptor.clone(),
         })
     }
+
+    /// Reads one row of the interface-method table.
+    pub fn interface_method(table: &ClassTable, index: u32) -> Option<Self> {
+        let member = table.interface_methods.get(index as usize)?.as_ref()?;
+
+        Some(Self {
+            class_name: table.class_name(member.class_index).into(),
+            name: member.name.clone(),
+            descriptor: member.descriptor.clone(),
+        })
+    }
 }
 
 /// Reads the `count` argument words a call was made with.

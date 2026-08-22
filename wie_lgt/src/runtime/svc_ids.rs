@@ -24,6 +24,10 @@ pub enum InitSvcId {
     JavaImportE1 = 18,
     JavaImportE2 = 19,
     JavaResolveOne = 20,
+    JavaImport26 = 21,
+    JavaImport38 = 22,
+    JavaImport40 = 23,
+    JavaImport64 = 24,
 }
 
 impl TryFrom<SvcId> for InitSvcId {
@@ -52,6 +56,10 @@ impl TryFrom<SvcId> for InitSvcId {
             18 => Self::JavaImportE1,
             19 => Self::JavaImportE2,
             20 => Self::JavaResolveOne,
+            21 => Self::JavaImport26,
+            22 => Self::JavaImport38,
+            23 => Self::JavaImport40,
+            24 => Self::JavaImport64,
             _ => return Err(wie_util::WieError::FatalError(alloc::format!("Unknown LGT init SVC id {}", value.0))),
         })
     }

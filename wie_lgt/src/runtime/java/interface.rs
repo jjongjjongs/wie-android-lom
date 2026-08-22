@@ -48,6 +48,11 @@ pub const MAX_DISPATCH_CLASSES: u32 = 63;
 /// One SVC id per (class, slot) pair a dispatch table does not account for.
 pub const JAVA_UNKNOWN_SLOT_SVC_BASE: u32 = 0x8000;
 
+/// One SVC id per row of the application's interface-method table. Interface
+/// dispatch uses a table returned by vm_find_interface rather than the
+/// receiver's ordinary virtual table, so these rows need their own namespace.
+pub const JAVA_INTERFACE_METHOD_SVC_BASE: u32 = 0xa000;
+
 /// One SVC id per row of the static method table that carries no descriptor.
 /// The compiled code calls these too, so they cannot be left null.
 pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x4000;
@@ -66,6 +71,10 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport10)?,
         0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport11)?,
         0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport23)?,
+        0x26 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport26)?,
+        0x38 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport38)?,
+        0x40 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport40)?,
+        0x64 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport64)?,
         0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaResolveOne)?,
         0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk9)?,
@@ -728,6 +737,69 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
     }
 
     build_dispatch_tables(core, handles, table, &slots)?;
+
+    if table.interface_methods.len() as u32 > JAVA_METHOD_SVC_LIMIT {
+        return Err(wie_util::WieError::FatalError(alloc::format!(
+            "LGT interface method table has {} rows, more than the {JAVA_METHOD_SVC_LIMIT} reserved",
+            table.interface_methods.len()
+        )));
+    }
+
+    // Native vm_find_interface returns a pointer to an interface-specific
+    // dispatch table whose word zero is the requested class_shared identity.
+    // The compiled application then indexes that table with the native slot
+    // written to interface_method_offsets and loads the callable at +4.
+    for class_index in 0..table.classes.len() {
+        let class = &table.classes[class_index];
+        if class.interface_method_count == 0 {
+            table.interface_vtables.push(0);
+            continue;
+        }
+
+        let platform = platform_class(&class.name).expect("platform class checked above");
+        let mut highest_slot = 0u32;
+
+        for index in class.interface_method_start..class.interface_method_start + class.interface_method_count {
+            let member = table
+                .interface_methods
+                .get(index as usize)
+                .and_then(|member| member.as_ref())
+                .ok_or_else(|| {
+                    wie_util::WieError::FatalError(alloc::format!(
+                        "Blank LGT interface-method import row {index}"
+                    ))
+                })?;
+            let method = platform.method(&member.name, &member.descriptor).ok_or_else(|| {
+                wie_util::WieError::FatalError(alloc::format!(
+                    "LGT interface table could not resolve {}",
+                    table.describe(member)
+                ))
+            })?;
+            highest_slot = highest_slot.max(method.slot);
+        }
+
+        let root = table.class_roots[class_index];
+        let dispatch = Allocator::alloc(core, (highest_slot + 2) * 4)?;
+        core.write_bytes(dispatch, &vec![0; ((highest_slot + 2) * 4) as usize])?;
+        write_generic(core, dispatch, root)?;
+
+        for index in class.interface_method_start..class.interface_method_start + class.interface_method_count {
+            let member = table.interface_methods[index as usize]
+                .as_ref()
+                .expect("interface member checked above");
+            let method = platform
+                .method(&member.name, &member.descriptor)
+                .expect("interface method checked above");
+
+            let stub = core.make_svc_stub(
+                SVC_CATEGORY_INIT,
+                JAVA_INTERFACE_METHOD_SVC_BASE + index,
+            )?;
+            write_generic(core, dispatch + 4 + method.slot * 4, stub)?;
+        }
+
+        table.interface_vtables.push(dispatch);
+    }
 
     // The imported native fields occupy their original word slots. AOT
     // application code also indexes this output array beyond the platform

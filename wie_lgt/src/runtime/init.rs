@@ -27,8 +27,9 @@ use super::{
         compiled_class, get_java_interface_method,
         handles::JavaHandles,
         interface::{
-            ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_METHOD_SVC_LIMIT, JAVA_RESERVED_SLOT_SVC_BASE,
-            JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE, bridge_class_chain,
+            ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
+            JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
+            bridge_class_chain,
             java_import_11, java_load_classes, java_resolve_one, java_unk0, java_unk9, java_unk11, java_unk12,
             primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
@@ -173,6 +174,13 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
     if id.0 >= JAVA_UNKNOWN_SLOT_SVC_BASE && id.0 < JAVA_UNKNOWN_SLOT_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let encoded = id.0 - JAVA_UNKNOWN_SLOT_SVC_BASE;
         let result = call_unknown_slot(core, context, encoded / DISPATCH_TABLE_SLOTS, encoded % DISPATCH_TABLE_SLOTS).await?;
+
+        return result.write(core, lr);
+    }
+
+    if id.0 >= JAVA_INTERFACE_METHOD_SVC_BASE && id.0 < JAVA_INTERFACE_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        let index = id.0 - JAVA_INTERFACE_METHOD_SVC_BASE;
+        let result = invoke_imported_interface(core, context, index).await?;
 
         return result.write(core, lr);
     }
@@ -616,6 +624,141 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             );
             context.save_points.throw(core, exception)
         }
+        // Native Java-interface 0x26 is
+        // vm_throw_class_cast_exception(message). The wrapper preserves its
+        // incoming r0 as the optional message and tail-calls the same native
+        // exception helper used by the other VM throw wrappers.
+        InitSvcId::JavaImport26 => {
+            let message = core.read_param(0)?;
+            let class_name = "java/lang/ClassCastException";
+            let vtable = synthetic_platform_vtable(core, context, class_name)?;
+
+            context.java_handles.set_dispatch_table(class_name, vtable);
+
+            let mut exception = match context.jvm.instantiate_class(class_name).await {
+                Ok(exception) => exception,
+                Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+            };
+
+            if message != 0 {
+                let message_bytes = read_null_terminated_string_bytes(core, message)?;
+                let message: String = message_bytes.iter().map(|&byte| char::from(byte)).collect();
+                let java_message = match JavaLangString::from_rust_string(&context.jvm, &message).await {
+                    Ok(message) => message,
+                    Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+                };
+
+                if let Err(error) = context
+                    .jvm
+                    .put_field(
+                        &mut exception,
+                        "detailMessage",
+                        "Ljava/lang/String;",
+                        java_message,
+                    )
+                    .await
+                {
+                    return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+                }
+            }
+
+            let exception = context.java_handles.address_of(exception)?;
+
+            tracing::debug!(
+                "vm_throw_class_cast_exception({message:#x}) -> longjmp({exception:#x})"
+            );
+            context.save_points.throw(core, exception)
+        }
+        // In this native build both vm_throw_abstract_method_error (0x38)
+        // and vm_throw_no_such_method_error (0x40) are aliases of
+        // vm_throw_virtual_machine_error(message). That routine loads
+        // class_shared_java_lang_VirtualMachineError from its GOT slot and
+        // forwards the incoming r0 as the optional message.
+        InitSvcId::JavaImport38 | InitSvcId::JavaImport40 => {
+            let message = core.read_param(0)?;
+            let class_name = "java/lang/VirtualMachineError";
+            let vtable = synthetic_platform_vtable(core, context, class_name)?;
+
+            context.java_handles.set_dispatch_table(class_name, vtable);
+
+            let mut exception = match context.jvm.instantiate_class(class_name).await {
+                Ok(exception) => exception,
+                Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+            };
+
+            if message != 0 {
+                let message_bytes = read_null_terminated_string_bytes(core, message)?;
+                let message: String = message_bytes.iter().map(|&byte| char::from(byte)).collect();
+                let java_message = match JavaLangString::from_rust_string(&context.jvm, &message).await {
+                    Ok(message) => message,
+                    Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+                };
+
+                if let Err(error) = context
+                    .jvm
+                    .put_field(
+                        &mut exception,
+                        "detailMessage",
+                        "Ljava/lang/String;",
+                        java_message,
+                    )
+                    .await
+                {
+                    return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+                }
+            }
+
+            let exception = context.java_handles.address_of(exception)?;
+
+            tracing::debug!(
+                "vm_throw_virtual_machine_error(import={:#x}, message={message:#x}) -> longjmp({exception:#x})",
+                id.0
+            );
+            context.save_points.throw(core, exception)
+        }
+        // Native vm_find_interface(object, requested_class_shared) walks the
+        // receiver class's linked interface list and returns the matching
+        // interface dispatch-table pointer, or zero when it is not implemented.
+        InitSvcId::JavaImport64 => {
+            let object = core.read_param(0)?;
+            let requested_root = core.read_param(1)?;
+
+            let Some(instance) = context.java_handles.get(object) else {
+                0u32.write(core, lr)?;
+                return Ok(());
+            };
+            let receiver_name = instance.class_definition().name();
+
+            let requested = {
+                let imported = context.imported_classes.lock();
+                imported.as_ref().and_then(|table| {
+                    let index = table.class_of_root(requested_root)?;
+                    let class = table.classes.get(index as usize)?;
+                    let dispatch = table.interface_vtables.get(index as usize).copied().unwrap_or(0);
+                    Some((class.name.clone(), dispatch))
+                })
+            };
+
+            let Some((requested_name, dispatch)) = requested else {
+                0u32.write(core, lr)?;
+                return Ok(());
+            };
+
+            let implements = class_implements_interface(context, &receiver_name, &requested_name);
+
+            if dispatch == 0 || !implements {
+                tracing::trace!(
+                    "vm_find_interface(object={object:#x}, receiver={receiver_name}, root={requested_root:#x}, interface={requested_name}) -> 0"
+                );
+                0u32.write(core, lr)?;
+                return Ok(());
+            }
+
+            tracing::trace!(
+                "vm_find_interface(object={object:#x}, receiver={receiver_name}, root={requested_root:#x}, interface={requested_name}) -> {dispatch:#x}"
+            );
+            dispatch.write(core, lr)
+        }
         InitSvcId::JavaImportE1 => {
             let class = imported_class_token(context, "java/lang/String")
                 .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
@@ -788,6 +931,41 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
 
 /// The table of the nearest platform class an application class extends, or
 /// the fallback when the chain does not reach one.
+fn class_implements_interface(context: &InitSvcContext, class_name: &str, interface_name: &str) -> bool {
+    let mut current = Some(String::from(class_name));
+
+    for _ in 0..MAX_SUPERCLASS_DEPTH {
+        let Some(name) = current.take() else {
+            return false;
+        };
+
+        if name == interface_name {
+            return true;
+        }
+
+        if let Some(class) = context.app_classes.lock().iter().find(|class| class.name == name).cloned() {
+            if class.interfaces.iter().any(|interface| interface == interface_name) {
+                return true;
+            }
+
+            current = class.superclass;
+            continue;
+        }
+
+        let Some(class) = platform_class(&name) else {
+            return false;
+        };
+
+        if class.interfaces.iter().any(|interface| *interface == interface_name) {
+            return true;
+        }
+
+        current = class.superclass.map(String::from);
+    }
+
+    false
+}
+
 fn imported_class_token(context: &InitSvcContext, name: &str) -> Option<u32> {
     let imported = context.imported_classes.lock();
     let table = imported.as_ref()?;
@@ -1347,6 +1525,25 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
 }
 
 /// Handles a call the compiled code made through a class's dispatch table.
+async fn invoke_imported_interface(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+    let this = core.read_param(0)?;
+
+    let member = context
+        .imported_classes
+        .lock()
+        .as_ref()
+        .and_then(|table| ResolvedMember::interface_method(table, index));
+
+    let Some(member) = member else {
+        return Err(WieError::FatalError(format!("Imported interface method {index} has no descriptor")));
+    };
+
+    let handles = context.java_handles.clone();
+    let jvm = context.jvm.clone();
+
+    method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await
+}
+
 async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
     let this = core.read_param(0)?;
 
