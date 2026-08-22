@@ -643,7 +643,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 .await?
                 .write(core, lr)
         }
-        InitSvcId::JavaImport09 => {
+        InitSvcId::VmGetConstantString => {
             let chars = core.read_param(1)?;
             let length = core.read_param(2)?;
             let cache = core.read_param(3)?;
@@ -652,7 +652,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             result.write(core, lr)
         }
-        InitSvcId::JavaImport0e => {
+        InitSvcId::VmGetArrayClass => {
             let dimensions = core.read_param(0)?;
             let element_class = core.read_param(1)?;
             let atype = core.read_param(2)?;
@@ -661,7 +661,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             class.write(core, lr)
         }
-        InitSvcId::JavaImport10 => {
+        InitSvcId::VmInstantiateArray => {
             let class = core.read_param(0)?;
             let length = core.read_param(1)?;
 
@@ -777,7 +777,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // The native routine frees save-point depth zero and longjmps with the
         // supplied exception object. A null exception is replaced with a new
         // java/lang/NullPointerException before the throw.
-        InitSvcId::JavaImport21 => {
+        InitSvcId::VmThrowException => {
             let exception = core.read_param(0)?;
 
             if exception != 0 {
@@ -802,7 +802,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // vm_throw_null_pointer_exception(message). The wrapper preserves r0
         // as its optional NUL-terminated message and forwards the NPE class to
         // throw_exception_with_class_and_message.
-        InitSvcId::JavaImport22 => {
+        InitSvcId::VmThrowNullPointerException => {
             let message = core.read_param(0)?;
             let class_name = "java/lang/NullPointerException";
             let vtable = synthetic_platform_vtable(core, context, class_name)?;
@@ -845,7 +845,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
         // Native Java-interface 0x25 is
         // vm_throw_arithmetic_exception(message), with the same message ABI.
-        InitSvcId::JavaImport25 => {
+        InitSvcId::VmThrowArithmeticException => {
             let message = core.read_param(0)?;
             let class_name = "java/lang/ArithmeticException";
             let vtable = synthetic_platform_vtable(core, context, class_name)?;
@@ -890,7 +890,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // vm_throw_array_index_out_of_bounds_exception(message). It constructs
         // a real AIOOBE object, pops the current save point, then
         // longjmp(save_point, exception_object).
-        InitSvcId::JavaImport23 => {
+        InitSvcId::VmThrowArrayIndexOutOfBoundsException => {
             let message = core.read_param(1)?;
             let class_name = "java/lang/ArrayIndexOutOfBoundsException";
             let vtable = synthetic_platform_vtable(core, context, class_name)?;
@@ -945,7 +945,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // vm_throw_class_cast_exception(message). The wrapper preserves its
         // incoming r0 as the optional message and tail-calls the same native
         // exception helper used by the other VM throw wrappers.
-        InitSvcId::JavaImport26 => {
+        InitSvcId::VmThrowClassCastException => {
             let message = core.read_param(0)?;
             let class_name = "java/lang/ClassCastException";
             let vtable = synthetic_platform_vtable(core, context, class_name)?;
@@ -991,7 +991,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // vm_throw_virtual_machine_error(message). That routine loads
         // class_shared_java_lang_VirtualMachineError from its GOT slot and
         // forwards the incoming r0 as the optional message.
-        InitSvcId::JavaImport38 | InitSvcId::JavaImport40 => {
+        InitSvcId::VmThrowAbstractMethodError | InitSvcId::VmThrowNoSuchMethodError => {
             let message = core.read_param(0)?;
             let class_name = "java/lang/VirtualMachineError";
             let vtable = synthetic_platform_vtable(core, context, class_name)?;
@@ -1036,7 +1036,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // Native vm_find_interface(object, requested_class_shared) walks the
         // receiver class's linked interface list and returns the matching
         // interface dispatch-table pointer, or zero when it is not implemented.
-        InitSvcId::JavaImport64 => {
+        InitSvcId::VmFindInterface => {
             let object = core.read_param(0)?;
             let requested_root = core.read_param(1)?;
 
@@ -1076,14 +1076,14 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             );
             dispatch.write(core, lr)
         }
-        InitSvcId::JavaImportE1 => {
+        InitSvcId::VmGetStringClass => {
             let class = imported_class_token(context, "java/lang/String")
                 .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
 
             tracing::debug!("vm_get_string_class() -> {class:#x}");
             class.write(core, lr)
         }
-        InitSvcId::JavaImportE2 => {
+        InitSvcId::VmGetStringArrayClass => {
             let string_class = imported_class_token(context, "java/lang/String")
                 .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
 
