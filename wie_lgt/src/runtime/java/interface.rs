@@ -69,7 +69,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport09)?,
         0x0e => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport0e)?,
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport10)?,
-        0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport11)?,
+        0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiateMultiArray)?,
         0x21 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport21)?,
         0x22 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport22)?,
         0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport23)?,
@@ -1104,9 +1104,4 @@ pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClas
     tracing::debug!("vm_instantiate_array({class:#x}, {length}) -> {array:#x}, {element_size} bytes an element");
 
     Ok(array)
-}
-
-pub async fn java_import_11(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("java_import_11(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
-    Ok(0)
 }

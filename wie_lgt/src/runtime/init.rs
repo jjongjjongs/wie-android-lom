@@ -31,7 +31,7 @@ use super::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
             bridge_class_chain,
-            java_import_11, java_load_classes, java_resolve_one, vm_run_main_class,
+            java_load_classes, java_resolve_one, vm_run_main_class,
             primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
         },
@@ -669,7 +669,110 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 .await?
                 .write(core, lr)
         }
-        InitSvcId::JavaImport11 => EmulatedFunction::call(&java_import_11, core, &mut ()).await?.write(core, lr),
+        // Native Java-interface 0x11 is
+        // vm_instantiate_multi_array(array_class, dimensions, dimension_count).
+        // It validates every requested length before allocating anything, then
+        // recursively fills each reference-array level with the next array class.
+        InitSvcId::VmInstantiateMultiArray => {
+            let class = core.read_param(0)?;
+            let dimensions_ptr = core.read_param(1)?;
+            let dimension_count = core.read_param(2)?;
+
+            let mut lengths = Vec::with_capacity(dimension_count as usize);
+            for index in 0..dimension_count {
+                let length: u32 = read_generic(core, dimensions_ptr + index * 4)?;
+                if (length as i32) < 0 {
+                    let class_name = "java/lang/NegativeArraySizeException";
+                    let vtable = synthetic_platform_vtable(core, context, class_name)?;
+                    context.java_handles.set_dispatch_table(class_name, vtable);
+
+                    let exception = match context.jvm.instantiate_class(class_name).await {
+                        Ok(exception) => exception,
+                        Err(error) => {
+                            return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+                        }
+                    };
+                    let exception = context.java_handles.address_of(exception)?;
+
+                    tracing::debug!(
+                        "vm_instantiate_multi_array({class:#x}, {dimensions_ptr:#x}, {dimension_count}) -> NegativeArraySizeException {exception:#x}"
+                    );
+                    return context.save_points.throw(core, exception);
+                }
+                lengths.push(length);
+            }
+
+            if dimension_count == 0 {
+                return Err(WieError::FatalError(
+                    "vm_instantiate_multi_array received zero dimensions".into(),
+                ));
+            }
+
+            let root = vm_instantiate_array(
+                &context.java_handles,
+                &context.array_classes,
+                class,
+                lengths[0],
+            )
+            .await?;
+
+            let mut current_class = class;
+            let mut parents = vec![root];
+
+            for depth in 1..dimension_count {
+                let info = context
+                    .array_classes
+                    .lock()
+                    .get(&current_class)
+                    .copied()
+                    .ok_or_else(|| {
+                        WieError::FatalError(format!(
+                            "vm_instantiate_multi_array class {current_class:#x} has no array metadata"
+                        ))
+                    })?;
+
+                if info.dimensions <= 1 {
+                    return Err(WieError::FatalError(format!(
+                        "vm_instantiate_multi_array exhausted class dimensions at depth {depth}"
+                    )));
+                }
+
+                let child_class = get_array_class(
+                    core,
+                    context,
+                    info.dimensions - 1,
+                    info.element_class,
+                    info.atype,
+                )?;
+
+                let mut children = Vec::new();
+                for parent in parents {
+                    let data: u32 = read_generic(core, parent + 8)?;
+                    let parent_length: u32 = read_generic(core, data)?;
+
+                    for index in 0..parent_length {
+                        let child = vm_instantiate_array(
+                            &context.java_handles,
+                            &context.array_classes,
+                            child_class,
+                            lengths[depth as usize],
+                        )
+                        .await?;
+
+                        write_generic(core, data + 4 + index * REFERENCE_SIZE, child)?;
+                        children.push(child);
+                    }
+                }
+
+                current_class = child_class;
+                parents = children;
+            }
+
+            tracing::debug!(
+                "vm_instantiate_multi_array({class:#x}, {dimensions_ptr:#x}, {dimension_count}) -> {root:#x}"
+            );
+            root.write(core, lr)
+        }
         // Native Java-interface 0x21 is vm_throw_exception(exception).
         // The native routine frees save-point depth zero and longjmps with the
         // supplied exception object. A null exception is replaced with a new
