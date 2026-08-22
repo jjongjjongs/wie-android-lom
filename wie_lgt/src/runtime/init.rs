@@ -257,206 +257,6 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         let a3 = core.read_param(3)?;
 
         tracing::warn!("lgt_java_diag(index={function_index:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
-        // Native Java-interface slot 0x12 is
-        // `vm_class_is_assignable_to(source_class_shared, target_class_shared)`.
-        // LoM normalizes both object and java/lang/Class operands to this exact
-        // identity layer before entering the import.
-        if function_index == 0x12 {
-            let assignable = class_is_assignable_to(core, context, a0, a1).await?;
-            u32::from(assignable).write(core, lr)?;
-            return Ok(());
-        }
-
-        // `vm_check_stack_overflow(words)`, which the compiled code calls at
-        // the head of every method with the frame it is about to use. It was
-        // read as an allocator, which meant a heap allocation per call whose
-        // result the caller then discarded. The emulated stack is the host's,
-        // and it has room.
-        if function_index == 0x54 {
-            tracing::trace!("vm_check_stack_overflow({a0})");
-            0u32.write(core, lr)?;
-            return Ok(());
-        }
-
-        if function_index == 0x55 {
-            tracing::trace!("vm_thread_reschedule()");
-            context.system.yield_now().await;
-            0u32.write(core, lr)?;
-            return Ok(());
-        }
-
-        // `vm_monitor_enter(object)`. Seed1 calls this immediately before
-        // java/lang/Object.wait(JI)V; without acquiring the JVM monitor,
-        // Object.wait fails with IllegalMonitorStateException.
-        if function_index == 0x56 {
-            let Some(instance) = context.java_handles.get(a0) else {
-                return Err(WieError::FatalError(format!("vm_monitor_enter({a0:#x}) names no JVM instance")));
-            };
-
-            tracing::trace!("vm_monitor_enter({a0:#x})");
-            if let Err(error) = context.jvm.monitor_enter(&instance).await {
-                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
-            }
-
-            0u32.write(core, lr)?;
-            return Ok(());
-        }
-
-        // Native Java-interface slot 0x57 is `vm_monitor_exit(object)`.
-        // It releases one level of the reentrant monitor acquired by slot
-        // 0x56 and throws IllegalMonitorStateException when the current
-        // thread does not own it.
-        if function_index == 0x57 {
-            let Some(instance) = context.java_handles.get(a0) else {
-                return Err(WieError::FatalError(format!("vm_monitor_exit({a0:#x}) names no JVM instance")));
-            };
-
-            tracing::trace!("vm_monitor_exit({a0:#x})");
-            if let Err(error) = context.jvm.monitor_exit(&instance).await {
-                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
-            }
-
-            0u32.write(core, lr)?;
-            return Ok(());
-        }
-
-        // Native save points form a per-thread linked chain. `depth` selects
-        // where in that chain an entry is inserted/removed; depth zero is the
-        // current exception target.
-        if function_index == 0x1f {
-            let save_point = context.save_points.alloc(core, a0)?;
-            tracing::debug!("vm_alloc_save_point({a0}) -> {save_point:#x}");
-            save_point.write(core, lr)?;
-            return Ok(());
-        }
-        if function_index == 0x20 {
-            let save_point = context.save_points.free(core, a0)?;
-            tracing::debug!("vm_free_save_point({a0}) -> {save_point:#x}");
-            save_point.write(core, lr)?;
-            return Ok(());
-        }
-        if function_index == 0x0b {
-            let root = a0;
-            let meta: u32 = read_generic(core, root + 8)?;
-            write_generic(core, meta + 0x1a, 3u16)?;
-
-            tracing::debug!("LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3");
-
-            root.write(core, lr)?;
-            return Ok(());
-        }
-
-        if function_index == 0x0c {
-            let root = a0;
-
-            if let Some(&activated) = context.java_activated_classes.lock().get(&root) {
-                tracing::debug!("LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> cached={activated:#x}");
-                activated.write(core, lr)?;
-                return Ok(());
-            }
-
-            // Native vm_activate_class allocates a 20-byte class header plus
-            // one word for each static field declared at metadata + 0x48.
-            // Classes carrying metadata flag 0x2000 use only the header.
-            let metadata: u32 = read_generic(core, root + 8)?;
-            let flags: u16 = read_generic(core, metadata)?;
-            let static_field_count: u16 = read_generic(core, metadata + 0x48)?;
-            let data_size = if flags & 0x2000 != 0 {
-                20
-            } else {
-                20 + u32::from(static_field_count) * 4
-            };
-            let data = Allocator::alloc(core, data_size)?;
-            core.write_bytes(data, &vec![0; data_size as usize])?;
-
-            write_generic(core, data, 0u16)?;
-            write_generic(core, data + 2, 0u16)?;
-            write_generic(core, data + 4, 0u32)?;
-            write_generic(core, data + 8, root)?;
-            write_generic(core, data + 12, 0u32)?;
-            write_generic(core, data + 16, 4u16)?;
-            write_generic(core, data + 18, 0u16)?;
-
-            let instance_vtable = activate_dispatch_table(core, context, root)?;
-            let class_vtable = context.java_handles.fallback_dispatch_table();
-
-            // Keep the activated java/lang/Class-like object distinct from
-            // instances of the application class. The original runtime gives
-            // the activated handle java/lang/Class's table and reaches the
-            // application instance table through the class metadata.
-            write_generic(core, data + 12, instance_vtable)?;
-
-            let activated = Allocator::alloc(core, 12)?;
-            write_generic(core, activated, class_vtable)?;
-            write_generic(core, activated + 4, 0u32)?;
-            write_generic(core, activated + 8, data)?;
-
-            context.java_activated_classes.lock().insert(root, activated);
-
-            tracing::debug!(
-                "LGT vm_activate_class(root={root:#x}, table={a1:#x}) -> handle={activated:#x}, data={data:#x}, class_vtable={class_vtable:#x}, instance_vtable={instance_vtable:#x}"
-            );
-
-            activated.write(core, lr)?;
-            return Ok(());
-        }
-        if function_index == 0x0d {
-            let activated_data: u32 = read_generic(core, a0 + 8)?;
-
-            // Mark initialization in progress before entering guest code so a
-            // recursive class lookup does not start the initializer again.
-            write_generic(core, activated_data + 0x10, 5u16)?;
-
-            if a1 != 0 {
-                let _: u32 = core.run_function(a1, &[a0]).await?;
-            }
-
-            tracing::debug!("LGT vm_initialize_class(handle={a0:#x}, data={activated_data:#x}, callback={a1:#x})");
-
-            a0.write(core, lr)?;
-            return Ok(());
-        }
-
-        // Instantiation. The argument is the token a class's first reserved
-        // row handed back, and the result is the object the constructor is
-        // then called on, so it has to carry that class's dispatch table in
-        // its first word.
-        // Java-interface imports 0xfa and 0x61 store an object reference
-        // into a guest reference array. Legend of Master uses 0xfa while
-        // initializing the class-selection arrays.
-        if function_index == 0xfa || function_index == 0x61 {
-            let array = a0;
-            let index = a1;
-            let value = a2;
-
-            if array == 0 {
-                return Err(WieError::FatalError("LGT reference-array store received a null array".into()));
-            }
-
-            let data: u32 = read_generic(core, array + 8)?;
-            let length: u32 = read_generic(core, data)?;
-
-            if index >= length {
-                return Err(WieError::FatalError(format!(
-                    "LGT reference-array store index {index} is outside length {length}"
-                )));
-            }
-
-            write_generic(core, data + 4 + index * REFERENCE_SIZE, value)?;
-
-            0u32.write(core, lr)?;
-            return Ok(());
-        }
-
-        if function_index == 0x0f {
-            let instance = instantiate(core, context, a0).await?;
-
-            tracing::debug!("LGT vm_instantiate({a0:#x}, lr={lr:#x}) -> {instance:#x}");
-
-            instance.write(core, lr)?;
-            return Ok(());
-        }
-
         if function_index == 0xf0
             || function_index == 0xf8
             || function_index == 0xfc
@@ -504,6 +304,168 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             core.read_param(2)?,
         )?
         .write(core, lr),
+        InitSvcId::VmClassIsAssignableTo => {
+            let source = core.read_param(0)?;
+            let target = core.read_param(1)?;
+            let assignable = class_is_assignable_to(core, context, source, target).await?;
+            u32::from(assignable).write(core, lr)
+        }
+        InitSvcId::VmCheckStackOverflow => {
+            let words = core.read_param(0)?;
+            tracing::trace!("vm_check_stack_overflow({words})");
+            0u32.write(core, lr)
+        }
+        InitSvcId::VmThreadReschedule => {
+            tracing::trace!("vm_thread_reschedule()");
+            context.system.yield_now().await;
+            0u32.write(core, lr)
+        }
+        InitSvcId::VmMonitorEnter => {
+            let object = core.read_param(0)?;
+            let Some(instance) = context.java_handles.get(object) else {
+                return Err(WieError::FatalError(format!(
+                    "vm_monitor_enter({object:#x}) names no JVM instance"
+                )));
+            };
+
+            tracing::trace!("vm_monitor_enter({object:#x})");
+            if let Err(error) = context.jvm.monitor_enter(&instance).await {
+                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+            }
+
+            0u32.write(core, lr)
+        }
+        InitSvcId::VmMonitorExit => {
+            let object = core.read_param(0)?;
+            let Some(instance) = context.java_handles.get(object) else {
+                return Err(WieError::FatalError(format!(
+                    "vm_monitor_exit({object:#x}) names no JVM instance"
+                )));
+            };
+
+            tracing::trace!("vm_monitor_exit({object:#x})");
+            if let Err(error) = context.jvm.monitor_exit(&instance).await {
+                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+            }
+
+            0u32.write(core, lr)
+        }
+        InitSvcId::VmAllocSavePoint => {
+            let depth = core.read_param(0)?;
+            let save_point = context.save_points.alloc(core, depth)?;
+            tracing::debug!("vm_alloc_save_point({depth}) -> {save_point:#x}");
+            save_point.write(core, lr)
+        }
+        InitSvcId::VmFreeSavePoint => {
+            let depth = core.read_param(0)?;
+            let save_point = context.save_points.free(core, depth)?;
+            tracing::debug!("vm_free_save_point({depth}) -> {save_point:#x}");
+            save_point.write(core, lr)
+        }
+        InitSvcId::VmInitializeClassShared => {
+            let root = core.read_param(0)?;
+            let meta: u32 = read_generic(core, root + 8)?;
+            write_generic(core, meta + 0x1a, 3u16)?;
+
+            tracing::debug!(
+                "LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3"
+            );
+            root.write(core, lr)
+        }
+        InitSvcId::VmActivateClass => {
+            let root = core.read_param(0)?;
+            let table = core.read_param(1)?;
+
+            if let Some(&activated) = context.java_activated_classes.lock().get(&root) {
+                tracing::debug!(
+                    "LGT vm_activate_class(root={root:#x}, table={table:#x}) -> cached={activated:#x}"
+                );
+                return activated.write(core, lr);
+            }
+
+            let metadata: u32 = read_generic(core, root + 8)?;
+            let flags: u16 = read_generic(core, metadata)?;
+            let static_field_count: u16 = read_generic(core, metadata + 0x48)?;
+            let data_size = if flags & 0x2000 != 0 {
+                20
+            } else {
+                20 + u32::from(static_field_count) * 4
+            };
+            let data = Allocator::alloc(core, data_size)?;
+            core.write_bytes(data, &vec![0; data_size as usize])?;
+
+            write_generic(core, data, 0u16)?;
+            write_generic(core, data + 2, 0u16)?;
+            write_generic(core, data + 4, 0u32)?;
+            write_generic(core, data + 8, root)?;
+            write_generic(core, data + 12, 0u32)?;
+            write_generic(core, data + 16, 4u16)?;
+            write_generic(core, data + 18, 0u16)?;
+
+            let instance_vtable = activate_dispatch_table(core, context, root)?;
+            let class_vtable = context.java_handles.fallback_dispatch_table();
+            write_generic(core, data + 12, instance_vtable)?;
+
+            let activated = Allocator::alloc(core, 12)?;
+            write_generic(core, activated, class_vtable)?;
+            write_generic(core, activated + 4, 0u32)?;
+            write_generic(core, activated + 8, data)?;
+
+            context.java_activated_classes.lock().insert(root, activated);
+
+            tracing::debug!(
+                "LGT vm_activate_class(root={root:#x}, table={table:#x}) -> handle={activated:#x}, data={data:#x}, class_vtable={class_vtable:#x}, instance_vtable={instance_vtable:#x}"
+            );
+            activated.write(core, lr)
+        }
+        InitSvcId::VmInitializeClass => {
+            let handle = core.read_param(0)?;
+            let callback = core.read_param(1)?;
+            let activated_data: u32 = read_generic(core, handle + 8)?;
+
+            write_generic(core, activated_data + 0x10, 5u16)?;
+
+            if callback != 0 {
+                let _: u32 = core.run_function(callback, &[handle]).await?;
+            }
+
+            tracing::debug!(
+                "LGT vm_initialize_class(handle={handle:#x}, data={activated_data:#x}, callback={callback:#x})"
+            );
+            handle.write(core, lr)
+        }
+        InitSvcId::VmAastoreImpl | InitSvcId::VmAastoreImplFast => {
+            let array = core.read_param(0)?;
+            let index = core.read_param(1)?;
+            let value = core.read_param(2)?;
+
+            if array == 0 {
+                return Err(WieError::FatalError(
+                    "LGT reference-array store received a null array".into(),
+                ));
+            }
+
+            let data: u32 = read_generic(core, array + 8)?;
+            let length: u32 = read_generic(core, data)?;
+
+            if index >= length {
+                return Err(WieError::FatalError(format!(
+                    "LGT reference-array store index {index} is outside length {length}"
+                )));
+            }
+
+            write_generic(core, data + 4 + index * REFERENCE_SIZE, value)?;
+            0u32.write(core, lr)
+        }
+        InitSvcId::VmInstantiate => {
+            let token = core.read_param(0)?;
+            let instance = instantiate(core, context, token).await?;
+
+            tracing::debug!(
+                "LGT vm_instantiate({token:#x}, lr={lr:#x}) -> {instance:#x}"
+            );
+            instance.write(core, lr)
+        }
         // Native WIPI-Java and LGTE activation publish their already
         // registered class tables into a process-local visibility table.
         // WIE has no equivalent visibility gate: the complete native platform
