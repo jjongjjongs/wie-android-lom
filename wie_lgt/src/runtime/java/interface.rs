@@ -1020,47 +1020,6 @@ pub async fn bridge_class_chain(
     true
 }
 
-pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
-    tracing::warn!("java_unk12({a0:#x})");
-
-    let mut bytes = [0u8; 128];
-
-    match core.read_bytes(a0, &mut bytes) {
-        Ok(read) => {
-            tracing::warn!("java_unk12 classes @{a0:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
-        }
-        Err(error) => {
-            tracing::warn!("java_unk12 classes @{a0:#x}: read failed: {error}");
-        }
-    }
-
-    let a1 = 0x01400ac4u32;
-    let mut metadata = [0u8; 512];
-
-    match core.read_bytes(a1, &mut metadata) {
-        Ok(read) => {
-            tracing::warn!("java_unk12 metadata @{a1:#x}, read={read:#x}: {:02x?}", &metadata[..read]);
-        }
-        Err(error) => {
-            tracing::warn!("java_unk12 metadata @{a1:#x}: read failed: {error}");
-        }
-    }
-
-    let lm_address = 0x01400000u32;
-    let mut lm_metadata = [0u8; 2048];
-
-    match core.read_bytes(lm_address, &mut lm_metadata) {
-        Ok(read) => {
-            tracing::warn!("java_unk12 Lm metadata @{lm_address:#x}, read={read:#x}: {:02x?}", &lm_metadata[..read]);
-        }
-        Err(error) => {
-            tracing::warn!("java_unk12 Lm metadata @{lm_address:#x}: read failed: {error}");
-        }
-    }
-
-    Ok(())
-}
-
 /// `vm_get_constant_string(class, chars, length, cache)`.
 ///
 /// The application keeps one word per string constant and passes its address

@@ -31,7 +31,7 @@ use super::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
             bridge_class_chain,
-            java_import_11, java_load_classes, java_resolve_one, java_unk0, java_unk9, java_unk11, java_unk12,
+            java_import_11, java_load_classes, java_resolve_one, java_unk0, java_unk9, java_unk11,
             primitive_element_size,
             vm_get_constant_string, vm_instantiate_array,
         },
@@ -520,7 +520,31 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // Native bankon_lib_module_activate is itself a zero-return no-op.
         InitSvcId::BankonModuleActivate => 0u32.write(core, lr),
         InitSvcId::JavaInterfaceUnk0 => EmulatedFunction::call(&java_unk0, core, &mut ()).await?.write(core, lr),
-        InitSvcId::JavaInterfaceUnk12 => EmulatedFunction::call(&java_unk12, core, &mut ()).await?.write(core, lr),
+        // Native Java interface import 0x06 is
+        // `vm_unregister_classes(index)`. Import 0x07 returns this index when
+        // the application's compiled classes are registered.
+        InitSvcId::JavaInterfaceUnk12 => {
+            let index = core.read_param(0)?;
+            let registered = context.java_class_tables.lock().remove(&index);
+
+            if let Some((classes, _runtime_table)) = registered {
+                let roots: Vec<u32> = app_classes::parse_registered_classes(core, classes)?
+                    .into_iter()
+                    .map(|class| class.root)
+                    .collect();
+
+                context.app_classes.lock().retain(|class| !roots.contains(&class.root));
+
+                tracing::debug!(
+                    "vm_unregister_classes({index:#x}) -> removed {} application classes",
+                    roots.len()
+                );
+            } else {
+                tracing::debug!("vm_unregister_classes({index:#x}) -> no registered class table");
+            }
+
+            ().write(core, lr)
+        }
         // Import 0x07. The application registers its *own* classes - the ones
         // its Java source was compiled into - as `{ u32 count, u32 pad, u32
         // root[count] }`. This is the other half of the class model: import
