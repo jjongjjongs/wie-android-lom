@@ -1106,11 +1106,10 @@ async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext
 /// slot 10 the superclass chain's virtual methods, then the class's own
 /// ```
 ///
-/// The application fills in the slots it has code for and leaves the rest
-/// zero, because those are the platform's to provide - which is what
-/// activation is for. The zero slots are filled here with the reporting stubs
-/// the fallback table already carries, so a call to one says what it wanted
-/// instead of branching to address zero.
+/// The application fills in the slots it has code for and leaves inherited
+/// slots zero. Native `vm_link_class_light` fills zero slots 1..N-1 from the
+/// superclass's same slot; this runtime mirrors that before falling back to a
+/// reporting stub. Slot zero remains runtime-owned.
 ///
 /// A class with no table of its own gets the fallback table whole.
 fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Result<u32> {
@@ -1196,6 +1195,8 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
         let entry = if entry != 0 {
             declared += 1;
             entry
+        } else if slot != 0 && slot < slots {
+            inherited_dispatch_entry(core, context, root, slot, fallback)?
         } else {
             read_generic(core, fallback + 4 + slot * 4)?
         };
@@ -1274,6 +1275,77 @@ fn platform_superclass_dispatch_table(context: &InitSvcContext, root: u32) -> u3
     }
 
     context.java_handles.fallback_dispatch_table()
+}
+
+/// Resolves one zero application dispatch slot the same way native
+/// `vm_link_class_light` does: walk the superclass chain and inherit the
+/// first implementation of the same slot. Application superclass tables may
+/// themselves contain zero placeholders, so keep walking until an
+/// implementation or a platform class is reached.
+fn inherited_dispatch_entry(
+    core: &ArmCore,
+    context: &InitSvcContext,
+    root: u32,
+    slot: u32,
+    fallback: u32,
+) -> Result<u32> {
+    let app_classes = context.app_classes.lock();
+    let imported_classes = context.imported_classes.lock();
+
+    inherited_dispatch_entry_from_tables(
+        core,
+        &app_classes,
+        imported_classes.as_ref(),
+        root,
+        slot,
+        fallback,
+    )
+}
+
+fn inherited_dispatch_entry_from_tables(
+    core: &ArmCore,
+    app_classes: &[AppClass],
+    imported_classes: Option<&ClassTable>,
+    root: u32,
+    slot: u32,
+    fallback: u32,
+) -> Result<u32> {
+    let mut superclass = app_classes.iter().find(|x| x.root == root).and_then(|x| x.superclass.clone());
+
+    for _ in 0..MAX_SUPERCLASS_DEPTH {
+        let Some(name) = superclass else { break };
+
+        if let Some(class) = app_classes.iter().find(|x| x.name == name) {
+            let metadata: u32 = read_generic(core, class.root + 8)?;
+            if metadata != 0 {
+                let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
+                let slots: u16 = read_generic(core, metadata + CLASS_DISPATCH_SLOTS)?;
+
+                if vtable != 0 && slot < u32::from(slots) {
+                    let entry: u32 = read_generic(core, vtable + 4 + slot * 4)?;
+                    if entry != 0 {
+                        return Ok(entry);
+                    }
+                }
+            }
+
+            superclass = class.superclass.clone();
+            continue;
+        }
+
+        let platform_vtable = imported_classes.and_then(|table| {
+            let index = table.classes.iter().position(|x| x.name == name)?;
+            table.vtables.get(index).copied()
+        });
+
+        if let Some(vtable) = platform_vtable {
+            return read_generic(core, vtable + 4 + slot * 4);
+        }
+
+        break;
+    }
+
+    read_generic(core, fallback + 4 + slot * 4)
 }
 
 fn primitive_array_descriptor(atype: u32) -> Option<char> {
@@ -2365,6 +2437,84 @@ mod dlet_property_tests {
 
         assert!(dlet_set_process_local_property(&properties, 1, 200, 1, 0).is_err());
         assert!(dlet_set_process_local_property(&properties, 0, 200, 1, 4).is_err());
+    }
+}
+
+#[cfg(test)]
+mod application_dispatch_tests {
+    use alloc::{string::String, vec, vec::Vec};
+
+    use wie_core_arm::{Allocator, ArmCore};
+    use wie_util::{ByteWrite, write_generic};
+
+    use super::{AppClass, inherited_dispatch_entry_from_tables};
+
+    fn core() -> ArmCore {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+        core
+    }
+
+    fn app_class(root: u32, name: &str, superclass: Option<&str>) -> AppClass {
+        AppClass {
+            root,
+            get_class: 0,
+            get_raw_class: 0,
+            name: String::from(name),
+            superclass: superclass.map(String::from),
+            interfaces: Vec::new(),
+            members: Vec::new(),
+            declared_members: 0,
+        }
+    }
+
+    fn class_image(core: &mut ArmCore, slots: u16, entries: &[(u32, u32)]) -> (u32, u32) {
+        let metadata = Allocator::alloc(core, 0x4c).unwrap();
+        let root = Allocator::alloc(core, 0x14).unwrap();
+        let vtable = Allocator::alloc(core, 4 + u32::from(slots) * 4).unwrap();
+
+        core.write_bytes(metadata, &vec![0; 0x4c]).unwrap();
+        core.write_bytes(root, &vec![0; 0x14]).unwrap();
+        core.write_bytes(vtable, &vec![0; (4 + u32::from(slots) * 4) as usize]).unwrap();
+
+        write_generic(core, root + 8, metadata).unwrap();
+        write_generic(core, metadata + 0x0c, vtable).unwrap();
+        write_generic(core, metadata + 0x26, slots).unwrap();
+        write_generic(core, vtable, root).unwrap();
+
+        for &(slot, entry) in entries {
+            write_generic(core, vtable + 4 + slot * 4, entry).unwrap();
+        }
+
+        (root, vtable)
+    }
+
+    #[test]
+    fn zero_dispatch_slot_walks_application_superclass_chain() {
+        let mut core = core();
+
+        let (j_root, _) = class_image(&mut core, 12, &[(10, 0x000e_4234)]);
+        let (c_root, _) = class_image(&mut core, 12, &[(11, 0x0000_b18c)]);
+        let (child_root, _) = class_image(&mut core, 12, &[]);
+
+        let fallback = Allocator::alloc(&mut core, 4 + 12 * 4).unwrap();
+        core.write_bytes(fallback, &vec![0; 4 + 12 * 4]).unwrap();
+        write_generic(&mut core, fallback + 4 + 10 * 4, 0xdead_beefu32).unwrap();
+
+        let classes = vec![
+            app_class(j_root, "j", Some("java/lang/Object")),
+            app_class(c_root, "c", Some("j")),
+            app_class(child_root, "child", Some("c")),
+        ];
+
+        assert_eq!(
+            inherited_dispatch_entry_from_tables(&core, &classes, None, child_root, 10, fallback).unwrap(),
+            0x000e_4234
+        );
+        assert_eq!(
+            inherited_dispatch_entry_from_tables(&core, &classes, None, child_root, 11, fallback).unwrap(),
+            0x0000_b18c
+        );
     }
 }
 
