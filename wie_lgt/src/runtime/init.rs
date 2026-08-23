@@ -9,7 +9,7 @@ use spin::Mutex;
 use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 
 use wie_backend::System;
-use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
+use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId, ThreadId};
 use wie_util::{
     ByteRead, ByteWrite, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic,
     write_null_terminated_string_bytes,
@@ -115,6 +115,47 @@ const CLASS_DISPATCH_SLOTS: u32 = 0x26;
 /// Guard on how far a class hierarchy is walked looking for a platform class.
 const MAX_SUPERCLASS_DEPTH: usize = 32;
 
+/// Native CLDC initializes both `the_vm_reschedule_count` and its threshold
+/// from configuration 32, whose LGT value is 100.
+const VM_RESCHEDULE_COUNT_THRESHOLD: u32 = 100;
+
+/// `unit_sched_time` is configuration 31 (4 ms); a new native exec-env stores
+/// five units in its scheduling interval, i.e. 20 ms.
+const VM_RESCHEDULE_INTERVAL_MS: u64 = 20;
+
+fn vm_thread_reschedule_due(count: &Mutex<u32>) -> bool {
+    let mut count = count.lock();
+
+    // Native compares the old value with zero, then decrements it with a
+    // non-flag-setting SUB. Starting from 100, calls 1..=100 therefore
+    // store 99..=0 and return; call 101 enters the slow path and reloads 100.
+    if *count > 0 {
+        *count -= 1;
+        false
+    } else {
+        *count = VM_RESCHEDULE_COUNT_THRESHOLD;
+        true
+    }
+}
+
+fn vm_exec_env_thread_id(core: &ArmCore) -> ThreadId {
+    // Match SavePointState: zero represents bootstrap/native-loader execution
+    // before an ArmCoreThreadWrapper owns the register context.
+    core.current_thread_id().unwrap_or(0)
+}
+
+fn vm_ensure_reschedule_deadline(
+    deadlines: &Mutex<BTreeMap<ThreadId, u64>>,
+    thread_id: ThreadId,
+    now: u64,
+) -> u64 {
+    let mut deadlines = deadlines.lock();
+
+    *deadlines
+        .entry(thread_id)
+        .or_insert_with(|| now.saturating_add(VM_RESCHEDULE_INTERVAL_MS))
+}
+
 #[derive(Clone)]
 struct InitSvcContext {
     wipic_category: u32,
@@ -141,6 +182,11 @@ struct InitSvcContext {
     /// Application roots whose native heavy method slots have already been
     /// linked and written back to their guest method rows.
     heavy_linked_classes: HeavyLinkedClasses,
+    /// Native VM-global reschedule countdown.
+    vm_reschedule_count: Arc<Mutex<u32>>,
+    /// Per-native-thread millisecond deadline corresponding to exec-env
+    /// +0x10/+0x14. An entry appears when that thread first needs an exec-env.
+    vm_reschedule_deadlines_ms: Arc<Mutex<BTreeMap<ThreadId, u64>>>,
 }
 
 fn register_init_svc_handler(
@@ -174,6 +220,8 @@ fn register_init_svc_handler(
             save_points: save_points.clone(),
             synthetic_classes: Default::default(),
             heavy_linked_classes: Default::default(),
+            vm_reschedule_count: Arc::new(Mutex::new(VM_RESCHEDULE_COUNT_THRESHOLD)),
+            vm_reschedule_deadlines_ms: Default::default(),
         },
     )
 }
@@ -318,11 +366,55 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         InitSvcId::VmCheckStackOverflow => {
             let words = core.read_param(0)?;
             tracing::trace!("vm_check_stack_overflow({words})");
+
+            // Native vm_check_stack_overflow obtains the current exec-env.
+            // Creating that exec-env initializes this thread's first deadline.
+            let thread_id = vm_exec_env_thread_id(core);
+            let now = context.system.platform().now().raw();
+            vm_ensure_reschedule_deadline(
+                &context.vm_reschedule_deadlines_ms,
+                thread_id,
+                now,
+            );
+
             0u32.write(core, lr)
         }
         InitSvcId::VmThreadReschedule => {
             tracing::trace!("vm_thread_reschedule()");
-            context.system.yield_now().await;
+
+            if vm_thread_reschedule_due(&context.vm_reschedule_count) {
+                let thread_id = vm_exec_env_thread_id(core);
+                let now = context.system.platform().now().raw();
+
+                // Native slow path calls vm_get_exec_env for the current
+                // dthread. A first use creates only this thread's now+20 ms
+                // deadline before the comparison.
+                let deadline = vm_ensure_reschedule_deadline(
+                    &context.vm_reschedule_deadlines_ms,
+                    thread_id,
+                    now,
+                );
+
+                // Native vm_thread_reschedule returns without yielding while
+                // the current time is at or before the exec-env deadline.
+                if now > deadline {
+                    context.system.yield_now().await;
+
+                    // Native refreshes only the current exec-env deadline from
+                    // a new time sample after dthread_yield returns.
+                    let next_deadline = context
+                        .system
+                        .platform()
+                        .now()
+                        .raw()
+                        .saturating_add(VM_RESCHEDULE_INTERVAL_MS);
+                    context
+                        .vm_reschedule_deadlines_ms
+                        .lock()
+                        .insert(thread_id, next_deadline);
+                }
+            }
+
             0u32.write(core, lr)
         }
         InitSvcId::VmMonitorEnter => {
@@ -752,6 +844,16 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // java/lang/NullPointerException before the throw.
         InitSvcId::VmThrowException => {
             let exception = core.read_param(0)?;
+
+            {
+                let thread_id = vm_exec_env_thread_id(core);
+                let now = context.system.platform().now().raw();
+                vm_ensure_reschedule_deadline(
+                    &context.vm_reschedule_deadlines_ms,
+                    thread_id,
+                    now,
+                );
+            }
 
             if exception != 0 {
                 tracing::debug!("vm_throw_exception({exception:#x}) -> longjmp");
@@ -2657,6 +2759,53 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u3
     tracing::debug!("Entrypoint: {:#x}", elf.ehdr.e_entry);
 
     Ok((elf.ehdr.e_entry as u32, ranges))
+}
+
+#[cfg(test)]
+mod vm_thread_reschedule_tests {
+    use alloc::collections::BTreeMap;
+
+    use spin::Mutex;
+
+    use super::{
+        VM_RESCHEDULE_COUNT_THRESHOLD, vm_ensure_reschedule_deadline,
+        vm_thread_reschedule_due,
+    };
+
+    #[test]
+    fn native_reschedule_countdown_checks_after_one_hundred_fast_calls() {
+        let count = Mutex::new(VM_RESCHEDULE_COUNT_THRESHOLD);
+
+        for _ in 0..VM_RESCHEDULE_COUNT_THRESHOLD {
+            assert!(!vm_thread_reschedule_due(&count));
+        }
+        assert_eq!(*count.lock(), 0);
+
+        assert!(vm_thread_reschedule_due(&count));
+        assert_eq!(*count.lock(), VM_RESCHEDULE_COUNT_THRESHOLD);
+
+        for _ in 0..VM_RESCHEDULE_COUNT_THRESHOLD {
+            assert!(!vm_thread_reschedule_due(&count));
+        }
+        assert_eq!(*count.lock(), 0);
+
+        assert!(vm_thread_reschedule_due(&count));
+    }
+
+    #[test]
+    fn native_exec_env_deadlines_are_thread_local() {
+        let deadlines = Mutex::new(BTreeMap::new());
+
+        assert_eq!(vm_ensure_reschedule_deadline(&deadlines, 1, 1000), 1020);
+        assert_eq!(vm_ensure_reschedule_deadline(&deadlines, 2, 2000), 2020);
+
+        // Re-reading an existing exec-env keeps its original deadline.
+        assert_eq!(vm_ensure_reschedule_deadline(&deadlines, 1, 9000), 1020);
+
+        let deadlines = deadlines.lock();
+        assert_eq!(deadlines.get(&1), Some(&1020));
+        assert_eq!(deadlines.get(&2), Some(&2020));
+    }
 }
 
 #[cfg(test)]
