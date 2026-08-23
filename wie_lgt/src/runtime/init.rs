@@ -2796,6 +2796,52 @@ mod application_dispatch_tests {
     }
 
     #[test]
+    fn lom_f_heavy_slots_match_native_linker_layout() {
+        let mut class = app_class(0x1000, "f", Some("org/kwis/msp/lcdui/Card"));
+
+        // LoM f has 371 positive-slot methods after its constructor. Native
+        // reuses Card.paint/keyNotify and appends every other method in row
+        // order starting at slot 25.
+        class.members = (1..=371)
+            .map(|row| match row {
+                56 => virtual_method("a", "(II)V"),
+                224 => virtual_method("paint", "(Lorg/kwis/msp/lcdui/Graphics;)V"),
+                227 => virtual_method("keyNotify", "(II)Z"),
+                231 => virtual_method("a", "()V"),
+                232 => virtual_method("b", "(II)V"),
+                370 => virtual_method("b", "()V"),
+                371 => virtual_method("c", "()V"),
+                _ => virtual_method(&alloc::format!("m{row}"), "()V"),
+            })
+            .collect();
+
+        let mut core = core();
+        let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 25).unwrap();
+
+        assert_eq!(slots, 394);
+
+        let slot = |name: &str, descriptor: &str| {
+            class
+                .members
+                .iter()
+                .find(|member| member.name() == name && member.descriptor() == descriptor)
+                .unwrap()
+                .slot()
+        };
+
+        assert_eq!(slot("paint", "(Lorg/kwis/msp/lcdui/Graphics;)V"), 19);
+        assert_eq!(slot("keyNotify", "(II)Z"), 17);
+
+        // Exact LoM java_resolve_one virtual rows 38..43:
+        assert_eq!(slot("c", "()V"), 393);
+        assert_eq!(slot("b", "()V"), 392);
+        assert_eq!(slot("keyNotify", "(II)Z"), 17);
+        assert_eq!(slot("b", "(II)V"), 254);
+        assert_eq!(slot("a", "()V"), 253);
+        assert_eq!(slot("a", "(II)V"), 80);
+    }
+
+    #[test]
     fn heavy_slots_are_written_back_to_native_method_rows() {
         let mut core = core();
         let row = Allocator::alloc(&mut core, 0x1c).unwrap();
