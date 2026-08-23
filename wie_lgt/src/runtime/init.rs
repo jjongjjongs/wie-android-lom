@@ -810,6 +810,17 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let class = core.read_param(0)?;
             let length = core.read_param(1)?;
 
+            // Native vm_instantiate_array treats the requested length as signed
+            // and throws before attempting any allocation when it is negative.
+            if (length as i32) < 0 {
+                return throw_vm_exception(
+                    core,
+                    context,
+                    "java/lang/NegativeArraySizeException",
+                )
+                .await;
+            }
+
             vm_instantiate_array(&context.java_handles, &context.array_classes, class, length)
                 .await?
                 .write(core, lr)
