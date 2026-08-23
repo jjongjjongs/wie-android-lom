@@ -1183,12 +1183,21 @@ fn ensure_heavy_method_slots_linked(
         return Ok(());
     }
 
+    // The application's main Jlet can live outside the table passed to
+    // vm_register_classes. Legend of Master's `Lm` is such a class: native
+    // vm_resolve_one still receives its real class_shared root and heavy-links
+    // it normally. Cache that parsed root on first use so the same linker path
+    // applies to registered and main-only application classes.
+    if !context.app_classes.lock().iter().any(|class| class.root == root) {
+        let class = app_classes::parse_class_root(core, root)?;
+        context.app_classes.lock().push(class);
+    }
+
     let snapshot = context.app_classes.lock().clone();
-    let Some(index) = snapshot.iter().position(|class| class.root == root) else {
-        return Err(WieError::FatalError(format!(
-            "Heavy-linked LGT class at {root:#x} was never registered"
-        )));
-    };
+    let index = snapshot
+        .iter()
+        .position(|class| class.root == root)
+        .expect("heavy-linked application class was just cached");
 
     let mut class = snapshot[index].clone();
     let superclass_slots = superclass_dispatch_slot_count(core, context, root)?;
@@ -2876,6 +2885,41 @@ mod application_dispatch_tests {
                 .slot(),
             32
         );
+    }
+
+    #[test]
+    fn lom_lm_heavy_slots_match_native_linker_layout() {
+        let mut class = app_class(0x140004c, "Lm", Some("org/kwis/msp/lcdui/Jlet"));
+        class.members = vec![
+            virtual_method("startApp", "([Ljava/lang/String;)V"),
+            virtual_method("pauseApp", "()V"),
+            virtual_method("resumeApp", "()V"),
+            virtual_method("destroyApp", "(Z)V"),
+            virtual_method("a", "()V"),
+        ];
+
+        let mut core = core();
+        let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 22).unwrap();
+
+        assert_eq!(slots, 23);
+
+        let slot = |name: &str, descriptor: &str| {
+            class
+                .members
+                .iter()
+                .find(|member| member.name() == name && member.descriptor() == descriptor)
+                .unwrap()
+                .slot()
+        };
+
+        assert_eq!(slot("startApp", "([Ljava/lang/String;)V"), 11);
+        assert_eq!(slot("pauseApp", "()V"), 12);
+        assert_eq!(slot("resumeApp", "()V"), 13);
+        assert_eq!(slot("destroyApp", "(Z)V"), 14);
+
+        // Exact LoM java_resolve_one virtual rows 44..45.
+        assert_eq!(slot("a", "()V"), 22);
+        assert_eq!(slot("destroyApp", "(Z)V"), 14);
     }
 
     #[test]
