@@ -1118,3 +1118,32 @@ pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClas
 
     Ok(array)
 }
+
+#[cfg(test)]
+mod tests {
+    use wie_core_arm::{Allocator, ArmCore};
+    use wie_util::{ByteWrite, read_generic, write_generic};
+
+    use super::write_continuation_slot;
+
+    #[test]
+    fn continuation_slot_advances_wide_field_second_word() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+
+        let output = Allocator::alloc(&mut core, 4).unwrap();
+        core.write_bytes(output, &[0; 4]).unwrap();
+
+        // LoM field row 50 is ew:J at native slot 262, while row 51 is
+        // a blank continuation row for the long's second 32-bit word.
+        write_generic(&mut core, output, 262u16).unwrap();
+
+        write_continuation_slot(&mut core, output, 1).unwrap();
+
+        let first: u16 = read_generic(&core, output).unwrap();
+        let continuation: u16 = read_generic(&core, output + 2).unwrap();
+
+        assert_eq!(first, 262);
+        assert_eq!(continuation, 263);
+    }
+}
