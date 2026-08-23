@@ -2842,6 +2842,40 @@ mod application_dispatch_tests {
     }
 
     #[test]
+    fn lom_n_heavy_slots_match_native_linker_layout() {
+        let mut class = app_class(
+            0x2000,
+            "n",
+            Some("org/kwis/msp/lwc/TextBoxComponent"),
+        );
+
+        class.members = vec![
+            virtual_method("keyNotify", "(II)Z"),
+            virtual_method("a", "(Ljava/lang/String;)I"),
+        ];
+
+        let mut core = core();
+        let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 65).unwrap();
+
+        assert_eq!(slots, 66);
+        assert_eq!(class.members[0].slot(), 32);
+        assert_eq!(class.members[1].slot(), 65);
+
+        // Exact LoM java_resolve_one virtual row 46.
+        assert_eq!(
+            class
+                .members
+                .iter()
+                .find(|member| {
+                    member.name() == "keyNotify" && member.descriptor() == "(II)Z"
+                })
+                .unwrap()
+                .slot(),
+            32
+        );
+    }
+
+    #[test]
     fn heavy_slots_are_written_back_to_native_method_rows() {
         let mut core = core();
         let row = Allocator::alloc(&mut core, 0x1c).unwrap();
