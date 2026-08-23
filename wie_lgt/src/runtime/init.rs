@@ -593,19 +593,42 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let index = core.read_param(1)?;
             let value = core.read_param(2)?;
 
-            if array == 0 {
-                return Err(WieError::FatalError(
-                    "LGT reference-array store received a null array".into(),
-                ));
+            // Native vm_aastore_impl checks null; the fast variant intentionally
+            // omits this check and immediately dereferences array+8.
+            if id.0 == InitSvcId::VmAastoreImpl as u32 && array == 0 {
+                return throw_vm_exception(
+                    core,
+                    context,
+                    "java/lang/NullPointerException",
+                )
+                .await;
             }
 
             let data: u32 = read_generic(core, array + 8)?;
             let length: u32 = read_generic(core, data)?;
 
             if index >= length {
-                return Err(WieError::FatalError(format!(
-                    "LGT reference-array store index {index} is outside length {length}"
-                )));
+                return throw_vm_exception(
+                    core,
+                    context,
+                    "java/lang/ArrayIndexOutOfBoundsException",
+                )
+                .await;
+            }
+
+            if value != 0 {
+                let array_class = object_class_root(core, array)?;
+                let target_class = array_component_class(&context.array_classes, array_class)?;
+                let source_class = object_class_root(core, value)?;
+
+                if !class_is_assignable_to(core, context, source_class, target_class).await? {
+                    return throw_vm_exception(
+                        core,
+                        context,
+                        "java/lang/ArrayStoreException",
+                    )
+                    .await;
+                }
             }
 
             write_generic(core, data + 4 + index * REFERENCE_SIZE, value)?;
@@ -1925,6 +1948,81 @@ fn class_identity_bridge_name(name: &str) -> Option<&str> {
     }
 }
 
+fn object_class_root(core: &ArmCore, object: u32) -> Result<u32> {
+    let vtable: u32 = read_generic(core, object)?;
+    if vtable == 0 {
+        return Err(WieError::FatalError(format!(
+            "guest object {object:#x} has no dispatch table"
+        )));
+    }
+
+    read_generic(core, vtable)
+}
+
+/// Returns the native component class used by `vm_aastore_impl`.
+///
+/// A one-dimensional reference array stores instances of `element_class`.
+/// A multidimensional array stores arrays of one dimension less.
+fn array_component_class(array_classes: &ArrayClasses, array_class: u32) -> Result<u32> {
+    let info = array_classes
+        .lock()
+        .get(&array_class)
+        .copied()
+        .ok_or_else(|| {
+            WieError::FatalError(format!(
+                "reference array class {array_class:#x} has no array metadata"
+            ))
+        })?;
+
+    if info.dimensions <= 1 {
+        if info.element_class == 0 {
+            return Err(WieError::FatalError(format!(
+                "aastore used with primitive array class {array_class:#x}"
+            )));
+        }
+        return Ok(info.element_class);
+    }
+
+    array_classes
+        .lock()
+        .iter()
+        .find(|(_, candidate)| {
+            candidate.dimensions == info.dimensions - 1
+                && candidate.element_class == info.element_class
+                && candidate.atype == info.atype
+        })
+        .map(|(class, _)| *class)
+        .ok_or_else(|| {
+            WieError::FatalError(format!(
+                "array class {array_class:#x} has no {}-dimension component class",
+                info.dimensions - 1
+            ))
+        })
+}
+
+async fn throw_vm_exception(
+    core: &mut ArmCore,
+    context: &mut InitSvcContext,
+    class_name: &str,
+) -> Result<()> {
+    let vtable = synthetic_platform_vtable(core, context, class_name)?;
+    context.java_handles.set_dispatch_table(class_name, vtable);
+
+    let exception = match context.jvm.instantiate_class(class_name).await {
+        Ok(exception) => exception,
+        Err(error) => {
+            return Err(wie_jvm_support::JvmSupport::to_wie_err(
+                &context.jvm,
+                error,
+            )
+            .await);
+        }
+    };
+    let exception = context.java_handles.address_of(exception)?;
+
+    context.save_points.throw(core, exception)
+}
+
 async fn class_is_assignable_to(core: &ArmCore, context: &mut InitSvcContext, source_root: u32, target_root: u32) -> Result<bool> {
     if source_root == target_root {
         return Ok(true);
@@ -2944,8 +3042,9 @@ mod application_dispatch_tests {
     use wie_util::{ByteWrite, write_generic};
 
     use super::{
-        AppClass, AppMember, VmMonitors, assign_heavy_method_slots,
-        inherited_dispatch_entry_from_tables, vm_monitor_exit_owned, vm_monitor_try_enter,
+        AppClass, AppMember, ArrayClassInfo, ArrayClasses, REFERENCE_SIZE, VmMonitors,
+        assign_heavy_method_slots, inherited_dispatch_entry_from_tables,
+        vm_monitor_exit_owned, vm_monitor_try_enter,
     };
 
     fn core() -> ArmCore {
@@ -2998,6 +3097,73 @@ mod application_dispatch_tests {
             entry: 0x1000,
             argument_words: 1,
         }
+    }
+
+    #[test]
+    fn object_class_root_follows_native_vtable_word_zero() {
+        let mut core = core();
+        let class = 0x1234_5678;
+        let vtable = Allocator::alloc(&mut core, 8).unwrap();
+        let object = Allocator::alloc(&mut core, 12).unwrap();
+
+        write_generic(&mut core, vtable, class).unwrap();
+        write_generic(&mut core, object, vtable).unwrap();
+
+        assert_eq!(super::object_class_root(&core, object).unwrap(), class);
+    }
+
+    #[test]
+    fn aastore_component_class_uses_element_for_one_dimension() {
+        let arrays: ArrayClasses = Default::default();
+        let element = 0x1111;
+        let array = 0x2222;
+
+        arrays.lock().insert(
+            array,
+            ArrayClassInfo {
+                dimensions: 1,
+                element_class: element,
+                atype: 1,
+                element_size: REFERENCE_SIZE,
+                vtable: 0,
+            },
+        );
+
+        assert_eq!(super::array_component_class(&arrays, array).unwrap(), element);
+    }
+
+    #[test]
+    fn aastore_component_class_uses_lower_array_dimension() {
+        let arrays: ArrayClasses = Default::default();
+        let element = 0x1111;
+        let one_dim = 0x2222;
+        let two_dim = 0x3333;
+
+        {
+            let mut arrays = arrays.lock();
+            arrays.insert(
+                one_dim,
+                ArrayClassInfo {
+                    dimensions: 1,
+                    element_class: element,
+                    atype: 1,
+                    element_size: REFERENCE_SIZE,
+                    vtable: 0,
+                },
+            );
+            arrays.insert(
+                two_dim,
+                ArrayClassInfo {
+                    dimensions: 2,
+                    element_class: element,
+                    atype: 1,
+                    element_size: REFERENCE_SIZE,
+                    vtable: 0,
+                },
+            );
+        }
+
+        assert_eq!(super::array_component_class(&arrays, two_dim).unwrap(), one_dim);
     }
 
     #[test]
