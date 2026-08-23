@@ -1172,12 +1172,14 @@ fn ensure_heavy_method_slots_linked(
         return Ok(());
     }
 
-    let flags: u16 = read_generic(core, metadata)?;
+    let linker_flags: u16 = read_generic(core, metadata + 0x24)?;
     let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
 
-    // The proven native heavy-link shape used by LoM f/n is flag 0x0100 with
-    // no prebuilt dispatch table. Leave prebuilt/light classes untouched.
-    if flags & 0x0100 == 0 || vtable != 0 {
+    // Native vm_link_class_light reads its linker flags from metadata+0x24.
+    // The proven heavy-link shape used by LoM f/n has bit 0x0100 set there
+    // (f=0x0707, n=0x0703) and no prebuilt dispatch table.
+    // Leave prebuilt/light classes untouched.
+    if linker_flags & 0x0100 == 0 || vtable != 0 {
         return Ok(());
     }
 
@@ -1307,14 +1309,15 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
         return Ok(fallback);
     }
 
-    let flags: u16 = read_generic(core, metadata)?;
+    let linker_flags: u16 = read_generic(core, metadata + 0x24)?;
     let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
     let slots: u16 = read_generic(core, metadata + CLASS_DISPATCH_SLOTS)?;
 
-    // Native vm_link_class_heavy handles classes whose linker flag 0x0100 is
+    // Native linker flags live at metadata+0x24. vm_link_class_heavy handles
+    // classes whose linker flag 0x0100 is
     // set. LoM's f/n are the proven case: they carry no prebuilt vtable and
     // require a newly synthesized variable-length table.
-    if flags & 0x0100 != 0 && vtable == 0 {
+    if linker_flags & 0x0100 != 0 && vtable == 0 {
         return activate_heavy_dispatch_table(core, context, root);
     }
 
