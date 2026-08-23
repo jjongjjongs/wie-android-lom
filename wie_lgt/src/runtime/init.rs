@@ -103,6 +103,14 @@ type UnresolvedImportCallCounts = Arc<Mutex<BTreeMap<(u32, u32), u64>>>;
 type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
 type SyntheticClasses = Arc<Mutex<BTreeMap<u32, String>>>;
 type HeavyLinkedClasses = Arc<Mutex<BTreeSet<u32>>>;
+/// Native monitor ownership keyed by the guest object's address.
+///
+/// Native `vm_monitor_enter` stores the owning dthread and recursion depth in a
+/// lazily allocated monitor attached to every object. The compiled application
+/// can synchronize on guest-only objects such as primitive arrays, which have
+/// no RustJava `ClassInstance`, so monitor identity must not depend on
+/// `JavaHandles`.
+type VmMonitors = Arc<Mutex<BTreeMap<u32, (ThreadId, u32)>>>;
 
 const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
 const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
@@ -156,6 +164,50 @@ fn vm_ensure_reschedule_deadline(
         .or_insert_with(|| now.saturating_add(VM_RESCHEDULE_INTERVAL_MS))
 }
 
+/// Attempts one native-style monitor enter.
+///
+/// A missing entry is an unlocked object. Re-entering from the owning native
+/// thread increments the recursion depth. A different owner leaves the state
+/// untouched so the caller can yield and retry without blocking the executor.
+fn vm_monitor_try_enter(monitors: &VmMonitors, object: u32, thread_id: ThreadId) -> bool {
+    let mut monitors = monitors.lock();
+
+    match monitors.get_mut(&object) {
+        Some((owner, depth)) if *owner == thread_id => {
+            *depth = depth.saturating_add(1);
+            true
+        }
+        Some(_) => false,
+        None => {
+            monitors.insert(object, (thread_id, 1));
+            true
+        }
+    }
+}
+
+/// Releases one recursion level if `thread_id` owns `object`.
+///
+/// Native clears the owner and unlocks only when the recursion depth reaches
+/// zero. `false` is the native IllegalMonitorStateException condition.
+fn vm_monitor_exit_owned(monitors: &VmMonitors, object: u32, thread_id: ThreadId) -> bool {
+    let mut monitors = monitors.lock();
+
+    let Some((owner, depth)) = monitors.get_mut(&object) else {
+        return false;
+    };
+    if *owner != thread_id {
+        return false;
+    }
+
+    if *depth > 1 {
+        *depth -= 1;
+    } else {
+        monitors.remove(&object);
+    }
+
+    true
+}
+
 #[derive(Clone)]
 struct InitSvcContext {
     wipic_category: u32,
@@ -187,6 +239,8 @@ struct InitSvcContext {
     /// Per-native-thread millisecond deadline corresponding to exec-env
     /// +0x10/+0x14. An entry appears when that thread first needs an exec-env.
     vm_reschedule_deadlines_ms: Arc<Mutex<BTreeMap<ThreadId, u64>>>,
+    /// Guest-object monitor owner and recursion depth.
+    vm_monitors: VmMonitors,
 }
 
 fn register_init_svc_handler(
@@ -222,6 +276,7 @@ fn register_init_svc_handler(
             heavy_linked_classes: Default::default(),
             vm_reschedule_count: Arc::new(Mutex::new(VM_RESCHEDULE_COUNT_THRESHOLD)),
             vm_reschedule_deadlines_ms: Default::default(),
+            vm_monitors: Default::default(),
         },
     )
 }
@@ -419,30 +474,32 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
         InitSvcId::VmMonitorEnter => {
             let object = core.read_param(0)?;
-            let Some(instance) = context.java_handles.get(object) else {
-                return Err(WieError::FatalError(format!(
-                    "vm_monitor_enter({object:#x}) names no JVM instance"
-                )));
-            };
+            if object == 0 {
+                return Err(WieError::FatalError("vm_monitor_enter(null)".into()));
+            }
 
-            tracing::trace!("vm_monitor_enter({object:#x})");
-            if let Err(error) = context.jvm.monitor_enter(&instance).await {
-                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+            let thread_id = vm_exec_env_thread_id(core);
+            tracing::trace!("vm_monitor_enter({object:#x}) thread={thread_id}");
+
+            while !vm_monitor_try_enter(&context.vm_monitors, object, thread_id) {
+                context.system.yield_now().await;
             }
 
             0u32.write(core, lr)
         }
         InitSvcId::VmMonitorExit => {
             let object = core.read_param(0)?;
-            let Some(instance) = context.java_handles.get(object) else {
-                return Err(WieError::FatalError(format!(
-                    "vm_monitor_exit({object:#x}) names no JVM instance"
-                )));
-            };
+            if object == 0 {
+                return Err(WieError::FatalError("vm_monitor_exit(null)".into()));
+            }
 
-            tracing::trace!("vm_monitor_exit({object:#x})");
-            if let Err(error) = context.jvm.monitor_exit(&instance).await {
-                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+            let thread_id = vm_exec_env_thread_id(core);
+            tracing::trace!("vm_monitor_exit({object:#x}) thread={thread_id}");
+
+            if !vm_monitor_exit_owned(&context.vm_monitors, object, thread_id) {
+                return Err(WieError::FatalError(format!(
+                    "vm_monitor_exit({object:#x}) from non-owner thread {thread_id}"
+                )));
             }
 
             0u32.write(core, lr)
@@ -2886,7 +2943,10 @@ mod application_dispatch_tests {
     use wie_core_arm::{Allocator, ArmCore};
     use wie_util::{ByteWrite, write_generic};
 
-    use super::{AppClass, AppMember, assign_heavy_method_slots, inherited_dispatch_entry_from_tables};
+    use super::{
+        AppClass, AppMember, VmMonitors, assign_heavy_method_slots,
+        inherited_dispatch_entry_from_tables, vm_monitor_exit_owned, vm_monitor_try_enter,
+    };
 
     fn core() -> ArmCore {
         let mut core = ArmCore::new(false, None).unwrap();
@@ -2938,6 +2998,38 @@ mod application_dispatch_tests {
             entry: 0x1000,
             argument_words: 1,
         }
+    }
+
+    #[test]
+    fn vm_monitor_is_reentrant_and_releases_at_zero_depth() {
+        let monitors: VmMonitors = Default::default();
+        let object = 0x1234;
+        let owner = 7;
+
+        assert!(vm_monitor_try_enter(&monitors, object, owner));
+        assert!(vm_monitor_try_enter(&monitors, object, owner));
+        assert_eq!(monitors.lock().get(&object).copied(), Some((owner, 2)));
+
+        assert!(vm_monitor_exit_owned(&monitors, object, owner));
+        assert_eq!(monitors.lock().get(&object).copied(), Some((owner, 1)));
+
+        assert!(vm_monitor_exit_owned(&monitors, object, owner));
+        assert!(!monitors.lock().contains_key(&object));
+    }
+
+    #[test]
+    fn vm_monitor_rejects_other_owner_until_release() {
+        let monitors: VmMonitors = Default::default();
+        let object = 0x5678;
+
+        assert!(vm_monitor_try_enter(&monitors, object, 11));
+        assert!(!vm_monitor_try_enter(&monitors, object, 12));
+        assert!(!vm_monitor_exit_owned(&monitors, object, 12));
+        assert_eq!(monitors.lock().get(&object).copied(), Some((11, 1)));
+
+        assert!(vm_monitor_exit_owned(&monitors, object, 11));
+        assert!(vm_monitor_try_enter(&monitors, object, 12));
+        assert_eq!(monitors.lock().get(&object).copied(), Some((12, 1)));
     }
 
     #[test]
