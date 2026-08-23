@@ -86,6 +86,8 @@ pub enum AppMember {
         name: String,
         descriptor: String,
         flags: u32,
+        /// Address of this 28-byte method row in guest memory.
+        row: u32,
         /// Native dispatch/interface slot from row +0x10.
         slot: u32,
         /// Address of the compiled code, in ARM mode.
@@ -117,6 +119,25 @@ impl AppMember {
     pub fn slot(&self) -> u32 {
         match self {
             AppMember::Field { slot, .. } | AppMember::Method { slot, .. } => *slot,
+        }
+    }
+
+    /// Address of the native method row, when this member is a method.
+    pub fn method_row(&self) -> Option<u32> {
+        match self {
+            AppMember::Method { row, .. } => Some(*row),
+            AppMember::Field { .. } => None,
+        }
+    }
+
+    /// Replaces the linked native dispatch/interface slot of a method.
+    pub fn set_method_slot(&mut self, linked_slot: u32) -> bool {
+        match self {
+            AppMember::Method { slot, .. } => {
+                *slot = linked_slot;
+                true
+            }
+            AppMember::Field { .. } => false,
         }
     }
 
@@ -267,6 +288,7 @@ where
             name,
             descriptor,
             flags,
+            row,
             slot: read_generic(reader, row + 0x10)?,
             entry: read_generic(reader, row + METHOD_ENTRY_OFFSET)?,
             argument_words: flags >> 16,
@@ -669,6 +691,7 @@ mod tests {
             name: "startApp".to_string(),
             descriptor: "([Ljava/lang/String;)V".to_string(),
             flags: 0,
+            row: 0,
             slot: 0,
             entry: 0x1118,
             argument_words: 2,
@@ -679,6 +702,7 @@ mod tests {
             name: "pauseApp".to_string(),
             descriptor: "()V".to_string(),
             flags: 0,
+            row: 0,
             slot: 0,
             entry: 0x1248,
             argument_words: 1,
@@ -689,6 +713,7 @@ mod tests {
             name: "main".to_string(),
             descriptor: "()V".to_string(),
             flags: 0,
+            row: 0,
             slot: 0,
             entry: 0x2000,
             argument_words: 0,

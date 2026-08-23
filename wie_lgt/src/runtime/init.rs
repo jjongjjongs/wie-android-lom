@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, format, sync::Arc, vec, vec::Vec};
+use alloc::{collections::{BTreeMap, BTreeSet}, format, sync::Arc, vec, vec::Vec};
 use alloc::string::String;
 use core::mem::size_of;
 
@@ -23,7 +23,7 @@ use crate::relocation::{
 use super::{
     SVC_CATEGORY_INIT, SVC_CATEGORY_STDLIB, SVC_CATEGORY_WIPIC,
     java::{
-        app_classes::{self, AppClass},
+        app_classes::{self, AppClass, AppMember},
         class_table::ClassTable,
         compiled_class, get_java_interface_method,
         handles::JavaHandles,
@@ -102,6 +102,7 @@ type UnresolvedImportCallCounts = Arc<Mutex<BTreeMap<(u32, u32), u64>>>;
 /// Platform classes the application imports, published by import `0x14`.
 type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
 type SyntheticClasses = Arc<Mutex<BTreeMap<u32, String>>>;
+type HeavyLinkedClasses = Arc<Mutex<BTreeSet<u32>>>;
 
 const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
 const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
@@ -137,6 +138,9 @@ struct InitSvcContext {
     /// identity must still cross the compiled/native boundary (notably VM-
     /// created exception subclasses).
     synthetic_classes: SyntheticClasses,
+    /// Application roots whose native heavy method slots have already been
+    /// linked and written back to their guest method rows.
+    heavy_linked_classes: HeavyLinkedClasses,
 }
 
 fn register_init_svc_handler(
@@ -169,6 +173,7 @@ fn register_init_svc_handler(
             array_classes: Default::default(),
             save_points: save_points.clone(),
             synthetic_classes: Default::default(),
+            heavy_linked_classes: Default::default(),
         },
     )
 }
@@ -495,6 +500,10 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     .collect();
 
                 context.app_classes.lock().retain(|class| !roots.contains(&class.root));
+            context
+                .heavy_linked_classes
+                .lock()
+                .retain(|root| !roots.contains(root));
 
                 tracing::debug!(
                     "vm_unregister_classes({index:#x}) -> removed {} application classes",
@@ -538,6 +547,8 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
         InitSvcId::JavaResolveOne => {
             let arguments: Vec<u32> = (0..12).map(|index| core.read_param(index)).collect::<Result<_>>()?;
+
+            ensure_heavy_method_slots_linked(core, context, arguments[1])?;
 
             java_resolve_one(
                 core,
@@ -1111,7 +1122,183 @@ async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext
 /// superclass's same slot; this runtime mirrors that before falling back to a
 /// reporting stub. Slot zero remains runtime-owned.
 ///
-/// A class with no table of its own gets the fallback table whole.
+/// Heavy-linked classes synthesize a variable-length table; light-linked
+/// classes with no table continue to inherit their superclass/fallback table.
+///
+/// Native slot count of the immediate superclass used as the starting point
+/// when `vm_link_class_heavy` appends newly declared virtual methods.
+fn superclass_dispatch_slot_count(
+    core: &ArmCore,
+    context: &InitSvcContext,
+    root: u32,
+) -> Result<u32> {
+    let classes = context.app_classes.lock();
+    let superclass = classes
+        .iter()
+        .find(|class| class.root == root)
+        .and_then(|class| class.superclass.clone());
+
+    let Some(superclass) = superclass else {
+        return Ok(0);
+    };
+
+    if let Some(class) = classes.iter().find(|class| class.name == superclass) {
+        let metadata: u32 = read_generic(core, class.root + 8)?;
+        let slots: u16 = read_generic(core, metadata + CLASS_DISPATCH_SLOTS)?;
+        return Ok(u32::from(slots));
+    }
+
+    Ok(platform_class(&superclass)
+        .map(|class| class.dispatch.len() as u32)
+        .unwrap_or(0))
+}
+
+/// Ensures native heavy-link method slots have been assigned exactly once.
+///
+/// `vm_resolve_one` receives an already-linked class_shared root and immediately
+/// reads its method rows. Some applications resolve virtual imports before the
+/// class is activated, so slot linking cannot be deferred until vtable creation.
+fn ensure_heavy_method_slots_linked(
+    core: &mut ArmCore,
+    context: &InitSvcContext,
+    root: u32,
+) -> Result<()> {
+    if context.heavy_linked_classes.lock().contains(&root) {
+        return Ok(());
+    }
+
+    let metadata: u32 = read_generic(core, root + 8)?;
+    if metadata == 0 {
+        return Ok(());
+    }
+
+    let flags: u16 = read_generic(core, metadata)?;
+    let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
+
+    // The proven native heavy-link shape used by LoM f/n is flag 0x0100 with
+    // no prebuilt dispatch table. Leave prebuilt/light classes untouched.
+    if flags & 0x0100 == 0 || vtable != 0 {
+        return Ok(());
+    }
+
+    let snapshot = context.app_classes.lock().clone();
+    let Some(index) = snapshot.iter().position(|class| class.root == root) else {
+        return Err(WieError::FatalError(format!(
+            "Heavy-linked LGT class at {root:#x} was never registered"
+        )));
+    };
+
+    let mut class = snapshot[index].clone();
+    let superclass_slots = superclass_dispatch_slot_count(core, context, root)?;
+    let slots = assign_heavy_method_slots(core, &mut class, &snapshot, superclass_slots)?;
+    let slots_u16 = u16::try_from(slots).map_err(|_| {
+        WieError::FatalError(format!(
+            "Heavy-linked LGT class {} requires {slots} dispatch slots",
+            class.name
+        ))
+    })?;
+
+    write_generic(core, metadata + CLASS_DISPATCH_SLOTS, slots_u16)?;
+
+    if let Some(cached) = context
+        .app_classes
+        .lock()
+        .iter_mut()
+        .find(|cached| cached.root == root)
+    {
+        *cached = class;
+    }
+
+    context.heavy_linked_classes.lock().insert(root);
+    Ok(())
+}
+
+/// Synthesizes the variable-length instance dispatch table produced by native
+/// `vm_link_class_heavy`.
+///
+/// Heavy AOT classes such as LoM `f` and `n` ship a null vtable pointer and
+/// positive method-slot link markers. Native linking rewrites those markers to
+/// inherited/new final slots, updates metadata+0x26, allocates exactly that many
+/// dispatch slots, copies the superclass dispatch, then installs every method
+/// whose linked signed slot is non-negative.
+fn activate_heavy_dispatch_table(
+    core: &mut ArmCore,
+    context: &InitSvcContext,
+    root: u32,
+) -> Result<u32> {
+    ensure_heavy_method_slots_linked(core, context, root)?;
+
+    let class = context
+        .app_classes
+        .lock()
+        .iter()
+        .find(|class| class.root == root)
+        .cloned()
+        .ok_or_else(|| {
+            WieError::FatalError(format!(
+                "Heavy-linked LGT class at {root:#x} was never registered"
+            ))
+        })?;
+
+    let superclass_slots = superclass_dispatch_slot_count(core, context, root)?;
+    let metadata: u32 = read_generic(core, root + 8)?;
+    let slots: u16 = read_generic(core, metadata + CLASS_DISPATCH_SLOTS)?;
+    let slots = u32::from(slots);
+
+    let bytes = slots
+        .checked_add(1)
+        .and_then(|words| words.checked_mul(4))
+        .ok_or_else(|| WieError::FatalError("Heavy LGT dispatch-table size overflow".into()))?;
+
+    let installed = Allocator::alloc(core, bytes)?;
+    core.write_bytes(installed, &vec![0; bytes as usize])?;
+    write_generic(core, installed, root)?;
+
+    let fallback = context.java_handles.fallback_dispatch_table();
+
+    // Native copies superclass dispatch slots 1..N-1 only:
+    // vm_link_class_heavy memcpy's from superclass_vtable+8 to new_vtable+8
+    // for (superclass_slots - 1) words. Slot zero remains class/runtime-owned.
+    for slot in 1..superclass_slots {
+        let entry = inherited_dispatch_entry(core, context, root, slot, fallback)?;
+        write_generic(core, installed + 4 + slot * 4, entry)?;
+    }
+
+    // Native's fill loop accepts every non-negative linked method slot.
+    for member in class.methods() {
+        let slot = member.slot() as u16 as i16;
+        if slot < 0 {
+            continue;
+        }
+
+        let slot = slot as u32;
+        if slot >= slots {
+            return Err(WieError::FatalError(format!(
+                "Heavy-linked method {}.{}{} has slot {slot} outside {slots}",
+                class.name,
+                member.name(),
+                member.descriptor()
+            )));
+        }
+
+        let entry = member.entry().ok_or_else(|| {
+            WieError::FatalError(format!(
+                "Heavy-linked member {}.{}{} has no entry",
+                class.name,
+                member.name(),
+                member.descriptor()
+            ))
+        })?;
+
+        write_generic(core, installed + 4 + slot * 4, entry)?;
+    }
+
+    // Native publishes the newly allocated table through metadata+0x0c.
+    write_generic(core, metadata + CLASS_DISPATCH_TABLE, installed)?;
+
+    Ok(installed)
+}
+
 fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Result<u32> {
     let fallback = context.java_handles.fallback_dispatch_table();
 
@@ -1120,14 +1307,19 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
         return Ok(fallback);
     }
 
+    let flags: u16 = read_generic(core, metadata)?;
     let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
     let slots: u16 = read_generic(core, metadata + CLASS_DISPATCH_SLOTS)?;
 
-    // A class that overrides nothing ships no table, and inherits its
-    // superclass's whole. Legend of Master's `f` is one, and reaches
-    // `Card.showNotify` at slot 16 - `move`, `resize`, `getWidth`,
-    // `getHeight`, `getX`, `getY`, `showNotify` being Card's first seven,
-    // which land at slots 10 to 16.
+    // Native vm_link_class_heavy handles classes whose linker flag 0x0100 is
+    // set. LoM's f/n are the proven case: they carry no prebuilt vtable and
+    // require a newly synthesized variable-length table.
+    if flags & 0x0100 != 0 && vtable == 0 {
+        return activate_heavy_dispatch_table(core, context, root);
+    }
+
+    // A light-linked class with no table of its own inherits the nearest
+    // available superclass dispatch table wholesale.
     if vtable == 0 {
         let inherited = platform_superclass_dispatch_table(context, root);
 
@@ -1346,6 +1538,92 @@ fn inherited_dispatch_entry_from_tables(
     }
 
     read_generic(core, fallback + 4 + slot * 4)
+}
+
+/// Finds the native virtual slot a superclass already owns for `name+descriptor`.
+///
+/// Native `vm_link_class_heavy` walks application superclasses first, comparing
+/// both strings, then continues into the platform hierarchy. Only positive
+/// signed 16-bit method slots participate in virtual dispatch.
+fn superclass_virtual_slot(
+    app_classes: &[AppClass],
+    superclass: Option<&str>,
+    name: &str,
+    descriptor: &str,
+) -> Option<u32> {
+    let mut current = superclass.map(String::from);
+
+    for _ in 0..MAX_SUPERCLASS_DEPTH {
+        let class_name = current.take()?;
+
+        if let Some(class) = app_classes.iter().find(|class| class.name == class_name) {
+            if let Some(member) = class.members.iter().find(|member| {
+                member.is_method()
+                    && member.name() == name
+                    && member.descriptor() == descriptor
+                    && (member.slot() as u16 as i16) > 0
+            }) {
+                return Some(member.slot());
+            }
+
+            current = class.superclass.clone();
+            continue;
+        }
+
+        return platform_class(&class_name)
+            .and_then(|class| class.virtual_method(name, descriptor))
+            .map(|method| method.slot);
+    }
+
+    None
+}
+
+/// Assigns final virtual slots to one native heavy-linked application class.
+///
+/// The incoming positive slot is a link marker, not the final slot. An override
+/// reuses the superclass method's slot; otherwise the method is appended after
+/// the superclass's final dispatch slot. This is the rule used by native
+/// `vm_link_class_heavy`.
+fn assign_heavy_method_slots(
+    core: &mut ArmCore,
+    class: &mut AppClass,
+    app_classes: &[AppClass],
+    superclass_slots: u32,
+) -> Result<u32> {
+    let superclass = class.superclass.clone();
+    let mut next_slot = superclass_slots;
+
+    for member in &mut class.members {
+        if !member.is_method() || (member.slot() as u16 as i16) <= 0 {
+            continue;
+        }
+
+        let linked_slot = superclass_virtual_slot(
+            app_classes,
+            superclass.as_deref(),
+            member.name(),
+            member.descriptor(),
+        )
+        .unwrap_or_else(|| {
+            let slot = next_slot;
+            next_slot += 1;
+            slot
+        });
+
+        let row = member
+            .method_row()
+            .ok_or_else(|| WieError::FatalError("Heavy-linked method has no native row".into()))?;
+
+        // Native vm_link_class_heavy rewrites the signed 16-bit slot in the
+        // method row itself. vm_resolve_one subsequently reads that linked row.
+        if row != 0 {
+            write_generic(core, row + 0x10, linked_slot as u16)?;
+        }
+
+        assert!(member.set_method_slot(linked_slot));
+    }
+
+    Ok(next_slot)
 }
 
 fn primitive_array_descriptor(atype: u32) -> Option<char> {
@@ -2447,7 +2725,7 @@ mod application_dispatch_tests {
     use wie_core_arm::{Allocator, ArmCore};
     use wie_util::{ByteWrite, write_generic};
 
-    use super::{AppClass, inherited_dispatch_entry_from_tables};
+    use super::{AppClass, AppMember, assign_heavy_method_slots, inherited_dispatch_entry_from_tables};
 
     fn core() -> ArmCore {
         let mut core = ArmCore::new(false, None).unwrap();
@@ -2487,6 +2765,76 @@ mod application_dispatch_tests {
         }
 
         (root, vtable)
+    }
+
+    fn virtual_method(name: &str, descriptor: &str) -> AppMember {
+        AppMember::Method {
+            name: String::from(name),
+            descriptor: String::from(descriptor),
+            flags: 0,
+            row: 0,
+            slot: 1,
+            entry: 0x1000,
+            argument_words: 1,
+        }
+    }
+
+    #[test]
+    fn heavy_slots_reuse_platform_override_and_append_new_method() {
+        let mut class = app_class(0x1000, "f", Some("org/kwis/msp/lcdui/Card"));
+        class.members = vec![
+            virtual_method("keyNotify", "(II)Z"),
+            virtual_method("ownMethod", "()V"),
+        ];
+
+        let mut core = core();
+        let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 25).unwrap();
+
+        assert_eq!(slots, 26);
+        assert_eq!(class.members[0].slot(), 17);
+        assert_eq!(class.members[1].slot(), 25);
+    }
+
+    #[test]
+    fn heavy_slots_are_written_back_to_native_method_rows() {
+        let mut core = core();
+        let row = Allocator::alloc(&mut core, 0x1c).unwrap();
+        core.write_bytes(row, &[0; 0x1c]).unwrap();
+        write_generic(&mut core, row + 0x10, 1u16).unwrap();
+
+        let mut class = app_class(0x3000, "f", Some("org/kwis/msp/lcdui/Card"));
+        class.members = vec![AppMember::Method {
+            name: String::from("keyNotify"),
+            descriptor: String::from("(II)Z"),
+            flags: 0,
+            row,
+            slot: 1,
+            entry: 0x1234,
+            argument_words: 3,
+        }];
+
+        let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 25).unwrap();
+
+        assert_eq!(slots, 25);
+        assert_eq!(class.members[0].slot(), 17);
+        let native_slot: u16 = wie_util::read_generic(&core, row + 0x10).unwrap();
+        assert_eq!(native_slot, 17);
+    }
+
+    #[test]
+    fn heavy_slots_use_text_box_component_native_slot() {
+        let mut class = app_class(0x2000, "n", Some("org/kwis/msp/lwc/TextBoxComponent"));
+        class.members = vec![
+            virtual_method("keyNotify", "(II)Z"),
+            virtual_method("a", "(Ljava/lang/String;)I"),
+        ];
+
+        let mut core = core();
+        let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 65).unwrap();
+
+        assert_eq!(slots, 66);
+        assert_eq!(class.members[0].slot(), 32);
+        assert_eq!(class.members[1].slot(), 65);
     }
 
     #[test]
