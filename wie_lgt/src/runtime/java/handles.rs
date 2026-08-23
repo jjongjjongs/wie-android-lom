@@ -114,11 +114,22 @@ impl JavaHandles {
     }
 
     /// Allocates an instance the compiled code can use: a header pointing at
-    /// its own field array.
+    /// its own field array. This compatibility path keeps the global slot count
+    /// used for JVM-originated objects whose exact native class layout is not
+    /// available at the insertion site.
     pub fn allocate_instance(&self, vtable: u32) -> Result<u32> {
+        let slots = self.field_slots.load(Ordering::SeqCst);
+        self.allocate_instance_with_fields(vtable, slots)
+    }
+
+    /// Allocates one native VM object using that class's exact four-byte
+    /// instance-field word count.
+    pub fn allocate_instance_with_fields(&self, vtable: u32, slots: u32) -> Result<u32> {
         let mut core = self.core.clone();
 
-        let slots = self.field_slots.load(Ordering::SeqCst);
+        // Native vm_gc_calloc(4, 0) still has to leave the object with a valid
+        // +0x08 pointer for guest code. Reserve one word while exposing zero
+        // logical field slots.
         let fields = Allocator::alloc(&mut core, slots.max(1) * 4)?;
         for slot in 0..slots {
             write_generic(&mut core, fields + slot * 4, 0u32)?;

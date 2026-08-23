@@ -9,7 +9,7 @@
 //!   +0x00 u32 flags
 //!   +0x08 u32 name
 //!   +0x10 u32 superclass name, zero for none
-//!   +0x18 u16 member count
+//!   +0x18 u16 instance field words
 //!   +0x28 u32 interface table, zero for none
 //!   +0x38 u32 method table, zero for none
 //!
@@ -55,7 +55,7 @@ const METADATA_SIZE: u32 = 0x4c;
 
 const METADATA_NAME: u32 = 0x08;
 const METADATA_SUPERCLASS: u32 = 0x10;
-const METADATA_MEMBER_COUNT: u32 = 0x18;
+const METADATA_INSTANCE_WORDS: u32 = 0x18;
 const METADATA_INTERFACES: u32 = 0x28;
 const METADATA_METHODS: u32 = 0x38;
 
@@ -166,9 +166,8 @@ pub struct AppClass {
     pub superclass: Option<String>,
     pub interfaces: Vec<String>,
     pub members: Vec<AppMember>,
-    /// The count the metadata carries, which is neither the number of fields
-    /// nor the number of methods nor their sum. Kept for the trace.
-    pub declared_members: u32,
+    /// Number of four-byte instance-field words native allocation reserves.
+    pub instance_words: u32,
 }
 
 impl AppClass {
@@ -339,7 +338,7 @@ where
     let name = read_string(reader, read_generic(reader, metadata + METADATA_NAME)?)?
         .ok_or_else(|| WieError::FatalError(format!("LGT class root {root:#x} has no name")))?;
     let superclass = read_superclass(reader, read_generic(reader, metadata + METADATA_SUPERCLASS)?)?;
-    let declared_members: u16 = read_generic(reader, metadata + METADATA_MEMBER_COUNT)?;
+    let instance_words: u16 = read_generic(reader, metadata + METADATA_INSTANCE_WORDS)?;
 
     let methods_table: u32 = read_generic(reader, metadata + METADATA_METHODS)?;
     let interfaces = parse_interfaces(reader, read_generic(reader, metadata + METADATA_INTERFACES)?)?;
@@ -364,7 +363,7 @@ where
         superclass,
         interfaces,
         members,
-        declared_members: declared_members.into(),
+        instance_words: instance_words.into(),
     })
 }
 
@@ -457,7 +456,7 @@ pub fn describe(class: &AppClass) -> String {
     let methods = class.methods().count();
 
     format!(
-        "{} extends {}{}{} at {:#x} ({} fields, {} methods, {} declared)",
+        "{} extends {}{}{} at {:#x} ({} fields, {} methods, {} instance words)",
         class.name,
         class.superclass.as_deref().unwrap_or("-"),
         if class.interfaces.is_empty() { "" } else { " implements " },
@@ -465,7 +464,7 @@ pub fn describe(class: &AppClass) -> String {
         class.root,
         class.members.len() - methods,
         methods,
-        class.declared_members
+        class.instance_words
     )
 }
 
@@ -530,7 +529,7 @@ mod tests {
     use wie_util::{ByteRead, Result};
 
     use super::{
-        AppMember, FIELD_ROW_SIZE, FIELD_SLOT_OFFSET, FIELD_TABLE_OFFSET, METADATA_MEMBER_COUNT, METADATA_METHODS, METADATA_NAME, METADATA_SIZE,
+        AppMember, FIELD_ROW_SIZE, FIELD_SLOT_OFFSET, FIELD_TABLE_OFFSET, METADATA_INSTANCE_WORDS, METADATA_METHODS, METADATA_NAME, METADATA_SIZE,
         METADATA_SUPERCLASS, METHOD_ENTRY_OFFSET, METHOD_ROW_SIZE, descriptor_argument_words, parse_class,
     };
 
@@ -596,7 +595,7 @@ mod tests {
         image.word(metadata + METADATA_SUPERCLASS, 0x1010);
         // Deliberately not two, and not four: the count in the image describes
         // neither table.
-        image.word(metadata + METADATA_MEMBER_COUNT, 3);
+        image.word(metadata + METADATA_INSTANCE_WORDS, 3);
         image.word(metadata + METADATA_METHODS, methods);
         image.word(root + 8, metadata);
 
@@ -638,15 +637,13 @@ mod tests {
         assert_eq!(class.members.len() - methods.len(), 2);
     }
 
-    /// The member count must not bound either walk. Reading only as many rows
-    /// as it names stops inside the method table, which is how `paint` came to
-    /// be missed and a same-descriptor helper called in its place.
+    /// Instance allocation size must not bound either member-table walk.
     #[test]
-    fn ignores_the_declared_member_count() {
+    fn ignores_the_instance_word_count_when_parsing_members() {
         let (image, root) = legend_of_master_shaped_class();
         let class = parse_class(&image, root).unwrap();
 
-        assert_eq!(class.declared_members, 3);
+        assert_eq!(class.instance_words, 3);
         assert_eq!(class.members.len(), 4);
         assert!(class.methods().any(|x| x.name() == "paint"));
     }
@@ -663,7 +660,7 @@ mod tests {
 
         image.string(0x1000, "b");
         image.word(metadata + METADATA_NAME, 0x1000);
-        image.word(metadata + METADATA_MEMBER_COUNT, 111);
+        image.word(metadata + METADATA_INSTANCE_WORDS, 111);
         image.word(root + 8, metadata);
 
         let class = parse_class(&image, root).unwrap();

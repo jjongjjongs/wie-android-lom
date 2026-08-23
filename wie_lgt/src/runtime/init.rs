@@ -23,7 +23,7 @@ use crate::relocation::{
 use super::{
     SVC_CATEGORY_INIT, SVC_CATEGORY_STDLIB, SVC_CATEGORY_WIPIC,
     java::{
-        app_classes::{self, AppClass, AppMember},
+        app_classes::{self, AppClass},
         class_table::ClassTable,
         compiled_class, get_java_interface_method,
         handles::JavaHandles,
@@ -2168,9 +2168,14 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
         return Ok(handle);
     };
 
-    let class = context.app_classes.lock().iter().find(|x| x.root == root).map(|x| x.name.clone());
+    let class = context
+        .app_classes
+        .lock()
+        .iter()
+        .find(|x| x.root == root)
+        .map(|x| (x.name.clone(), x.instance_words));
 
-    let Some(class) = class else {
+    let Some((class, instance_words)) = class else {
         tracing::warn!("LGT application class at {root:#x} was never registered");
         return Ok(handle);
     };
@@ -2202,11 +2207,15 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
     let activated_data: u32 = read_generic(core, handle + 8)?;
     let vtable: u32 = read_generic(core, activated_data + 12)?;
 
-    let object = context.java_handles.allocate_instance(vtable)?;
+    let object = context
+        .java_handles
+        .allocate_instance_with_fields(vtable, instance_words)?;
 
     context.java_handles.bind(object, instance);
 
-    tracing::debug!("LGT new {class} at {object:#x}, dispatch table {vtable:#x}");
+    tracing::debug!(
+        "LGT new {class} at {object:#x}, dispatch table {vtable:#x}, {instance_words} instance words"
+    );
 
     Ok(object)
 }
@@ -2221,24 +2230,27 @@ async fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcCo
         let index = table.class_of_object(class_object)?;
         let class = table.classes.get(index as usize)?;
 
-        Some((class.name.clone(), *table.vtables.get(index as usize)?, class.field_count))
+        let instance_words = platform_class(&class.name)?.instance_words;
+        Some((class.name.clone(), *table.vtables.get(index as usize)?, instance_words))
     });
 
-    let Some((name, vtable, field_count)) = layout else {
+    let Some((name, vtable, instance_words)) = layout else {
         tracing::warn!("LGT vm_instantiate({class_object:#x}) does not name a class");
         return Ok(class_object);
     };
 
     drop(table);
 
-    let _ = field_count;
-
-    let object = context.java_handles.allocate_instance(vtable)?;
+    let object = context
+        .java_handles
+        .allocate_instance_with_fields(vtable, instance_words)?;
 
     match context.jvm.instantiate_class(&name).await {
         Ok(instance) => {
             context.java_handles.bind(object, instance);
-            tracing::debug!("LGT new {name} instance at {object:#x}, dispatch table {vtable:#x}, JVM instance bound");
+            tracing::debug!(
+                "LGT new {name} instance at {object:#x}, dispatch table {vtable:#x}, {instance_words} instance words, JVM instance bound"
+            );
         }
         Err(error) => {
             tracing::warn!("LGT could not create uninitialized JVM instance for {name} at {object:#x}: {error:?}");
@@ -3038,11 +3050,13 @@ mod dlet_property_tests {
 mod application_dispatch_tests {
     use alloc::{string::String, vec, vec::Vec};
 
+    use crate::runtime::java::app_classes::AppMember;
+
     use wie_core_arm::{Allocator, ArmCore};
     use wie_util::{ByteWrite, write_generic};
 
     use super::{
-        AppClass, AppMember, ArrayClassInfo, ArrayClasses, REFERENCE_SIZE, VmMonitors,
+        AppClass, ArrayClassInfo, ArrayClasses, REFERENCE_SIZE, VmMonitors,
         assign_heavy_method_slots, inherited_dispatch_entry_from_tables,
         vm_monitor_exit_owned, vm_monitor_try_enter,
     };
@@ -3062,7 +3076,7 @@ mod application_dispatch_tests {
             superclass: superclass.map(String::from),
             interfaces: Vec::new(),
             members: Vec::new(),
-            declared_members: 0,
+            instance_words: 0,
         }
     }
 

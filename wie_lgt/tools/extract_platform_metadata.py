@@ -200,6 +200,7 @@ def main():
                 "name": name,
                 "superclass": superclass,
                 "flags": flags,
+                "instance_words": u16(metadata + 0x18),
                 "get_class": u32(metadata + 0x30),
                 "get_raw_class": u32(metadata + 0x34),
                 "fields": fields,
@@ -290,6 +291,7 @@ def main():
     lines.append("    pub superclass: Option<&'static str>,")
     lines.append("    pub interfaces: &'static [&'static str],")
     lines.append("    pub flags: u32,")
+    lines.append("    pub instance_words: u32,")
     lines.append("    pub get_class: u32,")
     lines.append("    pub get_raw_class: u32,")
     lines.append("    pub fields: &'static [PlatformField],")
@@ -376,6 +378,7 @@ def main():
         lines.append(f"        superclass: {superclass},")
         lines.append(f"        interfaces: &[{interfaces}],")
         lines.append(f"        flags: {cls['flags']:#010x},")
+        lines.append(f"        instance_words: {cls['instance_words']},")
         lines.append(f"        get_class: {cls['get_class']:#010x},")
         lines.append(f"        get_raw_class: {cls['get_raw_class']:#010x},")
         lines.append(f"        fields: FIELDS_{index},")
@@ -492,6 +495,15 @@ def main():
         '        let method = class.virtual_method("availableDataSize", "()I").unwrap();'
     )
     lines.append("        assert_eq!(method.slot, 32);")
+    lines.append("    }")
+    lines.append("")
+    lines.append("    #[test]")
+    lines.append("    fn native_instance_word_counts_are_preserved() {")
+    lines.append('        assert_eq!(platform_class("java/lang/StringBuffer").unwrap().instance_words, 3);')
+    lines.append('        assert_eq!(platform_class("java/lang/Thread").unwrap().instance_words, 4);')
+    lines.append('        assert_eq!(platform_class("java/util/Vector").unwrap().instance_words, 3);')
+    lines.append('        assert_eq!(platform_class("org/kwis/msp/lcdui/Display").unwrap().instance_words, 20);')
+    lines.append('        assert_eq!(platform_class("org/kwis/msp/lwc/TextBoxComponent").unwrap().instance_words, 43);')
     lines.append("    }")
     lines.append("")
     lines.append("    #[test]")
