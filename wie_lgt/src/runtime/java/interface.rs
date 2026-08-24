@@ -123,7 +123,10 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // LoM legacy 0xe1 returns the String[] class handle; virtually every
         // caller immediately passes it to 0x0f (VmInstantiateArray).
         0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringArrayClass)?,
-        0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringArrayClass)?,
+        // LoM legacy 0xe2 is the fast reference-array store helper. Generated
+        // code uses it to populate freshly instantiated String[] arrays, while
+        // 0x09 is the checked/general aastore path.
+        0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImplFast)?,
         _ => {
             tracing::warn!("Unimplemented LGT Java import {function_index:#x};                  installing diagnostic zero-return stub");
             core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + function_index)?
