@@ -21,7 +21,7 @@
 use alloc::{collections::BTreeMap, format, string::String, vec, vec::Vec};
 
 use wie_core_arm::ArmCore;
-use wie_util::{Result, WieError, write_generic};
+use wie_util::{Result, WieError, read_generic, write_generic};
 
 use crate::relocation::{R_ARM_ABS32, R_ARM_GLOB_DAT, R_ARM_JUMP_SLOT, R_ARM_NONE, R_ARM_RELATIVE, arm_abs32, arm_relative};
 
@@ -32,10 +32,13 @@ const DT_NULL: u32 = 0;
 const DT_PLTRELSZ: u32 = 2;
 const DT_STRTAB: u32 = 5;
 const DT_SYMTAB: u32 = 6;
+const DT_INIT: u32 = 12;
 const DT_SYMENT: u32 = 11;
 const DT_REL: u32 = 17;
 const DT_RELSZ: u32 = 18;
 const DT_JMPREL: u32 = 23;
+const DT_INIT_ARRAY: u32 = 25;
+const DT_INIT_ARRAYSZ: u32 = 27;
 
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
@@ -72,6 +75,12 @@ pub struct FirmwareImage {
     pub exports: BTreeMap<String, u32>,
     /// Imports left unbound by the resolver in this pass.
     pub unresolved_imports: Vec<UnresolvedImport>,
+    /// `DT_INIT` initializer (guest address), if the image has one. Run before
+    /// the init array.
+    pub init: Option<u32>,
+    /// `DT_INIT_ARRAY` initializers (guest addresses), in order. These are the
+    /// C/C++ static constructors; they run before any other firmware code.
+    pub init_array: Vec<u32>,
 }
 
 impl FirmwareImage {
@@ -216,6 +225,9 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
     let mut d_relsz = 0u32;
     let mut d_jmprel = None;
     let mut d_pltrelsz = 0u32;
+    let mut d_init = None;
+    let mut d_init_array = None;
+    let mut d_init_arraysz = 0u32;
 
     let mut cursor = dyn_off;
     let dyn_end = dyn_off + dyn_size;
@@ -232,6 +244,9 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
             DT_RELSZ => d_relsz = val,
             DT_JMPREL => d_jmprel = Some(val),
             DT_PLTRELSZ => d_pltrelsz = val,
+            DT_INIT => d_init = Some(val),
+            DT_INIT_ARRAY => d_init_array = Some(val),
+            DT_INIT_ARRAYSZ => d_init_arraysz = val,
             _ => {}
         }
     }
@@ -351,12 +366,29 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
         }
     }
 
+    // The init array holds relocated function pointers, so read them back from
+    // guest memory (R_ARM_RELATIVE has already rebased them). DT_INIT is a
+    // single vaddr in the image, so rebase it directly.
+    let init = d_init.map(|v| base.wrapping_add(v));
+    let mut init_array = Vec::new();
+    if let Some(array_vaddr) = d_init_array {
+        let count = d_init_arraysz as usize / 4;
+        for index in 0..count {
+            let entry: u32 = read_generic(core, base.wrapping_add(array_vaddr) + (index as u32) * 4)?;
+            // Linkers pad the array with 0 / -1 sentinels; skip them.
+            if entry != 0 && entry != u32::MAX {
+                init_array.push(entry);
+            }
+        }
+    }
+
     let entry = base.wrapping_add(e_entry);
     tracing::debug!(
-        "Loaded firmware at base {base:#x}: entry {entry:#x}, {} segment(s), {} export(s), {} unresolved import(s)",
+        "Loaded firmware at base {base:#x}: entry {entry:#x}, {} segment(s), {} export(s), {} unresolved import(s), {} init fn(s)",
         segments.len(),
         exports.len(),
-        unresolved_imports.len()
+        unresolved_imports.len(),
+        init_array.len() + usize::from(init.is_some())
     );
 
     Ok(FirmwareImage {
@@ -365,6 +397,8 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
         segments,
         exports,
         unresolved_imports,
+        init,
+        init_array,
     })
 }
 
