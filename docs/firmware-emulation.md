@@ -179,10 +179,23 @@ on device before the next.
 
 ## Phase plan
 
-- **P1 — Loader + HLE runtime (spike).** Load and relocate the firmware ELF into
-  the ARM address space beside the game. Stand up the libc/libm/thread/`libla`
-  HLE handlers the firmware imports. Reach a state where the firmware image is
-  mapped and its imports resolve. *(No behaviour change yet.)*
+- **P1 — Loader + HLE runtime (spike).** *In progress.* Load and relocate the
+  firmware ELF into the ARM address space beside the game. Stand up the
+  libc/libm/thread/allocator HLE handlers the firmware imports. Reach a state
+  where the firmware image is mapped and its imports resolve. *(No behaviour
+  change yet.)*
+  - **Landed:** `wie_lgt::load_firmware` (`wie_lgt/src/runtime/firmware.rs`) maps
+    the firmware's `ET_DYN` ARM image at a chosen base, applies `R_ARM_RELATIVE`
+    plus the `GLOB_DAT`/`JUMP_SLOT`/`ABS32` import bindings, resolves imports
+    through a caller-supplied `ImportResolver`, records any it cannot bind, and
+    re-derives the firmware's own export table (name → guest address) from its
+    dynamic symbol table — the linker table for free, read off the exact binary
+    that was loaded. It drives everything from `PT_DYNAMIC`, so a stripped `.so`
+    loads too. Unit-tested with a hand-built `ET_DYN` fixture. Dormant: nothing
+    calls it at startup yet, so no behaviour changes.
+  - **Next in P1:** an `ImportResolver` that mints `make_svc_stub` trampolines
+    for the ~131 C-runtime imports and the three allocator hooks
+    (`la_cal`/`la_mal`/`lafr`), reusing the existing `stdlib` HLE handlers.
 - **P2 — Firmware init.** Drive `MH_sysHalInit` and the rest of the boot sequence
   to a ready state, working out the host-call ABI (`__emutls host_call`,
   `a32_blk`) and any init structures the firmware expects.
