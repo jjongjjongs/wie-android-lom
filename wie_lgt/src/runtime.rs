@@ -1,3 +1,5 @@
+pub mod firmware;
+pub mod firmware_link;
 pub mod init;
 mod java;
 mod savepoint;

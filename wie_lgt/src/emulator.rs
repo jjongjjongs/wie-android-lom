@@ -157,6 +157,10 @@ impl LgtEmulator {
 
         apply_offline_auth_patch(&aid, &mut binary_mod);
 
+        // If the user supplied the firmware BIOS, map it and log what it took.
+        // Dormant otherwise, and never on the game's execution path yet (P1).
+        crate::runtime::firmware_link::try_load_bios(core, system).await?;
+
         load_native(core, system, &jvm, &binary_mod, &jar_filename, main_class_name.as_deref()).await?;
 
         Ok(())

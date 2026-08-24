@@ -9,6 +9,25 @@ pub(crate) const R_ARM_CALL: u32 = 28;
 pub(crate) const R_ARM_JUMP24: u32 = 29;
 pub(crate) const R_ARM_THM_JUMP24: u32 = 30;
 
+// Standard ARM ELF dynamic relocation numbers, used by the firmware's
+// `ET_DYN` image (a normal shared object) rather than the game's prelinked
+// Raptor `.mod`. The firmware is almost entirely `R_ARM_RELATIVE` (25,875
+// entries), with `R_ARM_GLOB_DAT` / `R_ARM_JUMP_SLOT` binding its libc/libm
+// imports through the PLT.
+pub(crate) const R_ARM_GLOB_DAT: u32 = 21;
+pub(crate) const R_ARM_JUMP_SLOT: u32 = 22;
+pub(crate) const R_ARM_RELATIVE: u32 = 23;
+
+/// Apply the standard ARM ELF `R_ARM_RELATIVE` relocation for an image loaded
+/// at `load_bias`.
+///
+/// The firmware is linked based at 0, so in a `REL` object the in-place word is
+/// the link-time address (the implicit addend) and the loaded value is simply
+/// that address shifted by the load bias.
+pub(crate) fn arm_relative(load_bias: u32, in_place_addend: u32) -> u32 {
+    load_bias.wrapping_add(in_place_addend)
+}
+
 // Legacy Raptor ER private relocation numbers recovered from the reference
 // loader. These occupy the processor-specific high end of the ELF32 r_type
 // byte and are not part of the standard ARM ELF ABI.
@@ -109,6 +128,15 @@ mod tests {
     fn abs_and_rel_are_wrapping_arm32_values() {
         assert_eq!(arm_abs32(0xffff_fff0, 0x20), 0x10);
         assert_eq!(arm_rel32(0x1000, 4, 0x2000), 0x1004);
+    }
+
+    #[test]
+    fn relative_shifts_the_link_time_address_by_the_load_bias() {
+        // An image linked at 0 whose word points at 0x1234, loaded at
+        // base 0x400000, resolves to 0x401234.
+        assert_eq!(arm_relative(0x40_0000, 0x1234), 0x40_1234);
+        // The addition wraps like a real 32-bit pointer.
+        assert_eq!(arm_relative(0xffff_f000, 0x2000), 0x1000);
     }
 
     #[test]
