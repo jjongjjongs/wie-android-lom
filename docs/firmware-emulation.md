@@ -221,10 +221,22 @@ on device before the next.
     Every import is bound (allocator and mem/str real, the rest traceable
     stubs), init runs as its own error-swallowing task, and a gated
     `firmware_init` harness (`WIE_FIRMWARE`) drives it locally.
-  - **Observed init calls:** `memset` (real), then still-stubbed
-    `pthread_mutex_init`, `vsnprintf`, `__android_log_print`. These are the next
-    handlers to make real, then the boot sequence past `MH_sysHalInit` (the
-    DTHREAD / JNI-env context it and `dlet_start` expect).
+  - **Boot chain up (landed):** the low-level runtime now boots cleanly, each
+    step returning 0, driven by `run_firmware_init`'s `BOOT_SEQUENCE`:
+    `dmempage_init` (page manager) → `dmemory_init` (memory manager) →
+    `dprocess_init` → `dthread_init` → `MH_sysHalInit`. The order was found by
+    unwinding faults: `dmemory_init`'s `malloc_md` tail-calls the `la_mal`
+    import (our allocator) but the paging globals were unset, so `dmempage_init`
+    must run first. The boot exercises real firmware paths (`strcmp`,
+    `mprotect`, `pthread_mutex_init`, `vsnprintf`, `__android_log_print` — all
+    harmless stubs so far).
+  - **Next layer — the process/thread lifecycle.** `WPMain_Init` just registers
+    a `dprocess` callback, so the `WP*_Init` subsystems (`WPKnl_Init` …
+    `WPMda_Init` for audio) run during process/thread *startup*, not as a linear
+    list. Reaching them needs `dprocess_create` + `dthread_create` +
+    `dthread_start`, i.e. running the firmware's scheduler far enough to fire the
+    registered callback. This is where the firmware's cooperative scheduler
+    meets our async executor — the deep integration point of P2.
   - The host-call ABI note below (`__emutls host_call`, `a32_blk`) turned out
     not to apply to us: that is the *reference's* ARM-interpreter plumbing. Our
     imports bind straight to SVC trampolines, so there is no host-call ABI to
