@@ -87,8 +87,11 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // 0x54 is the generated-code safepoint/yield helper. Its incoming
         // registers are not semantic arguments.
         0x54 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThreadReschedule)?,
-        0x55 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThreadReschedule)?,
-        0x56 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorEnter)?,
+        // LoM synchronized wrappers enter the object monitor through 0x55
+        // before allocating their save point, and release that same monitor
+        // through 0x56 on both normal and exception-cleanup paths.
+        0x55 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorEnter)?,
+        0x56 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorExit)?,
         // LoM uses 0x57 for constant-string materialization:
         // (module/table, UTF-16 chars, length, cache slot).
         0x57 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetConstantString)?,
