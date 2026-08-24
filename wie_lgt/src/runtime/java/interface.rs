@@ -115,10 +115,14 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x40 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRegisterClasses)?,
         0x64 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClassShared)?,
         0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
-        0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClass)?,
+        // LoM legacy 0x14 returns java/lang/String Class; generated code
+        // immediately instantiates it and invokes String constructors/methods.
+        0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringClass)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRunMainClass)?,
         0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetArrayClass)?,
-        0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringClass)?,
+        // LoM legacy 0xe1 returns the String[] class handle; virtually every
+        // caller immediately passes it to 0x0f (VmInstantiateArray).
+        0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringArrayClass)?,
         0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringArrayClass)?,
         _ => {
             tracing::warn!("Unimplemented LGT Java import {function_index:#x};                  installing diagnostic zero-return stub");
