@@ -230,13 +230,17 @@ on device before the next.
     must run first. The boot exercises real firmware paths (`strcmp`,
     `mprotect`, `pthread_mutex_init`, `vsnprintf`, `__android_log_print` — all
     harmless stubs so far).
-  - **Next layer — the process/thread lifecycle.** `WPMain_Init` just registers
-    a `dprocess` callback, so the `WP*_Init` subsystems (`WPKnl_Init` …
-    `WPMda_Init` for audio) run during process/thread *startup*, not as a linear
-    list. Reaching them needs `dprocess_create` + `dthread_create` +
-    `dthread_start`, i.e. running the firmware's scheduler far enough to fire the
-    registered callback. This is where the firmware's cooperative scheduler
-    meets our async executor — the deep integration point of P2.
+  - **Audio subsystem up (landed).** The boot now runs through `WPKnl_Init`
+    (kernel) and `AND_mdaInit`, and `AND_mdaInit` returns a live media context
+    pointer (not 0) using only the memory/runtime boot — no running scheduler
+    thread was needed. `WPMda_Init` turned out to be an empty stub (`bx lr`); the
+    real audio init is `AND_mdaInit`. So the firmware's audio subsystem
+    initializes to a usable state right after the low-level boot.
+  - **The process/thread lifecycle** (`dprocess_create` + `dthread_create` +
+    `dthread_start`, run via `WPMain_Init`'s registered callback) is still the
+    path a full app boot takes, and is where the firmware's cooperative
+    scheduler meets our async executor. It may not be needed just to reach audio
+    — that is the next thing to confirm.
   - The host-call ABI note below (`__emutls host_call`, `a32_blk`) turned out
     not to apply to us: that is the *reference's* ARM-interpreter plumbing. Our
     imports bind straight to SVC trampolines, so there is no host-call ABI to
@@ -252,6 +256,21 @@ on device before the next.
     work targeted. The firmware's `Java_com_lgt_MediaDeviceManager_mda*` /
     `AND_mdaInit` exports are the real implementations of exactly this player
     API, so the P3 cutover must route the player path (not just `MC_mdaPlay`).
+  - *The firmware exports the exact WIPI-C functions the game imports* —
+    `MC_mdaClipCreate`, `MC_mdaClipAllocPlayer`, `MC_mdaClipFreePlayer`,
+    `MC_mdaClipControl`, `MC_mdaClipClearData`, `MC_mdaClipAvailableDataSize`, … —
+    so the cutover is: route the game's WIPI-C mda import table (`0x1fb`) to the
+    firmware's `MC_mda*` exports instead of the Rust stubs in `wie_wipi_c`.
+    Underneath, `MC_mda*` drive a device HAL layer the firmware also owns:
+    `MH_mdaOpenDevice` / `MH_mdaPlay` / `MH_mdaControl` / `MH_mdaWriteData` and
+    the MA-3 synth. The remaining unknown is the *output tap* — where the
+    firmware writes final PCM (a HAL callback or a shared buffer the reference
+    drains into `setSoundBuffer`); find that and route it to `AndroidAudioSink`.
+  - **P3 plan:** (1) map the game's mda import indices to the firmware's
+    `MC_mda*` exports; (2) feed a clip's data through `MC_mdaClipCreate` +
+    put-data; (3) locate the firmware's PCM output and tap it to the sink;
+    (4) verify Zenonia on device against the reference; (5) delete the override
+    and bundled recordings.
 - **P4 — Wider cutover.** Move graphics and the rest over subsystem by subsystem,
   verifying each on device.
 - **P5 — Beyond the reference.** Save states, performance, display scaling, and
