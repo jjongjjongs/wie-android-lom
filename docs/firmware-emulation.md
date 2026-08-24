@@ -29,6 +29,45 @@ user's device. Once the firmware produces sound, the bundled recordings and the
 
 ## What the reverse engineering found
 
+### The reference is a multi-binary ARM32-on-ARM64 stack
+
+The reference APK ships six native libraries in `lib/arm64-v8a/` — all of them
+**aarch64** host code except the firmware, which is **ARM32**. The whole point of
+the stack is to run that one ARM32 module inside a 64-bit process:
+
+| Reference library | Arch | Role |
+|---|---|---|
+| `libarm32_lgt_system.so` (5.7 MB) | **ARM32** | The firmware — the entire WIPI/J2ME/MIDP middleware as native code. |
+| `liblgt_system.so` (282 KB) | aarch64 | JNI bridge + the `a32_*` **ARM32 interpreter/JIT** (`a32_blk_run`, `a32_run`, `host_call`) + `elf_load`/`elf_relocate`. |
+| `libarm32_raptor.so` (350 KB) | aarch64 | ARM32 **module loader** (`load_module`, `_reloc_arm`, `setup_raptor_module`) + WIPI kernel services (`_MC_knlAlloc/Calloc/Free/CurrentTime/DefTimer/SetTimer`). |
+| `libarm32_raptor_er.so` (12 KB) | aarch64 | ELF-load helper (`mmap`/`mprotect`/`dlopen`). |
+| `libla.so` (6 KB) | aarch64 | `LegacyAddressCompat` — reserves a low 32-bit host address region so the ARM32 module's 32-bit pointers are valid pointers in the 64-bit process. |
+| `libbinary.so`, `libcheat.so` | aarch64 | Small kernel overrides (`CUSTOM_MC_grpCreateImage`, timers) and cheat hooks. |
+
+The reference cannot execute ARM32 natively from a 64-bit process, so
+`liblgt_system.so` carries its own **ARM32 interpreter/JIT** (`a32_*`). Interpreted
+ARM32 code reaches native aarch64 functions (libc, kernel services) through
+`host_call`, an emutls-dispatched call bridge.
+
+### The crucial simplification: we already own the two hardest pieces
+
+Mapped onto our tree, most of the reference stack is plumbing **we do not need**,
+because our host is itself an ARM emulator rather than a 64-bit process
+smuggling ARM32 in:
+
+| Reference component | Our equivalent |
+|---|---|
+| `a32_*` ARM32 interpreter/JIT | **`wie_core_arm`** — we already interpret ARM. |
+| `host_call` interpreted-ARM→native bridge | **SVC + `binary_patches`** HLE dispatch — we already trap ARM→Rust. |
+| `libla.so` low-32-bit-address reservation | **not needed** — our emulator has its own 32-bit address space. |
+| `libarm32_raptor.so` loader + `_MC_knl*` | `load_executable`/`apply_relocations` + `wie_lgt` kernel stubs (partial). |
+| `raptor_er` ELF helper | our ELF loader. |
+
+So the work is not "build an ARM interpreter and a call bridge" (the reference's
+two biggest components) — those exist. It is "load and relocate one more ARM32
+ELF into the address space we already run, bind its imports to the HLE we already
+dispatch, drive its init, and tap its output."
+
 ### Firmware image (`libarm32_lgt_system.so`)
 
 - ARM 32-bit ELF, `ET_DYN`, entry `0xe4c38`.
@@ -39,18 +78,29 @@ user's device. Once the firmware produces sound, the bundled recordings and the
 - `NEEDED`: `libla.so`, `libdl.so`, `libc.so`, `libm.so`, `libstdc++.so`.
 - Init/entry symbols of interest: `MH_sysHalInit`, `LGTH_themeInitialize`,
   `LGTH_zoopInit`, `InitPCSAutomata`, `dlet_start` (the DLET/clet entry).
+- It is the whole middleware: alongside the platform C API it exports the entire
+  CLDC/MIDP class library as native code with JNI-style names —
+  `Java_java_lang_StringBuffer_*`, `Java_java_io_ByteArrayOutputStream_*`,
+  `Java_com_lgt_MediaDeviceManager_mda*` (audio), `Java_com_velox_*` (networking),
+  `Java_com_sun_cldc_io_*`. Reimplementing all of this by hand is the open-ended
+  chase; running it is the point of this plan.
 
 ### What the firmware needs from the host (the HAL)
 
-Of 131 undefined `FUNC` imports, all but three are standard C runtime:
+Confirmed against the binary: **134** undefined `FUNC` imports, and every one but
+three is standard C runtime:
 
-- `__aeabi_*` soft-float / integer division helpers,
-- libm (`sin`, `cos`, `pow`, `floor`, …),
-- libc (`malloc`, `memcpy`, `close`, `dlopen`, `__android_log_print`, …),
-- POSIX threads and semaphores (`pthread_mutex_*`, `sem_*`).
+- `__aeabi_*` soft-float / integer-division helpers,
+- libm (`sin`, `cos`, `pow`, `floor`, `sqrt`, `atan2`, …),
+- libc (`memcpy`, `snprintf`, `open`/`read`/`write`, `opendir`, `mkdir`,
+  `__android_log_print`, `dlopen`/`dlsym`, …),
+- POSIX mutexes and semaphores (`pthread_mutex_*`, `sem_*`, `pthread_self`),
+- setjmp/longjmp, `srand48`/`lrand48`.
 
-The three custom ones are the LGT allocator, from `libla.so`: **`la_cal`**,
-**`la_mal`**, **`lafr`** (calloc / malloc / free).
+The three custom ones are the LGT allocator: **`la_cal`**, **`la_mal`**, **`lafr`**
+(calloc / malloc / free). They are `UND` in the firmware too — the reference's
+loader binds them to the raptor kernel allocator (`_MC_knl*`). For us they are
+three more HLE handlers over a host allocator.
 
 So the HAL is "provide a C runtime to emulated ARM code, plus three allocator
 functions." This is high-level emulation of libc: when the firmware calls
@@ -59,12 +109,20 @@ so most of the surface exists.
 
 ### How the firmware's output reaches Android (in the reference)
 
-- Audio: the firmware's `MH_mdaWriteData` fills a sound buffer that the host
-  bridge hands to Java as `setSoundBuffer(byte[])`, which feeds an `AudioTrack`.
-- Video: the host bridge exposes `FrameSurfaceView` (`android_lgt_wipi`), i.e.
-  the firmware renders into a framebuffer the bridge blits to a `SurfaceView`.
+- Audio: the firmware's MA-3 path (exports `AND_mdaInit`,
+  `Java_com_lgt_MediaDeviceManager_mdaSetDevInfo0`, …) fills a PCM buffer; the
+  aarch64 bridge hands it to Java via `GetMethodID` + `CallVoidMethod` (the bridge
+  registers only a handful of JNI natives — `startWipiN`, `pltEventN`,
+  `pltChangeStateN`, `JavaThread_runN`, `FrameSurfaceView_*` — and pushes audio
+  and frames *back up* into Java through these callbacks). That feeds an
+  `AudioTrack`.
+- Video: the bridge exposes `FrameSurfaceView` (`android_lgt_wipi`) — the firmware
+  renders into a framebuffer the bridge blits to a `SurfaceView`.
 
-These are the two output hooks we must provide.
+The reference's output tap is a Java up-call; **ours is simpler** — we tap the
+same firmware buffer straight into `AndroidAudioSink` / `GameView` in Rust, with
+no JNI round-trip. The exact firmware-side buffer address and fill call are the
+one thing that must be pinned on device (see open questions).
 
 ### Where we already are
 
@@ -72,10 +130,12 @@ These are the two output hooks we must provide.
 
 - It has a full ARM ELF loader and relocator (`load_executable`,
   `apply_relocations`, `load_native` in `runtime/init.rs`).
-- **It already carries the firmware's symbol map**: `runtime/java/platform_metadata.rs`
-  lists platform methods with their firmware addresses (e.g. `cos → 0x00160178`,
-  `mdaSetDevInfo → 0x001bb32c`). The hard part — extracting name→address for the
-  whole platform — is done.
+- **It carries a platform address map**: `runtime/java/platform_metadata.rs`
+  lists platform methods with firmware addresses (e.g. `cos → 0x00160178`,
+  `mdaSetDevInfo → 0x001bb32c`). This is a strong head start on name→address for
+  the whole platform — but it is **not** the firmware's export table and must be
+  re-derived against the exact loaded binaries (see the findings section: some of
+  these addresses are PLT stubs or raptor addresses, not firmware internals).
 - A game import today resolves to a firmware address, and an injected SVC / binary
   patch at that address traps into a Rust reimplementation
   (`wie_core_arm` SVC + `binary_patches`).
@@ -155,33 +215,47 @@ on device before the next.
 - How the firmware learns where its sound and frame buffers are (does the bridge
   pass them in at init, or does the firmware allocate and the bridge read a known
   export?).
-- Whether `libla.so` (6 KB in the reference) is worth loading as ARM code or is
-  simplest reimplemented as three host functions.
+- Where the firmware's `la_cal`/`la_mal`/`lafr` allocator should point. In the
+  reference these resolve into the raptor kernel allocator (`_MC_knl*`); for us
+  they are simplest as three HLE handlers over a host allocator. (`libla.so`
+  itself is `LegacyAddressCompat`, a low-32-bit-address reservation for the
+  reference's 64-bit process — not the allocator, and not something we need.)
 
 These are all answerable from the reference's own `liblgt_system.so` bridge,
 which contains the other side of every one of these interfaces.
 
-## Findings from the first RE pass (complications)
+## Findings from the RE passes (complications)
 
-An initial pass at P1/P2 turned up that the loader is not as plug-and-play as
-the "symbol map for free" note above hoped:
+Two static RE passes over the reference libraries sharpened the plan and turned
+up where it is *not* plug-and-play, despite the "symbol map for free" hope above:
 
-- **The platform is more than one binary.** Besides `libarm32_lgt_system.so`
-  there is `raptor-carrier.mod` (~1 MB, ~4,980 functions), and the carrier
-  *imports* WIPI symbols such as `MC_mdaClipCreate` from the firmware. The stack
-  layers game → carrier → firmware; a loader has to place and link all of them.
+- **The platform is more than one binary** (corrected). The stack is
+  game → **`libarm32_raptor.so`** (loader + `_MC_knl*` kernel services) →
+  **`libarm32_lgt_system.so`** (firmware), all under the `a32_*` interpreter in
+  `liblgt_system.so`. (An earlier note called the middle layer a
+  `raptor-carrier.mod`; it is the `libarm32_raptor.so` above.) The firmware's
+  `la_cal`/`la_mal`/`lafr` and its `_MC_knl*` calls resolve *into the raptor
+  layer*, so a loader has to place and link the raptor alongside the firmware, not
+  the firmware alone.
 - **`platform_metadata` addresses do not map 1:1 to the extracted firmware.**
-  `cos` (metadata `0x160178`) is `UND` in the firmware (a libm import, likely a
-  PLT stub at that address), and `mdaSetDevInfo` (metadata `0x1bb32c`) is not a
-  firmware export at all. Firmware-internal symbols like `MH_sysHalInit`
-  (`0x18529c`), `dlet_start`, and `InitPCSAutomata` *do* match. So the metadata
-  addresses are a mix (firmware internals, PLT stubs, and probably carrier
-  addresses) and may be tied to a specific reference build's combined image, not
-  to any single binary. They cannot be assumed to be the firmware's export table.
+  `cos` (metadata `0x160178`) is `UND` in the firmware (a libm import / PLT stub),
+  and `mdaSetDevInfo` (metadata `0x1bb32c`) is not a firmware export at all
+  (the export is `Java_com_lgt_MediaDeviceManager_mdaSetDevInfo0`). Firmware-
+  internal symbols like `MH_sysHalInit` (`0x18529c`), `dlet_start`, and
+  `InitPCSAutomata` *do* match. So the metadata addresses are a mix (firmware
+  internals, PLT stubs, and probably raptor addresses) tied to a specific
+  reference build's combined image, not to any single binary. They cannot be
+  assumed to be the firmware's export table, and must be re-derived against the
+  exact binaries that get loaded.
 
-The direction still stands, but the loader/link step needs the carrier and the
-firmware placed together and their versions reconciled, and the metadata table
-re-derived against the exact binaries that get loaded. This is genuinely
-multi-binary, version-sensitive reverse engineering, and it can only be brought
-up and verified by building and running the emulator on a device with the real
-firmware present — not from static analysis alone.
+None of this changes the direction — and the second pass strengthened it by
+confirming we already own the reference's two hardest components (the ARM
+interpreter and the HLE-call bridge; see "the crucial simplification" above). But
+the loader/link step needs the raptor and the firmware placed together and their
+versions reconciled, and the metadata table re-derived against the exact binaries
+that get loaded. That is genuinely multi-binary, version-sensitive reverse
+engineering, and it can only be brought up and verified by building and running
+the emulator on a device with the real firmware present — not from static
+analysis alone. This document is therefore the implementation spec; the bring-up
+loop (load → relocate → init → tap audio → diff against the reference) is the
+on-device work it hands off to.
