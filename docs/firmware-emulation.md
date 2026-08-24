@@ -193,9 +193,24 @@ on device before the next.
     that was loaded. It drives everything from `PT_DYNAMIC`, so a stripped `.so`
     loads too. Unit-tested with a hand-built `ET_DYN` fixture. Dormant: nothing
     calls it at startup yet, so no behaviour changes.
-  - **Next in P1:** an `ImportResolver` that mints `make_svc_stub` trampolines
-    for the ~131 C-runtime imports and the three allocator hooks
-    (`la_cal`/`la_mal`/`lafr`), reusing the existing `stdlib` HLE handlers.
+  - **Landed:** the load is wired into startup behind the BIOS's presence
+    (`wie_lgt/src/runtime/firmware_link.rs`). `try_load_bios` checks the
+    filesystem overlay for `libarm32_lgt_system.so`; when present it maps and
+    relocates the image, binds the C-runtime imports the existing `stdlib` HLE
+    already serves (14 names so far) to SVC trampolines, and logs a summary plus
+    the exact list of imports still unbound and a probe of a few known exports.
+    With no BIOS file this is one filesystem check that logs and returns, so the
+    default path is unchanged; with it, the firmware is mapped beside the game
+    but nothing is routed into it yet (that is P3).
+  - **Supplying the BIOS on device:** add `libarm32_lgt_system.so` (pulled from
+    a player APK's `lib/` or dumped from a device) into the game's `.zip`
+    archive at top level, beside `app_info`/`binary.mod`. The Android runner
+    turns every archive entry into a virtual file, so the loader then finds it.
+    `adb logcat` shows the `Firmware mapped: …` summary and the
+    `Firmware imports still unbound (…)` line.
+  - **Next in P1:** stand up the still-unbound imports — libm (`sin`/`cos`/…),
+    the allocator (`la_cal`/`la_mal`/`lafr`), and POSIX threads/semaphores — as
+    HLE handlers, driven by exactly what that unbound list reports on device.
 - **P2 — Firmware init.** Drive `MH_sysHalInit` and the rest of the boot sequence
   to a ready state, working out the host-call ABI (`__emutls host_call`,
   `a32_blk`) and any init structures the firmware expects.
@@ -209,6 +224,10 @@ on device before the next.
 
 ## Integration points in the tree
 
+- `wie_lgt/src/runtime/firmware.rs` — `load_firmware`: the `ET_DYN` loader,
+  relocator, import binder, and export-table reader (P1, landed).
+- `wie_lgt/src/runtime/firmware_link.rs` — `try_load_bios`: the startup hook and
+  the import resolver mapping firmware names to Rust HLE handlers (P1, landed).
 - `wie_lgt/src/runtime/init.rs` — `load_executable` / `apply_relocations` are the
   templates for a firmware loader; the SVC/patch dispatch is where a subsystem is
   switched from Rust stand-in to real firmware code.
