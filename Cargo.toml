@@ -18,6 +18,13 @@ members = [
     "wie_midi",
 ]
 
+# Vendored third-party crates: dependencies, not our code, so they are kept out
+# of the workspace's formatting and lint passes and left in their own style.
+exclude = [
+    "third_party/smaf",
+    "third_party/smaf_player",
+]
+
 default-members = ["wie_cli"]
 
 [profile.dev.package.wie_core_arm]
