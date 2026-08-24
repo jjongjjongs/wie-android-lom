@@ -211,9 +211,24 @@ on device before the next.
   - **Next in P1:** stand up the still-unbound imports — libm (`sin`/`cos`/…),
     the allocator (`la_cal`/`la_mal`/`lafr`), and POSIX threads/semaphores — as
     HLE handlers, driven by exactly what that unbound list reports on device.
-- **P2 — Firmware init.** Drive `MH_sysHalInit` and the rest of the boot sequence
-  to a ready state, working out the host-call ABI (`__emutls host_call`,
-  `a32_blk`) and any init structures the firmware expects.
+- **P2 — Firmware init.** *In progress — the firmware runs.* Drive
+  `MH_sysHalInit` and the rest of the boot sequence to a ready state.
+  - **Landed:** the real firmware executes under our interpreter and
+    `MH_sysHalInit` runs to completion (returns 0). The unlock was an ARMv5T
+    CPU fix: `ldr pc, [...]` now interworks (an odd loaded value selects Thumb),
+    which the firmware's ELF PLT needs to reach an (odd) Thumb import
+    trampoline — the game, a prelinked `.mod` with no PLT, never exercised it.
+    Every import is bound (allocator and mem/str real, the rest traceable
+    stubs), init runs as its own error-swallowing task, and a gated
+    `firmware_init` harness (`WIE_FIRMWARE`) drives it locally.
+  - **Observed init calls:** `memset` (real), then still-stubbed
+    `pthread_mutex_init`, `vsnprintf`, `__android_log_print`. These are the next
+    handlers to make real, then the boot sequence past `MH_sysHalInit` (the
+    DTHREAD / JNI-env context it and `dlet_start` expect).
+  - The host-call ABI note below (`__emutls host_call`, `a32_blk`) turned out
+    not to apply to us: that is the *reference's* ARM-interpreter plumbing. Our
+    imports bind straight to SVC trampolines, so there is no host-call ABI to
+    reverse — the firmware calls our HLE directly.
 - **P3 — Audio cutover.** Route the audio subsystem's addresses to the real
   firmware; hook its sound-buffer output to `AndroidAudioSink`. Verify Zenonia on
   device against the reference. Remove the override + bundled recordings.
