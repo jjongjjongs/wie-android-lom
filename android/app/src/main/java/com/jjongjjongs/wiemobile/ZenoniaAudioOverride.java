@@ -23,6 +23,17 @@ import java.util.Set;
 
 final class ZenoniaAudioOverride {
     private static final String TAG = "WIE-ZenoniaAudio";
+
+    /**
+     * Whether the bundled-recording override is live. Off means the emulator's
+     * own audio — the MA-3 synthesiser, its recorded drums, and the ADPCM wave
+     * clips decoded straight out of a title's {@code .mmf} — is heard as-is,
+     * with nothing swapped in. Kept as a switch so the substituted sound can be
+     * put back for comparison; when the emulator's audio is confirmed to stand
+     * on its own, this class and the recordings it draws on come out entirely.
+     */
+    private static final boolean ENABLED = false;
+
     private static final String ASSET_DIR = "zenonia1/";
     private static final int ZENONIA2_CLIP_BASE = 2000;
     private static final int ZENONIA3_CLIP_BASE = 3000;
@@ -161,6 +172,9 @@ final class ZenoniaAudioOverride {
 
     // 0 = use normal WIE audio, 1 = consumed, 2 = consumed and reset MIDI synth.
     static synchronized int handle(byte[] command) {
+        if (!ENABLED) {
+            return 0;
+        }
         NativeWaveBridge.install();
         if (soundPool == null || command == null || command.length == 0) {
             return 0;
@@ -244,6 +258,9 @@ final class ZenoniaAudioOverride {
     }
 
     static synchronized boolean handleNativeWave(int sampleRate, int sampleCount, long fingerprint, short[] pcm) {
+        if (!ENABLED) {
+            return false;
+        }
         cleanupNativeWaves();
         Integer clip = PCM_CLIPS.get(pcmKey(sampleRate, sampleCount, fingerprint));
         if (clip != null && soundPool != null) {
