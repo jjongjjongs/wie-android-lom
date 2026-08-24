@@ -93,7 +93,9 @@ async fn read_bios(system: &System, size: usize) -> Vec<u8> {
 /// when no BIOS is present.
 pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option<FirmwareImage>> {
     if !system.filesystem().exists(BIOS_FILENAME).await {
-        tracing::debug!("No firmware BIOS ({BIOS_FILENAME}); staying on the Rust platform");
+        // Logged at INFO during bring-up so a build's firmware support is
+        // visible in logcat even when the user has not supplied a BIOS.
+        tracing::info!("Firmware BIOS support present; no {BIOS_FILENAME} supplied, staying on the Rust platform");
         return Ok(None);
     }
 
