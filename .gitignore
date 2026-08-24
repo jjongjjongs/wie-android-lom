@@ -14,3 +14,4 @@
 
 # Local Cargo checkout marker; the vendored source itself is tracked.
 /third_party/arm32_cpu/.cargo-ok
+third_party/**/target/

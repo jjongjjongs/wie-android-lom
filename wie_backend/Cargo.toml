@@ -20,8 +20,11 @@ zip = { version = "^8.6", features = ["deflate"], default-features = false }
 
 wie_util = { workspace = true }
 
-smaf = { git = "https://github.com/dlunch/smaf.git" }
-smaf_player = { git = "https://github.com/dlunch/smaf.git" }
+smaf = { path = "../third_party/smaf" }
+# Vendored from https://github.com/dlunch/smaf.git with a fix to the wave
+# trigger (see third_party/smaf_player), so a note 0 on any channel can fire a
+# single-wave track's clip - some titles trigger it from the percussion channel.
+smaf_player = { path = "../third_party/smaf_player" }
 
 [dev-dependencies]
 futures-test = { workspace = true }

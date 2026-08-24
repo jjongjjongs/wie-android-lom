@@ -23,4 +23,4 @@ wie_lgt = { path = "../wie_lgt" }
 wie_skt = { path = "../wie_skt" }
 
 [dev-dependencies]
-smaf_player = { git = "https://github.com/dlunch/smaf.git" }
+smaf_player = { path = "../third_party/smaf_player" }
