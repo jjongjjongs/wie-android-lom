@@ -12,13 +12,14 @@
 //! the low frequency oscillator and the output attenuation. What comes out is
 //! the title's music with its own instruments, not an impression of them.
 //!
-//! What is missing is the part of a handset that lived in ROM: the melodic
-//! bank a file falls back on when it defines no voice of its own, and the
-//! recorded drums behind twenty one of the kit's keys. Those get stand ins,
-//! marked as such where they are built.
+//! The other half of a handset lived in ROM as recordings. The drums behind
+//! twenty one of the kit's keys are those recordings, decoded and played back
+//! by [`wave`]; the melodic bank a file falls back on when it defines no voice
+//! of its own is still a stand in, marked as such where it is built.
 //!
 //! - [`tone`] reads voices out of the file's system exclusive.
-//! - [`voice`] is one sounding note.
+//! - [`voice`] is one synthesised note.
+//! - [`wave`] plays a note back from one of the handset's ROM recordings.
 //! - [`bus`] is the output stage, which attenuates rather than multiplies.
 //! - [`tables`] is the chip's own data.
 
@@ -26,12 +27,73 @@ mod bus;
 mod tables;
 mod tone;
 mod voice;
+mod wave;
 
 use crate::ma3::{
     bus::{clamp_i16, mix_q15, stereo_gain_q15},
-    tone::Bank,
+    tone::{Bank, DRUM_CHANNEL},
     voice::Voice,
+    wave::WaveVoice,
 };
+
+/// Where a slot's sound comes from: a synthesised voice, or a recording the
+/// chip played back. Both hand the mixer the same normalised mono sample, so
+/// the rest of the synthesiser does not care which a note turned out to be.
+enum Source {
+    Fm(Voice),
+    Pcm(WaveVoice),
+}
+
+impl Source {
+    fn sample(&mut self) -> f64 {
+        match self {
+            Source::Fm(voice) => voice.sample(),
+            Source::Pcm(voice) => voice.sample(),
+        }
+    }
+
+    fn audible(&self) -> bool {
+        match self {
+            Source::Fm(voice) => voice.audible(),
+            Source::Pcm(voice) => voice.audible(),
+        }
+    }
+
+    fn loudness(&self) -> f64 {
+        match self {
+            Source::Fm(voice) => voice.loudness(),
+            Source::Pcm(voice) => voice.loudness(),
+        }
+    }
+
+    fn release(&mut self) {
+        match self {
+            Source::Fm(voice) => voice.release(),
+            Source::Pcm(voice) => voice.release(),
+        }
+    }
+
+    fn all_sound_off(&mut self) {
+        match self {
+            Source::Fm(voice) => voice.all_sound_off(),
+            Source::Pcm(voice) => voice.all_sound_off(),
+        }
+    }
+
+    /// The wheel only bends a synthesised voice; a recording carries its own
+    /// pitch and ignores it.
+    fn set_modulation(&mut self, depth: usize) {
+        if let Source::Fm(voice) = self {
+            voice.set_modulation(depth);
+        }
+    }
+
+    fn set_pitch(&mut self, note: u8, bend: u16, bend_range: u8, sample_rate: u32) {
+        if let Source::Fm(voice) = self {
+            voice.set_pitch(note, bend, bend_range, sample_rate);
+        }
+    }
+}
 
 /// Rate the rendered stream runs at. FM puts out harmonics well above the
 /// note, so a rate this side of the chip's own would fold them back audibly.
@@ -98,7 +160,7 @@ struct Slot {
     channel: u8,
     note: u8,
     velocity: u8,
-    voice: Voice,
+    source: Source,
     left_q15: i32,
     right_q15: i32,
 }
@@ -142,22 +204,24 @@ impl Synth {
         };
         let state = *state;
 
-        let (tone, pitch) = self.bank.tone_for(channel, state.program, note);
-        let voice = Voice::new(
-            &tone,
-            pitch,
-            state.bend,
-            state.bend_range,
-            modulation_depth(state.modulation),
-            SAMPLE_RATE,
-        );
+        // Percussion the handset recorded is played back rather than
+        // synthesised; everything else is a voice, whether the file's own or a
+        // stand in.
+        let source = if channel == DRUM_CHANNEL {
+            match WaveVoice::drum(note, velocity, SAMPLE_RATE) {
+                Some(voice) => Source::Pcm(voice),
+                None => Source::Fm(self.fm_voice(channel, &state, note)),
+            }
+        } else {
+            Source::Fm(self.fm_voice(channel, &state, note))
+        };
 
         let (left_q15, right_q15) = gains(&state, velocity, self.master_volume);
         let slot = Slot {
             channel,
             note,
             velocity,
-            voice,
+            source,
             left_q15,
             right_q15,
         };
@@ -173,7 +237,7 @@ impl Synth {
             .voices
             .iter()
             .enumerate()
-            .min_by(|(_, left), (_, right)| left.voice.loudness().total_cmp(&right.voice.loudness()))
+            .min_by(|(_, left), (_, right)| left.source.loudness().total_cmp(&right.source.loudness()))
             .map(|(index, _)| index)
             .unwrap_or(0);
         self.voices[quietest] = slot;
@@ -182,7 +246,7 @@ impl Synth {
     pub fn note_off(&mut self, channel: u8, note: u8) {
         for slot in &mut self.voices {
             if slot.channel == channel && slot.note == note {
-                slot.voice.release();
+                slot.source.release();
             }
         }
     }
@@ -203,7 +267,7 @@ impl Synth {
                 state.modulation = value;
                 let depth = modulation_depth(value);
                 for slot in self.voices.iter_mut().filter(|x| x.channel == channel) {
-                    slot.voice.set_modulation(depth);
+                    slot.source.set_modulation(depth);
                 }
                 return;
             }
@@ -212,7 +276,7 @@ impl Synth {
             CONTROL_EXPRESSION => state.expression = value,
             CONTROL_ALL_SOUND_OFF => {
                 for slot in self.voices.iter_mut().filter(|x| x.channel == channel) {
-                    slot.voice.all_sound_off();
+                    slot.source.all_sound_off();
                 }
                 return;
             }
@@ -225,7 +289,7 @@ impl Synth {
                     };
                 }
                 for slot in self.voices.iter_mut().filter(|x| x.channel == channel) {
-                    slot.voice.release();
+                    slot.source.release();
                 }
             }
             _ => return,
@@ -244,7 +308,7 @@ impl Synth {
         let state = *state;
 
         for slot in self.voices.iter_mut().filter(|x| x.channel == channel) {
-            slot.voice.set_pitch(slot.note, state.bend, state.bend_range, SAMPLE_RATE);
+            slot.source.set_pitch(slot.note, state.bend, state.bend_range, SAMPLE_RATE);
         }
     }
 
@@ -299,7 +363,7 @@ impl Synth {
             let mut right = 0;
 
             for slot in &mut self.voices {
-                let sample = slot.voice.sample();
+                let sample = slot.source.sample();
                 left = mix_q15(left, sample, slot.left_q15);
                 right = mix_q15(right, sample, slot.right_q15);
             }
@@ -307,13 +371,27 @@ impl Synth {
             // A voice that has fallen silent gives its slot back, whether it
             // was released or simply ran out of envelope, which is how
             // percussion ends.
-            self.voices.retain(|x| x.voice.audible());
+            self.voices.retain(|x| x.source.audible());
 
             frame[0] = clamp_i16(left as i64) as i16;
             frame[1] = clamp_i16(right as i64) as i16;
         }
 
         Some(output)
+    }
+
+    /// Builds a synthesised voice for a note, taking its tone from the file's
+    /// bank or a stand in.
+    fn fm_voice(&self, channel: u8, state: &Channel, note: u8) -> Voice {
+        let (tone, pitch) = self.bank.tone_for(channel, state.program, note);
+        Voice::new(
+            &tone,
+            pitch,
+            state.bend,
+            state.bend_range,
+            modulation_depth(state.modulation),
+            SAMPLE_RATE,
+        )
     }
 
     fn channel(&mut self, channel: u8) -> Option<&mut Channel> {
@@ -415,7 +493,7 @@ fn wav(samples: &[i16]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHANNELS, MAX_VOICES, SAMPLE_RATE, Channel, Synth, modulation_depth};
+    use super::{CHANNELS, Channel, MAX_VOICES, SAMPLE_RATE, Synth, modulation_depth};
 
     /// A four operator voice, as one of the library's own files sends it.
     const VOICE: &[u8] = &[
