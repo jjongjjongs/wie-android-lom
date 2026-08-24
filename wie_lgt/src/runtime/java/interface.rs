@@ -68,8 +68,12 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // kernel table 1 / function 0x32 (setjmp).
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAllocSavePoint)?,
         0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmUnregisterClasses)?,
-        0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRegisterClasses)?,
-        0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetConstantString)?,
+        // LoM legacy ABI: generated Java wrappers pass their required stack
+        // word count to 0x07 before entering the method body.
+        0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmCheckStackOverflow)?,
+        // 0x09 is the checked reference-array store helper:
+        // (array, index, value).
+        0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImpl)?,
         0x0b => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClassShared)?,
         0x0c => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmActivateClass)?,
         0x0d => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAddClasspath)?,
@@ -80,10 +84,14 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // 0x20 to rethrow the object returned through that save point.
         0x1f => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmFreeSavePoint)?,
         0x20 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowException)?,
-        0x54 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmCheckStackOverflow)?,
+        // 0x54 is the generated-code safepoint/yield helper. Its incoming
+        // registers are not semantic arguments.
+        0x54 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThreadReschedule)?,
         0x55 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThreadReschedule)?,
         0x56 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorEnter)?,
-        0x57 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorExit)?,
+        // LoM uses 0x57 for constant-string materialization:
+        // (module/table, UTF-16 chars, length, cache slot).
+        0x57 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetConstantString)?,
         0x61 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImpl)?,
         0xfa => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImplFast)?,
         0x0e => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiate)?,
