@@ -767,15 +767,15 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             ().write(core, lr)
         }
-        // Native CLDC import 0x82 is `vm_add_classpath(path)`. LoM passes
+        // LoM table-0x64 import 0x0d is `vm_add_classpath(path)`. It receives
         // DLET property 200, which names the same JAR WIE already supplied to
         // `JvmSupport::new_jvm` as its class source before native startup.
         // Native stores this path in VM property 1007; duplicating that
         // bookkeeping is unnecessary in WIE, so activation succeeds here.
         InitSvcId::VmAddClasspath => 0u32.write(core, lr),
-        // Import 0x83: run a Java main class. The first two parameters name
-        // the class, which is always `org/kwis/msp/lcdui/Main`; the argument
-        // vector is what actually selects the application's Jlet.
+        // LoM table-0x64 import 0x82 runs the Java main class. The first two
+        // parameters name the class, which is `org/kwis/msp/lcdui/Main`; the
+        // argument vector selects the application's Jlet.
         InitSvcId::VmRunMainClass => {
             let argc = core.read_param(2)?;
             let argv = core.read_param(3)?;
