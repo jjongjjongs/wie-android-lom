@@ -74,8 +74,11 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // 0x09 is the checked reference-array store helper:
         // (array, index, value).
         0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImpl)?,
-        0x0b => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClassShared)?,
-        0x0c => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmActivateClass)?,
+        // LoM generated get_raw_class wrappers first bring class_shared to
+        // state 3 through 0x64, then activate it through 0x0b. Generated
+        // get_class wrappers initialize that activated Class object via 0x0c.
+        0x0b => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmActivateClass)?,
+        0x0c => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClass)?,
         0x0d => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAddClasspath)?,
         0x0f => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiateArray)?,
         0x12 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaResolveOne)?,
@@ -110,7 +113,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // Module cleanup later passes that saved slot to 0x38.
         0x38 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmUnregisterClasses)?,
         0x40 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRegisterClasses)?,
-        0x64 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmFindInterface)?,
+        0x64 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClassShared)?,
         0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClass)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRunMainClass)?,
