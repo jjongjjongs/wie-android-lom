@@ -135,7 +135,15 @@ pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option
 /// `dprocess_get_current` starts returning a live process; `MH_sysHalInit` is
 /// the HAL init that needs that context. Each is called with no arguments,
 /// matching their disassembly.
-const BOOT_SEQUENCE: &[&str] = &["dmempage_init", "dmemory_init", "dprocess_init", "dthread_init", "MH_sysHalInit"];
+const BOOT_SEQUENCE: &[&str] = &[
+    "dmempage_init",
+    "dmemory_init",
+    "dprocess_init",
+    "dthread_init",
+    "MH_sysHalInit",
+    "WPKnl_Init",
+    "AND_mdaInit",
+];
 
 /// The firmware entry points needed to drive init, lifted out of the image so
 /// they can move into an isolated task.
