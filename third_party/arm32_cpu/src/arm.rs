@@ -421,11 +421,22 @@ impl Cpu {
                         mmu.w8(addr, val as u8);
                     };
                 } else {
-                    self.reg[rd] = if b == 0 {
+                    let loaded = if b == 0 {
                         mmu.r32(addr)
                     } else {
                         mmu.r8(addr) as u32
                     };
+
+                    if rd == reg::PC {
+                        // `ldr pc, [...]` interworks on ARMv5T+: bit 0 of the
+                        // loaded value selects Thumb and is cleared from the
+                        // branch target. This is how the firmware's ELF PLT
+                        // reaches an (odd) Thumb import trampoline.
+                        self.reg[reg::CPSR] = (self.reg[reg::CPSR] & !(1u32 << cpsr::T)) | (loaded.get_bit(0) << cpsr::T);
+                        self.reg[rd] = loaded & !1u32;
+                    } else {
+                        self.reg[rd] = loaded;
+                    }
                 };
 
                 // post-indexing implies writeback
@@ -667,6 +678,41 @@ mod test {
         check!(Swap,        0xE10D_1090);
         check!(SoftwareInt, 0xEF00_0000);
         check!(Undefined,   0xE7DE_AD10);
+    }
+
+    /// `ldr pc, [...]` must interwork on ARMv5T+: an odd loaded value switches
+    /// to Thumb (clearing bit 0), an even one stays ARM. This is the path an ELF
+    /// PLT takes to reach a Thumb import trampoline.
+    fn ldr_pc_lands_at(target: u32) -> (u32, bool) {
+        use crate::ExampleMem;
+
+        // ldr pc, [pc, #0] = 0xE59FF000. In ARM, [pc,#0] here reads word at 8.
+        let mut data = [0u8; 12];
+        data[0..4].copy_from_slice(&0xE59F_F000u32.to_le_bytes());
+        data[8..12].copy_from_slice(&target.to_le_bytes());
+
+        let mut mmu = ExampleMem::new_with_data(&data);
+        let mut cpu = Cpu::new();
+        cpu.reg_set(Mode::User, reg::PC, 0x00);
+        cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+
+        cpu.step(&mut mmu);
+
+        (cpu.reg_get(Mode::User, reg::PC), cpu.thumb_mode())
+    }
+
+    #[test]
+    fn ldr_pc_interworks_to_thumb_on_odd_target() {
+        let (pc, thumb) = ldr_pc_lands_at(0x0000_0201);
+        assert_eq!(pc, 0x0000_0200, "bit 0 is cleared from the branch target");
+        assert!(thumb, "an odd loaded value selects Thumb");
+    }
+
+    #[test]
+    fn ldr_pc_stays_arm_on_even_target() {
+        let (pc, thumb) = ldr_pc_lands_at(0x0000_0200);
+        assert_eq!(pc, 0x0000_0200);
+        assert!(!thumb, "an even loaded value stays in ARM");
     }
 
     macro_rules! emutest {
