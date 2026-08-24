@@ -130,20 +130,32 @@ pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option
     Ok(Some(image))
 }
 
+/// The firmware runtime boot sequence, in call order. `dprocess_init` and
+/// `dthread_init` stand up the DTHREAD runtime (memory pools, config) so
+/// `dprocess_get_current` starts returning a live process; `MH_sysHalInit` is
+/// the HAL init that needs that context. Each is called with no arguments,
+/// matching their disassembly.
+const BOOT_SEQUENCE: &[&str] = &["dmempage_init", "dmemory_init", "dprocess_init", "dthread_init", "MH_sysHalInit"];
+
 /// The firmware entry points needed to drive init, lifted out of the image so
 /// they can move into an isolated task.
 pub struct FirmwareInitPlan {
     pub init: Option<u32>,
     pub init_array: Vec<u32>,
-    pub hal_init: Option<u32>,
+    /// `(name, guest address)` for each boot step present in the image.
+    pub boot_steps: Vec<(String, u32)>,
 }
 
 impl FirmwareInitPlan {
     pub fn from_image(image: &FirmwareImage) -> Self {
+        let boot_steps = BOOT_SEQUENCE
+            .iter()
+            .filter_map(|&name| image.export(name).map(|addr| (name.into(), addr)))
+            .collect();
         Self {
             init: image.init,
             init_array: image.init_array.clone(),
-            hal_init: image.export("MH_sysHalInit"),
+            boot_steps,
         }
     }
 }
@@ -165,19 +177,17 @@ pub async fn run_firmware_init(core: &mut ArmCore, plan: &FirmwareInitPlan) -> R
         let _: u32 = core.run_function(*ctor, &[]).await?;
     }
 
-    if let Some(hal_init) = plan.hal_init {
-        tracing::info!("Running firmware MH_sysHalInit at {hal_init:#x}");
-        match core.run_function::<u32>(hal_init, &[]).await {
-            Ok(result) => tracing::info!("MH_sysHalInit returned {result:#x}"),
+    for (name, addr) in &plan.boot_steps {
+        tracing::info!("Running firmware {name} at {addr:#x}");
+        match core.run_function::<u32>(*addr, &[]).await {
+            Ok(result) => tracing::info!("{name} returned {result:#x}"),
             Err(error) => {
                 // Dump the guest state at the fault so the bring-up log shows
                 // exactly where the boot sequence broke.
-                tracing::error!("MH_sysHalInit faulted: {error:?}\n{}", core.dump_reg_stack(0x40));
+                tracing::error!("{name} faulted: {error:?}\n{}", core.dump_reg_stack(0x40));
                 return Err(error);
             }
         }
-    } else {
-        tracing::warn!("MH_sysHalInit not found in firmware exports; skipping init");
     }
 
     Ok(())
