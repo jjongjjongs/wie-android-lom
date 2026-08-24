@@ -63,7 +63,10 @@ pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x2000;
 
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
     let method = match function_index {
-        0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::CldcModuleActivate)?,
+        // LoM's legacy CLDC ABI uses function 0x03 for vm_alloc_save_point.
+        // Native callers pass the returned save-point block directly to
+        // kernel table 1 / function 0x32 (setjmp).
+        0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAllocSavePoint)?,
         0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmUnregisterClasses)?,
         0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRegisterClasses)?,
         0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetConstantString)?,
