@@ -160,3 +160,28 @@ on device before the next.
 
 These are all answerable from the reference's own `liblgt_system.so` bridge,
 which contains the other side of every one of these interfaces.
+
+## Findings from the first RE pass (complications)
+
+An initial pass at P1/P2 turned up that the loader is not as plug-and-play as
+the "symbol map for free" note above hoped:
+
+- **The platform is more than one binary.** Besides `libarm32_lgt_system.so`
+  there is `raptor-carrier.mod` (~1 MB, ~4,980 functions), and the carrier
+  *imports* WIPI symbols such as `MC_mdaClipCreate` from the firmware. The stack
+  layers game → carrier → firmware; a loader has to place and link all of them.
+- **`platform_metadata` addresses do not map 1:1 to the extracted firmware.**
+  `cos` (metadata `0x160178`) is `UND` in the firmware (a libm import, likely a
+  PLT stub at that address), and `mdaSetDevInfo` (metadata `0x1bb32c`) is not a
+  firmware export at all. Firmware-internal symbols like `MH_sysHalInit`
+  (`0x18529c`), `dlet_start`, and `InitPCSAutomata` *do* match. So the metadata
+  addresses are a mix (firmware internals, PLT stubs, and probably carrier
+  addresses) and may be tied to a specific reference build's combined image, not
+  to any single binary. They cannot be assumed to be the firmware's export table.
+
+The direction still stands, but the loader/link step needs the carrier and the
+firmware placed together and their versions reconciled, and the metadata table
+re-derived against the exact binaries that get loaded. This is genuinely
+multi-binary, version-sensitive reverse engineering, and it can only be brought
+up and verified by building and running the emulator on a device with the real
+firmware present — not from static analysis alone.
