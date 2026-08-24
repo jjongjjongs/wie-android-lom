@@ -105,8 +105,11 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowArrayIndexOutOfBoundsException)?,
         0x25 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowArithmeticException)?,
         0x26 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowClassCastException)?,
-        0x38 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowAbstractMethodError)?,
-        0x40 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowNoSuchMethodError)?,
+        // LoM legacy class-registration lifecycle: 0x40 registers the
+        // module's class/raw-class tables and returns a registration slot.
+        // Module cleanup later passes that saved slot to 0x38.
+        0x38 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmUnregisterClasses)?,
+        0x40 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRegisterClasses)?,
         0x64 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmFindInterface)?,
         0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClass)?,
