@@ -75,8 +75,11 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x0d => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAddClasspath)?,
         0x0f => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiateArray)?,
         0x12 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaResolveOne)?,
-        0x1f => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAllocSavePoint)?,
-        0x20 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmFreeSavePoint)?,
+        // LoM legacy CLDC ABI: 0x03 allocates a save point, while 0x1f
+        // releases it after the setjmp-protected region. Exception paths use
+        // 0x20 to rethrow the object returned through that save point.
+        0x1f => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmFreeSavePoint)?,
+        0x20 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowException)?,
         0x54 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmCheckStackOverflow)?,
         0x55 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThreadReschedule)?,
         0x56 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorEnter)?,
