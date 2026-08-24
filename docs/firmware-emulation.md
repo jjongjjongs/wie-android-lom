@@ -217,6 +217,14 @@ on device before the next.
 - **P3 — Audio cutover.** Route the audio subsystem's addresses to the real
   firmware; hook its sound-buffer output to `AndroidAudioSink`. Verify Zenonia on
   device against the reference. Remove the override + bundled recordings.
+  - *Target confirmed on device:* a baseline Zenonia 1 run shows its audio goes
+    through the mda **player** API — `MC_mdaClipAllocPlayer` → `unk15` (the
+    player's play/control call, WIPI-C index `0x4b6`) → `MC_mdaClipFreePlayer`,
+    with `MC_mdaClipSetVolume` — every one currently a Rust stub, so the title
+    is silent. It does *not* use the simpler `MC_mdaPlay` path our other audio
+    work targeted. The firmware's `Java_com_lgt_MediaDeviceManager_mda*` /
+    `AND_mdaInit` exports are the real implementations of exactly this player
+    API, so the P3 cutover must route the player path (not just `MC_mdaPlay`).
 - **P4 — Wider cutover.** Move graphics and the rest over subsystem by subsystem,
   verifying each on device.
 - **P5 — Beyond the reference.** Save states, performance, display scaling, and
