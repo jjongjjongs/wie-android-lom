@@ -39,6 +39,8 @@ struct SerialEntry {
     port_id: i32,
     #[allow(dead_code)]
     config: SerialConfig,
+    write_callback: WIPICWord,
+    write_context: WIPICWord,
 }
 
 pub struct SerialState {
@@ -78,8 +80,45 @@ impl SerialState {
             self.next_handle = 1;
         }
 
-        self.entries.insert(handle, SerialEntry { port_id, config });
+        self.entries.insert(
+            handle,
+            SerialEntry {
+                port_id,
+                config,
+                write_callback: 0,
+                write_context: 0,
+            },
+        );
         handle
+    }
+
+    fn set_write_callback(
+        &mut self,
+        handle: i32,
+        callback: WIPICWord,
+        callback_context: WIPICWord,
+    ) -> i32 {
+        if handle < 0 {
+            return -2;
+        }
+
+        let Some(entry) = self.entries.get_mut(&handle) else {
+            return -1;
+        };
+
+        // Native serial object:
+        //   +0x08 write callback
+        //   +0x10 write callback context
+        entry.write_callback = callback;
+        entry.write_context = callback_context;
+        0
+    }
+
+    #[cfg(test)]
+    fn write_callback(&self, handle: i32) -> Option<(WIPICWord, WIPICWord)> {
+        self.entries
+            .get(&handle)
+            .map(|entry| (entry.write_callback, entry.write_context))
     }
 
     fn contains(&self, handle: i32) -> bool {
@@ -223,11 +262,36 @@ pub async fn write(
     Ok(0)
 }
 
+/// LGT MC_srlSetWriteCB.
+///
+/// Native behavior:
+/// - handle < 0 returns -2 without looking up the serial object.
+/// - a non-negative handle not present in the four-entry object table returns -1.
+/// - a valid handle stores the callback at object +0x08 and its context at
+///   object +0x10, then returns 0.
+/// Callback and context values themselves are not validated, so zero clears
+/// either stored value just like the native implementation.
+pub async fn set_write_callback(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    callback: WIPICWord,
+    callback_context: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_srlSetWriteCB({handle}, {callback:#x}, {callback_context:#x})"
+    );
+
+    Ok(context
+        .serial_state()
+        .lock()
+        .set_write_callback(handle, callback, callback_context))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{WIPICContext, context::test::TestContext};
 
-    use super::{SerialConfig, open, parse_config, write};
+    use super::{SerialConfig, open, parse_config, set_write_callback, write};
 
     #[test]
     fn lgt_serial_parser_matches_native_defaults_and_options() {
@@ -323,6 +387,54 @@ mod tests {
         assert_eq!(write(&mut context, handle, 0x1234, 0).await.unwrap(), 0);
         assert_eq!(write(&mut context, handle, 0x1234, -1).await.unwrap(), 0);
         assert_eq!(write(&mut context, handle, 0x1234, i32::MAX).await.unwrap(), 0);
+    }
+
+
+    #[futures_test::test]
+    async fn lgt_serial_set_write_callback_matches_native_object_updates() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            set_write_callback(&mut context, -1, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            -2
+        );
+        assert_eq!(
+            set_write_callback(&mut context, 77, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            -1
+        );
+
+        let empty_config = context.alloc_raw(1).unwrap();
+        wie_util::ByteWrite::write_bytes(&mut context, empty_config, &[0]).unwrap();
+        let handle = open(&mut context, 0, empty_config).await.unwrap();
+        assert_eq!(handle, 1);
+
+        assert_eq!(
+            set_write_callback(&mut context, handle, 0x1234, 0x5678)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            context.serial_state().lock().write_callback(handle),
+            Some((0x1234, 0x5678))
+        );
+
+        // Native performs no callback/context validation; zero values are
+        // stored directly and therefore act as ordinary clears.
+        assert_eq!(
+            set_write_callback(&mut context, handle, 0, 0)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            context.serial_state().lock().write_callback(handle),
+            Some((0, 0))
+        );
     }
 
 }
