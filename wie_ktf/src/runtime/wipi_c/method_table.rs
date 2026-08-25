@@ -248,7 +248,7 @@ pub fn get_uic_method_table() -> Vec<WIPICMethodBody> {
         gen_stub(28, "MC_uicSetActiveMenuItem"),
         gen_stub(29, "MC_uicGetActiveMenuItem"),
         uic::insert_text.into_body(),
-        gen_stub(31, "MC_uicDeleteText"),
+        uic::delete_text.into_body(),
         gen_stub(32, "MC_uicGetMaxTextSize"),
         gen_stub(33, "MC_uicSetMaxTextSize"),
         gen_stub(34, "MC_uicGetTextSize"),

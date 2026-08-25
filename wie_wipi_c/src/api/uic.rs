@@ -233,6 +233,105 @@ pub async fn insert_text(
     Ok(length)
 }
 
+/// LGT/KTF `MC_uicDeleteText`.
+///
+/// Native accepts `length == -1` (delete to end) or a positive length.
+/// If a positive deletion reaches or passes the end, it is also treated
+/// as delete-to-end. Invalid/null components and invalid ranges are no-ops.
+pub async fn delete_text(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: i32,
+    length: i32,
+) -> Result<()> {
+    tracing::debug!("MC_uicDeleteText({component:#x}, {position}, {length})");
+
+    if component == 0 || length < -1 || length == 0 {
+        return Ok(());
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) || component_type != 3 {
+        return Ok(());
+    }
+
+    let text: WIPICWord = read_generic(context, component + 0x44)?;
+    if text == 0 {
+        return Ok(());
+    }
+
+    let mut old_len = 0u32;
+    loop {
+        let byte: u8 = read_generic(context, text + old_len)?;
+        if byte == 0 {
+            break;
+        }
+        old_len = old_len.wrapping_add(1);
+    }
+
+    if position < 0 || position as u32 > old_len {
+        return Ok(());
+    }
+    let delete_pos = position as u32;
+
+    let mut old = alloc::vec![0u8; old_len as usize];
+    if old_len != 0 {
+        context.read_bytes(text, &mut old)?;
+    }
+
+    let delete_to_end = if length == -1 {
+        true
+    } else {
+        let end = (position as i64) + (length as i64);
+        end >= old_len as i64
+    };
+
+    if delete_to_end {
+        context.write_bytes(text + delete_pos, &[0])?;
+        write_generic(context, component + 0x4c, delete_pos)?;
+    } else {
+        let delete_len = length as u32;
+        let src = delete_pos + delete_len;
+        let tail_len = old_len - src;
+
+        if tail_len != 0 {
+            let mut tail = alloc::vec![0u8; tail_len as usize];
+            context.read_bytes(text + src, &mut tail)?;
+            context.write_bytes(text + delete_pos, &tail)?;
+        }
+
+        let new_len = old_len - delete_len;
+        context.write_bytes(text + new_len, &[0])?;
+
+        let cursor: i32 = read_generic(context, component + 0x4c)?;
+        let cursor = cursor.saturating_sub(length).max(0);
+        write_generic(context, component + 0x4c, cursor)?;
+    }
+
+    let changed = {
+        let mut current = alloc::vec![0u8; old_len as usize];
+        if old_len != 0 {
+            context.read_bytes(text, &mut current)?;
+        }
+
+        let old_c_len = old.iter().position(|&byte| byte == 0).unwrap_or(old.len());
+        let current_c_len = current.iter().position(|&byte| byte == 0).unwrap_or(current.len());
+        old[..old_c_len] != current[..current_c_len]
+    };
+
+    if changed {
+        let callback: WIPICWord = read_generic(context, component + 0x5c)?;
+        if callback != 0 {
+            let callback_context: WIPICWord = read_generic(context, component + 0x64)?;
+            context
+                .call_function(callback, &[component, 0, callback_context])
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: u32, psz: WIPICWord, buflen: i32, img: WIPICWord) -> Result<i32> {
     tracing::warn!("stub MC_uicGetMenuItem({cc:#x}, {idx}, {psz:#x}, {buflen}, {img:#x})");
 
@@ -246,7 +345,7 @@ mod tests {
 
     use crate::context::test::TestContext;
 
-    use super::{configure, insert_text};
+    use super::{configure, delete_text, insert_text};
 
     const COMPONENT: u32 = 0x1000;
 
@@ -279,6 +378,59 @@ mod tests {
         let end = buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len());
         buf.truncate(end);
         buf
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_delete_text_matches_native_partial_and_to_end_rules() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 16, 5);
+
+        delete_text(&mut context, COMPONENT, 2, 2).await.unwrap();
+        assert_eq!(read_text(&context, 16), b"abef");
+        assert_eq!(read_i32(&context, 0x4c), 3);
+
+        context.write_bytes(0x2000, b"abcdef\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x4c, 5i32).unwrap();
+        delete_text(&mut context, COMPONENT, 3, -1).await.unwrap();
+        assert_eq!(read_text(&context, 16), b"abc");
+        assert_eq!(read_i32(&context, 0x4c), 3);
+
+        context.write_bytes(0x2000, b"abcdef\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x4c, 5i32).unwrap();
+        delete_text(&mut context, COMPONENT, 2, 99).await.unwrap();
+        assert_eq!(read_text(&context, 16), b"ab");
+        assert_eq!(read_i32(&context, 0x4c), 2);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_delete_text_matches_native_cursor_clamp_and_validation() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 16, 1);
+
+        delete_text(&mut context, COMPONENT, 3, 2).await.unwrap();
+        assert_eq!(read_text(&context, 16), b"abcf");
+        assert_eq!(read_i32(&context, 0x4c), 0);
+
+        context.write_bytes(0x2000, b"abcdef\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x4c, 4i32).unwrap();
+
+        for (position, length) in [(-1, 1), (7, 1), (0, 0), (0, -2)] {
+            delete_text(&mut context, COMPONENT, position, length)
+                .await
+                .unwrap();
+            assert_eq!(read_text(&context, 16), b"abcdef");
+            assert_eq!(read_i32(&context, 0x4c), 4);
+        }
+
+        write_generic(&mut context, COMPONENT, 4u32).unwrap();
+        delete_text(&mut context, COMPONENT, 0, 1).await.unwrap();
+        assert_eq!(read_text(&context, 16), b"abcdef");
+
+        write_generic(&mut context, COMPONENT, 6u32).unwrap();
+        delete_text(&mut context, COMPONENT, 0, 1).await.unwrap();
+        assert_eq!(read_text(&context, 16), b"abcdef");
+
+        delete_text(&mut context, 0, 0, 1).await.unwrap();
     }
 
     #[futures_test::test]
