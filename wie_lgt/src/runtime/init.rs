@@ -1161,6 +1161,13 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             );
             context.save_points.throw(core, exception)
         }
+        // Legacy table64 0x26 is the negative-array-size failure helper.
+        // Cross-game static analysis finds 50 strict callers and every caller
+        // supplies r0 == NULL, so preserve the observed legacy ABI without
+        // attempting to decode a revision-specific message argument.
+        InitSvcId::LegacyVmThrowNegativeArraySizeException => {
+            throw_vm_exception(core, context, "java/lang/NegativeArraySizeException").await
+        }
         // Older LGT-generated code reaches table64 0x06 only after a resolved
         // dispatch slot has a null implementation pointer. Across multiple
         // binaries its incoming r0 is a live VM/object value, not a C-string
@@ -1179,9 +1186,6 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             let exception = context.java_handles.address_of(exception)?;
 
-            tracing::debug!(
-                "legacy_vm_throw_abstract_method_error() -> longjmp({exception:#x})"
-            );
             context.save_points.throw(core, exception)
         }
         // In this native build both vm_throw_abstract_method_error (0x38)
