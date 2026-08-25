@@ -167,12 +167,12 @@ pub async fn draw_arc(
     w: i32,
     h: i32,
     start_angle: i32,
-    arc_angle: i32,
+    end_angle: i32,
     p_gctx: WIPICWord,
 ) -> Result<()> {
-    tracing::debug!("MC_grpDrawArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {arc_angle}, {p_gctx:#x})", dst.0);
+    tracing::debug!("MC_grpDrawArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {end_angle}, {p_gctx:#x})", dst.0);
 
-    if w <= 0 || h <= 0 {
+    if dst.0 == 0 || p_gctx == 0 || w <= 0 || h <= 0 {
         return Ok(());
     }
 
@@ -188,7 +188,16 @@ pub async fn draw_arc(
     };
 
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.draw_arc(x as _, y as _, w as _, h as _, start_angle, arc_angle, color, clip);
+    canvas.draw_arc(
+        x as _,
+        y as _,
+        w as _,
+        h as _,
+        start_angle,
+        end_angle.wrapping_sub(start_angle),
+        color,
+        clip,
+    );
     canvas.flush()?;
 
     Ok(())
@@ -203,12 +212,12 @@ pub async fn fill_arc(
     w: i32,
     h: i32,
     start_angle: i32,
-    arc_angle: i32,
+    end_angle: i32,
     p_gctx: WIPICWord,
 ) -> Result<()> {
-    tracing::debug!("MC_grpFillArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {arc_angle}, {p_gctx:#x})", dst.0);
+    tracing::debug!("MC_grpFillArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {end_angle}, {p_gctx:#x})", dst.0);
 
-    if w <= 0 || h <= 0 {
+    if dst.0 == 0 || p_gctx == 0 || w <= 0 || h <= 0 {
         return Ok(());
     }
 
@@ -224,7 +233,16 @@ pub async fn fill_arc(
     };
 
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.fill_arc(x as _, y as _, w as _, h as _, start_angle, arc_angle, color, clip);
+    canvas.fill_arc(
+        x as _,
+        y as _,
+        w as _,
+        h as _,
+        start_angle,
+        end_angle.wrapping_sub(start_angle),
+        color,
+        clip,
+    );
     canvas.flush()?;
 
     Ok(())

@@ -112,6 +112,8 @@ async fn handle_wipic_svc(
         WIPICSvcId::CopyFrameBuffer => graphics::copy_frame_buffer.into_body(),
         WIPICSvcId::DrawImage => graphics::draw_image.into_body(),
         WIPICSvcId::CopyArea => graphics::copy_area.into_body(),
+        WIPICSvcId::DrawArc => graphics::draw_arc.into_body(),
+        WIPICSvcId::FillArc => graphics::fill_arc.into_body(),
         WIPICSvcId::DrawString => graphics::draw_string.into_body(),
         WIPICSvcId::GetRgbPixels => graphics::get_rgb_pixels.into_body(),
         WIPICSvcId::SetRgbPixels => graphics::set_rgb_pixels.into_body(),
