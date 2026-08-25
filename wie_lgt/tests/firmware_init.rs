@@ -40,9 +40,14 @@ fn drives_firmware_init_when_supplied() {
         }
     }));
 
-    // Inject the firmware into the game archive as a virtual file so
-    // try_load_bios finds it.
-    let mut archive = extract_zip(include_bytes!("../../test_data/helloworld_lgt.zip")).unwrap();
+    // Load the game archive named by WIE_GAME (e.g. a Zenonia zip, to exercise
+    // the audio path), or the bundled helloworld as a default. Inject the
+    // firmware as a virtual file so try_load_bios finds it.
+    let game_bytes = match std::env::var("WIE_GAME") {
+        Ok(path) => std::fs::read(&path).expect("read WIE_GAME archive"),
+        Err(_) => include_bytes!("../../test_data/helloworld_lgt.zip").to_vec(),
+    };
+    let mut archive = extract_zip(&game_bytes).unwrap();
     archive.insert("libarm32_lgt_system.so".into(), firmware);
 
     let mut emulator = LgtEmulator::from_archive(

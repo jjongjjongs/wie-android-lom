@@ -221,6 +221,11 @@ struct InitSvcContext {
     java_class_tables: JavaClassTables,
     java_activated_classes: JavaActivatedClasses,
     dlet_properties: DletProperties,
+    /// WIPI-C media import index -> firmware `MC_mda*` address. When the
+    /// firmware BIOS is loaded, these imports resolve to real firmware code
+    /// instead of the Rust `wie_wipi_c` stubs (P3 audio cutover). Empty
+    /// otherwise.
+    firmware_mda_routes: Arc<BTreeMap<u32, u32>>,
     import_function_cache: ImportFunctionCache,
     unresolved_import_call_counts: UnresolvedImportCallCounts,
     /// Array classes handed out by `vm_get_array_class`, to the size of one of
@@ -250,6 +255,7 @@ fn register_init_svc_handler(
     image_ranges: ImageRanges,
     save_points: &SavePointState,
     dlet_properties: DletProperties,
+    firmware_mda_routes: BTreeMap<u32, u32>,
 ) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
@@ -268,6 +274,7 @@ fn register_init_svc_handler(
             java_class_tables: Default::default(),
             java_activated_classes: Default::default(),
             dlet_properties,
+            firmware_mda_routes: Arc::new(firmware_mda_routes),
             import_function_cache: Default::default(),
             unresolved_import_call_counts: Default::default(),
             array_classes: Default::default(),
@@ -391,6 +398,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             *wipic_category,
             *stdlib_category,
             &context.import_function_cache,
+            &context.firmware_mda_routes,
             core.read_param(0)?,
             core.read_param(1)?,
         )
@@ -2527,6 +2535,7 @@ pub async fn load_native(
     data: &[u8],
     jar_filename: &str,
     _main_class_name: Option<&str>,
+    firmware_mda_routes: BTreeMap<u32, u32>,
 ) -> Result<()> {
     let (entrypoint, image_ranges) = load_executable(core, data)?;
     let save_points = SavePointState::default();
@@ -2549,6 +2558,7 @@ pub async fn load_native(
         Arc::new(image_ranges),
         &save_points,
         dlet_properties,
+        firmware_mda_routes,
     )?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;
@@ -2615,9 +2625,21 @@ async fn get_import_function(
     wipic_category: u32,
     stdlib_category: u32,
     cache: &ImportFunctionCache,
+    firmware_mda_routes: &BTreeMap<u32, u32>,
     import_table: u32,
     function_index: u32,
 ) -> Result<u32> {
+    // P3: when the firmware BIOS is loaded, its media functions replace the
+    // Rust WIPI-C stubs. The firmware export is real ARM code at an even
+    // address, so it is returned directly and NOT run through the Thumb-stub
+    // cache/validation path (which requires an odd address).
+    if import_table == 0x1fb {
+        if let Some(&firmware_addr) = firmware_mda_routes.get(&function_index) {
+            tracing::debug!("get_import_function({import_table:#x}, {function_index:#x}) -> firmware {firmware_addr:#x}");
+            return Ok(firmware_addr);
+        }
+    }
+
     let key = (import_table, function_index);
 
     if let Some(&cached) = cache.lock().get(&key) {

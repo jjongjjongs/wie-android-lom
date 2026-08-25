@@ -75,6 +75,36 @@ impl ImportResolver for FirmwareResolver {
     }
 }
 
+/// The game's WIPI-C media import indices (table `0x1fb`) paired with the
+/// firmware export that implements each. Routing these to the firmware is the
+/// P3 audio cutover: the game's clip lifecycle runs real firmware code.
+const MDA_ROUTES: &[(u32, &str)] = &[
+    (0x4b0, "MC_mdaClipCreate"),
+    (0x4b1, "MC_mdaClipFree"),
+    (0x4b3, "MC_mdaClipPutData"),
+    (0x4b6, "MC_mdaClipControl"), // the game's play/control call (unk15)
+    (0x4b9, "MC_mdaClipSetVolume"),
+    (0x4c5, "MC_mdaClipAllocPlayer"),
+    (0x4c6, "MC_mdaClipFreePlayer"),
+];
+
+/// Builds the WIPI-C-index -> firmware-address map for the media functions the
+/// loaded firmware provides. Indices whose export is missing are skipped, so a
+/// firmware that lacks one simply keeps the Rust stub for it.
+pub fn build_mda_routes(image: &FirmwareImage) -> BTreeMap<u32, u32> {
+    let mut routes = BTreeMap::new();
+    for (index, name) in MDA_ROUTES {
+        match image.export(name) {
+            Some(addr) => {
+                tracing::info!("Routing WIPI-C media import {index:#x} -> firmware {name} {addr:#x}");
+                routes.insert(*index, addr);
+            }
+            None => tracing::warn!("Firmware has no {name}; leaving WIPI-C import {index:#x} on the Rust stub"),
+        }
+    }
+    routes
+}
+
 /// Reads the whole BIOS file out of the filesystem overlay.
 async fn read_bios(system: &System, size: usize) -> Vec<u8> {
     let mut data = vec![0u8; size];
