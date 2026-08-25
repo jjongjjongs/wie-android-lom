@@ -13,7 +13,7 @@ use wie_jvm_support::JvmSupport;
 use wie_util::{Result, read_generic, write_generic, write_null_terminated_string_bytes};
 use wie_wipi_c::{
     MethodImpl, WIPICContext, WIPICMethodBody, WIPICResult,
-    api::{database, filesystem, graphics, kernel, media, misc, net, phone, system, util},
+    api::{database, filesystem, graphics, kernel, media, misc, net, phone, system, uic, util},
 };
 
 use context::LgtWIPICContext;
@@ -139,6 +139,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::TimeComponent => time_component.into_body(),
         WIPICSvcId::TimeConvert => time_convert.into_body(),
         WIPICSvcId::TimeToTm => time_to_tm.into_body(),
+        WIPICSvcId::UicSetEnable => uic::set_enable.into_body(),
         WIPICSvcId::DateTimeToTm => time_to_tm.into_body(),
         WIPICSvcId::OpenDatabase => database::open_database.into_body(),
         WIPICSvcId::ReadRecordSingle => database::stream_read.into_body(),

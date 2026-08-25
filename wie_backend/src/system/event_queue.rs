@@ -143,6 +143,10 @@ impl EventQueue {
             .retain(|event| !matches!(event, Event::Timer { id: event_id, .. } if *event_id == id));
     }
 
+    pub fn has_timer(&self, id: u32) -> bool {
+        self.timer_generations.contains_key(&id)
+    }
+
     pub fn is_timer_current(&self, id: u32, generation: u64) -> bool {
         self.timer_generations.get(&id).copied() == Some(generation)
     }

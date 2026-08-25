@@ -228,7 +228,7 @@ pub fn get_uic_method_table() -> Vec<WIPICMethodBody> {
         gen_stub(8, "MC_uicHandleEvent"),
         gen_stub(9, "MC_uicConfigure"),
         gen_stub(10, "MC_uicGetGeometry"),
-        gen_stub(11, "MC_uicSetEnable"),
+        uic::set_enable.into_body(),
         gen_stub(12, "MC_uicSetCallback"),
         gen_stub(13, "MC_uicSetEventHandler"),
         gen_stub(14, "MC_uicSetFont"),
