@@ -75,6 +75,17 @@ impl ImportResolver for FirmwareResolver {
     }
 }
 
+/// Whether to route the game's media calls to the firmware.
+///
+/// Currently OFF: the firmware's `MC_mda*` reach `dmemory_alloc`, which calls
+/// `dprocess_get_current()->allocator`. With no current process established
+/// that returns 0 and the firmware dereferences null (a game crash on the first
+/// audio call). Enabling this needs the process/thread lifecycle first
+/// (`dprocess_create` + `dthread_create` + `dthread_start`) so a current
+/// process exists - the next P3 step. The routing itself is verified (the map
+/// builds and resolves); it is gated, not removed, so re-enabling is one line.
+const ENABLE_MDA_ROUTING: bool = false;
+
 /// The game's WIPI-C media import indices (table `0x1fb`) paired with the
 /// firmware export that implements each. Routing these to the firmware is the
 /// P3 audio cutover: the game's clip lifecycle runs real firmware code.
@@ -93,6 +104,10 @@ const MDA_ROUTES: &[(u32, &str)] = &[
 /// firmware that lacks one simply keeps the Rust stub for it.
 pub fn build_mda_routes(image: &FirmwareImage) -> BTreeMap<u32, u32> {
     let mut routes = BTreeMap::new();
+    if !ENABLE_MDA_ROUTING {
+        tracing::info!("Firmware media routing disabled (needs a current dprocess first); game keeps the Rust audio path");
+        return routes;
+    }
     for (index, name) in MDA_ROUTES {
         match image.export(name) {
             Some(addr) => {
