@@ -163,7 +163,7 @@ pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option
         image.init_array.len() + usize::from(image.init.is_some())
     );
 
-    for name in ["MH_sysHalInit", "dlet_start", "InitPCSAutomata", "AND_mdaInit"] {
+    for name in ["MH_sysHalInit", "dlet_start", "InitPCSAutomata", "AND_mdaInit", "media_manager_init"] {
         match image.export(name) {
             Some(addr) => tracing::info!("Firmware export {name} -> {addr:#x}"),
             None => tracing::info!("Firmware export {name} not found"),
@@ -178,6 +178,17 @@ pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option
 /// `dprocess_get_current` starts returning a live process; `MH_sysHalInit` is
 /// the HAL init that needs that context. Each is called with no arguments,
 /// matching their disassembly.
+///
+/// `media_manager_init` (not the leaf `AND_mdaInit`) is the real media bring-up:
+/// from RE at 0x1926b4 it `dlink_init`s the clip list head - the global
+/// `media_create_clip_ex` inserts every clip into - allocates and parses the
+/// device descriptor table, registers each audio device, and calls `AND_mdaInit`
+/// itself at the right point. Calling `AND_mdaInit` alone (as we did) only
+/// memset the MH device-instance table and left the clip list a zeroed .bss
+/// global, so the game's first `MC_mdaClipCreate` operated on an uninitialised
+/// list and crashed. It reads the statically-relocated media-manager slot
+/// (`[GOT+0xa68]`), so it needs no argument, but it allocates, so the current
+/// process must already be installed (it runs after `dprocess_init`).
 const BOOT_SEQUENCE: &[&str] = &[
     "dmempage_init",
     "dmemory_init",
@@ -185,7 +196,7 @@ const BOOT_SEQUENCE: &[&str] = &[
     "dthread_init",
     "MH_sysHalInit",
     "WPKnl_Init",
-    "AND_mdaInit",
+    "media_manager_init",
 ];
 
 /// The firmware entry points needed to drive init, lifted out of the image so
