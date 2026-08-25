@@ -209,8 +209,15 @@ impl Runner {
     }
 }
 
+/// The LGT firmware BIOS, bundled into the app so an LGT title can run real
+/// firmware code. Injected as a virtual file under the reference's own filename,
+/// so `wie_lgt`'s `try_load_bios` finds it - the game archive is never touched.
+/// It is proprietary and lives only in this private repository.
+const FIRMWARE_BIOS: &[u8] = include_bytes!("../firmware/libarm32_lgt_system.so");
+const FIRMWARE_BIOS_NAME: &str = "libarm32_lgt_system.so";
+
 fn build_emulator(platform: Box<AndroidPlatform>, data: &[u8], options: Options) -> Result<Box<dyn Emulator + Send>, String> {
-    let files = extract_zip(data).map_err(|x| format!("압축을 열 수 없습니다: {x}"))?;
+    let mut files = extract_zip(data).map_err(|x| format!("압축을 열 수 없습니다: {x}"))?;
 
     // Handset archives are detected by their descriptor. A jar carries no
     // descriptor, so it is only considered once all three archive formats have
@@ -222,6 +229,9 @@ fn build_emulator(platform: Box<AndroidPlatform>, data: &[u8], options: Options)
             .map_err(|x| format!("KTF 아카이브를 실행할 수 없습니다: {x}"));
     }
     if LgtEmulator::loadable_archive(&files) {
+        // Ride the firmware in as a virtual file so the emulator's filesystem
+        // exposes it to try_load_bios.
+        files.insert(FIRMWARE_BIOS_NAME.to_owned(), FIRMWARE_BIOS.to_vec());
         return LgtEmulator::from_archive(platform, files, options)
             .map(|x| Box::new(x) as Box<dyn Emulator + Send>)
             .map_err(|x| format!("LGT 아카이브를 실행할 수 없습니다: {x}"));
