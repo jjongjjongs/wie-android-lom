@@ -128,11 +128,27 @@ fn register_firmware_mda_handler(core: &mut ArmCore, routes: FirmwareMdaRoutes) 
         }
 
         // Invoke the firmware export with the game's arguments. `run_function`
-        // saves and restores the game's register context around the nested call,
-        // so this is transparent to the game apart from r0 (the return value).
-        let ret: u32 = core.run_function(addr, &[a0, a1, a2, a3]).await?;
-        tracing::info!("[mda] {name} returned {ret:#x}");
-        ret.write(core, lr)
+        // saves and restores the game's register context around the nested call
+        // on success, so it is transparent to the game apart from r0.
+        //
+        // On a *fault* inside the firmware, `run_function` propagates the error
+        // without restoring the caller context, leaving the core in the
+        // firmware's faulted state. We snapshot the game's context first so we
+        // can log the firmware fault (its own registers/stack) and then restore
+        // the game and hand it a 0, letting the trace show the whole media call
+        // sequence instead of stopping at the first firmware-internal fault.
+        let saved = core.save_context();
+        match core.run_function::<u32>(addr, &[a0, a1, a2, a3]).await {
+            Ok(ret) => {
+                tracing::info!("[mda] {name} returned {ret:#x}");
+                ret.write(core, lr)
+            }
+            Err(error) => {
+                tracing::error!("[mda] {name} faulted inside firmware: {error:?}\n{}", core.dump_reg_stack(0x40));
+                core.restore_context(&saved);
+                0u32.write(core, lr)
+            }
+        }
     }
 
     core.register_svc_handler(SVC_CATEGORY_FIRMWARE_MDA, handle_mda_svc, &MdaTraceContext { routes })
@@ -246,6 +262,18 @@ pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option
             Some(addr) => tracing::info!("Firmware export {name} -> {addr:#x}"),
             None => tracing::info!("Firmware export {name} not found"),
         }
+    }
+
+    // The firmware's media manager is a JNI object: it fetches the current
+    // JNIEnv and calls Java through it. There is no ART here, so getJNIEnv
+    // returns null and the media path jumps through a null table slot. Install a
+    // synthetic JNIEnv into the firmware's kernel_jni_env global so those calls
+    // land on serviceable (for now, traced) stubs instead of crashing.
+    match image.export("kernel_jni_env") {
+        Some(addr) => {
+            super::firmware_jni::install_firmware_jni_env(core, system, addr)?;
+        }
+        None => tracing::warn!("Firmware has no kernel_jni_env export; media JNI path will not have an env"),
     }
 
     Ok(Some(image))
