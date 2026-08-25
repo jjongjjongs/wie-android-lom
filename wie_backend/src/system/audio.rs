@@ -145,6 +145,11 @@ impl SmafPlayer {
     }
 
     pub async fn play(&self, system: &mut System, sink: &dyn AudioSink, stop_flag: &AtomicBool, repeat: bool) {
+        // An isolated voice for this clip, so its sequence does not collide with
+        // other clips playing at the same time (a looping track under short
+        // effects) on shared MIDI channels.
+        let voice = sink.open_midi_voice();
+
         loop {
             let mut active_notes: Vec<(u8, u8)> = Vec::new();
             let mut used_channels: BTreeSet<u8> = BTreeSet::new();
@@ -173,47 +178,51 @@ impl SmafPlayer {
                         sink.play_wave(*channel, *sampling_rate, data);
                     }
                     SmafEvent::MidiNoteOn { channel, note, velocity } => {
-                        sink.midi_note_on(*channel, *note, *velocity);
+                        sink.midi_note_on(voice, *channel, *note, *velocity);
                         active_notes.push((*channel, *note));
                         used_channels.insert(*channel);
                     }
                     SmafEvent::MidiNoteOff { channel, note, velocity } => {
-                        sink.midi_note_off(*channel, *note, *velocity);
+                        sink.midi_note_off(voice, *channel, *note, *velocity);
                         active_notes.retain(|(c, n)| !(*c == *channel && *n == *note));
                     }
                     SmafEvent::MidiProgramChange { channel, program } => {
-                        sink.midi_program_change(*channel, *program);
+                        sink.midi_program_change(voice, *channel, *program);
                         used_channels.insert(*channel);
                     }
                     SmafEvent::MidiControlChange { channel, control, value } => {
-                        sink.midi_control_change(*channel, *control, *value);
+                        sink.midi_control_change(voice, *channel, *control, *value);
                         used_channels.insert(*channel);
                     }
                     SmafEvent::MidiPitchBend { channel, value } => {
-                        sink.midi_pitch_bend(*channel, *value);
+                        sink.midi_pitch_bend(voice, *channel, *value);
                         used_channels.insert(*channel);
                     }
                     SmafEvent::MidiSysEx(data) => {
-                        sink.midi_sysex(data);
+                        sink.midi_sysex(voice, data);
                     }
                     SmafEvent::End => {}
                 }
             }
 
             for (channel, note) in &active_notes {
-                sink.midi_note_off(*channel, *note, 0);
+                sink.midi_note_off(voice, *channel, *note, 0);
             }
 
             for channel in &used_channels {
-                sink.midi_control_change(*channel, 64, 0);
-                sink.midi_control_change(*channel, 120, 0);
-                sink.midi_control_change(*channel, 123, 0);
+                sink.midi_control_change(voice, *channel, 64, 0);
+                sink.midi_control_change(voice, *channel, 120, 0);
+                sink.midi_control_change(voice, *channel, 123, 0);
             }
 
             if !repeat || stop_flag.load(Ordering::Relaxed) {
                 break;
             }
         }
+
+        // The clip is done feeding events; let its voice ring out and be
+        // reclaimed once silent.
+        sink.close_midi_voice(voice);
     }
 }
 
@@ -378,17 +387,17 @@ mod tests {
     impl AudioSink for NoopAudioSink {
         fn play_wave(&self, _channel: u8, _sampling_rate: u32, _wave_data: &[i16]) {}
 
-        fn midi_note_on(&self, _channel_id: u8, _note: u8, _velocity: u8) {}
+        fn midi_note_on(&self, _voice: u32, _channel_id: u8, _note: u8, _velocity: u8) {}
 
-        fn midi_note_off(&self, _channel_id: u8, _note: u8, _velocity: u8) {}
+        fn midi_note_off(&self, _voice: u32, _channel_id: u8, _note: u8, _velocity: u8) {}
 
-        fn midi_program_change(&self, _channel_id: u8, _program: u8) {}
+        fn midi_program_change(&self, _voice: u32, _channel_id: u8, _program: u8) {}
 
-        fn midi_control_change(&self, _channel_id: u8, _control: u8, _value: u8) {}
+        fn midi_control_change(&self, _voice: u32, _channel_id: u8, _control: u8, _value: u8) {}
 
-        fn midi_pitch_bend(&self, _channel_id: u8, _value: u16) {}
+        fn midi_pitch_bend(&self, _voice: u32, _channel_id: u8, _value: u16) {}
 
-        fn midi_sysex(&self, _data: &[u8]) {}
+        fn midi_sysex(&self, _voice: u32, _data: &[u8]) {}
     }
 
     struct CountingSink {
@@ -400,22 +409,22 @@ mod tests {
     impl AudioSink for CountingSink {
         fn play_wave(&self, _channel: u8, _sampling_rate: u32, _wave_data: &[i16]) {}
 
-        fn midi_note_on(&self, _channel_id: u8, _note: u8, _velocity: u8) {}
+        fn midi_note_on(&self, _voice: u32, _channel_id: u8, _note: u8, _velocity: u8) {}
 
-        fn midi_note_off(&self, _channel_id: u8, _note: u8, _velocity: u8) {}
+        fn midi_note_off(&self, _voice: u32, _channel_id: u8, _note: u8, _velocity: u8) {}
 
-        fn midi_program_change(&self, _channel_id: u8, _program: u8) {
+        fn midi_program_change(&self, _voice: u32, _channel_id: u8, _program: u8) {
             let count = self.program_change_count.fetch_add(1, Ordering::SeqCst) + 1;
             if count >= self.stop_after {
                 self.stop_flag.store(true, Ordering::SeqCst);
             }
         }
 
-        fn midi_control_change(&self, _channel_id: u8, _control: u8, _value: u8) {}
+        fn midi_control_change(&self, _voice: u32, _channel_id: u8, _control: u8, _value: u8) {}
 
-        fn midi_pitch_bend(&self, _channel_id: u8, _value: u16) {}
+        fn midi_pitch_bend(&self, _voice: u32, _channel_id: u8, _value: u16) {}
 
-        fn midi_sysex(&self, _data: &[u8]) {}
+        fn midi_sysex(&self, _voice: u32, _data: &[u8]) {}
     }
 
     fn new_system() -> System {

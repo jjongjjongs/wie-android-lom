@@ -118,7 +118,7 @@ impl Runner {
         // Otherwise whatever the sequence was holding goes on sounding after
         // the game it belongs to has gone.
         if let Some(instance) = self.instance.as_ref() {
-            instance.shared.synth().silence();
+            instance.shared.mixer().silence();
         }
 
         self.instance = None;
@@ -158,7 +158,7 @@ impl Runner {
                 tracing::error!("Emulator stopped: {message}");
 
                 self.last_error = message.clone();
-                instance.shared.synth().silence();
+                instance.shared.mixer().silence();
                 self.instance = None;
 
                 return message;

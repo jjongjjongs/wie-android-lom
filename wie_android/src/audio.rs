@@ -126,7 +126,15 @@ impl wie_backend::AudioSink for AndroidAudioSink {
     fn set_master_volume(&self, volume: u8) {
         let volume = volume.min(100);
         self.master_volume.store(volume, Ordering::Relaxed);
-        self.shared.synth().set_master_volume(volume);
+        self.shared.mixer().set_master_volume(volume);
+    }
+
+    fn open_midi_voice(&self) -> u32 {
+        self.shared.mixer().open()
+    }
+
+    fn close_midi_voice(&self, voice: u32) {
+        self.shared.mixer().close(voice);
     }
 
     fn play_wave(&self, channel: u8, sampling_rate: u32, wave_data: &[i16]) {
@@ -157,31 +165,31 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         self.shared.push_audio(play_wave_command(channel, sampling_rate, &scaled));
     }
 
-    fn midi_note_on(&self, channel_id: u8, note: u8, velocity: u8) {
-        self.shared.synth().note_on(channel_id, note, velocity);
+    fn midi_note_on(&self, voice: u32, channel_id: u8, note: u8, velocity: u8) {
+        self.shared.mixer().note_on(voice, channel_id, note, velocity);
     }
 
-    fn midi_note_off(&self, channel_id: u8, note: u8, _velocity: u8) {
-        self.shared.synth().note_off(channel_id, note);
+    fn midi_note_off(&self, voice: u32, channel_id: u8, note: u8, _velocity: u8) {
+        self.shared.mixer().note_off(voice, channel_id, note);
     }
 
-    fn midi_program_change(&self, channel_id: u8, program: u8) {
-        self.shared.synth().program_change(channel_id, program);
+    fn midi_program_change(&self, voice: u32, channel_id: u8, program: u8) {
+        self.shared.mixer().program_change(voice, channel_id, program);
     }
 
-    fn midi_control_change(&self, channel_id: u8, control: u8, value: u8) {
-        self.shared.synth().control_change(channel_id, control, value);
+    fn midi_control_change(&self, voice: u32, channel_id: u8, control: u8, value: u8) {
+        self.shared.mixer().control_change(voice, channel_id, control, value);
     }
 
-    fn midi_pitch_bend(&self, channel_id: u8, value: u16) {
-        self.shared.synth().pitch_bend(channel_id, value);
+    fn midi_pitch_bend(&self, voice: u32, channel_id: u8, value: u16) {
+        self.shared.mixer().pitch_bend(voice, channel_id, value);
     }
 
     /// System exclusive is where a file sends the voices it wants played, so
     /// this is what makes a title sound like itself rather than like a set of
     /// stand ins.
-    fn midi_sysex(&self, data: &[u8]) {
-        self.shared.synth().sysex(data);
+    fn midi_sysex(&self, voice: u32, data: &[u8]) {
+        self.shared.mixer().sysex(voice, data);
     }
 }
 

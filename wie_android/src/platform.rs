@@ -18,7 +18,7 @@ use crate::{
     audio::AndroidAudioSink,
     database::AndroidDatabaseRepository,
     filesystem::AndroidFilesystem,
-    ma3::Synth,
+    ma3::SynthMixer,
     network::AndroidNetwork,
 };
 
@@ -38,7 +38,7 @@ pub struct Shared {
     audio: Arc<Mutex<VecDeque<Vec<u8>>>>,
     /// Shared because `Platform::audio_sink` hands out a fresh sink whenever
     /// it is asked, and the voices have to outlive any one of them.
-    synth: Arc<Mutex<Synth>>,
+    mixer: Arc<Mutex<SynthMixer>>,
     last_render: Arc<Mutex<Option<std::time::Instant>>>,
     redraw_requested: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
@@ -58,8 +58,8 @@ const MAX_QUEUED_AUDIO: usize = 64;
 const MAX_SYNTH_CATCHUP_MS: u32 = 120;
 
 impl Shared {
-    pub fn synth(&self) -> std::sync::MutexGuard<'_, Synth> {
-        self.synth.lock().unwrap_or_else(|x| x.into_inner())
+    pub fn mixer(&self) -> std::sync::MutexGuard<'_, SynthMixer> {
+        self.mixer.lock().unwrap_or_else(|x| x.into_inner())
     }
 
     /// Renders however much of the synthesiser's output the wall clock says is
@@ -88,7 +88,7 @@ impl Shared {
 
         let frames = (crate::ma3::SAMPLE_RATE as usize * millis as usize) / 1000;
 
-        if let Some(samples) = self.synth().render(frames) {
+        if let Some(samples) = self.mixer().render(frames) {
             self.push_audio(crate::audio::stream_command(&samples));
         }
     }

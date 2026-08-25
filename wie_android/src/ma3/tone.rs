@@ -332,10 +332,6 @@ impl Bank {
         Self { voices: Vec::new() }
     }
 
-    pub fn clear(&mut self) {
-        self.voices.clear();
-    }
-
     /// Takes a voice out of a system exclusive message. Anything that is not
     /// one is ignored, which is most of them: a sequence also uses exclusive
     /// for chip resets and for settings this synthesiser has no equivalent of.
