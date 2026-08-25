@@ -250,7 +250,7 @@ pub fn get_uic_method_table() -> Vec<WIPICMethodBody> {
         uic::insert_text.into_body(),
         uic::delete_text.into_body(),
         gen_stub(32, "MC_uicGetMaxTextSize"),
-        gen_stub(33, "MC_uicSetMaxTextSize"),
+        uic::set_max_text_size.into_body(),
         gen_stub(34, "MC_uicGetTextSize"),
         gen_stub(35, "MC_uicGetText"),
         gen_stub(36, "MC_uicAddListItem"),

@@ -1,4 +1,4 @@
-use wie_util::{Result, read_generic, read_null_terminated_string_bytes, write_generic};
+use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic};
 
 use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 
@@ -332,6 +332,79 @@ pub async fn delete_text(
     Ok(())
 }
 
+/// LGT/KTF `MC_uicSetMaxTextSize`.
+///
+/// Native returns the previous capacity on success. Invalid/null components
+/// and negative sizes return 0, non-Text components return -9, and realloc
+/// failure returns -17. For a positive new capacity, the final byte is always
+/// forced to NUL.
+///
+/// The WIE allocator has no realloc primitive, so changed-size reallocations
+/// are reproduced as allocate/copy/free using the old +0x48 capacity as the
+/// exact allocation size required by `free_raw`.
+pub async fn set_max_text_size(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    size: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_uicSetMaxTextSize({component:#x}, {size})");
+
+    if component == 0 || size < 0 {
+        return Ok(0);
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 3 {
+        return Ok(-9);
+    }
+
+    let old_text: WIPICWord = read_generic(context, component + 0x44)?;
+    let old_capacity: u32 = read_generic(context, component + 0x48)?;
+    let new_capacity = size as u32;
+
+    // Native dmemory_realloc(ptr, 0) frees a non-null old block and returns
+    // NULL. MC_uicSetMaxTextSize then reports -17 without updating +0x44/+0x48.
+    if new_capacity == 0 {
+        if old_text != 0 && old_capacity != 0 {
+            context.free_raw(old_text, old_capacity)?;
+        }
+        return Ok(-17);
+    }
+
+    // Native realloc keeps an existing block when the requested size does not
+    // exceed its allocator size. For the ordinary TextComponent case,
+    // requesting the same capacity therefore preserves the pointer.
+    if old_text != 0 && new_capacity == old_capacity {
+        context.write_bytes(old_text + new_capacity - 1, &[0])?;
+        return Ok(old_capacity as i32);
+    }
+
+    let new_text = match context.alloc_raw(new_capacity) {
+        Ok(address) => address,
+        Err(WieError::AllocationFailure) => return Ok(-17),
+        Err(error) => return Err(error),
+    };
+
+    if old_text != 0 && old_capacity != 0 {
+        let copy_len = old_capacity.min(new_capacity);
+        if copy_len != 0 {
+            let mut data = alloc::vec![0u8; copy_len as usize];
+            context.read_bytes(old_text, &mut data)?;
+            context.write_bytes(new_text, &data)?;
+        }
+        context.free_raw(old_text, old_capacity)?;
+    }
+
+    write_generic(context, component + 0x48, new_capacity)?;
+    write_generic(context, component + 0x44, new_text)?;
+    context.write_bytes(new_text + new_capacity - 1, &[0])?;
+
+    Ok(old_capacity as i32)
+}
+
 pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: u32, psz: WIPICWord, buflen: i32, img: WIPICWord) -> Result<i32> {
     tracing::warn!("stub MC_uicGetMenuItem({cc:#x}, {idx}, {psz:#x}, {buflen}, {img:#x})");
 
@@ -345,7 +418,7 @@ mod tests {
 
     use crate::context::test::TestContext;
 
-    use super::{configure, delete_text, insert_text};
+    use super::{configure, delete_text, insert_text, set_max_text_size};
 
     const COMPONENT: u32 = 0x1000;
 
@@ -378,6 +451,91 @@ mod tests {
         let end = buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len());
         buf.truncate(end);
         buf
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_max_text_size_matches_native_resize_and_return_contract() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 16, 5);
+
+        assert_eq!(
+            set_max_text_size(&mut context, COMPONENT, 5).await.unwrap(),
+            16
+        );
+        assert_eq!(read_i32(&context, 0x48), 5);
+
+        let text_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
+        let mut bytes = [0u8; 5];
+        context.read_bytes(text_ptr, &mut bytes).unwrap();
+        assert_eq!(&bytes, b"abcd\0");
+
+        assert_eq!(
+            set_max_text_size(&mut context, COMPONENT, 12).await.unwrap(),
+            5
+        );
+        assert_eq!(read_i32(&context, 0x48), 12);
+
+        let text_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
+        let last: u8 = read_generic(&context, text_ptr + 11).unwrap();
+        assert_eq!(last, 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_max_text_size_matches_native_same_size_and_validation() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 16, 5);
+
+        let old_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
+        assert_eq!(
+            set_max_text_size(&mut context, COMPONENT, 16).await.unwrap(),
+            16
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            old_ptr
+        );
+        let last: u8 = read_generic(&context, old_ptr + 15).unwrap();
+        assert_eq!(last, 0);
+
+        assert_eq!(
+            set_max_text_size(&mut context, COMPONENT, -1).await.unwrap(),
+            0
+        );
+
+        write_generic(&mut context, COMPONENT, 4u32).unwrap();
+        assert_eq!(
+            set_max_text_size(&mut context, COMPONENT, 8).await.unwrap(),
+            -9
+        );
+
+        write_generic(&mut context, COMPONENT, 6u32).unwrap();
+        assert_eq!(
+            set_max_text_size(&mut context, COMPONENT, 8).await.unwrap(),
+            0
+        );
+
+        assert_eq!(set_max_text_size(&mut context, 0, 8).await.unwrap(), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_max_text_size_preserves_native_zero_size_quirk() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcd\0", 16, 2);
+
+        let old_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
+
+        assert_eq!(
+            set_max_text_size(&mut context, COMPONENT, 0).await.unwrap(),
+            -17
+        );
+
+        // Native realloc(ptr, 0) frees the allocation but MC_uicSetMaxTextSize
+        // leaves both component fields untouched after the NULL return.
+        assert_eq!(read_i32(&context, 0x48), 16);
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            old_ptr
+        );
     }
 
     #[futures_test::test]
