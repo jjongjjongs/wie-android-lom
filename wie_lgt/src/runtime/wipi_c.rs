@@ -167,6 +167,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::Htons => util::htons.into_body(),
         WIPICSvcId::Ntohl => util::ntohl.into_body(),
         WIPICSvcId::Ntohs => util::ntohs.into_body(),
+        WIPICSvcId::InetAddrInt => util::inet_addr_int.into_body(),
         WIPICSvcId::ClipCreate => media::clip_create.into_body(),
         WIPICSvcId::ClipFree => media::clip_free.into_body(),
         WIPICSvcId::ClipPutData => media::clip_put_data.into_body(),
