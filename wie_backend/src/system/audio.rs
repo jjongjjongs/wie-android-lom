@@ -149,6 +149,7 @@ impl SmafPlayer {
         // other clips playing at the same time (a looping track under short
         // effects) on shared MIDI channels.
         let voice = sink.open_midi_voice();
+        tracing::info!("[audio] SMAF clip on isolated voice {voice}");
 
         loop {
             let mut active_notes: Vec<(u8, u8)> = Vec::new();

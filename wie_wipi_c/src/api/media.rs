@@ -277,8 +277,20 @@ pub async fn clip_alloc_player(_context: &mut dyn WIPICContext, clip: WIPICWord,
     Ok(0)
 }
 
-pub async fn clip_free_player(_context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
-    tracing::warn!("stub MC_mdaClipFreePlayer({clip:#x})");
+pub async fn clip_free_player(context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
+    // Titles free the player to stop the clip - the game's stop for a looping
+    // track. Without this a `repeat=1` BGM plays forever and every new track
+    // stacks another endless loop on top (garbled, ever-louder audio); the
+    // player-path stop (ClipControl + this) is where the sequence is meant to
+    // end. Stop the clip's playback by its loaded handle.
+    if clip == 0 {
+        return Ok(0);
+    }
+
+    let mda_clip: MdaClip = read_generic(context, clip)?;
+    let handle = mda_clip.handle;
+    tracing::info!("[media] MC_mdaClipFreePlayer(clip={clip:#x}) stop handle {handle:#x}");
+    context.system().audio().stop(handle);
 
     Ok(0)
 }
