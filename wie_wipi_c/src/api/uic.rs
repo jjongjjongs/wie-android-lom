@@ -125,6 +125,114 @@ pub async fn set_enable(
     Ok(())
 }
 
+/// LGT/KTF `MC_uicInsertText`.
+///
+/// TextComponent layout used here:
+/// +0x44 text buffer pointer, +0x48 buffer capacity, +0x4c cursor,
+/// +0x5c change callback, +0x64 callback context.
+pub async fn insert_text(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: i32,
+    source: WIPICWord,
+    length: i32,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_uicInsertText({component:#x}, {position}, {source:#x}, {length})"
+    );
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 3 {
+        return Ok(-9);
+    }
+    if source == 0 || length <= 0 {
+        return Ok(0);
+    }
+
+    let text: WIPICWord = read_generic(context, component + 0x44)?;
+    if text == 0 {
+        return Ok(0);
+    }
+
+    let mut old_len = 0u32;
+    loop {
+        let byte: u8 = read_generic(context, text + old_len)?;
+        if byte == 0 {
+            break;
+        }
+        old_len = old_len.wrapping_add(1);
+    }
+
+    let insert_len = length as u32;
+    let new_len = old_len.wrapping_add(insert_len);
+    let capacity: u32 = read_generic(context, component + 0x48)?;
+    if capacity <= new_len {
+        return Ok(-17);
+    }
+
+    let insert_pos = if position < 0 {
+        0
+    } else {
+        (position as u32).min(old_len)
+    };
+
+    let mut old = alloc::vec![0u8; old_len as usize];
+    if old_len != 0 {
+        context.read_bytes(text, &mut old)?;
+    }
+
+    let mut inserted = alloc::vec![0u8; insert_len as usize];
+    context.read_bytes(source, &mut inserted)?;
+
+    if insert_pos != 0 {
+        context.write_bytes(text, &old[..insert_pos as usize])?;
+    }
+    context.write_bytes(text + insert_pos, &inserted)?;
+    if insert_pos < old_len {
+        context.write_bytes(
+            text + insert_pos + insert_len,
+            &old[insert_pos as usize..],
+        )?;
+    }
+    context.write_bytes(text + new_len, &[0])?;
+
+    let cursor: u32 = read_generic(context, component + 0x4c)?;
+    if insert_pos <= cursor {
+        write_generic(context, component + 0x4c, insert_pos + insert_len)?;
+    }
+
+    let changed = {
+        let old_c_len = old.iter().position(|&byte| byte == 0).unwrap_or(old.len());
+
+        let mut current = alloc::vec![0u8; new_len as usize];
+        if new_len != 0 {
+            context.read_bytes(text, &mut current)?;
+        }
+        let current_c_len = current.iter().position(|&byte| byte == 0).unwrap_or(current.len());
+
+        old[..old_c_len] != current[..current_c_len]
+    };
+
+    if changed {
+        let callback: WIPICWord = read_generic(context, component + 0x5c)?;
+        if callback != 0 {
+            let callback_context: WIPICWord = read_generic(context, component + 0x64)?;
+            context
+                .call_function(callback, &[component, 0, callback_context])
+                .await?;
+        }
+    }
+
+    Ok(length)
+}
+
 pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: u32, psz: WIPICWord, buflen: i32, img: WIPICWord) -> Result<i32> {
     tracing::warn!("stub MC_uicGetMenuItem({cc:#x}, {idx}, {psz:#x}, {buflen}, {img:#x})");
 
@@ -134,11 +242,11 @@ pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: 
 
 #[cfg(test)]
 mod tests {
-    use wie_util::{read_generic, write_generic};
+    use wie_util::{ByteRead, ByteWrite, read_generic, write_generic};
 
     use crate::context::test::TestContext;
 
-    use super::configure;
+    use super::{configure, insert_text};
 
     const COMPONENT: u32 = 0x1000;
 
@@ -152,6 +260,89 @@ mod tests {
         write_generic(context, COMPONENT + 0x08, 20i32).unwrap();
         write_generic(context, COMPONENT + 0x0c, 30i32).unwrap();
         write_generic(context, COMPONENT + 0x10, 40i32).unwrap();
+    }
+
+    fn init_text_component(context: &mut TestContext, text: &[u8], capacity: u32, cursor: u32) {
+        write_generic(context, COMPONENT, 3u32).unwrap();
+        write_generic(context, COMPONENT + 0x44, 0x2000u32).unwrap();
+        write_generic(context, COMPONENT + 0x48, capacity).unwrap();
+        write_generic(context, COMPONENT + 0x4c, cursor).unwrap();
+        write_generic(context, COMPONENT + 0x5c, 0u32).unwrap();
+        write_generic(context, COMPONENT + 0x64, 0u32).unwrap();
+
+        context.write_bytes(0x2000, text).unwrap();
+    }
+
+    fn read_text(context: &TestContext, max: usize) -> alloc::vec::Vec<u8> {
+        let mut buf = alloc::vec![0u8; max];
+        context.read_bytes(0x2000, &mut buf).unwrap();
+        let end = buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len());
+        buf.truncate(end);
+        buf
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_insert_text_inserts_and_clamps_position_like_native() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcd\0", 16, 3);
+        context.write_bytes(0x3000, b"XY").unwrap();
+
+        assert_eq!(insert_text(&mut context, COMPONENT, 2, 0x3000, 2).await.unwrap(), 2);
+        assert_eq!(read_text(&context, 16), b"abXYcd");
+        assert_eq!(read_i32(&context, 0x4c), 4);
+
+        context.write_bytes(0x2000, b"abcd\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x4c, 1u32).unwrap();
+        assert_eq!(insert_text(&mut context, COMPONENT, -99, 0x3000, 2).await.unwrap(), 2);
+        assert_eq!(read_text(&context, 16), b"XYabcd");
+        assert_eq!(read_i32(&context, 0x4c), 2);
+
+        context.write_bytes(0x2000, b"abcd\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x4c, 1u32).unwrap();
+        assert_eq!(insert_text(&mut context, COMPONENT, 99, 0x3000, 2).await.unwrap(), 2);
+        assert_eq!(read_text(&context, 16), b"abcdXY");
+        assert_eq!(read_i32(&context, 0x4c), 1);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_insert_text_matches_native_validation_and_capacity_rule() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcd\0", 5, 2);
+        context.write_bytes(0x3000, b"X").unwrap();
+
+        // Native fails when capacity <= old_len + insert_len.
+        assert_eq!(insert_text(&mut context, COMPONENT, 2, 0x3000, 1).await.unwrap(), -17);
+        assert_eq!(read_text(&context, 8), b"abcd");
+
+        write_generic(&mut context, COMPONENT + 0x48, 6u32).unwrap();
+        assert_eq!(insert_text(&mut context, COMPONENT, 2, 0x3000, 1).await.unwrap(), 1);
+        assert_eq!(read_text(&context, 8), b"abXcd");
+
+        write_generic(&mut context, COMPONENT, 4u32).unwrap();
+        assert_eq!(insert_text(&mut context, COMPONENT, 0, 0x3000, 1).await.unwrap(), -9);
+
+        write_generic(&mut context, COMPONENT, 6u32).unwrap();
+        assert_eq!(insert_text(&mut context, COMPONENT, 0, 0x3000, 1).await.unwrap(), 0);
+
+        assert_eq!(insert_text(&mut context, 0, 0, 0x3000, 1).await.unwrap(), 0);
+
+        write_generic(&mut context, COMPONENT, 3u32).unwrap();
+        assert_eq!(insert_text(&mut context, COMPONENT, 0, 0, 1).await.unwrap(), 0);
+        assert_eq!(insert_text(&mut context, COMPONENT, 0, 0x3000, 0).await.unwrap(), 0);
+        assert_eq!(insert_text(&mut context, COMPONENT, 0, 0x3000, -1).await.unwrap(), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_insert_text_preserves_native_embedded_nul_behavior() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcd\0", 16, 4);
+        context.write_bytes(0x3000, &[0, b'X']).unwrap();
+
+        assert_eq!(insert_text(&mut context, COMPONENT, 4, 0x3000, 2).await.unwrap(), 2);
+
+        // Raw bytes were inserted, but as a C string the visible text remains "abcd".
+        assert_eq!(read_text(&context, 16), b"abcd");
+        assert_eq!(read_i32(&context, 0x4c), 6);
     }
 
     #[futures_test::test]
