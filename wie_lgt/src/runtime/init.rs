@@ -2638,6 +2638,12 @@ async fn get_import_function(
         core.make_svc_stub(stdlib_category, function_index)?
     } else {
         match (import_table, function_index) {
+            // LoM's legacy module 0 function 0 is its FatalError-style import.
+            // Its sole caller passes "don't get jar path" after dlet_get_property
+            // fails. Modern VNI_FatalError and INI_FatalError both alias
+            // vm_throw_virtual_machine_error(message), whose semantics are
+            // already implemented by this message-preserving handler.
+            (0x000, 0x00) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowAbstractMethodError)?,
             // LoM's legacy 0x1f8 table is revision-skewed relative to the
             // newer DLET export table. Static caller dataflow identifies 0x16
             // as dlet_get_property(applet, property, output).
