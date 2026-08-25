@@ -58,6 +58,12 @@ pub trait Platform: Send + Sync {
         None
     }
 
+    /// Places a telephone call through the host. Returns false when the host
+    /// cannot dispatch the request.
+    fn call_place(&self, _number: &str) -> bool {
+        false
+    }
+
     fn write_stdout(&self, buf: &[u8]);
     fn write_stderr(&self, buf: &[u8]);
     fn exit(&self);

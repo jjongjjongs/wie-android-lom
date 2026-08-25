@@ -207,6 +207,10 @@ impl Runner {
             .map(|instance| instance.shared.take_backlight_mode())
             .unwrap_or(0)
     }
+
+    pub fn take_phone_call(&mut self) -> Option<String> {
+        self.instance.as_ref()?.shared.take_phone_call()
+    }
 }
 
 /// The LGT firmware BIOS, bundled into the app so an LGT title can run real

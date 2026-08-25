@@ -3,6 +3,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
 
     <!-- Only for exporting saves to Downloads, and only before Android 10:
          from there a MediaStore insert needs no permission at all. -->

@@ -13,7 +13,7 @@ use wie_jvm_support::JvmSupport;
 use wie_util::{Result, read_generic, write_generic, write_null_terminated_string_bytes};
 use wie_wipi_c::{
     MethodImpl, WIPICContext, WIPICMethodBody, WIPICResult,
-    api::{database, graphics, kernel, media, misc, net, util},
+    api::{database, graphics, kernel, media, misc, net, phone, util},
 };
 
 use context::LgtWIPICContext;
@@ -184,6 +184,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::Unk10 => unk10.into_body(),
         WIPICSvcId::SetMuteState => media::set_mute_state.into_body(),
         WIPICSvcId::GetMuteState => media::get_mute_state.into_body(),
+        WIPICSvcId::CallPlace => phone::call_place.into_body(),
         WIPICSvcId::BackLight => misc::back_light.into_body(),
     };
 

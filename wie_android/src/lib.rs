@@ -251,6 +251,27 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     .unwrap_or(0) as jint
 }
 
+/// `nativePollPhoneCall() -> String`
+///
+/// Returns a pending telephone number, or `null` when there is no request.
+///
+/// # Safety
+/// Called by the JVM with a valid `env` reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollPhoneCall(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let number = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        with_runner(|runner| runner.take_phone_call())
+    })) {
+        Ok(Some(number)) => number,
+        Ok(None) | Err(_) => return std::ptr::null_mut(),
+    };
+
+    to_java_string(&env, &number)
+}
+
 /// `nativeInspect(byte[] archive) -> String`
 ///
 /// Describes an archive without running it.

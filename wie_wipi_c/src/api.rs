@@ -4,5 +4,6 @@ pub mod kernel;
 pub mod media;
 pub mod misc;
 pub mod net;
+pub mod phone;
 pub mod uic;
 pub mod util;

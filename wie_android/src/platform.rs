@@ -43,6 +43,7 @@ pub struct Shared {
     redraw_requested: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
     backlight_mode: Arc<AtomicU8>,
+    phone_call: Arc<Mutex<Option<String>>>,
 }
 
 /// Bound on queued audio commands. A game that pushes samples faster than
@@ -125,6 +126,14 @@ impl Shared {
     pub fn take_backlight_mode(&self) -> u8 {
         self.backlight_mode.swap(0, Ordering::SeqCst)
     }
+
+    pub fn push_phone_call(&self, number: String) {
+        *self.phone_call.lock().unwrap_or_else(|x| x.into_inner()) = Some(number);
+    }
+
+    pub fn take_phone_call(&self) -> Option<String> {
+        self.phone_call.lock().unwrap_or_else(|x| x.into_inner()).take()
+    }
 }
 
 pub struct AndroidPlatform {
@@ -176,6 +185,11 @@ impl Platform for AndroidPlatform {
 
     fn network(&self) -> Option<&dyn Network> {
         Some(&self.network)
+    }
+
+    fn call_place(&self, number: &str) -> bool {
+        self.shared.push_phone_call(number.to_string());
+        true
     }
 
     fn write_stdout(&self, buf: &[u8]) {

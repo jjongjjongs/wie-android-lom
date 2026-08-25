@@ -64,6 +64,9 @@ final class NativeBridge {
     /** Returns a pending handset backlight mode, or zero when unchanged. */
     static native int nativePollBacklightMode();
 
+    /** Returns a pending phone-call number, or null when there is no request. */
+    static native String nativePollPhoneCall();
+
     /** Describes an archive without running it. */
     static native String nativeInspect(byte[] archive);
 
