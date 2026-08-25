@@ -139,6 +139,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::TimeComponent => time_component.into_body(),
         WIPICSvcId::TimeConvert => time_convert.into_body(),
         WIPICSvcId::TimeToTm => time_to_tm.into_body(),
+        WIPICSvcId::UicConfigure => uic::configure.into_body(),
         WIPICSvcId::UicSetEnable => uic::set_enable.into_body(),
         WIPICSvcId::DateTimeToTm => time_to_tm.into_body(),
         WIPICSvcId::OpenDatabase => database::open_database.into_body(),
