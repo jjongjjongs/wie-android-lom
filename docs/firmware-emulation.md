@@ -275,6 +275,18 @@ on device before the next.
     still calls null. Nailing `dprocess_create`'s six arguments (r0-r3 + two
     stacked) is the remaining prerequisite; `create_process` (`0xecf5c`) shows
     it fills a process table, sets `+0x18/+0x54/+0x58`, a name, and links.
+  - **`dprocess_create` call convention (from `dlet_start` at `0x19abfc`).**
+    `dprocess_create(r0=name, r1=[desc+0x28], r2=0, r3=[desc+0x38],`
+    `stack0=[desc+0x3c], stack1=[desc+0x40])`, all fields of the applet
+    descriptor. `create_process` uses r0 as a NUL-terminated name (it `strlen`s
+    it), stores r1 at process `+0x54` and the result of an internal call at
+    `+0x58`. To synthesize a process for audio only (no scheduler), the open
+    questions are which of these args are load-bearing for `dmemory_alloc`'s
+    path (the allocator at `+0x24`) versus only for actually *running* the
+    process, and where `create_process` sets `+0x24`. That is the first thing to
+    pin next session: read `create_process` past `0xed058` for the `+0x24`
+    (allocator) write, then call `dprocess_create` with a name + safe zeros and
+    set it current.
   - The host-call ABI note below (`__emutls host_call`, `a32_blk`) turned out
     not to apply to us: that is the *reference's* ARM-interpreter plumbing. Our
     imports bind straight to SVC trampolines, so there is no host-call ABI to
