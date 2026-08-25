@@ -1,4 +1,5 @@
 pub mod database;
+pub mod filesystem;
 pub mod graphics;
 pub mod kernel;
 pub mod media;

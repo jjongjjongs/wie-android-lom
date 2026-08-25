@@ -193,4 +193,30 @@ impl Filesystem for CliFilesystem {
 
         fs::remove_file(disk_path).is_ok()
     }
+
+    async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
+        let disk_path = if path.is_empty() {
+            self.path_for(aid, ".")?
+        } else {
+            self.path_for(aid, path)?
+        };
+
+        let entries = match fs::read_dir(disk_path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(aid, path, error = %error, "list: read_dir failed");
+                }
+                return None;
+            }
+        };
+
+        Some(
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect(),
+        )
+    }
+
 }

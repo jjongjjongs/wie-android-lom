@@ -170,6 +170,38 @@ impl Filesystem for AndroidFilesystem {
 
         fs::remove_file(disk_path).is_ok()
     }
+
+    async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
+        let sanitized_aid: String = aid.chars().filter(|c| !matches!(c, '/' | '\\' | '\0')).collect();
+        if sanitized_aid.is_empty() || sanitized_aid == "." || sanitized_aid == ".." {
+            tracing::error!(aid, path, "list: invalid aid");
+            return None;
+        }
+
+        let disk_path = if path.is_empty() {
+            self.base_path.join(sanitized_aid)
+        } else {
+            self.path_for(aid, path)?
+        };
+
+        let entries = match fs::read_dir(disk_path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(aid, path, error = %error, "list: read_dir failed");
+                }
+                return None;
+            }
+        };
+
+        Some(
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect(),
+        )
+    }
+
 }
 
 #[cfg(test)]

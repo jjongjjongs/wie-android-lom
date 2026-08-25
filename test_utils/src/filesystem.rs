@@ -1,4 +1,6 @@
 use alloc::{
+    format,
+    collections::BTreeSet,
     boxed::Box,
     string::{String, ToString},
     vec::Vec,
@@ -64,5 +66,34 @@ impl Filesystem for MemoryFilesystem {
 
     async fn remove(&self, aid: &str, path: &str) -> bool {
         self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
+    }
+
+    async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{path}/")
+        };
+        let files = self.files.lock();
+        let mut entries = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        for ((entry_aid, entry_path), _) in files.iter() {
+            if entry_aid != aid {
+                continue;
+            }
+            let Some(rest) = entry_path.strip_prefix(&prefix) else {
+                continue;
+            };
+            if rest.is_empty() {
+                continue;
+            }
+            let child = rest.split('/').next().unwrap_or(rest).to_string();
+            if seen.insert(child.clone()) {
+                entries.push(child);
+            }
+        }
+
+        Some(entries)
     }
 }

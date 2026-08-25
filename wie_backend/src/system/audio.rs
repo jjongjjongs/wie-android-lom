@@ -219,6 +219,7 @@ impl SmafPlayer {
 
 #[cfg(test)]
 mod tests {
+    use alloc::{string::String, vec::Vec};
     use alloc::{boxed::Box, sync::Arc, vec};
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -297,6 +298,10 @@ mod tests {
 
         async fn remove(&self, _aid: &str, _path: &str) -> bool {
             false
+        }
+
+        async fn list(&self, _aid: &str, _path: &str) -> Option<Vec<String>> {
+            None
         }
     }
 

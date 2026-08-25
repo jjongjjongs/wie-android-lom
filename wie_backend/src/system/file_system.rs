@@ -1,4 +1,4 @@
-use alloc::{borrow::ToOwned, boxed::Box, string::String, sync::Arc, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeSet, string::String, sync::Arc, vec::Vec};
 use core::cmp::min;
 
 use hashbrown::HashMap;
@@ -39,6 +39,39 @@ fn normalize_guest_path(path: &str) -> Option<String> {
 
     if out.is_empty() { None } else { Some(out) }
 }
+
+/// Normalize a guest directory path.
+///
+/// Unlike file paths, the root directory is valid and is represented as the
+/// empty string. A trailing slash is accepted because the LGT filesystem layer
+/// strips it before opening the directory.
+fn normalize_guest_directory(path: &str) -> Option<String> {
+    if path.contains('\\') {
+        return None;
+    }
+
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Some(String::new());
+    }
+
+    let mut out = String::new();
+    for seg in trimmed.split('/') {
+        match seg {
+            "" | "." => continue,
+            ".." => return None,
+            normal => {
+                if !out.is_empty() {
+                    out.push('/');
+                }
+                out.push_str(normal);
+            }
+        }
+    }
+
+    Some(out)
+}
+
 
 /// Unified filesystem view exposed by `System::filesystem()`.
 ///
@@ -126,10 +159,67 @@ impl FilesystemOverlay {
 
         self.platform.filesystem().remove(&self.aid, &normalized).await
     }
+
+    /// Lists the direct children visible through the overlay.
+    ///
+    /// Platform entries come first in their native enumeration order. Virtual
+    /// archive entries that are not shadowed by the platform follow. Virtual
+    /// directories are implicit in archive paths and are exposed by their
+    /// first path component.
+    pub async fn list(&self, path: &str) -> Option<Vec<String>> {
+        let normalized = normalize_guest_directory(path)?;
+
+        let platform_entries = self.platform.filesystem().list(&self.aid, &normalized).await;
+        let platform_exists = platform_entries.is_some();
+        let mut entries = platform_entries.unwrap_or_default();
+
+        let mut seen = BTreeSet::new();
+        for entry in &entries {
+            seen.insert(entry.clone());
+        }
+
+        let prefix = if normalized.is_empty() {
+            String::new()
+        } else {
+            let mut prefix = normalized.clone();
+            prefix.push('/');
+            prefix
+        };
+
+        for key in self.virtual_files.lock().keys() {
+            let Some(rest) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            if rest.is_empty() {
+                continue;
+            }
+
+            let child = rest.split('/').next().unwrap_or(rest);
+            if seen.insert(child.to_owned()) {
+                entries.push(child.to_owned());
+            }
+        }
+
+        if entries.is_empty() {
+            let virtual_dir_exists = normalized.is_empty()
+                || self
+                    .virtual_files
+                    .lock()
+                    .keys()
+                    .any(|key| key.starts_with(&prefix));
+
+            if !virtual_dir_exists && !platform_exists {
+                return None;
+            }
+        }
+
+        Some(entries)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::{collections::BTreeSet, format};
     use alloc::{
         boxed::Box,
         string::{String, ToString},
@@ -190,6 +280,35 @@ mod tests {
 
         async fn remove(&self, aid: &str, path: &str) -> bool {
             self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
+        }
+
+        async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
+            let prefix = if path.is_empty() {
+                String::new()
+            } else {
+                format!("{path}/")
+            };
+            let files = self.files.lock();
+            let mut entries = Vec::new();
+            let mut seen = BTreeSet::new();
+
+            for ((entry_aid, entry_path), _) in files.iter() {
+                if entry_aid != aid {
+                    continue;
+                }
+                let Some(rest) = entry_path.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if rest.is_empty() {
+                    continue;
+                }
+                let child = rest.split('/').next().unwrap_or(rest).to_string();
+                if seen.insert(child.clone()) {
+                    entries.push(child);
+                }
+            }
+
+            Some(entries)
         }
     }
 
@@ -292,5 +411,39 @@ mod tests {
         let mut buf = [0u8; 4];
         assert_eq!(fs.read("cfg.dat", 0, 4, &mut buf).await, Some(4));
         assert_eq!(buf, [1, 2, 3, 4]);
+    }
+
+
+    #[futures_test::test]
+    async fn list_merges_platform_and_virtual_direct_children() {
+        let fs = setup();
+
+        fs.write("dir/platform.dat", 0, &[1]).await;
+        fs.add_virtual("dir/virtual.dat", vec![2]);
+        fs.add_virtual("dir/sub/deep.dat", vec![3]);
+        fs.add_virtual("dir/platform.dat", vec![4]);
+
+        let entries = fs.list("dir/").await.unwrap();
+
+        assert_eq!(entries.first().map(String::as_str), Some("platform.dat"));
+        assert_eq!(entries.iter().filter(|x| x.as_str() == "platform.dat").count(), 1);
+
+        let mut virtual_tail = entries[1..].to_vec();
+        virtual_tail.sort();
+        assert_eq!(virtual_tail, vec!["sub".to_string(), "virtual.dat".to_string()]);
+    }
+
+    #[futures_test::test]
+    async fn list_virtual_root_exposes_only_direct_children() {
+        let fs = setup();
+
+        fs.add_virtual("root.bin", vec![1]);
+        fs.add_virtual("P/data.bin", vec![2]);
+        fs.add_virtual("P/nested/deep.bin", vec![3]);
+
+        let mut entries = fs.list("/").await.unwrap();
+        entries.sort();
+
+        assert_eq!(entries, vec!["P".to_string(), "root.bin".to_string()]);
     }
 }

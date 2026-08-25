@@ -1,4 +1,4 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 use crate::{audio_sink::AudioSink, database::DatabaseRepository, screen::Screen, time::Instant};
 
@@ -110,4 +110,11 @@ pub trait Filesystem: Send + Sync {
     async fn truncate(&self, aid: &str, path: &str, len: usize);
 
     async fn remove(&self, aid: &str, path: &str) -> bool;
+
+    /// Lists direct child basenames of a directory.
+    ///
+    /// Files and directories are returned alike. `Some(Vec::new())` means an
+    /// existing empty directory; `None` means the directory could not be
+    /// opened. Implementations preserve their native enumeration order.
+    async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>>;
 }
