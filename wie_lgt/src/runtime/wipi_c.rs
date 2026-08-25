@@ -13,7 +13,7 @@ use wie_jvm_support::JvmSupport;
 use wie_util::{Result, read_generic, write_generic, write_null_terminated_string_bytes};
 use wie_wipi_c::{
     MethodImpl, WIPICContext, WIPICMethodBody, WIPICResult,
-    api::{database, filesystem, graphics, kernel, media, misc, net, phone, system, uic, util},
+    api::{database, filesystem, graphics, kernel, media, misc, net, phone, serial, system, uic, util},
 };
 
 use context::LgtWIPICContext;
@@ -44,11 +44,21 @@ struct CMethodProxy {
 
 async fn handle_wipic_svc(
     core: &mut ArmCore,
-    (system, jvm, network_state): &mut (System, Jvm, net::SharedNetworkState),
+    (system, jvm, network_state, serial_state): &mut (
+        System,
+        Jvm,
+        net::SharedNetworkState,
+        serial::SharedSerialState,
+    ),
     id: SvcId,
 ) -> Result<()> {
-    let wipic_context =
-        LgtWIPICContext::new(core.clone(), system.clone(), jvm.clone(), network_state.clone());
+    let wipic_context = LgtWIPICContext::new(
+        core.clone(),
+        system.clone(),
+        jvm.clone(),
+        network_state.clone(),
+        serial_state.clone(),
+    );
     let (_, lr) = core.read_pc_lr()?;
     // An unimplemented WIPI-C function is reported and skipped rather than
     // ending the run. Stopping on the first one hides everything a title does
@@ -167,6 +177,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SocketClose => net::socket_close.into_body(),
         WIPICSvcId::SetReadCallback => net::set_read_callback.into_body(),
         WIPICSvcId::SetWriteCallback => net::set_write_callback.into_body(),
+        WIPICSvcId::SerialOpen => serial::open.into_body(),
         WIPICSvcId::BillSocket => net::bill_socket.into_body(),
         WIPICSvcId::Htonl => util::htonl.into_body(),
         WIPICSvcId::Htons => util::htons.into_body(),
@@ -235,7 +246,7 @@ pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm
     core.register_svc_handler(
         SVC_CATEGORY_WIPIC,
         handle_wipic_svc,
-        &(system.clone(), jvm.clone(), net::new_state()),
+        &(system.clone(), jvm.clone(), net::new_state(), serial::new_state()),
     )
 }
 
