@@ -211,6 +211,10 @@ impl Runner {
     pub fn take_phone_call(&mut self) -> Option<String> {
         self.instance.as_ref()?.shared.take_phone_call()
     }
+
+    pub fn take_browser_url(&mut self) -> Option<String> {
+        self.instance.as_ref()?.shared.take_browser_url()
+    }
 }
 
 /// The LGT firmware BIOS, bundled into the app so an LGT title can run real

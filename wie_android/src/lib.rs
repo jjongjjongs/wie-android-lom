@@ -272,6 +272,28 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     to_java_string(&env, &number)
 }
 
+/// `nativePollBrowserUrl() -> String`
+///
+/// Returns a pending URL to open in the host browser, or `null` when there is
+/// no request.
+///
+/// # Safety
+/// Called by the JVM with a valid `env` reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBrowserUrl(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let url = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        with_runner(|runner| runner.take_browser_url())
+    })) {
+        Ok(Some(url)) => url,
+        Ok(None) | Err(_) => return std::ptr::null_mut(),
+    };
+
+    to_java_string(&env, &url)
+}
+
 /// `nativeInspect(byte[] archive) -> String`
 ///
 /// Describes an archive without running it.

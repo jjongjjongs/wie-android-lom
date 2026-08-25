@@ -17,6 +17,7 @@ static TEST_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 pub enum TestPlatformEvent {
     Stdout(Vec<u8>),
+    OpenUrl(String),
     Exit,
 }
 
@@ -76,6 +77,15 @@ impl Platform for TestPlatform {
 
     fn audio_sink(&self) -> Box<dyn AudioSink> {
         Box::new(TestAudioSink)
+    }
+
+    fn open_url(&self, url: &str) -> bool {
+        if let Some(event_handler) = &self.event_handler {
+            (event_handler)(TestPlatformEvent::OpenUrl(url.to_string()));
+            true
+        } else {
+            false
+        }
     }
 
     fn write_stdout(&self, buf: &[u8]) {

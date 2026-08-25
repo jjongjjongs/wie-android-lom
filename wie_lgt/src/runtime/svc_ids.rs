@@ -233,6 +233,7 @@ pub enum WIPICSvcId {
     GetMuteState = 0x4d2,
     CallPlace = 0x514,
     BackLight = 0x578,
+    SysExecute = 0x6a4,
 }
 
 impl TryFrom<SvcId> for WIPICSvcId {
@@ -359,6 +360,7 @@ impl TryFrom<SvcId> for WIPICSvcId {
             0x4d2 => Self::GetMuteState,
             0x514 => Self::CallPlace,
             0x578 => Self::BackLight,
+            0x6a4 => Self::SysExecute,
             _ => return Err(wie_util::WieError::FatalError(alloc::format!("Unknown LGT WIPIC SVC id {}", value.0))),
         })
     }

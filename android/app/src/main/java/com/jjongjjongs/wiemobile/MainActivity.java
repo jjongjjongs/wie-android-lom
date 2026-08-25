@@ -882,6 +882,11 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> placePhoneCall(phoneCall));
         }
 
+        String browserUrl = NativeBridge.nativePollBrowserUrl();
+        if (browserUrl != null) {
+            runOnUiThread(() -> openBrowser(browserUrl));
+        }
+
         if (NativeBridge.nativeRunning() == 0) {
             running = false;
             String error = NativeBridge.nativeLastError();
@@ -927,6 +932,19 @@ public final class MainActivity extends Activity {
             Toast.makeText(
                     this,
                     "통화 요청 실패: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Host side of LGT MC_sysExecute("WAPBROWSER", argv). */
+    private void openBrowser(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception e) {
+            Log.e(TAG, "Browser launch failed", e);
+            Toast.makeText(
+                    this,
+                    "브라우저 실행 실패: " + e.getMessage(),
                     Toast.LENGTH_LONG).show();
         }
     }

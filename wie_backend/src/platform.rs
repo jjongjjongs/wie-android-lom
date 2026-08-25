@@ -64,6 +64,12 @@ pub trait Platform: Send + Sync {
         false
     }
 
+    /// Opens a URL through the host platform. Returns false when the host
+    /// cannot dispatch the request.
+    fn open_url(&self, _url: &str) -> bool {
+        false
+    }
+
     fn write_stdout(&self, buf: &[u8]);
     fn write_stderr(&self, buf: &[u8]);
     fn exit(&self);

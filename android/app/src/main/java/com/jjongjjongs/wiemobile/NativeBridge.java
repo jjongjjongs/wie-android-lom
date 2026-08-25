@@ -67,6 +67,9 @@ final class NativeBridge {
     /** Returns a pending phone-call number, or null when there is no request. */
     static native String nativePollPhoneCall();
 
+    /** Returns a pending URL to open in the host browser, or null when there is no request. */
+    static native String nativePollBrowserUrl();
+
     /** Describes an archive without running it. */
     static native String nativeInspect(byte[] archive);
 

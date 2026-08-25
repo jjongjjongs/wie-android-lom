@@ -44,6 +44,7 @@ pub struct Shared {
     exited: Arc<AtomicBool>,
     backlight_mode: Arc<AtomicU8>,
     phone_call: Arc<Mutex<Option<String>>>,
+    browser_url: Arc<Mutex<Option<String>>>,
 }
 
 /// Bound on queued audio commands. A game that pushes samples faster than
@@ -134,6 +135,14 @@ impl Shared {
     pub fn take_phone_call(&self) -> Option<String> {
         self.phone_call.lock().unwrap_or_else(|x| x.into_inner()).take()
     }
+
+    pub fn push_browser_url(&self, url: String) {
+        *self.browser_url.lock().unwrap_or_else(|x| x.into_inner()) = Some(url);
+    }
+
+    pub fn take_browser_url(&self) -> Option<String> {
+        self.browser_url.lock().unwrap_or_else(|x| x.into_inner()).take()
+    }
 }
 
 pub struct AndroidPlatform {
@@ -189,6 +198,11 @@ impl Platform for AndroidPlatform {
 
     fn call_place(&self, number: &str) -> bool {
         self.shared.push_phone_call(number.to_string());
+        true
+    }
+
+    fn open_url(&self, url: &str) -> bool {
+        self.shared.push_browser_url(url.to_string());
         true
     }
 
