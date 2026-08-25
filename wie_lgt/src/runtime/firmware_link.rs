@@ -264,6 +264,18 @@ pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option
         }
     }
 
+    // The firmware's media manager is a JNI object: it fetches the current
+    // JNIEnv and calls Java through it. There is no ART here, so getJNIEnv
+    // returns null and the media path jumps through a null table slot. Install a
+    // synthetic JNIEnv into the firmware's kernel_jni_env global so those calls
+    // land on serviceable (for now, traced) stubs instead of crashing.
+    match image.export("kernel_jni_env") {
+        Some(addr) => {
+            super::firmware_jni::install_firmware_jni_env(core, system, addr)?;
+        }
+        None => tracing::warn!("Firmware has no kernel_jni_env export; media JNI path will not have an env"),
+    }
+
     Ok(Some(image))
 }
 
