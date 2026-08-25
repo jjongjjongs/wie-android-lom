@@ -132,6 +132,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::ImGetSupportedModes => im_get_supported_modes.into_body(),
         WIPICSvcId::ImSetCurrentMode => im_set_current_mode.into_body(),
         WIPICSvcId::ImGetCurrentMode => im_get_current_mode.into_body(),
+        WIPICSvcId::ImHandleInput => im_handle_input.into_body(),
         WIPICSvcId::TimeNow => time_now.into_body(),
         WIPICSvcId::TimeComponent => time_component.into_body(),
         WIPICSvcId::TimeConvert => time_convert.into_body(),
@@ -389,6 +390,49 @@ async fn im_get_current_mode(context: &mut dyn WIPICContext, a0: u32, a1: u32, a
     tracing::debug!("MC_imGetCurrentMode({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(context.system().current_input_mode())
+}
+
+/// `MC_imHandleInput` (vendor export 304 / WIPI-C service 0x130).
+///
+/// The LGT wrapper maps WIPI key event 503 to DIME event 2. Its provider only
+/// handles DIME events 2 and 4, so WIPI events 502 and 504 return 0 without
+/// touching the output buffers. For event 503, both output pairs are cleared
+/// before input processing and then receive committed/composing text.
+async fn im_handle_input(
+    context: &mut dyn WIPICContext,
+    key: u32,
+    event: u32,
+    output0: u32,
+    output0_len: u32,
+    output1: u32,
+    output1_len: u32,
+) -> Result<u32> {
+    tracing::debug!(
+        "MC_imHandleInput({key:#x}, {event:#x}, {output0:#x}, {output0_len:#x}, {output1:#x}, {output1_len:#x})"
+    );
+
+    if event != 503 {
+        return Ok(0);
+    }
+
+    context.write_bytes(output0, &[0])?;
+    write_generic(context, output0_len, 0u32)?;
+    context.write_bytes(output1, &[0])?;
+    write_generic(context, output1_len, 0u32)?;
+
+    let output = context.system().handle_input_method(key as i8, 2);
+
+    if output.output0_len != 0 {
+        context.write_bytes(output0, &output.output0[..output.output0_len])?;
+    }
+    write_generic(context, output0_len, output.output0_len as u32)?;
+
+    if output.output1_len != 0 {
+        context.write_bytes(output1, &output.output1[..output.output1_len])?;
+    }
+    write_generic(context, output1_len, output.output1_len as u32)?;
+
+    Ok(if output.handled { 1 } else { 0 })
 }
 
 /// `MC_imSetCurrentMode` (vendor export 302).
