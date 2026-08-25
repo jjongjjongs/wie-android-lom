@@ -163,7 +163,7 @@ impl LgtEmulator {
         // MC_mda* exports (P3). Dormant without the BIOS; the game runs on the
         // Rust platform either way.
         let mda_routes = if let Some(image) = crate::runtime::firmware_link::try_load_bios(core, system).await? {
-            let routes = crate::runtime::firmware_link::build_mda_routes(&image);
+            let routes = crate::runtime::firmware_link::build_mda_routes(core, system, &image)?;
             let plan = crate::runtime::firmware_link::FirmwareInitPlan::from_image(&image);
             let mut firmware_core = core.clone();
             system.spawn(async move || {

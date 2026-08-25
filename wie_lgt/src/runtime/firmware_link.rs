@@ -9,14 +9,15 @@
 //! constructors and `MH_sysHalInit`. Init failures are logged, not fatal, so a
 //! bring-up crash never stops the game from running on the Rust platform.
 
-use alloc::{collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
+use alloc::{collections::BTreeMap, format, string::String, sync::Arc, vec, vec::Vec};
 
 use spin::Mutex;
 
 use wie_backend::System;
-use wie_core_arm::{Allocator, ArmCore};
+use wie_core_arm::{Allocator, ArmCore, ResultWriter, SvcId};
 use wie_util::{ByteWrite, Result, read_generic, write_generic};
 
+use super::SVC_CATEGORY_FIRMWARE_MDA;
 use super::firmware::{FirmwareImage, ImportResolver, load_firmware};
 use super::firmware_libc::{FirmwareImportNames, register_firmware_libc_handler};
 
@@ -84,6 +85,59 @@ impl ImportResolver for FirmwareResolver {
 /// than as the previous first-call crash.
 const ENABLE_MDA_ROUTING: bool = true;
 
+/// Whether to route each media call through a trace shim instead of straight to
+/// the firmware. ON logs every `MC_mda*` the game makes - name, args, and return
+/// value - so the otherwise-silent media call sequence (which jumps directly
+/// into firmware code) becomes visible in the device log. It adds a call layer
+/// per media call, so it is a diagnostic switch, not the shipping path.
+const ENABLE_MDA_TRACE: bool = true;
+
+/// SVC-id -> (import name, firmware export address) for the media trace shim,
+/// shared between `build_mda_routes` (which fills it, one entry per route) and
+/// the trace handler (which reads it to name the call and find the firmware
+/// function to invoke).
+type FirmwareMdaRoutes = Arc<Mutex<Vec<(String, u32)>>>;
+
+/// Registers the media-route trace handler. Each routed call arrives as an SVC
+/// whose id indexes `routes`; the handler logs the call, invokes the firmware
+/// export with the same arguments, logs the result, and returns it to the game.
+fn register_firmware_mda_handler(core: &mut ArmCore, routes: FirmwareMdaRoutes) -> Result<()> {
+    #[derive(Clone)]
+    struct MdaTraceContext {
+        routes: FirmwareMdaRoutes,
+    }
+
+    async fn handle_mda_svc(core: &mut ArmCore, context: &mut MdaTraceContext, id: SvcId) -> Result<()> {
+        let (_, lr) = core.read_pc_lr()?;
+        let index = id.0 as usize;
+        let (name, addr) = context
+            .routes
+            .lock()
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| (format!("mda_route#{index}"), 0));
+
+        let a0 = core.read_param(0)?;
+        let a1 = core.read_param(1)?;
+        let a2 = core.read_param(2)?;
+        let a3 = core.read_param(3)?;
+        tracing::info!("[mda] {name}(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x}) -> firmware {addr:#x}");
+
+        if addr == 0 {
+            return 0u32.write(core, lr);
+        }
+
+        // Invoke the firmware export with the game's arguments. `run_function`
+        // saves and restores the game's register context around the nested call,
+        // so this is transparent to the game apart from r0 (the return value).
+        let ret: u32 = core.run_function(addr, &[a0, a1, a2, a3]).await?;
+        tracing::info!("[mda] {name} returned {ret:#x}");
+        ret.write(core, lr)
+    }
+
+    core.register_svc_handler(SVC_CATEGORY_FIRMWARE_MDA, handle_mda_svc, &MdaTraceContext { routes })
+}
+
 /// The game's WIPI-C media import indices (table `0x1fb`) paired with the
 /// firmware export that implements each. Routing these to the firmware is the
 /// P3 audio cutover: the game's clip lifecycle runs real firmware code.
@@ -100,22 +154,46 @@ const MDA_ROUTES: &[(u32, &str)] = &[
 /// Builds the WIPI-C-index -> firmware-address map for the media functions the
 /// loaded firmware provides. Indices whose export is missing are skipped, so a
 /// firmware that lacks one simply keeps the Rust stub for it.
-pub fn build_mda_routes(image: &FirmwareImage) -> BTreeMap<u32, u32> {
+pub fn build_mda_routes(core: &mut ArmCore, _system: &System, image: &FirmwareImage) -> Result<BTreeMap<u32, u32>> {
     let mut routes = BTreeMap::new();
     if !ENABLE_MDA_ROUTING {
         tracing::info!("Firmware media routing disabled (needs a current dprocess first); game keeps the Rust audio path");
-        return routes;
+        return Ok(routes);
     }
+
+    // When tracing, each route resolves to an SVC trace stub (which logs and
+    // then invokes the firmware) rather than the firmware address directly.
+    let trace: Option<FirmwareMdaRoutes> = if ENABLE_MDA_TRACE {
+        let table: FirmwareMdaRoutes = Arc::new(Mutex::new(Vec::new()));
+        register_firmware_mda_handler(core, table.clone())?;
+        Some(table)
+    } else {
+        None
+    };
+
     for (index, name) in MDA_ROUTES {
         match image.export(name) {
             Some(addr) => {
-                tracing::info!("Routing WIPI-C media import {index:#x} -> firmware {name} {addr:#x}");
-                routes.insert(*index, addr);
+                let target = if let Some(table) = &trace {
+                    let stub_id = {
+                        let mut table = table.lock();
+                        let id = table.len() as u32;
+                        table.push(((*name).into(), addr));
+                        id
+                    };
+                    let stub = core.make_svc_stub(SVC_CATEGORY_FIRMWARE_MDA, stub_id)?;
+                    tracing::info!("Routing WIPI-C media import {index:#x} -> [traced] firmware {name} {addr:#x} via stub {stub:#x}");
+                    stub
+                } else {
+                    tracing::info!("Routing WIPI-C media import {index:#x} -> firmware {name} {addr:#x}");
+                    addr
+                };
+                routes.insert(*index, target);
             }
             None => tracing::warn!("Firmware has no {name}; leaving WIPI-C import {index:#x} on the Rust stub"),
         }
     }
-    routes
+    Ok(routes)
 }
 
 /// Reads the whole BIOS file out of the filesystem overlay.
