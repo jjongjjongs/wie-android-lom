@@ -29,6 +29,8 @@ mod tone;
 mod voice;
 mod wave;
 
+use std::collections::BTreeMap;
+
 use crate::ma3::{
     bus::{clamp_i16, mix_q15, stereo_gain_q15},
     tone::{Bank, DRUM_CHANNEL},
@@ -329,13 +331,6 @@ impl Synth {
         }
     }
 
-    pub fn silence(&mut self) {
-        self.voices.clear();
-        self.channels = [Channel::default(); MIDI_CHANNELS];
-        self.bank.clear();
-        self.reported_voices = 0;
-    }
-
     pub fn set_master_volume(&mut self, volume: u8) {
         self.master_volume = ((u16::from(volume.min(100)) * 127) / 100) as u8;
 
@@ -414,6 +409,148 @@ impl Synth {
 
 fn gains(state: &Channel, velocity: u8, master_volume: u8) -> (i32, i32) {
     stereo_gain_q15(state.volume, state.expression, velocity, master_volume, state.pan)
+}
+
+/// A set of independent [`Synth`] voices, one per playing clip, summed to one
+/// output.
+///
+/// A title plays several clips at once - a looping background track under short
+/// effects - and each is its own sequence on its own channels, every file
+/// numbering channels from zero. Rendered through one shared synth they collide:
+/// an effect's program change overwrites the track's instrument on the same
+/// channel, and each clip's end-of-sequence "all notes off" silences whatever
+/// else is sounding there. The reference avoids this by giving every clip its
+/// own renderer and mixing the results; this does the same. `open` hands a clip
+/// an isolated voice, its events go only to that voice, and `render` sums them.
+pub struct SynthMixer {
+    voices: BTreeMap<u32, MixerVoice>,
+    next_id: u32,
+    master_volume: u8,
+}
+
+struct MixerVoice {
+    synth: Synth,
+    /// The clip has stopped feeding this voice; keep rendering until its sound
+    /// decays (release tails finished), then `render` drops it, so a stop does
+    /// not cut the tail.
+    closing: bool,
+}
+
+impl Default for SynthMixer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SynthMixer {
+    pub fn new() -> Self {
+        Self {
+            voices: BTreeMap::new(),
+            next_id: 1,
+            master_volume: 100,
+        }
+    }
+
+    /// Opens an isolated voice and returns its id. Id 0 is never handed out, so
+    /// a caller can use it as "no voice".
+    pub fn open(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let mut synth = Synth::new();
+        synth.set_master_volume(self.master_volume);
+        self.voices.insert(id, MixerVoice { synth, closing: false });
+        id
+    }
+
+    /// Marks a voice's clip as finished; the voice keeps rendering until its
+    /// sound decays, then `render` drops it.
+    pub fn close(&mut self, voice: u32) {
+        if let Some(entry) = self.voices.get_mut(&voice) {
+            entry.closing = true;
+        }
+    }
+
+    fn synth(&mut self, voice: u32) -> Option<&mut Synth> {
+        self.voices.get_mut(&voice).map(|entry| &mut entry.synth)
+    }
+
+    pub fn note_on(&mut self, voice: u32, channel: u8, note: u8, velocity: u8) {
+        if let Some(synth) = self.synth(voice) {
+            synth.note_on(channel, note, velocity);
+        }
+    }
+
+    pub fn note_off(&mut self, voice: u32, channel: u8, note: u8) {
+        if let Some(synth) = self.synth(voice) {
+            synth.note_off(channel, note);
+        }
+    }
+
+    pub fn program_change(&mut self, voice: u32, channel: u8, program: u8) {
+        if let Some(synth) = self.synth(voice) {
+            synth.program_change(channel, program);
+        }
+    }
+
+    pub fn control_change(&mut self, voice: u32, channel: u8, control: u8, value: u8) {
+        if let Some(synth) = self.synth(voice) {
+            synth.control_change(channel, control, value);
+        }
+    }
+
+    pub fn pitch_bend(&mut self, voice: u32, channel: u8, value: u16) {
+        if let Some(synth) = self.synth(voice) {
+            synth.pitch_bend(channel, value);
+        }
+    }
+
+    pub fn sysex(&mut self, voice: u32, message: &[u8]) {
+        if let Some(synth) = self.synth(voice) {
+            synth.sysex(message);
+        }
+    }
+
+    pub fn set_master_volume(&mut self, volume: u8) {
+        self.master_volume = volume;
+        for entry in self.voices.values_mut() {
+            entry.synth.set_master_volume(volume);
+        }
+    }
+
+    /// Stops every voice at once (the game paused or gone).
+    pub fn silence(&mut self) {
+        self.voices.clear();
+    }
+
+    /// Renders `frames` from every voice and sums them, dropping any closed
+    /// voice that has fallen silent. Returns `None` when nothing sounded, so the
+    /// caller queues no chunk - the same contract as [`Synth::render`].
+    pub fn render(&mut self, frames: usize) -> Option<Vec<i16>> {
+        let mut accumulator: Option<Vec<i32>> = None;
+        let mut finished: Vec<u32> = Vec::new();
+
+        for (id, entry) in &mut self.voices {
+            match entry.synth.render(frames) {
+                Some(samples) => {
+                    let acc = accumulator.get_or_insert_with(|| vec![0i32; frames * CHANNELS]);
+                    for (slot, sample) in acc.iter_mut().zip(samples.iter()) {
+                        *slot += i32::from(*sample);
+                    }
+                }
+                None => {
+                    if entry.closing {
+                        finished.push(*id);
+                    }
+                }
+            }
+        }
+
+        for id in finished {
+            self.voices.remove(&id);
+        }
+
+        accumulator.map(|acc| acc.iter().map(|sample| clamp_i16(i64::from(*sample)) as i16).collect())
+    }
 }
 
 /// Plays a whole `.mmf` through the synthesiser and returns the result as a

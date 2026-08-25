@@ -335,6 +335,37 @@ on device before the next.
     put-data; (3) locate the firmware's PCM output and tap it to the sink;
     (4) verify Zenonia on device against the reference; (5) delete the override
     and bundled recordings.
+  - **P3 findings (device trace, `firmware_link`/`firmware_jni`).** Routing the
+    mda imports to the firmware works up through the clip lifecycle: on device
+    Zenonia runs `MC_mdaClipCreate` → `MC_mdaClipPutData` (loads the MMF bytes)
+    → `MC_mdaClipAllocPlayer`, all in real firmware, after `media_manager_init`
+    (not the leaf `AND_mdaInit`) initialises the clip list and a synthetic
+    current process backs `dmemory_alloc`. Playback then calls `MC_mdaClipSetVolume`
+    / the player path, which reaches `getWipiMediaManager` — and here is the
+    real shape of the reference:
+    - **The firmware does not synthesise PCM itself; it delegates to Java over
+      JNI.** `MH_mdaPlay`/`MH_mdaSetVolume` call `getJNIEnv` then
+      `getWipiMediaManager`, which calls `JNIEnv->FindClass("uwipi/audio/LegacyMmfMediaManager")`
+      and drives that Java class's methods. `MH_sysHalInit` similarly looks up
+      `android/lgt/wipi/HandsetManager`. On real hardware `JNI_OnLoad` hands the
+      firmware a real ART `JNIEnv`; there is none here, so `getJNIEnv` returned
+      null and the media path jumped through a null table slot (`PC=0`).
+    - **We install a synthetic `JNIEnv`** (`firmware_jni::install_firmware_jni_env`):
+      a `JNINativeInterface` table of SVC stubs plus a one-word env, written into
+      the firmware's `kernel_jni_env` export so `wipihal_get_kernel_jni_env`
+      returns it. For bring-up each slot logs the JNI function it services; the
+      trace named `FindClass`/`GetMethodID`/… — the set a real bridge must
+      implement to forward `LegacyMmfMediaManager` calls to wie's renderer.
+    - **Consequence — the two audio tracks converge.** The firmware ultimately
+      needs an MMF/MA-3 renderer (`uwipi.audio.LegacyMmfMediaManager`), which is
+      exactly what wie already owns in Rust (`wie_android/src/ma3` +
+      `third_party/smaf*`). So the shared, highest-value work is that renderer's
+      fidelity; a firmware-JNI bridge later forwards the Java media-manager calls
+      into it. Routing is therefore gated **off** (`ENABLE_MDA_ROUTING=false`)
+      until the bridge produces PCM: mixed routing (firmware clip, Rust
+      `media::play`) yields an `InvalidHandle` and silences every game, so it
+      must not ship. Firmware load/boot and the synthetic JNIEnv stay in, dormant,
+      for continued bring-up behind the flag.
 - **P4 — Wider cutover.** Move graphics and the rest over subsystem by subsystem,
   verifying each on device.
 - **P5 — Beyond the reference.** Save states, performance, display scaling, and

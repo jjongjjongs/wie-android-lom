@@ -89,6 +89,8 @@ pub async fn clip_create(context: &mut dyn WIPICContext, ptr_type: WIPICWord, bu
     };
     write_generic(context, clip_address, clip)?;
 
+    tracing::info!("[media] MC_mdaClipCreate(type={ptr_type:#x}, buf_size={buf_size:#x}, cb={callback:#x}) -> clip {clip_address:#x}");
+
     Ok(clip_address)
 }
 
@@ -139,13 +141,17 @@ pub async fn clip_put_data(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, 
     let mut data = vec![0; buf_size as _];
     context.read_bytes(buf, &mut data)?;
 
+    // First bytes help identify the format (SMAF "MMMD", etc.) when a title's
+    // clips fail to load and stay silent.
+    let magic: Vec<u8> = data.iter().take(4).copied().collect();
     let handle = context.system().audio().load_smaf(&data);
     if let Err(x) = handle {
-        tracing::error!("Failed to load audio: {x:?}");
+        tracing::error!("[media] MC_mdaClipPutData(clip={ptr_clip:#x}, size={buf_size:#x}, magic={magic:02x?}) load_smaf FAILED: {x:?}");
         return Ok(0);
     }
 
     let handle = handle.unwrap();
+    tracing::info!("[media] MC_mdaClipPutData(clip={ptr_clip:#x}, size={buf_size:#x}, magic={magic:02x?}) load_smaf -> handle {handle:#x}");
 
     let mut clip: MdaClip = read_generic(context, ptr_clip)?;
     clip.handle = handle;
@@ -185,14 +191,13 @@ pub async fn get_volume(_context: &mut dyn WIPICContext) -> Result<WIPICWord> {
 }
 
 pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: WIPICWord) -> Result<i32> {
-    tracing::debug!("MC_mdaPlay({ptr_clip:#x}, {repeat})");
-
     if ptr_clip == 0 {
         return Ok(0);
     }
 
     let clip: MdaClip = read_generic(context, ptr_clip)?;
     let callback = clip.h_proc as WIPICWord;
+    tracing::info!("[media] MC_mdaPlay(clip={ptr_clip:#x}, repeat={repeat}) handle={:#x}", clip.handle);
 
     let completed = {
         let system = context.system();
@@ -242,6 +247,23 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
             clip: ptr_clip,
         }))?;
     }
+
+    Ok(0)
+}
+
+/// `MC_mdaClipControl` (WIPI-C index `0x4b6`) — the player-path play/control
+/// call that titles like Zenonia use instead of `MC_mdaPlay`. The sequence is
+/// `ClipAllocPlayer` → `ClipSetVolume` → `ClipControl(clip, cmd, …)` →
+/// `ClipFreePlayer`; the clip's audio was already loaded by `ClipPutData`
+/// (`load_smaf`). Without this the loaded clip is never played and those effects
+/// are silent. `cmd` selects the play mode: `0x31` loops (BGM), `0x30` plays
+/// once (SFX); other commands are logged and ignored for now.
+pub async fn clip_control(_context: &mut dyn WIPICContext, clip: WIPICWord, cmd: WIPICWord, arg1: WIPICWord, arg2: WIPICWord) -> Result<WIPICWord> {
+    // Diagnostic (INFO): playing here blindly double-triggered clips the game
+    // also drives another way and layered them, so this is a logging no-op for
+    // now. The media-path INFO trace (clip_create/put_data/play) shows the real
+    // protocol; the player path is wired for real once that is understood.
+    tracing::info!("[media] MC_mdaClipControl(clip={clip:#x}, cmd={cmd:#x}, arg1={arg1:#x}, arg2={arg2:#x})");
 
     Ok(0)
 }

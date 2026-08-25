@@ -172,7 +172,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::ClipCreate => media::clip_create.into_body(),
         WIPICSvcId::ClipFree => media::clip_free.into_body(),
         WIPICSvcId::ClipPutData => media::clip_put_data.into_body(),
-        WIPICSvcId::Unk15 => unk15.into_body(),
+        WIPICSvcId::Unk15 => media::clip_control.into_body(),
         WIPICSvcId::ClipGetVolume => media::clip_get_volume.into_body(),
         WIPICSvcId::ClipSetVolume => media::clip_set_volume.into_body(),
         WIPICSvcId::Play => media::play.into_body(),
@@ -558,10 +558,3 @@ async fn unk14(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u
     Ok(0)
 }
 
-async fn unk15(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk15({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-
-    // media
-
-    Ok(0)
-}
