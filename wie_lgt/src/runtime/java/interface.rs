@@ -98,8 +98,11 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // LoM uses 0x57 for constant-string materialization:
         // (module/table, UTF-16 chars, length, cache slot).
         0x57 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetConstantString)?,
-        0x61 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImpl)?,
-        0xfa => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImplFast)?,
+        // Legacy LGT CLDC startup uses 0xfa -> 0x61 immediately before
+        // WIPI-Java/LGTE module activation. Cross-game binaries preserve this
+        // sequence and never use either slot as an array-store helper.
+        0x61 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyCldcBootstrap61)?,
+        0xfa => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyCldcBootstrapFa)?,
         0x0e => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiate)?,
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiateMultiArray)?,
         0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmClassIsAssignableTo)?,

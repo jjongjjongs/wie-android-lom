@@ -658,6 +658,15 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // application class registration/loading follows through imports
         // 0x07/0x14, so no additional process-local state is required here.
         InitSvcId::CldcModuleActivate => 0u32.write(core, lr),
+        // Older LGT-generated binaries split part of CLDC startup across
+        // table-0x64 imports 0xfa and 0x61 before WIPI-Java/LGTE activation.
+        // The exact native helper names are revision-specific, but their
+        // observable contract here is bootstrap side effects only: unrelated
+        // games use the same sequence and discard the wrapper return value.
+        // WIE already provides the corresponding process/class visibility
+        // through its single runtime context, so both compatibility hooks are
+        // intentionally zero-return no-ops, matching CldcModuleActivate.
+        InitSvcId::LegacyCldcBootstrapFa | InitSvcId::LegacyCldcBootstrap61 => 0u32.write(core, lr),
         // Native Java interface import 0x06 is
         // `vm_unregister_classes(index)`. Import 0x07 returns this index when
         // the application's compiled classes are registered.
