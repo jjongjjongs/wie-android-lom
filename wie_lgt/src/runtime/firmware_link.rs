@@ -230,6 +230,13 @@ const CURRENT_HOLDER_GOT_SLOT: u32 = 0x2f0;
 /// The `"os"` allocator-type string in firmware rodata, the type
 /// `create_process` passes to `dmemory_initheap_ex` for a process heap.
 const OS_ALLOC_TYPE_OFFSET: u32 = 0x29d158;
+/// The media clip list head, a firmware global that `media_create_clip_ex`
+/// (behind `MC_mdaClipCreate`) inserts each clip into via `dlink_insert_prev`.
+/// `AND_mdaInit` initialises it as an empty circular list (head->next =
+/// head->prev = head); if it ran without an allocator/current process the head
+/// is left zeroed and the first insert corrupts state. Logged after boot so the
+/// device trace shows whether init took. From RE: `r8(GOT) + 0x18411c`.
+const MEDIA_CLIP_LIST_HEAD_OFFSET: u32 = GOT_BASE_OFFSET + 0x18411c;
 /// Layout of the process struct used by `dmemory_alloc`: it reads the allocator
 /// at `+0x24`; `dmemory_initheap_ex` initialises the heap header at `+0x1c`, and
 /// the process name lives at `+148`.
@@ -331,6 +338,18 @@ pub async fn run_firmware_init(core: &mut ArmCore, plan: &FirmwareInitPlan) -> R
         let _: u32 = core.run_function(*ctor, &[]).await?;
     }
 
+    // The current process must exist *before* the media/kernel init runs.
+    // `AND_mdaInit` (and the kernel init before it) allocate and initialise the
+    // media clip list head and device structures via `dmemory_alloc`, which
+    // dereferences `dprocess_get_current()->allocator`. Run it too early - as we
+    // did when `setup_current_process` came last - and those allocations return
+    // null, leaving the clip list head (a firmware global) uninitialised; the
+    // game's first `MC_mdaClipCreate` then inserts into that garbage list and
+    // corrupts state (observed: the GOT-base register clobbered, a wild branch
+    // into game code). So we establish the process the moment the memory and
+    // process subsystems are up (right after `dprocess_init`) and before the
+    // media init that needs it.
+    let mut current_process_ready = false;
     for (name, addr) in &plan.boot_steps {
         tracing::info!("Running firmware {name} at {addr:#x}");
         match core.run_function::<u32>(*addr, &[]).await {
@@ -342,14 +361,52 @@ pub async fn run_firmware_init(core: &mut ArmCore, plan: &FirmwareInitPlan) -> R
                 return Err(error);
             }
         }
+
+        // `dprocess_init` allocates the current-process holder global and
+        // `dmemory_init` registers the "os" allocator type - both of which
+        // `setup_current_process` needs - so install the process here, before
+        // the media/kernel init that allocates against it.
+        if name == PROCESS_SUBSYSTEM_READY_STEP {
+            setup_current_process(core, plan).await?;
+            current_process_ready = true;
+        }
     }
 
-    // Establish a current process so the firmware's media functions have the
-    // allocator context they dereference.
-    setup_current_process(core, plan).await?;
+    // Fallback: if the sequence did not include the expected step (e.g. a
+    // firmware variant renames it), still establish the process so the media
+    // allocator has a context, even if some earlier init missed it.
+    if !current_process_ready {
+        setup_current_process(core, plan).await?;
+    }
+
+    // Diagnostic: report whether the media init built a valid (circular) clip
+    // list head. A healthy empty list has next == prev == the head's own
+    // address; zero/garbage means the init did not take and the first
+    // `MC_mdaClipCreate` will corrupt state.
+    let head = plan.base.wrapping_add(MEDIA_CLIP_LIST_HEAD_OFFSET);
+    let next: Result<u32> = read_generic(core, head);
+    let prev: Result<u32> = read_generic(core, head + 4);
+    match (next, prev) {
+        (Ok(next), Ok(prev)) => {
+            let healthy = next == head && prev == head;
+            tracing::info!(
+                "Media clip list head {head:#x}: next={next:#x} prev={prev:#x} ({})",
+                if healthy {
+                    "circular/empty - OK"
+                } else {
+                    "NOT initialised as a circular list"
+                }
+            );
+        }
+        _ => tracing::warn!("Media clip list head {head:#x}: could not read"),
+    }
 
     Ok(())
 }
+
+/// The boot step after which the memory + process subsystems are up, so a
+/// current process can be installed. Media/kernel init must run *after* this.
+const PROCESS_SUBSYSTEM_READY_STEP: &str = "dprocess_init";
 
 #[cfg(test)]
 mod tests {
