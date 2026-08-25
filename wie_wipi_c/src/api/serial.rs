@@ -81,6 +81,10 @@ impl SerialState {
         self.entries.insert(handle, SerialEntry { port_id, config });
         handle
     }
+
+    fn contains(&self, handle: i32) -> bool {
+        self.entries.contains_key(&handle)
+    }
 }
 
 fn atoi(bytes: &[u8]) -> i32 {
@@ -189,11 +193,41 @@ pub async fn open(
     Ok(context.serial_state().lock().open(port_id, config))
 }
 
+/// LGT MC_srlWrite.
+///
+/// The native function checks a null buffer before rejecting the handle.
+/// For a non-null buffer, both negative and unknown handles return -2.
+/// The LGT handset HAL `MH_serialWrite` unconditionally returns 0, so a
+/// valid logical handle returns 0 without inspecting the buffer contents or
+/// validating the signed length.
+///
+/// The native wrapper also has a dormant asynchronous path: dsio -2011 sets
+/// the serial object's pending-write bit and returns -19. That path is not
+/// reachable with this LGT HAL because its write primitive always succeeds.
+pub async fn write(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    buffer: WIPICWord,
+    length: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_srlWrite({handle}, {buffer:#x}, {length})");
+
+    if buffer == 0 {
+        return Ok(-9);
+    }
+
+    if handle < 0 || !context.serial_state().lock().contains(handle) {
+        return Ok(-2);
+    }
+
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{WIPICContext, context::test::TestContext};
 
-    use super::{SerialConfig, open, parse_config};
+    use super::{SerialConfig, open, parse_config, write};
 
     #[test]
     fn lgt_serial_parser_matches_native_defaults_and_options() {
@@ -265,4 +299,30 @@ mod tests {
         assert_eq!(open(&mut context, 0, ptr).await.unwrap(), -1);
 
     }
+
+    #[futures_test::test]
+    async fn lgt_serial_write_matches_native_hal_stub_and_error_order() {
+        let mut context = TestContext::new();
+
+        // MC_srlWrite checks NULL buffer before handle validity.
+        assert_eq!(write(&mut context, -1, 0, 123).await.unwrap(), -9);
+        assert_eq!(write(&mut context, 77, 0, 123).await.unwrap(), -9);
+
+        // With a non-null buffer, negative and unknown handles map to -2.
+        assert_eq!(write(&mut context, -1, 0x1234, 123).await.unwrap(), -2);
+        assert_eq!(write(&mut context, 77, 0x1234, 123).await.unwrap(), -2);
+
+        let empty_config = context.alloc_raw(1).unwrap();
+        wie_util::ByteWrite::write_bytes(&mut context, empty_config, &[0]).unwrap();
+        let handle = open(&mut context, 0, empty_config).await.unwrap();
+        assert_eq!(handle, 1);
+
+        // MH_serialWrite ignores buffer contents and length and returns 0.
+        // Therefore a valid logical handle does not dereference the buffer
+        // and even unusual signed lengths remain successful in this LGT build.
+        assert_eq!(write(&mut context, handle, 0x1234, 0).await.unwrap(), 0);
+        assert_eq!(write(&mut context, handle, 0x1234, -1).await.unwrap(), 0);
+        assert_eq!(write(&mut context, handle, 0x1234, i32::MAX).await.unwrap(), 0);
+    }
+
 }
