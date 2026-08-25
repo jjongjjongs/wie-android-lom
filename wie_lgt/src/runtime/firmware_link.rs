@@ -78,12 +78,18 @@ impl ImportResolver for FirmwareResolver {
 
 /// Whether to route the game's media calls to the firmware.
 ///
-/// ON: `setup_current_process` now establishes a current process with a working
-/// allocator (verified: `dmemory_alloc` returns a live pointer), so the
-/// firmware's `MC_mda*` no longer null-deref at `dprocess_get_current()`. Any
-/// remaining blocker is deeper in the media path and surfaces in the log rather
-/// than as the previous first-call crash.
-const ENABLE_MDA_ROUTING: bool = true;
+/// OFF while the firmware audio path is still being brought up. Routing only
+/// `MC_mdaClipCreate`/`PutData`/`AllocPlayer` to the firmware (as we do) hands
+/// the game a *firmware* clip, but the game's play call still lands on wie's
+/// Rust `media::play`, which reads the clip as a Rust `MdaClip` and fails with
+/// `InvalidHandle` - so mixed routing produces no firmware sound *and* breaks
+/// the Rust audio path that works for every other game. The device trace has
+/// served its purpose (the media path reaches `getWipiMediaManager`, which needs
+/// a JNI-backed Java audio layer); until that bridge actually produces PCM,
+/// keep routing off so all games keep their working Rust audio. The firmware
+/// still loads and boots (P1/P2) and the synthetic JNIEnv is installed, all
+/// dormant, so bring-up can continue behind this flag.
+const ENABLE_MDA_ROUTING: bool = false;
 
 /// Whether to route each media call through a trace shim instead of straight to
 /// the firmware. ON logs every `MC_mda*` the game makes - name, args, and return
