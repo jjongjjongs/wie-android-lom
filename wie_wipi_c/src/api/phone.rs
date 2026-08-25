@@ -25,3 +25,28 @@ pub async fn call_place(
         -1
     })
 }
+
+
+/// LGT `MC_phnSmsSend`.
+///
+/// The native implementation does not inspect any API arguments. It checks
+/// SMS permission bit 0x8000, discards that result, and unconditionally
+/// returns -1 without invoking the handset SMS backend.
+pub async fn sms_send(_context: &mut dyn WIPICContext) -> Result<i32> {
+    tracing::debug!("MC_phnSmsSend() -> -1");
+    Ok(-1)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::context::test::TestContext;
+
+    use super::sms_send;
+
+    #[futures_test::test]
+    async fn lgt_phn_sms_send_matches_native_unconditional_failure() {
+        let mut context = TestContext::new();
+
+        assert_eq!(sms_send(&mut context).await.unwrap(), -1);
+    }
+}

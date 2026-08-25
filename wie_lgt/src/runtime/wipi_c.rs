@@ -192,6 +192,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SetMuteState => media::set_mute_state.into_body(),
         WIPICSvcId::GetMuteState => media::get_mute_state.into_body(),
         WIPICSvcId::CallPlace => phone::call_place.into_body(),
+        WIPICSvcId::SmsSend => phone::sms_send.into_body(),
         WIPICSvcId::SysExecute => system::execute.into_body(),
         WIPICSvcId::BackLight => misc::back_light.into_body(),
     };
