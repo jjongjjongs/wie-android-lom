@@ -2638,8 +2638,14 @@ async fn get_import_function(
         core.make_svc_stub(stdlib_category, function_index)?
     } else {
         match (import_table, function_index) {
-            (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::DletSetProperty)?,
-            (0x1f8, 0x17) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::DletGetProperty)?,
+            // LoM's legacy 0x1f8 table is revision-skewed relative to the
+            // newer DLET export table. Static caller dataflow identifies 0x16
+            // as dlet_get_property(applet, property, output).
+            (0x1f8, 0x16) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::DletGetProperty)?,
+            // Legacy 0x17 is vm_find_interface(object, requested_class_shared):
+            // LoM indexes the returned interface dispatch table with the
+            // resolved Socket close/getInputStream/getOutputStream slots.
+            (0x1f8, 0x17) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmFindInterface)?,
             (0x1fc, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::WipiJavaModuleActivate)?,
             (0x1ff, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LgteModuleActivate)?,
             (0x201, 0x03) => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::BankonModuleActivate)?,
