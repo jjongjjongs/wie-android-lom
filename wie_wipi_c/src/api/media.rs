@@ -246,6 +246,31 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
     Ok(0)
 }
 
+/// `MC_mdaClipControl` (WIPI-C index `0x4b6`) — the player-path play/control
+/// call that titles like Zenonia use instead of `MC_mdaPlay`. The sequence is
+/// `ClipAllocPlayer` → `ClipSetVolume` → `ClipControl(clip, cmd, …)` →
+/// `ClipFreePlayer`; the clip's audio was already loaded by `ClipPutData`
+/// (`load_smaf`). Without this the loaded clip is never played and those effects
+/// are silent. `cmd` selects the play mode: `0x31` loops (BGM), `0x30` plays
+/// once (SFX); other commands are logged and ignored for now.
+pub async fn clip_control(context: &mut dyn WIPICContext, clip: WIPICWord, cmd: WIPICWord, arg1: WIPICWord, arg2: WIPICWord) -> Result<WIPICWord> {
+    tracing::debug!("MC_mdaClipControl({clip:#x}, {cmd:#x}, {arg1:#x}, {arg2:#x})");
+
+    match cmd {
+        // Play (0x30 = once, 0x31 = looping). Drive the same load_smaf-backed
+        // playback path as MC_mdaPlay.
+        0x30 | 0x31 => {
+            let repeat = WIPICWord::from(cmd == 0x31);
+            play(context, clip, repeat).await?;
+            Ok(0)
+        }
+        _ => {
+            tracing::warn!("MC_mdaClipControl: unhandled command {cmd:#x} on clip {clip:#x}");
+            Ok(0)
+        }
+    }
+}
+
 pub async fn clip_alloc_player(_context: &mut dyn WIPICContext, clip: WIPICWord, param: WIPICWord) -> Result<WIPICWord> {
     // Returning a non-null handle here makes titles read the player as "already
     // set up" and skip the following MC_mdaPlay, leaving the logo jingle and
