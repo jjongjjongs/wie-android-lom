@@ -15,7 +15,7 @@ use spin::Mutex;
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore};
-use wie_util::{ByteWrite, Result};
+use wie_util::{ByteWrite, Result, read_generic, write_generic};
 
 use super::firmware::{FirmwareImage, ImportResolver, load_firmware};
 use super::firmware_libc::{FirmwareImportNames, register_firmware_libc_handler};
@@ -197,6 +197,12 @@ pub struct FirmwareInitPlan {
     pub init_array: Vec<u32>,
     /// `(name, guest address)` for each boot step present in the image.
     pub boot_steps: Vec<(String, u32)>,
+    /// Load base, for computing the firmware's GOT-relative globals.
+    pub base: u32,
+    /// `dprocess_create` / `dprocess_get_current` addresses, for establishing
+    /// the current process the media path needs.
+    pub dprocess_create: Option<u32>,
+    pub dprocess_get_current: Option<u32>,
 }
 
 impl FirmwareInitPlan {
@@ -209,8 +215,83 @@ impl FirmwareInitPlan {
             init: image.init,
             init_array: image.init_array.clone(),
             boot_steps,
+            base: image.base,
+            dprocess_create: image.export("dprocess_create"),
+            dprocess_get_current: image.export("dprocess_get_current"),
         }
     }
+}
+
+/// Firmware GOT layout for `dprocess_get_current` (from RE at `0xecb18`): the
+/// GOT base is `base + GOT_BASE_OFFSET`, and it reads the init flag and the
+/// current-process holder through two GOT slots.
+const GOT_BASE_OFFSET: u32 = 0x34a0e8;
+const INIT_FLAG_GOT_SLOT: u32 = 0x8d4;
+const CURRENT_HOLDER_GOT_SLOT: u32 = 0x2f0;
+/// Size of the heap handed to the synthetic process. `create_process` needs a
+/// non-zero heap base+size or it skips heap init and leaves the allocator null.
+const PROCESS_HEAP_SIZE: u32 = 512 * 1024;
+
+/// Establishes a "current process" so the firmware's media path works.
+///
+/// `MC_mda*` reach `dmemory_alloc`, which calls
+/// `dprocess_get_current()->allocator[+4]`. Without a current process that is
+/// null. We create a real process with its own heap via `dprocess_create`
+/// (which wires the allocator at `+0x24`), then point the current-process
+/// global at it directly - the manual-current shortcut, avoiding the firmware
+/// scheduler's context switch.
+async fn setup_current_process(core: &mut ArmCore, plan: &FirmwareInitPlan) -> Result<()> {
+    let Some(dprocess_create) = plan.dprocess_create else {
+        tracing::warn!("Firmware has no dprocess_create; media path will not have a current process");
+        return Ok(());
+    };
+
+    // dprocess_init's config gives a real process table (count 32), so no need
+    // to provision one. A heap for the process, a name (create_process strlen's
+    // r0), and a non-null r1: dprocess_create rejects r0==0 || r1==0 outright,
+    // and stores r1 at process+0x54 (only read when the process runs, which we
+    // never do), so a small zeroed buffer is a safe placeholder.
+    let heap = Allocator::alloc(core, PROCESS_HEAP_SIZE)?;
+    let name = Allocator::alloc(core, 4)?;
+    core.write_bytes(name, b"wie\0")?;
+    let arg1 = Allocator::alloc(core, 64)?;
+    core.write_bytes(arg1, &[0u8; 64])?;
+
+    // dprocess_create(name, arg1, 0, 0, heap_base, heap_size). The remaining
+    // args are the applet's context/priority, unused while we never run it.
+    let process: u32 = match core.run_function(dprocess_create, &[name, arg1, 0, 0, heap, PROCESS_HEAP_SIZE]).await {
+        Ok(process) => process,
+        Err(error) => {
+            tracing::error!("dprocess_create faulted: {error:?}\n{}", core.dump_reg_stack(0x40));
+            return Err(error);
+        }
+    };
+    if process == 0 {
+        tracing::warn!("dprocess_create returned 0; no current process established");
+        return Ok(());
+    }
+    tracing::info!("dprocess_create -> process {process:#x} (heap {heap:#x}+{PROCESS_HEAP_SIZE:#x})");
+
+    // Install it as the current process: write it into the holder global and
+    // set the init flag, both reached through the GOT slots.
+    let got = plan.base.wrapping_add(GOT_BASE_OFFSET);
+    let holder: u32 = read_generic(core, got + CURRENT_HOLDER_GOT_SLOT)?;
+    write_generic(core, holder + 4, process)?;
+    let flag_global: u32 = read_generic(core, got + INIT_FLAG_GOT_SLOT)?;
+    write_generic(core, flag_global, 1u32)?;
+    tracing::info!("Current process installed: holder {holder:#x}+4 = {process:#x}, flag {flag_global:#x} = 1");
+
+    // Verify by asking the firmware itself.
+    if let Some(get_current) = plan.dprocess_get_current {
+        let current: u32 = core.run_function(get_current, &[]).await?;
+        if current == process {
+            tracing::info!("dprocess_get_current() -> {current:#x} (matches); media path has a current process");
+        } else {
+            tracing::warn!("dprocess_get_current() -> {current:#x}, expected {process:#x}; current-process wiring is off");
+        }
+    }
+
+    Ok(())
 }
 
 /// Drives the firmware's init: the C/C++ constructors (`DT_INIT` + init array)
@@ -242,6 +323,10 @@ pub async fn run_firmware_init(core: &mut ArmCore, plan: &FirmwareInitPlan) -> R
             }
         }
     }
+
+    // Establish a current process so the firmware's media functions have the
+    // allocator context they dereference.
+    setup_current_process(core, plan).await?;
 
     Ok(())
 }

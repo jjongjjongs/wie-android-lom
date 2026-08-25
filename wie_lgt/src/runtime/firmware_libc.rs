@@ -96,6 +96,20 @@ pub fn register_firmware_libc_handler(core: &mut ArmCore, system: &System, names
                 let len = stdlib::strlen(core, &mut (), a0).await?;
                 return len.write(core, lr);
             }
+            // Threading/sync primitives. We are cooperatively single-threaded,
+            // so these never block, but callers store and later dereference the
+            // handles, so they must be non-null. sem_init(sem=a0, ...) writes a
+            // sentinel into the caller's semaphore slot; pthread_self returns a
+            // non-zero thread id.
+            "sem_init" => {
+                if a0 != 0 {
+                    core.write_bytes(a0, &1u32.to_le_bytes())?;
+                }
+                return 0u32.write(core, lr);
+            }
+            "pthread_self" => {
+                return 1u32.write(core, lr);
+            }
             _ => {}
         }
 

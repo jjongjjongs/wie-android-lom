@@ -283,10 +283,24 @@ on device before the next.
     `+0x58`. To synthesize a process for audio only (no scheduler), the open
     questions are which of these args are load-bearing for `dmemory_alloc`'s
     path (the allocator at `+0x24`) versus only for actually *running* the
-    process, and where `create_process` sets `+0x24`. That is the first thing to
-    pin next session: read `create_process` past `0xed058` for the `+0x24`
-    (allocator) write, then call `dprocess_create` with a name + safe zeros and
-    set it current.
+    process, and where `create_process` sets `+0x24`.
+  - **Manual-current progress (landed, in `setup_current_process`).** The
+    shortcut is wired and gets several layers deep before the next wall:
+    1. `dprocess_create` rejects `r0==0 || r1==0` up front — must pass a name
+       *and* a non-null `r1` (stored at process `+0x54`, only read when the
+       process runs). Fixed.
+    2. `create_process` sets up the process heap via `dmemory_initheap_ex`
+       (needs a non-zero heap base+size) and a semaphore via `sem_init`; the
+       stub `sem_init`/`pthread_self` had to return non-null handles.
+    3. It then reaches **`startThread` (`0x178194`)**, which calls
+       `dthread_get_jni_env` and dereferences the result — null, because no JNI
+       environment is attached to the thread. This is the next wall: firmware
+       threads expect a JNI env (there is a `dthread_set_jni_env` export), so
+       the thread/JNI runtime is the layer to stand up next. `create_process`
+       spawning a thread means the manual-current shortcut does not actually
+       avoid the thread machinery.
+    Everything above runs in the isolated firmware-init task with errors caught,
+    so the game is unaffected (still silent, routing gated).
   - The host-call ABI note below (`__emutls host_call`, `a32_blk`) turned out
     not to apply to us: that is the *reference's* ARM-interpreter plumbing. Our
     imports bind straight to SVC trampolines, so there is no host-call ABI to
