@@ -46,6 +46,7 @@ pub enum InitSvcId {
     VmAastoreImplFast = 40,
     LegacyCldcBootstrapFa = 41,
     LegacyCldcBootstrap61 = 42,
+    LegacyVmThrowAbstractMethodError = 43,
 }
 
 impl TryFrom<SvcId> for InitSvcId {
@@ -96,6 +97,7 @@ impl TryFrom<SvcId> for InitSvcId {
             40 => Self::VmAastoreImplFast,
             41 => Self::LegacyCldcBootstrapFa,
             42 => Self::LegacyCldcBootstrap61,
+            43 => Self::LegacyVmThrowAbstractMethodError,
             _ => return Err(wie_util::WieError::FatalError(alloc::format!("Unknown LGT init SVC id {}", value.0))),
         })
     }

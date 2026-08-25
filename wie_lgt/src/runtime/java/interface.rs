@@ -67,7 +67,11 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         // Native callers pass the returned save-point block directly to
         // kernel table 1 / function 0x32 (setjmp).
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAllocSavePoint)?,
-        0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmUnregisterClasses)?,
+        // Legacy table64 0x06 is the generated-code fallback for a resolved
+        // virtual/interface dispatch slot whose implementation pointer is null.
+        // Its r0 ABI is revision-skewed and carries a live VM/object value rather
+        // than the C-string message accepted by the newer native helper.
+        0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyVmThrowAbstractMethodError)?,
         // LoM legacy ABI: generated Java wrappers pass their required stack
         // word count to 0x07 before entering the method body.
         0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmCheckStackOverflow)?,

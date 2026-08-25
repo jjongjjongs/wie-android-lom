@@ -1161,6 +1161,29 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             );
             context.save_points.throw(core, exception)
         }
+        // Older LGT-generated code reaches table64 0x06 only after a resolved
+        // dispatch slot has a null implementation pointer. Across multiple
+        // binaries its incoming r0 is a live VM/object value, not a C-string
+        // message. Preserve the abstract-method failure semantics without
+        // interpreting that revision-specific argument as text.
+        InitSvcId::LegacyVmThrowAbstractMethodError => {
+            let class_name = "java/lang/VirtualMachineError";
+            let vtable = synthetic_platform_vtable(core, context, class_name)?;
+
+            context.java_handles.set_dispatch_table(class_name, vtable);
+
+            let exception = match context.jvm.instantiate_class(class_name).await {
+                Ok(exception) => exception,
+                Err(error) => return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await),
+            };
+
+            let exception = context.java_handles.address_of(exception)?;
+
+            tracing::debug!(
+                "legacy_vm_throw_abstract_method_error() -> longjmp({exception:#x})"
+            );
+            context.save_points.throw(core, exception)
+        }
         // In this native build both vm_throw_abstract_method_error (0x38)
         // and vm_throw_no_such_method_error (0x40) are aliases of
         // vm_throw_virtual_machine_error(message). That routine loads
