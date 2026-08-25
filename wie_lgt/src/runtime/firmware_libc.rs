@@ -16,7 +16,17 @@ use spin::Mutex;
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, ResultWriter, SvcId, stdlib};
-use wie_util::{ByteWrite, Result};
+use wie_util::{ByteWrite, Result, read_null_terminated_string_bytes};
+
+/// C `strcmp` byte semantics: the sign of the first differing byte, or the
+/// length difference, as -1 / 0 / 1.
+fn cstr_cmp(a: &[u8], b: &[u8]) -> i32 {
+    match a.cmp(b) {
+        core::cmp::Ordering::Less => -1,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Greater => 1,
+    }
+}
 
 use super::SVC_CATEGORY_FIRMWARE_LIBC;
 
@@ -95,6 +105,21 @@ pub fn register_firmware_libc_handler(core: &mut ArmCore, system: &System, names
             "strlen" => {
                 let len = stdlib::strlen(core, &mut (), a0).await?;
                 return len.write(core, lr);
+            }
+            // Real strcmp/strncmp: the firmware matches allocator and config
+            // names by string, so a stub returning "equal" corrupts its
+            // registries (dmemory_initheap_ex fails with a name lookup error).
+            "strcmp" => {
+                let a = read_null_terminated_string_bytes(core, a0)?;
+                let b = read_null_terminated_string_bytes(core, a1)?;
+                return (cstr_cmp(&a, &b) as u32).write(core, lr);
+            }
+            "strncmp" => {
+                let a = read_null_terminated_string_bytes(core, a0)?;
+                let b = read_null_terminated_string_bytes(core, a1)?;
+                let n = a2 as usize;
+                let result = cstr_cmp(&a[..a.len().min(n)], &b[..b.len().min(n)]);
+                return (result as u32).write(core, lr);
             }
             // Threading/sync primitives. We are cooperatively single-threaded,
             // so these never block, but callers store and later dereference the

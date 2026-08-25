@@ -77,14 +77,12 @@ impl ImportResolver for FirmwareResolver {
 
 /// Whether to route the game's media calls to the firmware.
 ///
-/// Currently OFF: the firmware's `MC_mda*` reach `dmemory_alloc`, which calls
-/// `dprocess_get_current()->allocator`. With no current process established
-/// that returns 0 and the firmware dereferences null (a game crash on the first
-/// audio call). Enabling this needs the process/thread lifecycle first
-/// (`dprocess_create` + `dthread_create` + `dthread_start`) so a current
-/// process exists - the next P3 step. The routing itself is verified (the map
-/// builds and resolves); it is gated, not removed, so re-enabling is one line.
-const ENABLE_MDA_ROUTING: bool = false;
+/// ON: `setup_current_process` now establishes a current process with a working
+/// allocator (verified: `dmemory_alloc` returns a live pointer), so the
+/// firmware's `MC_mda*` no longer null-deref at `dprocess_get_current()`. Any
+/// remaining blocker is deeper in the media path and surfaces in the log rather
+/// than as the previous first-call crash.
+const ENABLE_MDA_ROUTING: bool = true;
 
 /// The game's WIPI-C media import indices (table `0x1fb`) paired with the
 /// firmware export that implements each. Routing these to the firmware is the
@@ -199,10 +197,10 @@ pub struct FirmwareInitPlan {
     pub boot_steps: Vec<(String, u32)>,
     /// Load base, for computing the firmware's GOT-relative globals.
     pub base: u32,
-    /// `dprocess_create` / `dprocess_get_current` addresses, for establishing
-    /// the current process the media path needs.
-    pub dprocess_create: Option<u32>,
+    /// Addresses for establishing the current process the media path needs.
+    pub dmemory_initheap_ex: Option<u32>,
     pub dprocess_get_current: Option<u32>,
+    pub dmemory_alloc: Option<u32>,
 }
 
 impl FirmwareInitPlan {
@@ -216,8 +214,9 @@ impl FirmwareInitPlan {
             init_array: image.init_array.clone(),
             boot_steps,
             base: image.base,
-            dprocess_create: image.export("dprocess_create"),
+            dmemory_initheap_ex: image.export("dmemory_initheap_ex"),
             dprocess_get_current: image.export("dprocess_get_current"),
+            dmemory_alloc: image.export("dmemory_alloc"),
         }
     }
 }
@@ -228,49 +227,60 @@ impl FirmwareInitPlan {
 const GOT_BASE_OFFSET: u32 = 0x34a0e8;
 const INIT_FLAG_GOT_SLOT: u32 = 0x8d4;
 const CURRENT_HOLDER_GOT_SLOT: u32 = 0x2f0;
-/// Size of the heap handed to the synthetic process. `create_process` needs a
-/// non-zero heap base+size or it skips heap init and leaves the allocator null.
+/// The `"os"` allocator-type string in firmware rodata, the type
+/// `create_process` passes to `dmemory_initheap_ex` for a process heap.
+const OS_ALLOC_TYPE_OFFSET: u32 = 0x29d158;
+/// Layout of the process struct used by `dmemory_alloc`: it reads the allocator
+/// at `+0x24`; `dmemory_initheap_ex` initialises the heap header at `+0x1c`, and
+/// the process name lives at `+148`.
+const PROCESS_STRUCT_SIZE: u32 = 404;
+const PROCESS_HEAP_HEADER_OFFSET: u32 = 0x1c;
+const PROCESS_NAME_OFFSET: u32 = 148;
+/// Size of the heap handed to the synthetic process.
 const PROCESS_HEAP_SIZE: u32 = 512 * 1024;
 
 /// Establishes a "current process" so the firmware's media path works.
 ///
 /// `MC_mda*` reach `dmemory_alloc`, which calls
 /// `dprocess_get_current()->allocator[+4]`. Without a current process that is
-/// null. We create a real process with its own heap via `dprocess_create`
-/// (which wires the allocator at `+0x24`), then point the current-process
-/// global at it directly - the manual-current shortcut, avoiding the firmware
-/// scheduler's context switch.
+/// null. Rather than `dprocess_create` (which also spawns a JNI thread via
+/// `startThread` - a whole runtime layer the audio path does not need), we build
+/// a minimal process struct and initialise just its heap/allocator with
+/// `dmemory_initheap_ex` (the same call `create_process` uses), then point the
+/// current-process global at it. The media path only needs the allocator.
 async fn setup_current_process(core: &mut ArmCore, plan: &FirmwareInitPlan) -> Result<()> {
-    let Some(dprocess_create) = plan.dprocess_create else {
-        tracing::warn!("Firmware has no dprocess_create; media path will not have a current process");
+    let Some(dmemory_initheap_ex) = plan.dmemory_initheap_ex else {
+        tracing::warn!("Firmware has no dmemory_initheap_ex; media path will not have a current process");
         return Ok(());
     };
 
-    // dprocess_init's config gives a real process table (count 32), so no need
-    // to provision one. A heap for the process, a name (create_process strlen's
-    // r0), and a non-null r1: dprocess_create rejects r0==0 || r1==0 outright,
-    // and stores r1 at process+0x54 (only read when the process runs, which we
-    // never do), so a small zeroed buffer is a safe placeholder.
+    // A minimal process struct and its heap.
+    let process = Allocator::alloc(core, PROCESS_STRUCT_SIZE)?;
+    core.write_bytes(process, &vec![0u8; PROCESS_STRUCT_SIZE as usize])?;
+    core.write_bytes(process + PROCESS_NAME_OFFSET, b"wie\0")?;
     let heap = Allocator::alloc(core, PROCESS_HEAP_SIZE)?;
-    let name = Allocator::alloc(core, 4)?;
-    core.write_bytes(name, b"wie\0")?;
-    let arg1 = Allocator::alloc(core, 64)?;
-    core.write_bytes(arg1, &[0u8; 64])?;
 
-    // dprocess_create(name, arg1, 0, 0, heap_base, heap_size). The remaining
-    // args are the applet's context/priority, unused while we never run it.
-    let process: u32 = match core.run_function(dprocess_create, &[name, arg1, 0, 0, heap, PROCESS_HEAP_SIZE]).await {
-        Ok(process) => process,
+    // dmemory_initheap_ex(alloc_out = process+0x1c, type = "os", 1,
+    //                     name = process+148, heap_base, heap_size).
+    let alloc_out = process + PROCESS_HEAP_HEADER_OFFSET;
+    let os_type = plan.base.wrapping_add(OS_ALLOC_TYPE_OFFSET);
+    let name_ptr = process + PROCESS_NAME_OFFSET;
+    let rc: u32 = match core
+        .run_function(dmemory_initheap_ex, &[alloc_out, os_type, 1, name_ptr, heap, PROCESS_HEAP_SIZE])
+        .await
+    {
+        Ok(rc) => rc,
         Err(error) => {
-            tracing::error!("dprocess_create faulted: {error:?}\n{}", core.dump_reg_stack(0x40));
+            tracing::error!("dmemory_initheap_ex faulted: {error:?}\n{}", core.dump_reg_stack(0x40));
             return Err(error);
         }
     };
-    if process == 0 {
-        tracing::warn!("dprocess_create returned 0; no current process established");
+    if (rc as i32) < 0 {
+        tracing::warn!("dmemory_initheap_ex returned {rc}; process heap not initialised");
         return Ok(());
     }
-    tracing::info!("dprocess_create -> process {process:#x} (heap {heap:#x}+{PROCESS_HEAP_SIZE:#x})");
+    let allocator: u32 = read_generic(core, process + 0x24)?;
+    tracing::info!("Synthetic process {process:#x}: heap {heap:#x}, allocator@+0x24 = {allocator:#x}");
 
     // Install it as the current process: write it into the holder global and
     // set the init flag, both reached through the GOT slots.
@@ -288,6 +298,16 @@ async fn setup_current_process(core: &mut ArmCore, plan: &FirmwareInitPlan) -> R
             tracing::info!("dprocess_get_current() -> {current:#x} (matches); media path has a current process");
         } else {
             tracing::warn!("dprocess_get_current() -> {current:#x}, expected {process:#x}; current-process wiring is off");
+        }
+    }
+
+    // Confirm the allocator works end to end: dmemory_alloc is exactly the call
+    // the media functions crashed on before a current process existed.
+    if let Some(dmemory_alloc) = plan.dmemory_alloc {
+        match core.run_function::<u32>(dmemory_alloc, &[64]).await {
+            Ok(ptr) if ptr != 0 => tracing::info!("dmemory_alloc(64) -> {ptr:#x}; the media allocator path works"),
+            Ok(_) => tracing::warn!("dmemory_alloc(64) -> 0; allocator returned null"),
+            Err(error) => tracing::error!("dmemory_alloc(64) faulted: {error:?}"),
         }
     }
 
