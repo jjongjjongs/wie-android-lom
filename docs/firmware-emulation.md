@@ -236,11 +236,37 @@ on device before the next.
     thread was needed. `WPMda_Init` turned out to be an empty stub (`bx lr`); the
     real audio init is `AND_mdaInit`. So the firmware's audio subsystem
     initializes to a usable state right after the low-level boot.
-  - **The process/thread lifecycle** (`dprocess_create` + `dthread_create` +
-    `dthread_start`, run via `WPMain_Init`'s registered callback) is still the
-    path a full app boot takes, and is where the firmware's cooperative
-    scheduler meets our async executor. It may not be needed just to reach audio
-    — that is the next thing to confirm.
+  - **The process/thread lifecycle is required after all (confirmed on
+    device).** Routing the game's media imports to the firmware `MC_mda*` (P3,
+    gated off in `ENABLE_MDA_ROUTING`) crashes on the first audio call:
+    `MC_mda*` → `dmemory_alloc`, which does
+    `dprocess_get_current()->allocator[+4](...)`. With no current process,
+    `dprocess_get_current` returns 0 and the firmware calls through null
+    (`Invalid memory access, PC=0`). So the audio path needs a **current
+    dprocess** — the piece `AND_mdaInit` alone did not require.
+  - **What sets "current".** `dthread_start` only marks a thread runnable
+    (`change_state` → state 2); it does not run it. The firmware carries a full
+    cooperative scheduler — `dscheduler_init` / `dscheduler_main` /
+    `dscheduler_sched`, `dthread_switch`, `dcontext_switch_md` — and the context
+    switch is what installs the current process/thread. `create_process` builds
+    a 404-byte process in a table but does not set current.
+  - **Two ways to get a current process** (next P3 step):
+    1. *Full scheduler.* `dscheduler_init` → `dprocess_create` (6 args) →
+       `dthread_create` → `dthread_start` → `dscheduler_sched`. Correct, but
+       `dcontext_switch_md` register-switches the guest, which has to be
+       reconciled with how `ArmCore` runs functions — the real
+       scheduler-meets-executor integration, and the riskiest part.
+    2. *Manual current (shortcut to try first).* Create a real process/thread
+       with `dprocess_create`/`dthread_create` for correctly-initialised structs
+       (allocator at `+0x24`, dthread at `+0x68`), then write the current-process
+       global directly instead of running the scheduler. If the media path only
+       reads current for its allocator/thread, this avoids the context switch
+       entirely. Unknowns: the `dprocess_create` argument shape and whether the
+       media path touches scheduler/timer state beyond "current".
+  - The host-call ABI note below (`__emutls host_call`, `a32_blk`) turned out
+    not to apply to us: that is the *reference's* ARM-interpreter plumbing. Our
+    imports bind straight to SVC trampolines, so there is no host-call ABI to
+    reverse — the firmware calls our HLE directly.
   - The host-call ABI note below (`__emutls host_call`, `a32_blk`) turned out
     not to apply to us: that is the *reference's* ARM-interpreter plumbing. Our
     imports bind straight to SVC trampolines, so there is no host-call ABI to

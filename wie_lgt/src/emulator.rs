@@ -157,11 +157,13 @@ impl LgtEmulator {
 
         apply_offline_auth_patch(&aid, &mut binary_mod);
 
-        // If the user supplied the firmware BIOS, map and bind it, then drive
-        // its init as its own task so a bring-up crash cannot corrupt the game
-        // thread (P2). Dormant without the BIOS; the game runs on the Rust
-        // platform either way.
-        if let Some(image) = crate::runtime::firmware_link::try_load_bios(core, system).await? {
+        // If the user supplied the firmware BIOS, map and bind it, drive its
+        // init as its own task so a bring-up crash cannot corrupt the game
+        // thread (P2), and route the game's media imports to the firmware's
+        // MC_mda* exports (P3). Dormant without the BIOS; the game runs on the
+        // Rust platform either way.
+        let mda_routes = if let Some(image) = crate::runtime::firmware_link::try_load_bios(core, system).await? {
+            let routes = crate::runtime::firmware_link::build_mda_routes(&image);
             let plan = crate::runtime::firmware_link::FirmwareInitPlan::from_image(&image);
             let mut firmware_core = core.clone();
             system.spawn(async move || {
@@ -170,9 +172,12 @@ impl LgtEmulator {
                 }
                 Ok(())
             });
-        }
+            routes
+        } else {
+            BTreeMap::new()
+        };
 
-        load_native(core, system, &jvm, &binary_mod, &jar_filename, main_class_name.as_deref()).await?;
+        load_native(core, system, &jvm, &binary_mod, &jar_filename, main_class_name.as_deref(), mda_routes).await?;
 
         Ok(())
     }
