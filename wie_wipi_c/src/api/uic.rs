@@ -2,7 +2,7 @@ use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes
 
 use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 
-use crate::{api::kernel, context::WIPICContext};
+use crate::{api::{graphics, kernel}, context::WIPICContext};
 
 pub async fn create_application_context(_context: &mut dyn WIPICContext) -> Result<WIPICIndirectPtr> {
     tracing::warn!("stub MC_uicCreateApplicationContext");
@@ -403,6 +403,56 @@ pub async fn set_max_text_size(
     context.write_bytes(new_text + new_capacity - 1, &[0])?;
 
     Ok(old_capacity as i32)
+}
+
+/// LGT `MC_uicPaint` (WIPI-C service 0x325).
+///
+/// Native contract:
+/// - NULL or invalid component types (outside 1..=5) are silent no-ops.
+/// - NULL graphics context is a silent no-op.
+/// - property 148 selects screen framebuffer 0 or 3 before draw dispatch.
+/// - component +0x24 is invoked as `(component, graphics_context)`.
+/// - callback +0x30, when present, is then invoked as
+///   `(component, 0, component+0x3c context)`.
+///
+/// `MC_uicCreate` remains a separate API: it is responsible for populating
+/// the type-specific +0x24 draw function pointer.
+pub async fn paint(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    graphics_context: WIPICWord,
+) -> Result<()> {
+    tracing::debug!("MC_uicPaint({component:#x}, {graphics_context:#x})");
+
+    if component == 0 {
+        return Ok(());
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) || graphics_context == 0 {
+        return Ok(());
+    }
+
+    // Native first selects framebuffer 0 or 3 from dlet property 148.
+    // WIPICContext does not expose that LGT property table, so use the
+    // native fallback surface (0). The type-specific native draw routine
+    // performs the same framebuffer selection before actual rendering.
+    let _ = graphics::get_screen_framebuffer(context, 0).await?;
+
+    let draw: WIPICWord = read_generic(context, component + 0x24)?;
+    context
+        .call_function(draw, &[component, graphics_context])
+        .await?;
+
+    let callback: WIPICWord = read_generic(context, component + 0x30)?;
+    if callback != 0 {
+        let callback_context: WIPICWord = read_generic(context, component + 0x3c)?;
+        context
+            .call_function(callback, &[component, 0, callback_context])
+            .await?;
+    }
+
+    Ok(())
 }
 
 pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: u32, psz: WIPICWord, buflen: i32, img: WIPICWord) -> Result<i32> {
