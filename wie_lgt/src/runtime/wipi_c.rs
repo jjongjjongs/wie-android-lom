@@ -158,6 +158,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SocketClose => net::socket_close.into_body(),
         WIPICSvcId::SetReadCallback => net::set_read_callback.into_body(),
         WIPICSvcId::SetWriteCallback => net::set_write_callback.into_body(),
+        WIPICSvcId::BillSocket => net::bill_socket.into_body(),
         WIPICSvcId::Htonl => util::htonl.into_body(),
         WIPICSvcId::Htons => util::htons.into_body(),
         WIPICSvcId::Ntohl => util::ntohl.into_body(),

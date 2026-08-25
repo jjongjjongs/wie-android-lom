@@ -331,6 +331,14 @@ pub async fn socket_close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32
 }
 
 
+pub async fn bill_socket(
+    _context: &mut dyn WIPICContext,
+    _family: i32,
+    _socket_type: i32,
+) -> Result<i32> {
+    Ok(M_E_NOTCONN)
+}
+
 const M_E_ERROR: i32 = -1;
 const M_E_BADFD: i32 = -2;
 const M_E_INVALID: i32 = -9;
