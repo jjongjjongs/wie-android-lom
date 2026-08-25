@@ -124,6 +124,24 @@ impl SerialState {
     fn contains(&self, handle: i32) -> bool {
         self.entries.contains_key(&handle)
     }
+
+    fn close(&mut self, handle: i32) -> i32 {
+        if handle < 0 {
+            return -2;
+        }
+
+        // Native dsio_close returns -2009 when the WIPI-facing fd does not
+        // resolve to an active DSIO port. MC_srlClose forwards that value
+        // unchanged.
+        if self.entries.remove(&handle).is_none() {
+            return -2009;
+        }
+
+        // In this LGT build MH_serialClose always returns 0, so a valid DSIO
+        // port is freed and MC_srlClose subsequently releases its 28-byte
+        // serial object.
+        0
+    }
 }
 
 fn atoi(bytes: &[u8]) -> i32 {
@@ -287,11 +305,28 @@ pub async fn set_write_callback(
         .set_write_callback(handle, callback, callback_context))
 }
 
+/// LGT MC_srlClose.
+///
+/// Native contract:
+/// - a negative handle is rejected immediately with -2.
+/// - dsio_close is called with a 50000 tick timeout for every non-negative
+///   handle.
+/// - an unknown/already-closed handle yields dsio -2009, which MC_srlClose
+///   returns unchanged.
+/// - MH_serialClose is an unconditional-success stub in this LGT runtime, so
+///   a valid handle is freed from DSIO and its WIPI serial object is released.
+/// - the global DSIO fd sequence is not rewound by close, so later opens keep
+///   allocating monotonically increasing handles rather than reusing this one.
+pub async fn close(context: &mut dyn WIPICContext, handle: i32) -> Result<i32> {
+    tracing::debug!("MC_srlClose({handle})");
+    Ok(context.serial_state().lock().close(handle))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{WIPICContext, context::test::TestContext};
 
-    use super::{SerialConfig, open, parse_config, set_write_callback, write};
+    use super::{SerialConfig, close, open, parse_config, set_write_callback, write};
 
     #[test]
     fn lgt_serial_parser_matches_native_defaults_and_options() {
@@ -435,6 +470,51 @@ mod tests {
             context.serial_state().lock().write_callback(handle),
             Some((0, 0))
         );
+    }
+
+
+    #[futures_test::test]
+    async fn lgt_serial_close_releases_native_objects_and_preserves_fd_sequence() {
+        let mut context = TestContext::new();
+
+        // MC_srlClose itself rejects only negative handles.
+        assert_eq!(close(&mut context, -1).await.unwrap(), -2);
+
+        // Non-negative handles proceed into dsio_close; a missing fd is -2009
+        // and is returned by MC_srlClose without remapping.
+        assert_eq!(close(&mut context, 0).await.unwrap(), -2009);
+        assert_eq!(close(&mut context, 77).await.unwrap(), -2009);
+
+        let empty_config = context.alloc_raw(1).unwrap();
+        wie_util::ByteWrite::write_bytes(&mut context, empty_config, &[0]).unwrap();
+
+        let first = open(&mut context, 0, empty_config).await.unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(
+            set_write_callback(&mut context, first, 0x1234, 0x5678)
+                .await
+                .unwrap(),
+            0
+        );
+
+        // HAL close succeeds, DSIO frees the port and MC_srlClose releases
+        // the corresponding serial object.
+        assert_eq!(close(&mut context, first).await.unwrap(), 0);
+        assert_eq!(write(&mut context, first, 0x1234, 1).await.unwrap(), -2);
+        assert_eq!(
+            set_write_callback(&mut context, first, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            -1
+        );
+
+        // Closing it again reaches dsio_close and reports the missing fd.
+        assert_eq!(close(&mut context, first).await.unwrap(), -2009);
+
+        // free_port restores capacity but does not rewind the global fd
+        // sequence, so the next logical handle is 2 rather than 1.
+        let second = open(&mut context, 0, empty_config).await.unwrap();
+        assert_eq!(second, 2);
     }
 
 }

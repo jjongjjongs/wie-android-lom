@@ -180,6 +180,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SerialOpen => serial::open.into_body(),
         WIPICSvcId::SerialWrite => serial::write.into_body(),
         WIPICSvcId::SerialSetWriteCallback => serial::set_write_callback.into_body(),
+        WIPICSvcId::SerialClose => serial::close.into_body(),
         WIPICSvcId::BillSocket => net::bill_socket.into_body(),
         WIPICSvcId::Htonl => util::htonl.into_body(),
         WIPICSvcId::Htons => util::htons.into_body(),
