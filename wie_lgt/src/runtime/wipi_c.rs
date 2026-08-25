@@ -42,8 +42,13 @@ struct CMethodProxy {
     body: WIPICMethodBody,
 }
 
-async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm), id: SvcId) -> Result<()> {
-    let wipic_context = LgtWIPICContext::new(core.clone(), system.clone(), jvm.clone());
+async fn handle_wipic_svc(
+    core: &mut ArmCore,
+    (system, jvm, network_state): &mut (System, Jvm, net::SharedNetworkState),
+    id: SvcId,
+) -> Result<()> {
+    let wipic_context =
+        LgtWIPICContext::new(core.clone(), system.clone(), jvm.clone(), network_state.clone());
     let (_, lr) = core.read_pc_lr()?;
     // An unimplemented WIPI-C function is reported and skipped rather than
     // ending the run. Stopping on the first one hides everything a title does
@@ -146,7 +151,13 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),
         WIPICSvcId::Close => net::close.into_body(),
+        WIPICSvcId::Socket => net::socket.into_body(),
+        WIPICSvcId::SocketConnect => net::socket_connect.into_body(),
+        WIPICSvcId::SocketWrite => net::socket_write.into_body(),
+        WIPICSvcId::SocketRead => net::socket_read.into_body(),
         WIPICSvcId::SocketClose => net::socket_close.into_body(),
+        WIPICSvcId::SetReadCallback => net::set_read_callback.into_body(),
+        WIPICSvcId::SetWriteCallback => net::set_write_callback.into_body(),
         WIPICSvcId::Htonl => util::htonl.into_body(),
         WIPICSvcId::Htons => util::htons.into_body(),
         WIPICSvcId::Ntohl => util::ntohl.into_body(),
@@ -207,7 +218,11 @@ impl EmulatedFunction<(), WIPICMethodResult, ()> for CMethodProxy {
 }
 
 pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm) -> Result<()> {
-    core.register_svc_handler(SVC_CATEGORY_WIPIC, handle_wipic_svc, &(system.clone(), jvm.clone()))
+    core.register_svc_handler(
+        SVC_CATEGORY_WIPIC,
+        handle_wipic_svc,
+        &(system.clone(), jvm.clone(), net::new_state()),
+    )
 }
 
 async fn clet_register(core: &mut ArmCore, jvm: &mut Jvm, function_table: u32, a1: u32) -> Result<()> {

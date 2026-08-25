@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 async-trait = { workspace = true }
 md5 = { workspace = true, features = ["std"] }
+polling = { workspace = true }
 tracing = { workspace = true }
 
 jni = "^0.21"

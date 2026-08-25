@@ -2,12 +2,62 @@ use alloc::boxed::Box;
 
 use crate::{audio_sink::AudioSink, database::DatabaseRepository, screen::Screen, time::Instant};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkError {
+    InvalidSocket,
+    NotConnected,
+    WouldBlock,
+    TimedOut,
+    ConnectionRefused,
+    HostUnreachable,
+    Unsupported,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkPoll<T> {
+    Pending,
+    Ready(Result<T, NetworkError>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkEvent {
+    Connected(i32),
+    ConnectFailed(i32),
+    Readable(i32),
+    Writable(i32),
+}
+
+pub trait Network: Send + Sync {
+    fn socket(&self, family: i32, socket_type: i32) -> Result<i32, NetworkError>;
+
+    fn connect(
+        &self,
+        socket: i32,
+        address: u32,
+        port: u16,
+    ) -> NetworkPoll<()>;
+
+    fn read(&self, socket: i32, buf: &mut [u8]) -> Result<usize, NetworkError>;
+
+    fn write(&self, socket: i32, buf: &[u8]) -> Result<usize, NetworkError>;
+
+    fn close(&self, socket: i32) -> Result<(), NetworkError>;
+
+    fn poll_event(&self) -> Option<NetworkEvent>;
+}
+
 pub trait Platform: Send + Sync {
     fn screen(&self) -> &dyn Screen;
     fn now(&self) -> Instant;
     fn database_repository(&self) -> &dyn DatabaseRepository;
     fn filesystem(&self) -> &dyn Filesystem;
     fn audio_sink(&self) -> Box<dyn AudioSink>;
+
+    fn network(&self) -> Option<&dyn Network> {
+        None
+    }
+
     fn write_stdout(&self, buf: &[u8]);
     fn write_stderr(&self, buf: &[u8]);
     fn exit(&self);

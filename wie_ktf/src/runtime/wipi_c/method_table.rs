@@ -299,13 +299,13 @@ pub fn get_media_method_table() -> Vec<WIPICMethodBody> {
 
 pub fn get_net_method_table() -> Vec<WIPICMethodBody> {
     vec![
-        net::connect.into_body(),
-        net::close.into_body(),
+        net::legacy_connect_stub.into_body(),
+        net::legacy_close_stub.into_body(),
         gen_stub(2, "MC_netSocket"),
         gen_stub(3, "MC_netSocketConnect"),
         gen_stub(4, "MC_netSocketWrite"),
         gen_stub(5, "MC_netSocketRead"),
-        net::socket_close.into_body(),
+        net::legacy_socket_close_stub.into_body(),
         gen_stub(7, "MC_netSocketBind"),
         gen_stub(8, "MC_netGetMaxPacketLength"),
         gen_stub(9, "MC_netSocketSendTo"),

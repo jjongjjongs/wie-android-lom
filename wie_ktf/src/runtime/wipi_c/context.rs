@@ -9,18 +9,27 @@ use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 use wie_backend::{AsyncCallable, Instant, System};
 use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{ByteRead, ByteWrite, Result, read_generic, write_generic};
-use wie_wipi_c::{WIPICContext, WIPICMethodBody};
+use wie_wipi_c::{
+    WIPICContext, WIPICMethodBody,
+    api::net::SharedNetworkState,
+};
 
 #[derive(Clone)]
 pub struct KtfWIPICContext {
     core: ArmCore,
     system: System,
     jvm: Jvm, // We need jvm to access resource in jvm. TODO is there better way to do this?
+    network_state: SharedNetworkState,
 }
 
 impl KtfWIPICContext {
-    pub fn new(core: ArmCore, system: System, jvm: Jvm) -> Self {
-        Self { core, system, jvm }
+    pub fn new(core: ArmCore, system: System, jvm: Jvm, network_state: SharedNetworkState) -> Self {
+        Self {
+            core,
+            system,
+            jvm,
+            network_state,
+        }
     }
 }
 
@@ -59,6 +68,10 @@ impl WIPICContext for KtfWIPICContext {
 
     fn system(&mut self) -> &mut System {
         &mut self.system
+    }
+
+    fn network_state(&self) -> SharedNetworkState {
+        self.network_state.clone()
     }
 
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord> {

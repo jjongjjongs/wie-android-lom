@@ -14,6 +14,7 @@ mod database;
 mod filesystem;
 mod logging;
 mod ma3;
+mod network;
 mod platform;
 mod runner;
 

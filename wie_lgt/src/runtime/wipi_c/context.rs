@@ -9,7 +9,10 @@ use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 use wie_backend::{AsyncCallable, Instant, System};
 use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
-use wie_wipi_c::{WIPICContext, WIPICMethodBody};
+use wie_wipi_c::{
+    WIPICContext, WIPICMethodBody,
+    api::net::SharedNetworkState,
+};
 
 // mostly same as ktf's one, can we merge those?
 #[derive(Clone)]
@@ -17,11 +20,17 @@ pub struct LgtWIPICContext {
     core: ArmCore,
     system: System,
     jvm: Jvm,
+    network_state: SharedNetworkState,
 }
 
 impl LgtWIPICContext {
-    pub fn new(core: ArmCore, system: System, jvm: Jvm) -> Self {
-        Self { core, system, jvm }
+    pub fn new(core: ArmCore, system: System, jvm: Jvm, network_state: SharedNetworkState) -> Self {
+        Self {
+            core,
+            system,
+            jvm,
+            network_state,
+        }
     }
 }
 
@@ -57,6 +66,10 @@ impl WIPICContext for LgtWIPICContext {
 
     fn system(&mut self) -> &mut System {
         &mut self.system
+    }
+
+    fn network_state(&self) -> SharedNetworkState {
+        self.network_state.clone()
     }
 
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord> {

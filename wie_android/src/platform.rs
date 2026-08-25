@@ -9,12 +9,18 @@ use std::{
 };
 
 use wie_backend::{
-    AudioSink, DatabaseRepository, Filesystem, Instant, Platform, Screen,
+    AudioSink, DatabaseRepository, Filesystem, Instant, Network, Platform, Screen,
     canvas::{Image, PixelType, Rgb565Pixel},
 };
 use wie_util::Result;
 
-use crate::{audio::AndroidAudioSink, database::AndroidDatabaseRepository, filesystem::AndroidFilesystem, ma3::Synth};
+use crate::{
+    audio::AndroidAudioSink,
+    database::AndroidDatabaseRepository,
+    filesystem::AndroidFilesystem,
+    ma3::Synth,
+    network::AndroidNetwork,
+};
 
 /// A frame handed to `Screen::paint`, kept until Java collects it.
 pub struct Frame {
@@ -126,6 +132,7 @@ pub struct AndroidPlatform {
     shared: Shared,
     filesystem: AndroidFilesystem,
     database_repository: AndroidDatabaseRepository,
+    network: AndroidNetwork,
 }
 
 impl AndroidPlatform {
@@ -138,6 +145,7 @@ impl AndroidPlatform {
             },
             filesystem: AndroidFilesystem::new(runtime_dir.join("fs")),
             database_repository: AndroidDatabaseRepository::new(runtime_dir.join("db")),
+            network: AndroidNetwork::new(),
             shared,
         }
     }
@@ -164,6 +172,10 @@ impl Platform for AndroidPlatform {
 
     fn audio_sink(&self) -> Box<dyn AudioSink> {
         Box::new(AndroidAudioSink::new(self.shared.clone()))
+    }
+
+    fn network(&self) -> Option<&dyn Network> {
+        Some(&self.network)
     }
 
     fn write_stdout(&self, buf: &[u8]) {

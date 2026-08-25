@@ -7,6 +7,7 @@ use wie_util::{ByteRead, ByteWrite, Result};
 
 use crate::{
     WIPICMethodBody,
+    api::net::SharedNetworkState,
     method::{ParamConverter, ResultConverter},
 };
 
@@ -19,6 +20,7 @@ pub trait WIPICContext: ByteRead + ByteWrite + Send + Sync {
     fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord>;
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord>;
     fn system(&mut self) -> &mut System;
+    fn network_state(&self) -> SharedNetworkState;
     fn spawn(&mut self, callback: WIPICMethodBody) -> Result<()>;
     async fn get_resource_size(&self, name: &str) -> Result<Option<usize>>;
     async fn read_resource(&self, name: &str) -> Result<Vec<u8>>;
@@ -90,6 +92,7 @@ pub mod test {
     use wie_util::{ByteRead, ByteWrite, Result, WieError};
 
     use super::{WIPICContext, WIPICMethodBody};
+    use crate::api::net::{SharedNetworkState, new_state};
 
     const TEST_MEMORY_SIZE: usize = 0x20000;
     const TEST_ALLOC_START: usize = 0x10000;
@@ -99,6 +102,7 @@ pub mod test {
         last_alloc: usize,
         system: Option<System>,
         resources: Vec<(String, Vec<u8>)>,
+        network_state: SharedNetworkState,
     }
 
     impl TestContext {
@@ -109,6 +113,7 @@ pub mod test {
                 last_alloc: TEST_ALLOC_START,
                 system: None,
                 resources: Vec::new(),
+                network_state: new_state(),
             }
         }
 
@@ -118,6 +123,7 @@ pub mod test {
                 last_alloc: TEST_ALLOC_START,
                 system: Some(system),
                 resources: Vec::new(),
+                network_state: new_state(),
             }
         }
 
@@ -158,6 +164,10 @@ pub mod test {
 
         fn system(&mut self) -> &mut System {
             self.system.as_mut().unwrap()
+        }
+
+        fn network_state(&self) -> SharedNetworkState {
+            self.network_state.clone()
         }
 
         fn spawn(&mut self, _callback: WIPICMethodBody) -> Result<()> {
