@@ -594,6 +594,38 @@ pub async fn get_font(
     read_generic(context, component + 0x14)
 }
 
+fn uic_color_to_rgb565(color: WIPICWord) -> WIPICWord {
+    ((color >> 8) & 0xf800) | ((color >> 5) & 0x07e0) | ((color >> 3) & 0x001f)
+}
+
+/// LGT `MC_uicSetFgColor` (WIPI-C service 0x330).
+///
+/// Native validates the component, converts the WIPI 0xRRGGBB color through
+/// the active display's color-to-pixel operation, stores the resulting RGB565
+/// pixel at +0x18, and returns that pixel value. NULL or invalid components
+/// return 0 and leave memory untouched.
+pub async fn set_fg_color(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    color: WIPICWord,
+) -> Result<WIPICWord> {
+    tracing::debug!("MC_uicSetFgColor({component:#x}, {color:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    let pixel = uic_color_to_rgb565(color);
+    write_generic(context, component + 0x18, pixel)?;
+
+    Ok(pixel)
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2222,8 +2254,8 @@ mod tests {
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
         destroy, get_class, get_class_name, get_font, get_geometry, insert_text, is_instance,
-        repaint, set_callback, set_enable, set_event_handler, set_font, set_max_text_size,
-        uic_repaint_rect, uic_skip_time_separator,
+        repaint, set_callback, set_enable, set_event_handler, set_fg_color, set_font,
+        set_max_text_size, uic_color_to_rgb565, uic_repaint_rect, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -2782,6 +2814,62 @@ mod tests {
         // Raw bytes were inserted, but as a C string the visible text remains "abcd".
         assert_eq!(read_text(&context, 16), b"abcd");
         assert_eq!(read_i32(&context, 0x4c), 6);
+    }
+
+    #[test]
+    fn lgt_uic_color_to_rgb565_matches_native_mh_fb_make_pixel() {
+        for (color, expected) in [
+            (0x0000_0000u32, 0x0000u32),
+            (0x00ff_ffffu32, 0xffffu32),
+            (0x00ff_0000u32, 0xf800u32),
+            (0x0000_ff00u32, 0x07e0u32),
+            (0x0000_00ffu32, 0x001fu32),
+            (0x0012_3456u32, 0x11aau32),
+            (0xff12_3456u32, 0x11aau32),
+        ] {
+            assert_eq!(uic_color_to_rgb565(color), expected);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_fg_color_matches_native_conversion_store_and_return() {
+        for component_type in 1u32..=5 {
+            let mut context = TestContext::new();
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x18, 0xdead_beefu32).unwrap();
+
+            assert_eq!(
+                set_fg_color(&mut context, COMPONENT, 0x0012_3456)
+                    .await
+                    .unwrap(),
+                0x11aa
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x18).unwrap(),
+                0x11aa
+            );
+        }
+
+        let mut context = TestContext::new();
+        assert_eq!(
+            set_fg_color(&mut context, 0, 0x00ff_0000)
+                .await
+                .unwrap(),
+            0
+        );
+
+        init_component(&mut context, 6);
+        write_generic(&mut context, COMPONENT + 0x18, 0xaabb_ccddu32).unwrap();
+        assert_eq!(
+            set_fg_color(&mut context, COMPONENT, 0x00ff_0000)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x18).unwrap(),
+            0xaabb_ccdd
+        );
     }
 
     #[futures_test::test]
