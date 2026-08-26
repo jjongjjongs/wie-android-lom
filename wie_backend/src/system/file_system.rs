@@ -180,6 +180,35 @@ impl FilesystemOverlay {
         self.platform.filesystem().mkdir(&self.aid, &normalized).await
     }
 
+    pub async fn rmdir(
+        &self,
+        path: &str,
+    ) -> core::result::Result<(), crate::platform::FilesystemRmDirError> {
+        use crate::platform::FilesystemRmDirError;
+
+        let Some(normalized) = normalize_guest_path(path) else {
+            return Err(FilesystemRmDirError::Other);
+        };
+
+        // A directory visible only through the packaged archive is read-only.
+        // Do not turn that into a persistent-layer ENOENT.
+        if self
+            .platform
+            .filesystem()
+            .list(&self.aid, &normalized)
+            .await
+            .is_none()
+            && self.list(&normalized).await.is_some()
+        {
+            return Err(FilesystemRmDirError::Other);
+        }
+
+        self.platform
+            .filesystem()
+            .rmdir(&self.aid, &normalized)
+            .await
+    }
+
     pub async fn rename(
         &self,
         from: &str,
@@ -287,7 +316,10 @@ mod tests {
     use crate::{
         audio_sink::AudioSink,
         database::DatabaseRepository,
-        platform::{Filesystem, FilesystemMkdirError, FilesystemRenameError, Platform},
+        platform::{
+            Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError,
+            Platform,
+        },
         screen::Screen,
         time::Instant,
     };
@@ -375,6 +407,47 @@ mod tests {
             }
 
             directories.insert(key);
+            Ok(())
+        }
+
+        async fn rmdir(
+            &self,
+            aid: &str,
+            path: &str,
+        ) -> core::result::Result<(), FilesystemRmDirError> {
+            if path.is_empty() {
+                return Err(FilesystemRmDirError::Other);
+            }
+
+            let key = (aid.to_string(), path.to_string());
+
+            if self.files.lock().contains_key(&key) {
+                return Err(FilesystemRmDirError::Other);
+            }
+
+            let mut prefix = path.to_string();
+            prefix.push('/');
+
+            let has_file_child = self.files.lock().keys().any(|(entry_aid, entry_path)| {
+                entry_aid == aid && entry_path.starts_with(&prefix)
+            });
+
+            let mut directories = self.directories.lock();
+            let exists = directories.contains(&key);
+            let has_directory_child =
+                directories.iter().any(|(entry_aid, entry_path)| {
+                    entry_aid == aid && entry_path.starts_with(&prefix)
+                });
+
+            if has_file_child || has_directory_child {
+                return Err(FilesystemRmDirError::NotEmpty);
+            }
+
+            if !exists {
+                return Err(FilesystemRmDirError::NotFound);
+            }
+
+            directories.remove(&key);
             Ok(())
         }
 

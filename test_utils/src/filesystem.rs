@@ -10,7 +10,9 @@ use core::cmp::min;
 use hashbrown::HashMap;
 use spin::Mutex;
 
-use wie_backend::{Filesystem, FilesystemMkdirError, FilesystemRenameError};
+use wie_backend::{
+    Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError,
+};
 
 /// In-memory `Filesystem` implementation for tests.
 #[derive(Default)]
@@ -116,6 +118,48 @@ impl Filesystem for MemoryFilesystem {
         }
 
         self.directories.lock().insert((aid_owned, path_owned));
+        Ok(())
+    }
+
+    async fn rmdir(
+        &self,
+        aid: &str,
+        path: &str,
+    ) -> core::result::Result<(), FilesystemRmDirError> {
+        if path.is_empty() {
+            return Err(FilesystemRmDirError::Other);
+        }
+
+        let aid_owned = aid.to_string();
+        let path_owned = path.to_string();
+        let key = (aid_owned.clone(), path_owned.clone());
+
+        if self.files.lock().contains_key(&key) {
+            return Err(FilesystemRmDirError::Other);
+        }
+
+        let mut prefix = path_owned.clone();
+        prefix.push('/');
+
+        let has_file_child = self.files.lock().keys().any(|(entry_aid, entry_path)| {
+            entry_aid == aid && entry_path.starts_with(&prefix)
+        });
+
+        let mut directories = self.directories.lock();
+        let exists = directories.contains(&key);
+        let has_directory_child = directories.iter().any(|(entry_aid, entry_path)| {
+            entry_aid == aid && entry_path.starts_with(&prefix)
+        });
+
+        if has_file_child || has_directory_child {
+            return Err(FilesystemRmDirError::NotEmpty);
+        }
+
+        if !exists {
+            return Err(FilesystemRmDirError::NotFound);
+        }
+
+        directories.remove(&key);
         Ok(())
     }
 

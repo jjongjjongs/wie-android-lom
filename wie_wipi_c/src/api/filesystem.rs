@@ -618,6 +618,76 @@ pub async fn mkdir(
     }
 }
 
+/// WIPI-C MC_fsRmDir (service 0x199).
+///
+/// Native flow:
+/// WPFS_IsPossibleAccess(2, access) -> WPFS_MakeFullPathName -> dfs_stat ->
+/// dfs_rmdir.
+///
+/// The stat preflight is significant: any stat failure is returned as -12
+/// before rmdir is attempted.
+///
+/// Native return mapping represented here:
+/// - inaccessible access selector => -24
+/// - bad/null filename => -3
+/// - path longer than 128 bytes => -11
+/// - missing/stat failure => -12
+/// - non-empty directory => -15
+/// - regular file or generic rmdir failure => -1
+/// - success => 0
+pub async fn rmdir(
+    context: &mut dyn WIPICContext,
+    path: WIPICWord,
+    access: WIPICWord,
+) -> Result<i32> {
+    use wie_backend::FilesystemRmDirError;
+
+    tracing::debug!("MC_fsRmDir({path:#x}, {access})");
+
+    // Native WPFS_IsPossibleAccess(2, access) is the first semantic check.
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if path == 0 {
+        return Ok(-3);
+    }
+
+    let path_bytes = read_null_terminated_string_bytes(context, path)?;
+    if path_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let path = encoding_rs::EUC_KR.decode(&path_bytes).0.into_owned();
+
+    let filesystem = context.system().filesystem().clone();
+
+    // Native dfs_stat precedes dfs_rmdir.
+    let is_file = filesystem.size(&path).await.is_some();
+    let is_directory = if is_file {
+        false
+    } else {
+        filesystem.list(&path).await.is_some()
+    };
+
+    if !is_file && !is_directory {
+        return Ok(-12);
+    }
+
+    // POSIX rmdir on a regular file fails generically (typically ENOTDIR),
+    // which the native HAL collapses to -1.
+    if is_file {
+        return Ok(-1);
+    }
+
+    match filesystem.rmdir(&path).await {
+        Ok(()) => Ok(0),
+        Err(FilesystemRmDirError::NotFound) => Ok(-12),
+        Err(FilesystemRmDirError::NotEmpty) => Ok(-15),
+        Err(FilesystemRmDirError::NameTooLong) => Ok(-11),
+        Err(FilesystemRmDirError::Other) => Ok(-1),
+    }
+}
+
 /// WIPI-C MC_fsRename (service 0x197).
 ///
 /// Native flow:
@@ -774,7 +844,9 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{close, file_attribute, list, mkdir, open, read, remove, rename, seek, write};
+    use super::{
+        close, file_attribute, list, mkdir, open, read, remove, rename, rmdir, seek, write,
+    };
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -1619,6 +1691,74 @@ mod tests {
         context.write_bytes(0x1000 + 129, &[0]).unwrap();
 
         assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), -11);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rmdir_removes_empty_directory() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"empty\0").unwrap();
+
+        assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), 0);
+        assert_eq!(rmdir(&mut context, 0x1000, 2).await.unwrap(), 0);
+        assert_eq!(context.system().filesystem().list("empty").await, None);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rmdir_nonempty_directory_returns_minus_15_and_is_non_recursive() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"parent\0").unwrap();
+        context.write_bytes(0x1100, b"parent/child\0").unwrap();
+
+        assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), 0);
+        assert_eq!(mkdir(&mut context, 0x1100, 2).await.unwrap(), 0);
+
+        assert_eq!(rmdir(&mut context, 0x1000, 2).await.unwrap(), -15);
+        assert!(context.system().filesystem().list("parent").await.is_some());
+
+        assert_eq!(rmdir(&mut context, 0x1100, 2).await.unwrap(), 0);
+        assert_eq!(rmdir(&mut context, 0x1000, 2).await.unwrap(), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rmdir_regular_file_is_generic_failure() {
+        let mut context = filesystem_test_context();
+        context.system().filesystem().write("file.dat", 0, b"x").await;
+        context.write_bytes(0x1000, b"file.dat\0").unwrap();
+
+        assert_eq!(rmdir(&mut context, 0x1000, 2).await.unwrap(), -1);
+        assert_eq!(context.system().filesystem().size("file.dat").await, Some(1));
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rmdir_missing_and_virtual_directory_match_native_read_only_model() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"missing\0").unwrap();
+
+        assert_eq!(rmdir(&mut context, 0x1000, 2).await.unwrap(), -12);
+
+        context
+            .system()
+            .filesystem()
+            .add_virtual("virtual/item.bin", b"x".to_vec());
+        context.write_bytes(0x1100, b"virtual\0").unwrap();
+
+        // Stat sees the virtual directory, but the packaged layer is read-only.
+        assert_eq!(rmdir(&mut context, 0x1100, 2).await.unwrap(), -1);
+        assert!(context.system().filesystem().list("virtual").await.is_some());
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rmdir_matches_native_validation_order() {
+        let mut context = filesystem_test_context();
+
+        assert_eq!(rmdir(&mut context, 0, 0).await.unwrap(), -24);
+        assert_eq!(rmdir(&mut context, 0, 2).await.unwrap(), -3);
+
+        let long = vec![b'a'; 129];
+        context.write_bytes(0x1000, &long).unwrap();
+        context.write_bytes(0x1000 + 129, &[0]).unwrap();
+
+        assert_eq!(rmdir(&mut context, 0x1000, 2).await.unwrap(), -11);
     }
 
     #[futures_test::test]

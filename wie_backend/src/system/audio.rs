@@ -318,6 +318,14 @@ mod tests {
             Err(crate::platform::FilesystemMkdirError::NotFound)
         }
 
+        async fn rmdir(
+            &self,
+            _aid: &str,
+            _path: &str,
+        ) -> core::result::Result<(), crate::platform::FilesystemRmDirError> {
+            Err(crate::platform::FilesystemRmDirError::NotFound)
+        }
+
         async fn rename(
             &self,
             _aid: &str,

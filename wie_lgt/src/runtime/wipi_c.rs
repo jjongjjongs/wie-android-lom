@@ -200,7 +200,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsRemove => filesystem::remove.into_body(),
         WIPICSvcId::FsRename => filesystem::rename.into_body(),
         WIPICSvcId::FsMkDir => filesystem::mkdir.into_body(),
-        WIPICSvcId::SelectRecord => database::select_record.into_body(),
+        WIPICSvcId::FsRmDir => filesystem::rmdir.into_body(),
         WIPICSvcId::FsList => filesystem::list.into_body(),
         WIPICSvcId::Unk8 => database::exists_database.into_body(),
         WIPICSvcId::FsAvailable => fs_available.into_body(),

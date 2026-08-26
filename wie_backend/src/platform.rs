@@ -88,6 +88,14 @@ pub enum FilesystemMkdirError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemRmDirError {
+    NotFound,
+    NotEmpty,
+    NameTooLong,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FilesystemRenameError {
     NotFound,
     AlreadyExists,
@@ -142,6 +150,15 @@ pub trait Filesystem: Send + Sync {
         aid: &str,
         path: &str,
     ) -> core::result::Result<(), FilesystemMkdirError>;
+
+    /// Remove exactly one empty directory.
+    ///
+    /// This operation is non-recursive.
+    async fn rmdir(
+        &self,
+        aid: &str,
+        path: &str,
+    ) -> core::result::Result<(), FilesystemRmDirError>;
 
     /// Rename or move an existing filesystem object.
     ///
