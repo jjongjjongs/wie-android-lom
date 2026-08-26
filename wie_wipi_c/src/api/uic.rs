@@ -1369,6 +1369,87 @@ pub async fn get_text_size(
     Ok(uic_read_c_string(context, text)?.len() as i32)
 }
 
+/// LGT `MC_uicGetText` (WIPI-C service 0x343).
+///
+/// Native argument order is `(component, position, output, buflen)`.
+///
+/// Validation order is significant:
+/// - NULL/invalid component => 0
+/// - NULL output or `buflen <= 0` => 0
+/// - valid non-Text component => -9
+/// - NULL Text buffer at +0x44 => 0
+///
+/// A negative position is clamped to 0 with the native ARM
+/// `bic position, position, position, asr #31` sequence.
+///
+/// Native does not treat `buflen` as a copy-count limit. After obtaining the
+/// source `strlen`, it requires:
+///
+/// `source_len >= position` and `source_len < position + buflen`
+///
+/// using signed ARM comparisons and 32-bit wrapping addition. If either test
+/// fails it returns 0 without writing the destination.
+///
+/// On success it copies the complete suffix `source[position..source_len]`,
+/// appends NUL, then tail-calls `strlen(output)`. Therefore the successful
+/// return value is the suffix length.
+pub async fn get_text(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: i32,
+    output: WIPICWord,
+    buflen: i32,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_uicGetText({component:#x}, {position}, {output:#x}, {buflen})"
+    );
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    if output == 0 || buflen <= 0 {
+        return Ok(0);
+    }
+
+    if component_type != 3 {
+        return Ok(-9);
+    }
+
+    let text: WIPICWord = read_generic(context, component + 0x44)?;
+    if text == 0 {
+        return Ok(0);
+    }
+
+    let source = uic_read_c_string(context, text)?;
+    let source_len = source.len() as i32;
+    let position = if position < 0 { 0 } else { position };
+
+    if source_len < position {
+        return Ok(0);
+    }
+
+    let end = position.wrapping_add(buflen);
+    if source_len >= end {
+        return Ok(0);
+    }
+
+    let copy_len = source_len.wrapping_sub(position) as usize;
+    let start = position as usize;
+
+    if copy_len != 0 {
+        context.write_bytes(output, &source[start..start + copy_len])?;
+    }
+    context.write_bytes(output.wrapping_add(copy_len as u32), &[0])?;
+
+    Ok(uic_read_c_string(context, output)?.len() as i32)
+}
+
 /// LGT/KTF `MC_uicSetMaxTextSize`.
 ///
 /// Native returns the previous capacity on success. Invalid/null components
@@ -3065,8 +3146,8 @@ mod tests {
         repaint, set_active_menu_item, set_bg_color, set_callback,
         set_enable,
         set_event_handler,
-        get_max_text_size, get_text_size, set_fg_color, set_font, set_label, set_label_alignment,
-        set_max_text_size,
+        get_max_text_size, get_text, get_text_size, set_fg_color, set_font, set_label,
+        set_label_alignment, set_max_text_size,
         set_time, set_time_long, set_time_mask, uic_color_to_rgb565, uic_read_c_string,
         uic_repaint_rect,
         uic_skip_time_separator,
@@ -3538,6 +3619,136 @@ mod tests {
         assert_eq!(
             read_generic::<u32, _>(&context, COMPONENT + 0x4c).unwrap(),
             0x1122_3344
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_text_copies_native_suffix_and_returns_strlen() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 16, 5);
+
+        context.write_bytes(0x3000, &[0xcc; 16]).unwrap();
+
+        assert_eq!(
+            get_text(&mut context, COMPONENT, 2, 0x3000, 5)
+                .await
+                .unwrap(),
+            4
+        );
+
+        let mut actual = [0u8; 8];
+        context.read_bytes(0x3000, &mut actual).unwrap();
+        assert_eq!(&actual[..5], b"cdef\0");
+
+        context.write_bytes(0x3000, &[0xcc; 16]).unwrap();
+
+        assert_eq!(
+            get_text(&mut context, COMPONENT, -123, 0x3000, 7)
+                .await
+                .unwrap(),
+            6
+        );
+
+        context.read_bytes(0x3000, &mut actual).unwrap();
+        assert_eq!(&actual[..7], b"abcdef\0");
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_text_matches_native_range_and_capacity_contract() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 16, 5);
+
+        context.write_bytes(0x3000, &[0xcc; 16]).unwrap();
+
+        // position 2 leaves four bytes. Native requires position + buflen
+        // to be strictly greater than strlen, so buflen == 4 fails.
+        assert_eq!(
+            get_text(&mut context, COMPONENT, 2, 0x3000, 4)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let mut unchanged = [0u8; 16];
+        context.read_bytes(0x3000, &mut unchanged).unwrap();
+        assert_eq!(unchanged, [0xcc; 16]);
+
+        assert_eq!(
+            get_text(&mut context, COMPONENT, 7, 0x3000, 16)
+                .await
+                .unwrap(),
+            0
+        );
+
+        // position == strlen passes the first comparison, copies zero bytes,
+        // writes a NUL, and returns strlen(output) == 0.
+        context.write_bytes(0x3000, &[0xcc; 16]).unwrap();
+        assert_eq!(
+            get_text(&mut context, COMPONENT, 6, 0x3000, 1)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(read_generic::<u8, _>(&context, 0x3000).unwrap(), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_text_matches_native_validation_order() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            get_text(&mut context, 0, 0, 0x3000, 16).await.unwrap(),
+            0
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            assert_eq!(
+                get_text(&mut context, COMPONENT, 0, 0x3000, 16)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+
+        // Output/buffer validation occurs before the Text type check.
+        for component_type in [1u32, 2, 4, 5] {
+            init_component(&mut context, component_type);
+
+            assert_eq!(
+                get_text(&mut context, COMPONENT, 0, 0, 16)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                get_text(&mut context, COMPONENT, 0, 0x3000, 0)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                get_text(&mut context, COMPONENT, 0, 0x3000, -1)
+                    .await
+                    .unwrap(),
+                0
+            );
+
+            assert_eq!(
+                get_text(&mut context, COMPONENT, 0, 0x3000, 16)
+                    .await
+                    .unwrap(),
+                -9
+            );
+        }
+
+        init_component(&mut context, 3);
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+        assert_eq!(
+            get_text(&mut context, COMPONENT, 0, 0x3000, 16)
+                .await
+                .unwrap(),
+            0
         );
     }
 
