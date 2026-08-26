@@ -776,6 +776,62 @@ pub async fn set_label_alignment(
     Ok(old_alignment)
 }
 
+/// LGT `MC_uicSetTimeMask` (WIPI-C service 0x335).
+///
+/// Native validates the component first. NULL/invalid components return 0,
+/// while valid non-DateTime components return -9. The mask is rejected with
+/// -9 when either of its low two bits is set (`mask & 3 != 0`).
+///
+/// On success, native returns the previous +0x44 mask, stores the new mask,
+/// immediately regenerates the DateTime text at +0x74 through
+/// `WPUic_SetTimeStr`, and invokes the +0xa0 callback only when the rendered
+/// text actually changes.
+pub async fn set_time_mask(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    mask: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicSetTimeMask({component:#x}, {mask:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 2 || mask & 3 != 0 {
+        return Ok(-9);
+    }
+
+    let old_mask: i32 = read_generic(context, component + 0x44)?;
+    let old_text = uic_read_c_string(context, component + 0x74)?;
+
+    write_generic(context, component + 0x44, mask)?;
+
+    let mut fields = [0i32; 9];
+    for (index, field) in fields.iter_mut().enumerate() {
+        *field = read_generic(context, component + 0x48 + index as u32 * 4)?;
+    }
+
+    let formatted = uic_format_datetime(mask, &fields);
+    context.write_bytes(component + 0x74, &formatted)?;
+    context.write_bytes(component + 0x74 + formatted.len() as u32, &[0])?;
+
+    if formatted != old_text {
+        let callback: WIPICWord = read_generic(context, component + 0xa0)?;
+        if callback != 0 {
+            let callback_context: WIPICWord = read_generic(context, component + 0xa4)?;
+            context
+                .call_function(callback, &[component, 0, callback_context])
+                .await?;
+        }
+    }
+
+    Ok(old_mask)
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2408,8 +2464,7 @@ mod tests {
         destroy, get_class, get_class_name, get_font, get_geometry, get_label, insert_text,
         is_instance, repaint, set_bg_color, set_callback, set_enable, set_event_handler,
         set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
-        uic_color_to_rgb565,
-        uic_repaint_rect,
+        set_time_mask, uic_color_to_rgb565, uic_read_c_string, uic_repaint_rect,
         uic_skip_time_separator,
     };
 
@@ -3199,6 +3254,101 @@ mod tests {
             assert_eq!(
                 read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
                 2
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_time_mask_returns_previous_updates_mask_and_reformats() {
+        for mask in [0u32, 4, 8, 0xffff_fffc] {
+            let mut context = TestContext::new();
+            init_component(&mut context, 2);
+
+            write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
+
+            let fields = [
+                5i32,   // sec
+                4,      // min
+                3,      // hour
+                2,      // mday
+                0,      // mon: January
+                124,    // year: 2024
+                2,
+                1,
+                0,
+            ];
+            for (index, value) in fields.iter().enumerate() {
+                write_generic(
+                    &mut context,
+                    COMPONENT + 0x48 + index as u32 * 4,
+                    *value,
+                )
+                .unwrap();
+            }
+
+            context
+                .write_bytes(COMPONENT + 0x74, b"2024/01/02 03:04:05\0")
+                .unwrap();
+
+            assert_eq!(
+                set_time_mask(&mut context, COMPONENT, mask).await.unwrap(),
+                3
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+                mask
+            );
+
+            let rendered = uic_read_c_string(&context, COMPONENT + 0x74).unwrap();
+            assert_eq!(rendered, b"2024/01/02");
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_time_mask_matches_native_validation_and_mask_rule() {
+        let mut context = TestContext::new();
+
+        assert_eq!(set_time_mask(&mut context, 0, 0).await.unwrap(), 0);
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 0x1122_3344u32).unwrap();
+
+            assert_eq!(
+                set_time_mask(&mut context, COMPONENT, 0).await.unwrap(),
+                0
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+                0x1122_3344
+            );
+        }
+
+        for component_type in [1u32, 3, 4, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 0x5566_7788u32).unwrap();
+
+            assert_eq!(
+                set_time_mask(&mut context, COMPONENT, 0).await.unwrap(),
+                -9
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+                0x5566_7788
+            );
+        }
+
+        init_component(&mut context, 2);
+        for mask in [1u32, 2, 3, 5, u32::MAX] {
+            write_generic(&mut context, COMPONENT + 0x44, 0x1234_5678u32).unwrap();
+
+            assert_eq!(
+                set_time_mask(&mut context, COMPONENT, mask).await.unwrap(),
+                -9
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+                0x1234_5678
             );
         }
     }
