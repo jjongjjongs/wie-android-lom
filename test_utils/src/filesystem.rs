@@ -78,6 +78,8 @@ impl Filesystem for MemoryFilesystem {
         let mut entries = Vec::new();
         let mut seen = BTreeSet::new();
 
+        let mut directory_exists = path.is_empty();
+
         for ((entry_aid, entry_path), _) in files.iter() {
             if entry_aid != aid {
                 continue;
@@ -88,12 +90,15 @@ impl Filesystem for MemoryFilesystem {
             if rest.is_empty() {
                 continue;
             }
+
+            directory_exists = true;
+
             let child = rest.split('/').next().unwrap_or(rest).to_string();
             if seen.insert(child.clone()) {
                 entries.push(child);
             }
         }
 
-        Some(entries)
+        if directory_exists { Some(entries) } else { None }
     }
 }

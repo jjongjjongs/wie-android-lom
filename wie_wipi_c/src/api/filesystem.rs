@@ -418,6 +418,67 @@ pub async fn seek(
     Ok(target as i32)
 }
 
+/// WIPI-C MC_fsFileAttribute (service 0x195).
+///
+/// Native output is three 32-bit words:
+/// - word 0: 1 for a directory, 0 for a regular file
+/// - word 1: timestamp/attribute slot; LGT's HAL path supplies 0
+/// - word 2: regular-file size, or 0 for a directory
+///
+/// Native error contract:
+/// - inaccessible access selector => -24
+/// - bad/null filename => -3
+/// - path longer than 128 bytes => -11
+/// - null output pointer => -1
+/// - missing/stat failure => -1
+pub async fn file_attribute(
+    context: &mut dyn WIPICContext,
+    path: WIPICWord,
+    output: WIPICWord,
+    access: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_fsFileAttribute({path:#x}, {output:#x}, {access})");
+
+    // Native WPFS_IsPossibleAccess(1, access) precedes path processing.
+    // As with the other LGT filesystem services, WIE accepts recognized
+    // access values 2/3 because the per-DLET permission bitmask is not
+    // currently represented.
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if path == 0 {
+        return Ok(-3);
+    }
+
+    let path_bytes = read_null_terminated_string_bytes(context, path)?;
+    if path_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let path = encoding_rs::EUC_KR.decode(&path_bytes).0.into_owned();
+
+    // Native checks the destination only after full-path construction.
+    if output == 0 {
+        return Ok(-1);
+    }
+
+    let filesystem = context.system().filesystem().clone();
+
+    let (is_directory, size) = if let Some(size) = filesystem.size(&path).await {
+        (0u32, size as u32)
+    } else if filesystem.list(&path).await.is_some() {
+        (1u32, 0u32)
+    } else {
+        return Ok(-1);
+    };
+
+    context.write_bytes(output, &is_directory.to_le_bytes())?;
+    context.write_bytes(output + 4, &0u32.to_le_bytes())?;
+    context.write_bytes(output + 8, &size.to_le_bytes())?;
+
+    Ok(0)
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -498,7 +559,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{close, list, open, read, seek, write};
+    use super::{close, file_attribute, list, open, read, seek, write};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -995,6 +1056,162 @@ mod tests {
         let state = context.filesystem_state();
         let state = state.lock();
         assert_eq!(state.entry(fd).unwrap().cursor, 7);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_file_attribute_reports_regular_file_size() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/attr.dat", 0, b"abcdef")
+            .await;
+        context.write_bytes(0x1000, b"save/attr.dat\0").unwrap();
+        context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
+
+        assert_eq!(
+            file_attribute(&mut context, 0x1000, 0x2000, 1)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let mut actual = [0u8; 12];
+        context.read_bytes(0x2000, &mut actual).unwrap();
+
+        assert_eq!(u32::from_le_bytes(actual[0..4].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(actual[4..8].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(actual[8..12].try_into().unwrap()), 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_file_attribute_reports_directory_and_virtual_directory() {
+        let mut context = filesystem_test_context();
+
+        context
+            .system()
+            .filesystem()
+            .write("save/child.dat", 0, b"x")
+            .await;
+        context
+            .system()
+            .filesystem()
+            .add_virtual("archive/sub/data.bin", b"x".to_vec());
+
+        context.write_bytes(0x1000, b"save\0").unwrap();
+        context.write_bytes(0x1100, b"archive/sub\0").unwrap();
+
+        for path in [0x1000, 0x1100] {
+            context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
+
+            assert_eq!(
+                file_attribute(&mut context, path, 0x2000, 1)
+                    .await
+                    .unwrap(),
+                0
+            );
+
+            let mut actual = [0u8; 12];
+            context.read_bytes(0x2000, &mut actual).unwrap();
+
+            assert_eq!(u32::from_le_bytes(actual[0..4].try_into().unwrap()), 1);
+            assert_eq!(u32::from_le_bytes(actual[4..8].try_into().unwrap()), 0);
+            assert_eq!(u32::from_le_bytes(actual[8..12].try_into().unwrap()), 0);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_file_attribute_reports_virtual_file_size() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .add_virtual("res/attr.bin", b"virtual".to_vec());
+
+        context.write_bytes(0x1000, b"res/attr.bin\0").unwrap();
+        context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
+
+        assert_eq!(
+            file_attribute(&mut context, 0x1000, 0x2000, 100)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let mut actual = [0u8; 12];
+        context.read_bytes(0x2000, &mut actual).unwrap();
+
+        assert_eq!(u32::from_le_bytes(actual[0..4].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(actual[4..8].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(actual[8..12].try_into().unwrap()), 7);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_file_attribute_matches_native_validation_and_missing_errors() {
+        let mut context = filesystem_test_context();
+
+        context.write_bytes(0x1000, b"missing.dat\0").unwrap();
+        context.write_bytes(0x1100, b"existing.dat\0").unwrap();
+        context
+            .system()
+            .filesystem()
+            .write("existing.dat", 0, b"x")
+            .await;
+
+        // Access validation occurs first.
+        assert_eq!(
+            file_attribute(&mut context, 0, 0, 0).await.unwrap(),
+            -24
+        );
+
+        assert_eq!(
+            file_attribute(&mut context, 0, 0x2000, 1).await.unwrap(),
+            -3
+        );
+
+        // The output pointer is checked only after path processing.
+        assert_eq!(
+            file_attribute(&mut context, 0x1100, 0, 1)
+                .await
+                .unwrap(),
+            -1
+        );
+
+        assert_eq!(
+            file_attribute(&mut context, 0x1000, 0x2000, 1)
+                .await
+                .unwrap(),
+            -1
+        );
+
+        for access in [1, 2, 3, 100] {
+            assert_eq!(
+                file_attribute(&mut context, 0x1100, 0x2000, access)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_file_attribute_root_is_directory() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"/\0").unwrap();
+        context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
+
+        assert_eq!(
+            file_attribute(&mut context, 0x1000, 0x2000, 1)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let mut actual = [0u8; 12];
+        context.read_bytes(0x2000, &mut actual).unwrap();
+        assert_eq!(u32::from_le_bytes(actual[0..4].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(actual[4..8].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(actual[8..12].try_into().unwrap()), 0);
     }
 
     #[futures_test::test]
