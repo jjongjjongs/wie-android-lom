@@ -155,6 +155,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicIsInstance => uic::is_instance.into_body(),
         WIPICSvcId::UicHandleEvent => uic::handle_event.into_body(),
         WIPICSvcId::UicConfigure => uic::configure.into_body(),
+        WIPICSvcId::UicGetGeometry => uic::get_geometry.into_body(),
         WIPICSvcId::UicSetEnable => uic::set_enable.into_body(),
         WIPICSvcId::UicInsertText => uic::insert_text.into_body(),
         WIPICSvcId::UicDeleteText => uic::delete_text.into_body(),

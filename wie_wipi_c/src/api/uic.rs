@@ -423,6 +423,52 @@ pub async fn configure(
     Ok(())
 }
 
+/// LGT `MC_uicGetGeometry` (WIPI-C service 0x32a).
+///
+/// Native validates the component, then independently writes x, y, width,
+/// and height to each non-NULL output pointer. NULL output pointers are
+/// ignored, and invalid/NULL components leave all outputs untouched.
+pub async fn get_geometry(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    x: WIPICWord,
+    y: WIPICWord,
+    width: WIPICWord,
+    height: WIPICWord,
+) -> Result<()> {
+    tracing::debug!(
+        "MC_uicGetGeometry({component:#x}, {x:#x}, {y:#x}, {width:#x}, {height:#x})"
+    );
+
+    if component == 0 {
+        return Ok(());
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(());
+    }
+
+    if x != 0 {
+        let value: i32 = read_generic(context, component + 0x04)?;
+        write_generic(context, x, value)?;
+    }
+    if y != 0 {
+        let value: i32 = read_generic(context, component + 0x08)?;
+        write_generic(context, y, value)?;
+    }
+    if width != 0 {
+        let value: i32 = read_generic(context, component + 0x0c)?;
+        write_generic(context, width, value)?;
+    }
+    if height != 0 {
+        let value: i32 = read_generic(context, component + 0x10)?;
+        write_generic(context, height, value)?;
+    }
+
+    Ok(())
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2050,8 +2096,8 @@ mod tests {
 
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
-        destroy, get_class, get_class_name, insert_text, is_instance, repaint, set_enable,
-        set_max_text_size, uic_repaint_rect, uic_skip_time_separator,
+        destroy, get_class, get_class_name, get_geometry, insert_text, is_instance, repaint,
+        set_enable, set_max_text_size, uic_repaint_rect, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -2610,6 +2656,91 @@ mod tests {
         // Raw bytes were inserted, but as a C string the visible text remains "abcd".
         assert_eq!(read_text(&context, 16), b"abcd");
         assert_eq!(read_i32(&context, 0x4c), 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_geometry_writes_each_non_null_output_like_native() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 4);
+
+        write_generic(&mut context, COMPONENT + 0x04, -11i32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x08, 22i32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x0c, 333i32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x10, 444i32).unwrap();
+
+        for address in [0x3000u32, 0x3004, 0x3008, 0x300c] {
+            write_generic(&mut context, address, 0x1357_2468u32).unwrap();
+        }
+
+        get_geometry(
+            &mut context,
+            COMPONENT,
+            0x3000,
+            0,
+            0x3008,
+            0x300c,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(read_generic::<i32, _>(&context, 0x3000).unwrap(), -11);
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3004).unwrap(),
+            0x1357_2468
+        );
+        assert_eq!(read_generic::<i32, _>(&context, 0x3008).unwrap(), 333);
+        assert_eq!(read_generic::<i32, _>(&context, 0x300c).unwrap(), 444);
+
+        get_geometry(
+            &mut context,
+            COMPONENT,
+            0,
+            0x3004,
+            0,
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(read_generic::<i32, _>(&context, 0x3004).unwrap(), 22);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_geometry_leaves_outputs_untouched_for_invalid_components() {
+        let mut context = TestContext::new();
+
+        for address in [0x3000u32, 0x3004, 0x3008, 0x300c] {
+            write_generic(&mut context, address, 0x2468_1357u32).unwrap();
+        }
+
+        get_geometry(&mut context, 0, 0x3000, 0x3004, 0x3008, 0x300c)
+            .await
+            .unwrap();
+
+        for address in [0x3000u32, 0x3004, 0x3008, 0x300c] {
+            assert_eq!(
+                read_generic::<u32, _>(&context, address).unwrap(),
+                0x2468_1357
+            );
+        }
+
+        init_component(&mut context, 6);
+        get_geometry(
+            &mut context,
+            COMPONENT,
+            0x3000,
+            0x3004,
+            0x3008,
+            0x300c,
+        )
+        .await
+        .unwrap();
+
+        for address in [0x3000u32, 0x3004, 0x3008, 0x300c] {
+            assert_eq!(
+                read_generic::<u32, _>(&context, address).unwrap(),
+                0x2468_1357
+            );
+        }
     }
 
     #[futures_test::test]
