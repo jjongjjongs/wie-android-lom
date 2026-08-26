@@ -68,6 +68,10 @@ impl FilesystemState {
         entry.cursor = cursor;
         true
     }
+
+    fn close(&mut self, fd: i32) -> bool {
+        self.entries.remove(&fd).is_some()
+    }
 }
 
 /// WIPI-C MC_fsOpen (service 0x190).
@@ -301,6 +305,30 @@ pub async fn write(
     Ok(written as i32)
 }
 
+/// WIPI-C MC_fsClose (service 0x193).
+///
+/// Native dfs_close removes the descriptor object only after the underlying
+/// close callback succeeds. WIE's filesystem abstraction has no persistent
+/// host handle, so a valid synthetic descriptor closes by removing its state.
+///
+/// Native contract:
+/// - valid fd => 0
+/// - invalid/non-positive/already-closed fd => -2
+/// - other low-level close failure => -1
+pub async fn close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
+    tracing::debug!("MC_fsClose({fd})");
+
+    if fd <= 0 {
+        return Ok(-2);
+    }
+
+    if !context.filesystem_state().lock().close(fd) {
+        return Ok(-2);
+    }
+
+    Ok(0)
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -381,7 +409,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{list, open, read, write};
+    use super::{close, list, open, read, write};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -707,6 +735,67 @@ mod tests {
         let state = context.filesystem_state();
         let state = state.lock();
         assert_eq!(state.entry(fd).unwrap().cursor, 3);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_close_removes_descriptor_and_invalidates_future_io() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/close.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/close.dat\0").unwrap();
+        context.write_bytes(0x2000, b"Z").unwrap();
+
+        let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
+        assert_eq!(fd, 1);
+
+        assert_eq!(close(&mut context, fd).await.unwrap(), 0);
+
+        {
+            let state = context.filesystem_state();
+            let state = state.lock();
+            assert!(state.entry(fd).is_none());
+        }
+
+        assert_eq!(read(&mut context, fd, 0x2000, 1).await.unwrap(), -2);
+        assert_eq!(write(&mut context, fd, 0x2000, 1).await.unwrap(), -2);
+        assert_eq!(close(&mut context, fd).await.unwrap(), -2);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_close_rejects_nonpositive_and_unknown_descriptors() {
+        let mut context = filesystem_test_context();
+
+        assert_eq!(close(&mut context, 0).await.unwrap(), -2);
+        assert_eq!(close(&mut context, -1).await.unwrap(), -2);
+        assert_eq!(close(&mut context, 77).await.unwrap(), -2);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_close_does_not_reuse_native_fd_sequence() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/a.dat", 0, b"a")
+            .await;
+        context
+            .system()
+            .filesystem()
+            .write("save/b.dat", 0, b"b")
+            .await;
+
+        context.write_bytes(0x1000, b"save/a.dat\0").unwrap();
+        context.write_bytes(0x1100, b"save/b.dat\0").unwrap();
+
+        let first = open(&mut context, 0x1000, 1, 1).await.unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(close(&mut context, first).await.unwrap(), 0);
+
+        let second = open(&mut context, 0x1100, 1, 1).await.unwrap();
+        assert_eq!(second, 2);
     }
 
     #[futures_test::test]
