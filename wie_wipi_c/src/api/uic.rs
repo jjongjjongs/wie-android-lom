@@ -4,8 +4,11 @@ use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 
 use crate::{api::{graphics, kernel}, context::WIPICContext};
 
+/// LGT `MC_uicCreateApplicationContext` (WIPI-C service 0x320).
+///
+/// Native is a two-instruction constant return and always yields NULL.
 pub async fn create_application_context(_context: &mut dyn WIPICContext) -> Result<WIPICIndirectPtr> {
-    tracing::warn!("stub MC_uicCreateApplicationContext");
+    tracing::debug!("MC_uicCreateApplicationContext");
 
     Ok(WIPICIndirectPtr(0))
 }
