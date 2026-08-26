@@ -2896,6 +2896,34 @@ pub async fn set_active_menu_item(
     Ok(old_selected)
 }
 
+/// LGT `MC_uicGetActiveMenuItem` (WIPI-C service 0x33d).
+///
+/// Native is a thin wrapper over `WPUic_GetActiveItem` with required component type 1.
+///
+/// `WPUic_CheckValidComp` failure is converted from 0 to -1. A valid component of
+/// any type other than Menu returns -9. For a valid Menu component, native simply
+/// returns the signed 32-bit active-item value stored at +0x48 unchanged.
+pub async fn get_active_menu_item(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicGetActiveMenuItem({component:#x})");
+
+    if component == 0 {
+        return Ok(-1);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(-1);
+    }
+    if component_type != 1 {
+        return Ok(-9);
+    }
+
+    read_generic(context, component + 0x48)
+}
+
 /// LGT `MC_uicGetMenuItem` (WIPI-C service 0x33a).
 ///
 /// Native is a thin wrapper over `WPUic_GetItem` with required component type 1.
@@ -2972,8 +3000,8 @@ mod tests {
         UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
         delete_text,
         add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
-        get_menu_item, get_time, insert_text, is_instance, remove_menu_item, repaint, set_active_menu_item,
-        set_bg_color, set_callback,
+        get_active_menu_item, get_menu_item, get_time, insert_text, is_instance, remove_menu_item,
+        repaint, set_active_menu_item, set_bg_color, set_callback,
         set_enable,
         set_event_handler,
         set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
@@ -4120,6 +4148,57 @@ mod tests {
             read_generic::<u32, _>(&context, table).unwrap(),
             only
         );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_active_menu_item_matches_native_validation_and_type_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            get_active_menu_item(&mut context, 0).await.unwrap(),
+            -1
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 0x1234_5678i32).unwrap();
+
+            assert_eq!(
+                get_active_menu_item(&mut context, COMPONENT)
+                    .await
+                    .unwrap(),
+                -1
+            );
+        }
+
+        for component_type in [2u32, 3, 4, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 7i32).unwrap();
+
+            assert_eq!(
+                get_active_menu_item(&mut context, COMPONENT)
+                    .await
+                    .unwrap(),
+                -9
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_active_menu_item_returns_native_slot_unchanged() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 1);
+
+        for expected in [-1i32, 0, 2, -2, i32::MIN, i32::MAX] {
+            write_generic(&mut context, COMPONENT + 0x48, expected).unwrap();
+
+            assert_eq!(
+                get_active_menu_item(&mut context, COMPONENT)
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
     }
 
     #[futures_test::test]

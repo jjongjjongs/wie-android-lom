@@ -177,6 +177,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicGetMenuItem => uic::get_menu_item.into_body(),
         WIPICSvcId::UicRemoveMenuItem => uic::remove_menu_item.into_body(),
         WIPICSvcId::UicSetActiveMenuItem => uic::set_active_menu_item.into_body(),
+        WIPICSvcId::UicGetActiveMenuItem => uic::get_active_menu_item.into_body(),
         WIPICSvcId::OpenDatabase => database::open_database.into_body(),
         WIPICSvcId::ReadRecordSingle => database::stream_read.into_body(),
         WIPICSvcId::WriteRecordSingle => database::stream_write.into_body(),
