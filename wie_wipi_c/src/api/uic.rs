@@ -1334,6 +1334,41 @@ pub async fn get_max_text_size(
     read_generic(context, component + 0x48)
 }
 
+/// LGT `MC_uicGetTextSize` (WIPI-C service 0x342).
+///
+/// Native first validates the component. NULL/invalid components return 0 and
+/// valid non-Text components return -9.
+///
+/// For a valid Text component, +0x44 is the NUL-terminated text buffer pointer.
+/// A NULL text pointer returns 0. Otherwise native tail-calls `strlen` and
+/// returns the current text length, excluding the terminating NUL. The +0x48
+/// capacity and +0x4c cursor fields are not consulted.
+pub async fn get_text_size(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicGetTextSize({component:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 3 {
+        return Ok(-9);
+    }
+
+    let text: WIPICWord = read_generic(context, component + 0x44)?;
+    if text == 0 {
+        return Ok(0);
+    }
+
+    Ok(uic_read_c_string(context, text)?.len() as i32)
+}
+
 /// LGT/KTF `MC_uicSetMaxTextSize`.
 ///
 /// Native returns the previous capacity on success. Invalid/null components
@@ -3030,7 +3065,8 @@ mod tests {
         repaint, set_active_menu_item, set_bg_color, set_callback,
         set_enable,
         set_event_handler,
-        get_max_text_size, set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
+        get_max_text_size, get_text_size, set_fg_color, set_font, set_label, set_label_alignment,
+        set_max_text_size,
         set_time, set_time_long, set_time_mask, uic_color_to_rgb565, uic_read_c_string,
         uic_repaint_rect,
         uic_skip_time_separator,
@@ -3442,6 +3478,67 @@ mod tests {
                 0x5566_7788
             );
         }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_text_size_returns_native_strlen() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 0x1234_5678, 5);
+
+        assert_eq!(get_text_size(&mut context, COMPONENT).await.unwrap(), 6);
+
+        context.write_bytes(0x2000, b"a\0cdef\0").unwrap();
+        assert_eq!(get_text_size(&mut context, COMPONENT).await.unwrap(), 1);
+
+        context.write_bytes(0x2000, b"\0").unwrap();
+        assert_eq!(get_text_size(&mut context, COMPONENT).await.unwrap(), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_text_size_matches_native_validation_and_null_text_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(get_text_size(&mut context, 0).await.unwrap(), 0);
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 0x2000u32).unwrap();
+            context.write_bytes(0x2000, b"ignored\0").unwrap();
+
+            assert_eq!(
+                get_text_size(&mut context, COMPONENT).await.unwrap(),
+                0
+            );
+        }
+
+        for component_type in [1u32, 2, 4, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 0x2000u32).unwrap();
+            context.write_bytes(0x2000, b"ignored\0").unwrap();
+
+            assert_eq!(
+                get_text_size(&mut context, COMPONENT).await.unwrap(),
+                -9
+            );
+        }
+
+        init_component(&mut context, 3);
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x48, 0x5566_7788u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344u32).unwrap();
+
+        assert_eq!(
+            get_text_size(&mut context, COMPONENT).await.unwrap(),
+            0
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
+            0x5566_7788
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x4c).unwrap(),
+            0x1122_3344
+        );
     }
 
     #[futures_test::test]
