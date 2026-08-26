@@ -545,6 +545,33 @@ pub async fn set_event_handler(
     Ok(previous)
 }
 
+/// LGT `MC_uicSetFont` (WIPI-C service 0x32e).
+///
+/// Native validates the component, returns the previous font value from +0x14,
+/// and stores the new value there. NULL or invalid components return 0 and
+/// leave memory untouched.
+pub async fn set_font(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    font: WIPICWord,
+) -> Result<WIPICWord> {
+    tracing::debug!("MC_uicSetFont({component:#x}, {font:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    let previous: WIPICWord = read_generic(context, component + 0x14)?;
+    write_generic(context, component + 0x14, font)?;
+
+    Ok(previous)
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2173,8 +2200,8 @@ mod tests {
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
         destroy, get_class, get_class_name, get_geometry, insert_text, is_instance, repaint,
-        set_callback, set_enable, set_event_handler, set_max_text_size, uic_repaint_rect,
-        uic_skip_time_separator,
+        set_callback, set_enable, set_event_handler, set_font, set_max_text_size,
+        uic_repaint_rect, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -2733,6 +2760,56 @@ mod tests {
         // Raw bytes were inserted, but as a C string the visible text remains "abcd".
         assert_eq!(read_text(&context, 16), b"abcd");
         assert_eq!(read_i32(&context, 0x4c), 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_font_returns_previous_and_replaces_native_slot() {
+        for component_type in 1u32..=5 {
+            let mut context = TestContext::new();
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x14, 0x1234_5678u32).unwrap();
+
+            assert_eq!(
+                set_font(&mut context, COMPONENT, 0x8765_4321)
+                    .await
+                    .unwrap(),
+                0x1234_5678
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(),
+                0x8765_4321
+            );
+
+            assert_eq!(
+                set_font(&mut context, COMPONENT, 0).await.unwrap(),
+                0x8765_4321
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(),
+                0
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_font_returns_zero_for_invalid_components() {
+        let mut context = TestContext::new();
+
+        assert_eq!(set_font(&mut context, 0, 0x1111_2222).await.unwrap(), 0);
+
+        init_component(&mut context, 6);
+        write_generic(&mut context, COMPONENT + 0x14, 0xaabb_ccddu32).unwrap();
+
+        assert_eq!(
+            set_font(&mut context, COMPONENT, 0x1111_2222)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(),
+            0xaabb_ccdd
+        );
     }
 
     #[futures_test::test]
