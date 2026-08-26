@@ -59,6 +59,15 @@ impl FilesystemState {
         entry.cursor = entry.cursor.wrapping_add(count);
         true
     }
+
+    fn set_cursor(&mut self, fd: i32, cursor: usize) -> bool {
+        let Some(entry) = self.entries.get_mut(&fd) else {
+            return false;
+        };
+
+        entry.cursor = cursor;
+        true
+    }
 }
 
 /// WIPI-C MC_fsOpen (service 0x190).
@@ -208,6 +217,90 @@ pub async fn read(
     Ok(read as i32)
 }
 
+/// WIPI-C MC_fsWrite (service 0x192).
+///
+/// Native contract:
+/// - null buffer or signed size < 0 => -9
+/// - size == 0 is a valid zero-byte write and returns 0
+/// - invalid fd => -2
+/// - ENOSPC => -13
+/// - other write failure => -1
+/// - successful write returns the byte count
+pub async fn write(
+    context: &mut dyn WIPICContext,
+    fd: i32,
+    buffer: WIPICWord,
+    size: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_fsWrite({fd}, {buffer:#x}, {size})");
+
+    if buffer == 0 || size < 0 {
+        return Ok(-9);
+    }
+
+    let entry = {
+        let state = context.filesystem_state();
+        let state = state.lock();
+        state.entry(fd).cloned()
+    };
+
+    let Some(entry) = entry else {
+        return Ok(-2);
+    };
+
+    // Native mode 1 is O_RDONLY. POSIX write fails with EBADF and the
+    // native wrapper collapses that path to the generic -1 result.
+    if entry.mode == 1 {
+        return Ok(-1);
+    }
+
+    // POSIX write(fd, ..., 0) succeeds with 0. Preserve that distinction
+    // before calling WIE's backend, whose 0 return also denotes failure.
+    if size == 0 {
+        return Ok(0);
+    }
+
+    let size = size as usize;
+    let mut data = alloc::vec![0u8; size];
+    context.read_bytes(buffer, &mut data)?;
+
+    let filesystem = context.system().filesystem().clone();
+
+    // Mode 2 was opened O_APPEND. Every write therefore starts at the
+    // current EOF regardless of a preceding seek. Other writable modes use
+    // the descriptor's current file offset.
+    let offset = if entry.mode == 2 {
+        let Some(file_size) = filesystem.size(&entry.path).await else {
+            return Ok(-1);
+        };
+        file_size
+    } else {
+        entry.cursor
+    };
+
+    let written = filesystem.write(&entry.path, offset, &data).await;
+    if written == 0 {
+        // WIE's Filesystem contract currently collapses disk-full,
+        // permission and other backend failures to 0, so ENOSPC cannot be
+        // distinguished here. The native generic failure is -1.
+        return Ok(-1);
+    }
+
+    let state = context.filesystem_state();
+    let mut state = state.lock();
+    let updated = if entry.mode == 2 {
+        state.set_cursor(fd, offset.wrapping_add(written))
+    } else {
+        state.advance_cursor(fd, written)
+    };
+
+    if !updated {
+        return Ok(-2);
+    }
+
+    Ok(written as i32)
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -288,7 +381,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{list, open, read};
+    use super::{list, open, read, write};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -482,6 +575,138 @@ mod tests {
         let mut actual = [0u8; 7];
         context.read_bytes(0x2000, &mut actual).unwrap();
         assert_eq!(&actual, b"virtual");
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_write_writes_at_cursor_and_advances() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/rw.dat", 0, b"abcdef")
+            .await;
+        context.write_bytes(0x1000, b"save/rw.dat\0").unwrap();
+        context.write_bytes(0x2000, b"XYZ").unwrap();
+
+        let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
+        assert_eq!(write(&mut context, fd, 0x2000, 3).await.unwrap(), 3);
+
+        let mut actual = [0u8; 6];
+        assert_eq!(
+            context
+                .system()
+                .filesystem()
+                .read("save/rw.dat", 0, 6, &mut actual)
+                .await,
+            Some(6)
+        );
+        assert_eq!(&actual, b"XYZdef");
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 3);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_write_append_uses_eof_and_sets_cursor_to_new_eof() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/append.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/append.dat\0").unwrap();
+        context.write_bytes(0x2000, b"XY").unwrap();
+
+        let fd = open(&mut context, 0x1000, 2, 1).await.unwrap();
+
+        // The descriptor begins at offset zero, but O_APPEND redirects the
+        // write itself to EOF.
+        {
+            let state = context.filesystem_state();
+            let state = state.lock();
+            assert_eq!(state.entry(fd).unwrap().cursor, 0);
+        }
+
+        assert_eq!(write(&mut context, fd, 0x2000, 2).await.unwrap(), 2);
+
+        let mut actual = [0u8; 5];
+        assert_eq!(
+            context
+                .system()
+                .filesystem()
+                .read("save/append.dat", 0, 5, &mut actual)
+                .await,
+            Some(5)
+        );
+        assert_eq!(&actual, b"abcXY");
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 5);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_write_matches_native_validation_and_mode_errors() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/readonly.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/readonly.dat\0").unwrap();
+        context.write_bytes(0x2000, b"Z").unwrap();
+
+        // MC_fsWrite validates buffer and signed size before dfs_write.
+        assert_eq!(write(&mut context, 77, 0, 1).await.unwrap(), -9);
+        assert_eq!(write(&mut context, 77, 0x2000, -1).await.unwrap(), -9);
+
+        // A zero-sized write is valid, but fd validation still happens first.
+        assert_eq!(write(&mut context, 77, 0x2000, 0).await.unwrap(), -2);
+
+        assert_eq!(write(&mut context, 0, 0x2000, 1).await.unwrap(), -2);
+        assert_eq!(write(&mut context, 77, 0x2000, 1).await.unwrap(), -2);
+
+        let readonly_fd = open(&mut context, 0x1000, 1, 1).await.unwrap();
+        assert_eq!(write(&mut context, readonly_fd, 0x2000, 1).await.unwrap(), -1);
+        assert_eq!(write(&mut context, readonly_fd, 0x2000, 0).await.unwrap(), -1);
+
+        let rw_fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
+        assert_eq!(write(&mut context, rw_fd, 0x2000, 0).await.unwrap(), 0);
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(rw_fd).unwrap().cursor, 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_write_truncate_mode_starts_from_zero() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/truncate-write.dat", 0, b"old-data")
+            .await;
+        context.write_bytes(0x1000, b"save/truncate-write.dat\0").unwrap();
+        context.write_bytes(0x2000, b"new").unwrap();
+
+        let fd = open(&mut context, 0x1000, 4, 1).await.unwrap();
+        assert_eq!(write(&mut context, fd, 0x2000, 3).await.unwrap(), 3);
+
+        let mut actual = [0u8; 3];
+        assert_eq!(
+            context
+                .system()
+                .filesystem()
+                .read("save/truncate-write.dat", 0, 3, &mut actual)
+                .await,
+            Some(3)
+        );
+        assert_eq!(&actual, b"new");
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 3);
     }
 
     #[futures_test::test]
