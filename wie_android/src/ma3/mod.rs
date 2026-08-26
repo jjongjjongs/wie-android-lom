@@ -490,7 +490,11 @@ impl SynthMixer {
             return;
         }
         let step = f64::from(source_rate) / f64::from(SAMPLE_RATE);
-        self.pcm.push(PcmOneShot { samples, position: 0.0, step });
+        self.pcm.push(PcmOneShot {
+            samples,
+            position: 0.0,
+            step,
+        });
     }
 
     /// Opens an isolated voice and returns its id. Id 0 is never handed out, so
@@ -571,10 +575,12 @@ impl SynthMixer {
     pub fn render(&mut self, frames: usize) -> Option<Vec<i16>> {
         let mut accumulator: Option<Vec<i32>> = None;
         let mut finished: Vec<u32> = Vec::new();
+        let mut active_voices = 0usize;
 
         for (id, entry) in &mut self.voices {
             match entry.synth.render(frames) {
                 Some(samples) => {
+                    active_voices += 1;
                     let acc = accumulator.get_or_insert_with(|| vec![0i32; frames * CHANNELS]);
                     for (slot, sample) in acc.iter_mut().zip(samples.iter()) {
                         *slot += i32::from(*sample);
@@ -592,14 +598,25 @@ impl SynthMixer {
             self.voices.remove(&id);
         }
 
+        // Peak of everything the sequenced voices produced, measured before the
+        // recorded waves are added, so a diagnostic can tell whether a wave is
+        // being buried by loud concurrent music in the single summed stream.
+        let synth_peak = accumulator
+            .as_ref()
+            .map(|acc| acc.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0))
+            .unwrap_or(0);
+
         // Mix the one-shot recorded waves (mono) into both output channels,
         // resampled to the output rate, and drop any that have played out.
+        let pcm_active = self.pcm.len();
+        let mut pcm_peak = 0u32;
         if !self.pcm.is_empty() {
             let acc = accumulator.get_or_insert_with(|| vec![0i32; frames * CHANNELS]);
             self.pcm.retain_mut(|wave| {
                 for frame in acc.chunks_exact_mut(CHANNELS) {
                     match wave.next_sample() {
                         Some(sample) => {
+                            pcm_peak = pcm_peak.max(sample.unsigned_abs() as u32);
                             let sample = i32::from(sample);
                             for slot in frame.iter_mut() {
                                 *slot += sample;
@@ -612,7 +629,16 @@ impl SynthMixer {
             });
         }
 
-        accumulator.map(|acc| acc.iter().map(|sample| clamp_i16(i64::from(*sample)) as i16).collect())
+        accumulator.map(|acc| {
+            let total_peak = acc.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+            let clamped = total_peak > 32767;
+            if pcm_active > 0 {
+                tracing::info!(
+                    "[mix] pcm={pcm_active} pcm_peak={pcm_peak} voices={active_voices} synth_peak={synth_peak} total_peak={total_peak} clamped={clamped}"
+                );
+            }
+            acc.iter().map(|sample| clamp_i16(i64::from(*sample)) as i16).collect()
+        })
     }
 }
 
