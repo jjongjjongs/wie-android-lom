@@ -2892,6 +2892,98 @@ pub async fn add_menu_item(
     Ok(count as i32)
 }
 
+/// LGT `MC_uicAddListItem` (WIPI-C service 0x344).
+///
+/// Native is a thin wrapper over `WPUic_AddItem` with required component type 5.
+/// Its storage and return contract are identical to `MC_uicAddMenuItem`:
+/// +0x44 is the item count and +0x50 is the raw pointer table. Each table entry
+/// points to a zero-initialized `[image: u32][NUL-terminated label]` block.
+///
+/// NULL/invalid components return 0 and valid non-List components return -9.
+/// A NULL label is accepted and produces an empty string. The first table is a
+/// four-byte allocation; later additions grow it to `(count + 1) * 4`.
+/// WIPICContext has no raw realloc primitive, so WIE mirrors the successful
+/// native realloc path by allocating a replacement table, copying the existing
+/// pointer words, freeing the old table, and storing the replacement at +0x50.
+///
+/// Allocation failure returns 0 without incrementing +0x44. Successful addition
+/// returns the previous count, which is the new item's zero-based index.
+pub async fn add_list_item(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    label: WIPICWord,
+    image: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_uicAddListItem({component:#x}, {label:#x}, {image:#x})"
+    );
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 5 {
+        return Ok(-9);
+    }
+
+    let count: WIPICWord = read_generic(context, component + 0x44)?;
+
+    let table = if count == 0 {
+        let table = match context.alloc_raw(4) {
+            Ok(address) => address,
+            Err(_) => return Ok(0),
+        };
+        context.write_bytes(table, &[0; 4])?;
+        write_generic(context, component + 0x50, table)?;
+        table
+    } else {
+        let old_table: WIPICWord = read_generic(context, component + 0x50)?;
+        let old_size = count.wrapping_mul(4);
+        let new_size = count.wrapping_add(1).wrapping_mul(4);
+
+        let new_table = match context.alloc_raw(new_size) {
+            Ok(address) => address,
+            Err(_) => return Ok(0),
+        };
+
+        let mut old_entries = alloc::vec![0u8; old_size as usize];
+        context.read_bytes(old_table, &mut old_entries)?;
+        context.write_bytes(new_table, &old_entries)?;
+        context.free_raw_unsized(old_table)?;
+        write_generic(context, component + 0x50, new_table)?;
+        new_table
+    };
+
+    let label_bytes = if label == 0 {
+        alloc::vec::Vec::new()
+    } else {
+        uic_read_c_string(context, label)?
+    };
+    let item_size = (label_bytes.len() as u32).wrapping_add(5);
+
+    let item = match context.alloc_raw(item_size) {
+        Ok(address) => address,
+        Err(_) => return Ok(0),
+    };
+    context.write_bytes(item, &alloc::vec![0; item_size as usize])?;
+
+    write_generic(context, table + count.wrapping_mul(4), item)?;
+    write_generic(context, item, image)?;
+
+    if label != 0 {
+        context.write_bytes(item + 4, &label_bytes)?;
+        context.write_bytes(item + 4 + label_bytes.len() as u32, &[0])?;
+    }
+
+    write_generic(context, component + 0x44, count.wrapping_add(1))?;
+
+    Ok(count as i32)
+}
+
 /// LGT `MC_uicRemoveMenuItem` (WIPI-C service 0x33b).
 ///
 /// Native is a thin wrapper over `WPUic_RemoveItem` with required component type 1.
@@ -3141,7 +3233,7 @@ mod tests {
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
         delete_text,
-        add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
+        add_list_item, add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
         get_active_menu_item, get_menu_item, get_time, insert_text, is_instance, remove_menu_item,
         repaint, set_active_menu_item, set_bg_color, set_callback,
         set_enable,
@@ -4277,6 +4369,124 @@ mod tests {
             assert_eq!(
                 read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
                 0x1234_5678
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_add_list_item_builds_native_pointer_table_and_item_blocks() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 5);
+
+        context.write_bytes(0x3000, b"First list item\0").unwrap();
+
+        assert_eq!(
+            add_list_item(&mut context, COMPONENT, 0x3000, 0x1122_3344)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            1
+        );
+
+        let first_table: u32 =
+            read_generic(&context, COMPONENT + 0x50).unwrap();
+        assert_ne!(first_table, 0);
+
+        let first_item: u32 = read_generic(&context, first_table).unwrap();
+        assert_ne!(first_item, 0);
+        assert_eq!(
+            read_generic::<u32, _>(&context, first_item).unwrap(),
+            0x1122_3344
+        );
+        assert_eq!(
+            uic_read_c_string(&context, first_item + 4).unwrap(),
+            b"First list item"
+        );
+
+        assert_eq!(
+            add_list_item(&mut context, COMPONENT, 0, 0xaabb_ccdd)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            2
+        );
+
+        let second_table: u32 =
+            read_generic(&context, COMPONENT + 0x50).unwrap();
+        assert_ne!(second_table, 0);
+
+        assert_eq!(
+            read_generic::<u32, _>(&context, second_table).unwrap(),
+            first_item
+        );
+
+        let second_item: u32 =
+            read_generic(&context, second_table + 4).unwrap();
+        assert_ne!(second_item, 0);
+        assert_eq!(
+            read_generic::<u32, _>(&context, second_item).unwrap(),
+            0xaabb_ccdd
+        );
+        assert_eq!(
+            uic_read_c_string(&context, second_item + 4).unwrap(),
+            b""
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_add_list_item_matches_native_validation_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            add_list_item(&mut context, 0, 0, 0).await.unwrap(),
+            0
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 0x1234u32).unwrap();
+            write_generic(&mut context, COMPONENT + 0x50, 0x5678u32).unwrap();
+
+            assert_eq!(
+                add_list_item(&mut context, COMPONENT, 0, 0)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+                0x1234
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(),
+                0x5678
+            );
+        }
+
+        for component_type in [1u32, 2, 3, 4] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+            write_generic(&mut context, COMPONENT + 0x50, 0u32).unwrap();
+
+            assert_eq!(
+                add_list_item(&mut context, COMPONENT, 0, 0)
+                    .await
+                    .unwrap(),
+                -9
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+                0
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(),
+                0
             );
         }
     }

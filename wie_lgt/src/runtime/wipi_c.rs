@@ -175,6 +175,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicGetMaxTextSize => uic::get_max_text_size.into_body(),
         WIPICSvcId::UicGetTextSize => uic::get_text_size.into_body(),
         WIPICSvcId::UicGetText => uic::get_text.into_body(),
+        WIPICSvcId::UicAddListItem => uic::add_list_item.into_body(),
         WIPICSvcId::UicGetTime => uic::get_time.into_body(),
         WIPICSvcId::UicAddMenuItem => uic::add_menu_item.into_body(),
         WIPICSvcId::UicGetMenuItem => uic::get_menu_item.into_body(),
