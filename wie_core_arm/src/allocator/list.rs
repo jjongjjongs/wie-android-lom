@@ -67,6 +67,19 @@ impl ListAllocator {
         Ok(address + size_of::<ListAllocationHeader>() as u32)
     }
 
+    pub fn allocation_size(core: &ArmCore, address: u32) -> Result<u32> {
+        let base_address = address - size_of::<ListAllocationHeader>() as u32;
+        let header: ListAllocationHeader = read_generic(core, base_address)?;
+
+        if !header.in_use() || header.size() < size_of::<ListAllocationHeader>() as u32 + CANARY_SIZE {
+            return Err(WieError::FatalError(format!(
+                "Address {address:#x} is not an active list allocation"
+            )));
+        }
+
+        Ok(header.size() - size_of::<ListAllocationHeader>() as u32 - CANARY_SIZE)
+    }
+
     pub fn free(core: &mut ArmCore, address: u32) -> Result<()> {
         let base_address = address - size_of::<ListAllocationHeader>() as u32;
 
@@ -136,6 +149,18 @@ mod tests {
     use crate::ArmCore;
 
     use super::ListAllocator;
+
+    #[test]
+    fn allocation_size_recovers_rounded_payload_capacity() -> Result<()> {
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.map(0x40000000, 0x1000)?;
+        ListAllocator::init(&mut core, 0x40000000, 0x1000)?;
+
+        let address = ListAllocator::alloc(&mut core, 0x40000000, 0x1000, 513)?;
+        assert_eq!(ListAllocator::allocation_size(&core, address)?, 516);
+
+        Ok(())
+    }
 
     #[test]
     fn test_allocator() -> Result<()> {

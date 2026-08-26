@@ -72,6 +72,10 @@ impl WIPICContext for KtfWIPICContext {
         Allocator::free_unsized(&mut self.core, address)
     }
 
+    fn raw_alloc_size(&self, address: WIPICWord) -> Result<WIPICWord> {
+        Allocator::allocation_size(&self.core, address)
+    }
+
     fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord> {
         let base: WIPICWord = read_generic(&self.core, memory.0)?;
 

@@ -304,8 +304,7 @@ pub async fn destroy(context: &mut dyn WIPICContext, component: WIPICWord) -> Re
         4 => {
             let label: WIPICWord = read_generic(context, component + 0x44)?;
             if label != 0 {
-                let label_len = uic_read_c_string(context, label)?.len() as u32;
-                context.free_raw(label, label_len + 1)?;
+                context.free_raw_unsized(label)?;
             }
         }
         _ => unreachable!(),
@@ -652,6 +651,66 @@ pub async fn set_bg_color(
     write_generic(context, component + 0x1c, pixel)?;
 
     Ok(pixel)
+}
+
+/// LGT `MC_uicSetLabel` (WIPI-C service 0x332).
+///
+/// Native first validates the component. For a valid component, NULL labels
+/// and non-Label component types return the validator's success value (1)
+/// without changing memory. LabelComponent stores a private NUL-terminated
+/// copy at +0x44.
+///
+/// Native `dmemory_realloc` keeps an existing allocation when the new
+/// `strlen(label)+1` request fits its actual allocator block capacity.
+/// WIE mirrors that using `raw_alloc_size`; growth allocates a replacement
+/// before releasing the old block. After copying `strlen+1` bytes, native
+/// also writes one extra NUL byte immediately after the requested region.
+pub async fn set_label(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    label: WIPICWord,
+) -> Result<WIPICWord> {
+    tracing::debug!("MC_uicSetLabel({component:#x}, {label:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    if label == 0 || component_type != 4 {
+        return Ok(1);
+    }
+
+    let label_bytes = uic_read_c_string(context, label)?;
+    let request_size = label_bytes.len() as u32 + 1;
+    let old_label: WIPICWord = read_generic(context, component + 0x44)?;
+
+    let new_label = if old_label != 0 && request_size <= context.raw_alloc_size(old_label)? {
+        old_label
+    } else {
+        let address = match context.alloc_raw(request_size) {
+            Ok(address) => address,
+            Err(WieError::AllocationFailure) => return Ok(0),
+            Err(error) => return Err(error),
+        };
+
+        if old_label != 0 {
+            context.free_raw_unsized(old_label)?;
+        }
+
+        write_generic(context, component + 0x44, address)?;
+        address
+    };
+
+    context.write_bytes(new_label, &label_bytes)?;
+    context.write_bytes(new_label + label_bytes.len() as u32, &[0])?;
+    context.write_bytes(new_label + request_size, &[0])?;
+
+    Ok(new_label)
 }
 
 /// LGT/KTF `MC_uicSetEnable`.
@@ -2283,7 +2342,7 @@ mod tests {
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
         destroy, get_class, get_class_name, get_font, get_geometry, insert_text, is_instance,
         repaint, set_bg_color, set_callback, set_enable, set_event_handler, set_fg_color,
-        set_font, set_max_text_size, uic_color_to_rgb565, uic_repaint_rect,
+        set_font, set_label, set_max_text_size, uic_color_to_rgb565, uic_repaint_rect,
         uic_skip_time_separator,
     };
 
@@ -2884,6 +2943,77 @@ mod tests {
             read_generic::<u32, _>(&context, COMPONENT + 0x1c).unwrap(),
             0xaabb_ccdd
         );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_label_matches_native_validation_and_copy_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(set_label(&mut context, 0, 0x3000).await.unwrap(), 0);
+
+        init_component(&mut context, 6);
+        context.write_bytes(0x3000, b"invalid\0").unwrap();
+        assert_eq!(set_label(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
+
+        init_component(&mut context, 1);
+        write_generic(&mut context, COMPONENT + 0x44, 0xdead_beefu32).unwrap();
+        assert_eq!(set_label(&mut context, COMPONENT, 0).await.unwrap(), 1);
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            0xdead_beef
+        );
+
+        context.write_bytes(0x3000, b"menu\0").unwrap();
+        assert_eq!(set_label(&mut context, COMPONENT, 0x3000).await.unwrap(), 1);
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            0xdead_beef
+        );
+
+        init_component(&mut context, 4);
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+        context.write_bytes(0x3000, b"Label\0").unwrap();
+        let result = set_label(&mut context, COMPONENT, 0x3000).await.unwrap();
+        assert_ne!(result, 0);
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            result
+        );
+
+        let mut copied = [0u8; 7];
+        context.read_bytes(result, &mut copied).unwrap();
+        assert_eq!(&copied[..6], b"Label\0");
+        assert_eq!(copied[6], 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_label_preserves_or_replaces_pointer_by_actual_capacity() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 4);
+
+        context.write_bytes(0x3000, b"abcdefghij\0").unwrap();
+        let first = set_label(&mut context, COMPONENT, 0x3000).await.unwrap();
+        assert_ne!(first, 0);
+
+        context.write_bytes(0x3040, b"abc\0").unwrap();
+        let smaller = set_label(&mut context, COMPONENT, 0x3040).await.unwrap();
+        assert_eq!(smaller, first);
+
+        context
+            .write_bytes(0x3080, b"abcdefghijklmnop\0")
+            .unwrap();
+        let larger = set_label(&mut context, COMPONENT, 0x3080).await.unwrap();
+        assert_ne!(larger, 0);
+        assert_ne!(larger, first);
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            larger
+        );
+
+        let mut copied = [0u8; 18];
+        context.read_bytes(larger, &mut copied).unwrap();
+        assert_eq!(&copied[..17], b"abcdefghijklmnop\0");
+        assert_eq!(copied[17], 0);
     }
 
     #[test]

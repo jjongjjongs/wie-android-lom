@@ -99,6 +99,26 @@ impl BucketAllocator {
         Self::free_in_bucket(core, base_address, address, bucket_index)
     }
 
+    pub fn allocation_size(base_address: u32, address: u32) -> Result<u32> {
+        for (bucket_index, &(slot_size, slot_count)) in BUCKETS.iter().enumerate() {
+            let header_address = base_address + region_offset(bucket_index) as u32;
+            let header_len = header_length(bucket_index) as u32;
+            let slots_start = header_address + header_len;
+            let slots_end = slots_start + slot_size as u32 * slot_count as u32;
+
+            if address >= slots_start
+                && address < slots_end
+                && (address - slots_start) % slot_size as u32 == 0
+            {
+                return Ok(slot_size as u32);
+            }
+        }
+
+        Err(WieError::FatalError(alloc::format!(
+            "Address {address:#x} is not a bucket allocation"
+        )))
+    }
+
     pub fn free_unsized(core: &mut ArmCore, base_address: u32, address: u32) -> Result<()> {
         for (bucket_index, &(slot_size, slot_count)) in BUCKETS.iter().enumerate() {
             let header_address = base_address + region_offset(bucket_index) as u32;
@@ -163,6 +183,21 @@ mod tests {
     // Bucket 1 (8-byte): region_offset = 0x20000 + 4*0x100000 = 0x420000.
     //   header_length = 0x80000 / 8 = 0x10000.
     //   First slot at base + 0x420000 + 0x10000 = 0x40430000.
+
+    #[test]
+    fn allocation_size_recovers_bucket_slot_capacity() -> Result<()> {
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.map(0x40000000, 0x8000000)?;
+        BucketAllocator::init(&mut core, 0x40000000, 0x8000000)?;
+
+        let a = BucketAllocator::alloc(&mut core, 0x40000000, 5)?;
+        assert_eq!(BucketAllocator::allocation_size(0x40000000, a)?, 8);
+
+        let b = BucketAllocator::alloc(&mut core, 0x40000000, 20)?;
+        assert_eq!(BucketAllocator::allocation_size(0x40000000, b)?, 32);
+
+        Ok(())
+    }
 
     #[test]
     fn test_allocator() -> Result<()> {

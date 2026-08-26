@@ -18,6 +18,7 @@ pub trait WIPICContext: ByteRead + ByteWrite + Send + Sync {
     fn free(&mut self, memory: WIPICIndirectPtr) -> Result<()>;
     fn free_raw(&mut self, address: WIPICWord, size: WIPICWord) -> Result<()>;
     fn free_raw_unsized(&mut self, address: WIPICWord) -> Result<()>;
+    fn raw_alloc_size(&self, address: WIPICWord) -> Result<WIPICWord>;
     fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord>;
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord>;
     fn system(&mut self) -> &mut System;
@@ -108,6 +109,7 @@ pub mod test {
         memory: [u8; TEST_MEMORY_SIZE],
         global_data: [u8; TEST_GLOBAL_DATA_SIZE],
         last_alloc: usize,
+        raw_allocations: Vec<(WIPICWord, WIPICWord)>,
         system: Option<System>,
         resources: Vec<(String, Vec<u8>)>,
         network_state: SharedNetworkState,
@@ -121,6 +123,7 @@ pub mod test {
                 memory: [0; TEST_MEMORY_SIZE],
                 global_data: [0; TEST_GLOBAL_DATA_SIZE],
                 last_alloc: TEST_ALLOC_START,
+                raw_allocations: Vec::new(),
                 system: None,
                 resources: Vec::new(),
                 network_state: new_network_state(),
@@ -133,6 +136,7 @@ pub mod test {
                 memory: [0; TEST_MEMORY_SIZE],
                 global_data: [0; TEST_GLOBAL_DATA_SIZE],
                 last_alloc: TEST_ALLOC_START,
+                raw_allocations: Vec::new(),
                 system: Some(system),
                 resources: Vec::new(),
                 network_state: new_network_state(),
@@ -151,6 +155,7 @@ pub mod test {
         fn alloc_raw(&mut self, size: WIPICWord) -> Result<WIPICWord> {
             let address = self.last_alloc;
             self.last_alloc += size as usize;
+            self.raw_allocations.push((address as WIPICWord, size));
 
             Ok(address as WIPICWord)
         }
@@ -163,12 +168,28 @@ pub mod test {
             Ok(())
         }
 
-        fn free_raw(&mut self, _address: WIPICWord, _size: WIPICWord) -> Result<()> {
+        fn free_raw(&mut self, address: WIPICWord, _size: WIPICWord) -> Result<()> {
+            if let Some(index) = self.raw_allocations.iter().position(|&(candidate, _)| candidate == address) {
+                self.raw_allocations.remove(index);
+            }
             Ok(())
         }
 
-        fn free_raw_unsized(&mut self, _address: WIPICWord) -> Result<()> {
+        fn free_raw_unsized(&mut self, address: WIPICWord) -> Result<()> {
+            if let Some(index) = self.raw_allocations.iter().position(|&(candidate, _)| candidate == address) {
+                self.raw_allocations.remove(index);
+            }
             Ok(())
+        }
+
+        fn raw_alloc_size(&self, address: WIPICWord) -> Result<WIPICWord> {
+            self.raw_allocations
+                .iter()
+                .find(|&&(candidate, _)| candidate == address)
+                .map(|&(_, size)| size)
+                .ok_or_else(|| WieError::FatalError(format!(
+                    "Address {address:#x} is not a tracked raw allocation"
+                )))
         }
 
         fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord> {

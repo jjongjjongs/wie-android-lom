@@ -41,6 +41,14 @@ impl Allocator {
         }
     }
 
+    pub fn allocation_size(core: &ArmCore, address: u32) -> Result<u32> {
+        if address < HEAP_BASE + HEAP_SIZE / 2 {
+            ListAllocator::allocation_size(core, address)
+        } else {
+            BucketAllocator::allocation_size(HEAP_BASE + HEAP_SIZE / 2, address)
+        }
+    }
+
     pub fn free_unsized(core: &mut ArmCore, address: u32) -> Result<()> {
         if address < HEAP_BASE + HEAP_SIZE / 2 {
             ListAllocator::free(core, address)
@@ -58,6 +66,20 @@ mod tests {
     use crate::ArmCore;
 
     use super::Allocator;
+
+    #[test]
+    fn allocation_size_recovers_bucket_and_list_capacity() -> Result<()> {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core)?;
+
+        let bucket = Allocator::alloc(&mut core, 20)?;
+        assert_eq!(Allocator::allocation_size(&core, bucket)?, 32);
+
+        let list = Allocator::alloc(&mut core, 513)?;
+        assert_eq!(Allocator::allocation_size(&core, list)?, 516);
+
+        Ok(())
+    }
 
     #[test]
     fn free_unsized_recovers_bucket_and_list_allocations() -> Result<()> {
