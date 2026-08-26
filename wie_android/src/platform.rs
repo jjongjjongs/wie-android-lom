@@ -105,7 +105,14 @@ impl Shared {
         let mut queue = self.audio.lock().unwrap_or_else(|x| x.into_inner());
 
         while queue.len() >= MAX_QUEUED_AUDIO {
-            queue.pop_front();
+            // A one-shot wave (opcode 1) dropped here never sounds; the synth
+            // stream (opcode 2) can flood the queue, so flag it if a wave is the
+            // casualty.
+            if let Some(dropped) = queue.pop_front() {
+                if dropped.first() == Some(&1) {
+                    tracing::warn!("[wave] opcode-1 wave command DROPPED from a full audio queue before Java drained it");
+                }
+            }
         }
         queue.push_back(command);
     }

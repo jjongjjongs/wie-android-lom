@@ -139,30 +139,37 @@ impl wie_backend::AudioSink for AndroidAudioSink {
 
     fn play_wave(&self, channel: u8, sampling_rate: u32, wave_data: &[i16]) {
         if wave_data.is_empty() {
+            tracing::info!("[wave] play_wave ch={channel} rate={sampling_rate} samples=0 -> dropped (empty)");
             return;
         }
 
         let volume = self.master_volume.load(Ordering::Relaxed);
+        tracing::info!("[wave] play_wave ch={channel} rate={sampling_rate} samples={} volume={volume}", wave_data.len());
         if volume == 0 {
+            tracing::warn!("[wave] dropped: master volume is 0");
             return;
         }
 
         if volume == 100 {
             if wave_callback_consumed(channel, sampling_rate, wave_data) {
+                tracing::info!("[wave] consumed by native callback");
                 return;
             }
 
             self.shared.push_audio(play_wave_command(channel, sampling_rate, wave_data));
+            tracing::info!("[wave] queued as opcode-1 command");
             return;
         }
 
         let scaled = scale_wave_volume(wave_data, volume);
 
         if wave_callback_consumed(channel, sampling_rate, &scaled) {
+            tracing::info!("[wave] consumed by native callback (scaled)");
             return;
         }
 
         self.shared.push_audio(play_wave_command(channel, sampling_rate, &scaled));
+        tracing::info!("[wave] queued as opcode-1 command (scaled)");
     }
 
     fn midi_note_on(&self, voice: u32, channel_id: u8, note: u8, velocity: u8) {
