@@ -4,7 +4,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use wie_backend::{Filesystem, FilesystemRenameError};
+use wie_backend::{Filesystem, FilesystemMkdirError, FilesystemRenameError};
 
 /// Persistent filesystem rooted at the app-private directory Java passes to
 /// `nativeStart`, laid out as `<base>/<aid>/<path>`.
@@ -169,6 +169,21 @@ impl Filesystem for AndroidFilesystem {
         };
 
         fs::remove_file(disk_path).is_ok()
+    }
+
+    async fn mkdir(
+        &self,
+        aid: &str,
+        path: &str,
+    ) -> core::result::Result<(), FilesystemMkdirError> {
+        let path = self.path_for(aid, path).ok_or(FilesystemMkdirError::Other)?;
+
+        fs::create_dir(path).map_err(|error| match error.raw_os_error() {
+            Some(17) => FilesystemMkdirError::AlreadyExists, // EEXIST
+            Some(2) => FilesystemMkdirError::NotFound,       // ENOENT
+            Some(36) => FilesystemMkdirError::NameTooLong,   // ENAMETOOLONG
+            _ => FilesystemMkdirError::Other,
+        })
     }
 
     async fn rename(

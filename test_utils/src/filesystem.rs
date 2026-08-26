@@ -10,12 +10,13 @@ use core::cmp::min;
 use hashbrown::HashMap;
 use spin::Mutex;
 
-use wie_backend::{Filesystem, FilesystemRenameError};
+use wie_backend::{Filesystem, FilesystemMkdirError, FilesystemRenameError};
 
 /// In-memory `Filesystem` implementation for tests.
 #[derive(Default)]
 pub struct MemoryFilesystem {
     files: Mutex<HashMap<(String, String), Vec<u8>>>,
+    directories: Mutex<BTreeSet<(String, String)>>,
 }
 
 impl MemoryFilesystem {
@@ -66,6 +67,56 @@ impl Filesystem for MemoryFilesystem {
 
     async fn remove(&self, aid: &str, path: &str) -> bool {
         self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
+    }
+
+    async fn mkdir(
+        &self,
+        aid: &str,
+        path: &str,
+    ) -> core::result::Result<(), FilesystemMkdirError> {
+        if path.is_empty() {
+            return Err(FilesystemMkdirError::AlreadyExists);
+        }
+
+        let aid_owned = aid.to_string();
+        let path_owned = path.to_string();
+
+        {
+            let files = self.files.lock();
+            let directories = self.directories.lock();
+
+            if files.contains_key(&(aid_owned.clone(), path_owned.clone()))
+                || directories.contains(&(aid_owned.clone(), path_owned.clone()))
+            {
+                return Err(FilesystemMkdirError::AlreadyExists);
+            }
+
+            let parent = path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+            if !parent.is_empty() {
+                if files.contains_key(&(aid_owned.clone(), parent.to_string())) {
+                    return Err(FilesystemMkdirError::Other);
+                }
+
+                let mut parent_prefix = parent.to_string();
+                parent_prefix.push('/');
+
+                let parent_exists =
+                    directories.contains(&(aid_owned.clone(), parent.to_string()))
+                    || directories.iter().any(|(entry_aid, entry_path)| {
+                        entry_aid == aid && entry_path.starts_with(&parent_prefix)
+                    })
+                    || files.keys().any(|(entry_aid, entry_path)| {
+                        entry_aid == aid && entry_path.starts_with(&parent_prefix)
+                    });
+
+                if !parent_exists {
+                    return Err(FilesystemMkdirError::NotFound);
+                }
+            }
+        }
+
+        self.directories.lock().insert((aid_owned, path_owned));
+        Ok(())
     }
 
     async fn rename(
@@ -151,15 +202,37 @@ impl Filesystem for MemoryFilesystem {
             format!("{path}/")
         };
         let files = self.files.lock();
+        let directories = self.directories.lock();
         let mut entries = Vec::new();
         let mut seen = BTreeSet::new();
 
-        let mut directory_exists = path.is_empty();
+        let mut directory_exists =
+            path.is_empty() || directories.contains(&(aid.to_string(), path.to_string()));
 
         for ((entry_aid, entry_path), _) in files.iter() {
             if entry_aid != aid {
                 continue;
             }
+            let Some(rest) = entry_path.strip_prefix(&prefix) else {
+                continue;
+            };
+            if rest.is_empty() {
+                continue;
+            }
+
+            directory_exists = true;
+
+            let child = rest.split('/').next().unwrap_or(rest).to_string();
+            if seen.insert(child.clone()) {
+                entries.push(child);
+            }
+        }
+
+        for (entry_aid, entry_path) in directories.iter() {
+            if entry_aid != aid {
+                continue;
+            }
+
             let Some(rest) = entry_path.strip_prefix(&prefix) else {
                 continue;
             };

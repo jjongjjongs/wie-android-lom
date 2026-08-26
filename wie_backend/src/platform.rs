@@ -80,6 +80,14 @@ pub trait Platform: Send + Sync {
 /// Platform filesystem abstraction. Every method is scoped by `aid`;
 /// implementations MUST NOT cross aid boundaries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemMkdirError {
+    AlreadyExists,
+    NotFound,
+    NameTooLong,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FilesystemRenameError {
     NotFound,
     AlreadyExists,
@@ -125,6 +133,15 @@ pub trait Filesystem: Send + Sync {
     async fn truncate(&self, aid: &str, path: &str, len: usize);
 
     async fn remove(&self, aid: &str, path: &str) -> bool;
+
+    /// Create exactly one directory.
+    ///
+    /// Missing parent directories are not created implicitly.
+    async fn mkdir(
+        &self,
+        aid: &str,
+        path: &str,
+    ) -> core::result::Result<(), FilesystemMkdirError>;
 
     /// Rename or move an existing filesystem object.
     ///

@@ -310,6 +310,14 @@ mod tests {
             false
         }
 
+        async fn mkdir(
+            &self,
+            _aid: &str,
+            _path: &str,
+        ) -> core::result::Result<(), crate::platform::FilesystemMkdirError> {
+            Err(crate::platform::FilesystemMkdirError::NotFound)
+        }
+
         async fn rename(
             &self,
             _aid: &str,

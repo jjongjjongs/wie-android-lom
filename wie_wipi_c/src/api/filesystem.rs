@@ -570,6 +570,54 @@ pub async fn remove(
     Ok(0)
 }
 
+/// WIPI-C MC_fsMkDir (service 0x198).
+///
+/// Native flow:
+/// WPFS_IsPossibleAccess(2, access) -> WPFS_MakeFullPathName -> dfs_mkdir.
+///
+/// The LGT/Android HAL calls POSIX mkdir(path, 0755), so creation is strictly
+/// one level: missing parents are not created automatically.
+///
+/// Native return mapping:
+/// - inaccessible access selector => -24
+/// - bad/null filename => -3
+/// - path longer than 128 bytes => -11
+/// - existing file or directory => -5
+/// - missing parent => -12
+/// - generic mkdir failure => -1
+/// - success => 0
+pub async fn mkdir(
+    context: &mut dyn WIPICContext,
+    path: WIPICWord,
+    access: WIPICWord,
+) -> Result<i32> {
+    use wie_backend::FilesystemMkdirError;
+
+    tracing::debug!("MC_fsMkDir({path:#x}, {access})");
+
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if path == 0 {
+        return Ok(-3);
+    }
+
+    let path_bytes = read_null_terminated_string_bytes(context, path)?;
+    if path_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let path = encoding_rs::EUC_KR.decode(&path_bytes).0.into_owned();
+
+    match context.system().filesystem().mkdir(&path).await {
+        Ok(()) => Ok(0),
+        Err(FilesystemMkdirError::AlreadyExists) => Ok(-5),
+        Err(FilesystemMkdirError::NotFound) => Ok(-12),
+        Err(FilesystemMkdirError::NameTooLong) => Ok(-11),
+        Err(FilesystemMkdirError::Other) => Ok(-1),
+    }
+}
+
 /// WIPI-C MC_fsRename (service 0x197).
 ///
 /// Native flow:
@@ -718,7 +766,7 @@ pub async fn list(
 
 #[cfg(test)]
 mod tests {
-    use alloc::{boxed::Box, vec};
+    use alloc::{boxed::Box, vec, vec::Vec};
 
     use test_utils::TestPlatform;
     use wie_backend::{DefaultTaskRunner, System};
@@ -726,7 +774,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{close, file_attribute, list, open, read, remove, rename, seek, write};
+    use super::{close, file_attribute, list, mkdir, open, read, remove, rename, seek, write};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -1495,6 +1543,82 @@ mod tests {
         }
 
         assert_eq!(read(&mut context, fd, 0x2000, 1).await.unwrap(), -1);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_mkdir_creates_empty_directory_visible_to_list_and_attribute() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"created\0").unwrap();
+
+        assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), 0);
+        assert_eq!(
+            context.system().filesystem().list("created").await,
+            Some(Vec::new())
+        );
+
+        context.write_bytes(0x2000, &[0xaa; 12]).unwrap();
+        assert_eq!(
+            file_attribute(&mut context, 0x1000, 0x2000, 1)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let mut output = [0u8; 12];
+        context.read_bytes(0x2000, &mut output).unwrap();
+        assert_eq!(
+            output,
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_mkdir_is_non_recursive_and_allows_existing_parent() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"missing/child\0").unwrap();
+
+        assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), -12);
+
+        context.write_bytes(0x1100, b"parent\0").unwrap();
+        assert_eq!(mkdir(&mut context, 0x1100, 2).await.unwrap(), 0);
+
+        context.write_bytes(0x1200, b"parent/child\0").unwrap();
+        assert_eq!(mkdir(&mut context, 0x1200, 2).await.unwrap(), 0);
+        assert!(context.system().filesystem().list("parent/child").await.is_some());
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_mkdir_existing_file_directory_and_virtual_path_return_minus_5() {
+        let mut context = filesystem_test_context();
+
+        context.system().filesystem().write("file.dat", 0, b"x").await;
+        context.write_bytes(0x1000, b"file.dat\0").unwrap();
+        assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), -5);
+
+        context.write_bytes(0x1100, b"dir\0").unwrap();
+        assert_eq!(mkdir(&mut context, 0x1100, 2).await.unwrap(), 0);
+        assert_eq!(mkdir(&mut context, 0x1100, 2).await.unwrap(), -5);
+
+        context
+            .system()
+            .filesystem()
+            .add_virtual("virtual/item.bin", b"x".to_vec());
+        context.write_bytes(0x1200, b"virtual\0").unwrap();
+        assert_eq!(mkdir(&mut context, 0x1200, 2).await.unwrap(), -5);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_mkdir_matches_native_validation_order() {
+        let mut context = filesystem_test_context();
+
+        assert_eq!(mkdir(&mut context, 0, 0).await.unwrap(), -24);
+        assert_eq!(mkdir(&mut context, 0, 2).await.unwrap(), -3);
+
+        let long = vec![b'a'; 129];
+        context.write_bytes(0x1000, &long).unwrap();
+        context.write_bytes(0x1000 + 129, &[0]).unwrap();
+
+        assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), -11);
     }
 
     #[futures_test::test]

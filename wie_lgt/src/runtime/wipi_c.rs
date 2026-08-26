@@ -199,7 +199,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsFileAttribute => filesystem::file_attribute.into_body(),
         WIPICSvcId::FsRemove => filesystem::remove.into_body(),
         WIPICSvcId::FsRename => filesystem::rename.into_body(),
-        WIPICSvcId::UpdateRecord => database::update_record.into_body(),
+        WIPICSvcId::FsMkDir => filesystem::mkdir.into_body(),
         WIPICSvcId::SelectRecord => database::select_record.into_body(),
         WIPICSvcId::FsList => filesystem::list.into_body(),
         WIPICSvcId::Unk8 => database::exists_database.into_body(),

@@ -160,6 +160,26 @@ impl FilesystemOverlay {
         self.platform.filesystem().remove(&self.aid, &normalized).await
     }
 
+    pub async fn mkdir(
+        &self,
+        path: &str,
+    ) -> core::result::Result<(), crate::platform::FilesystemMkdirError> {
+        use crate::platform::FilesystemMkdirError;
+
+        let Some(normalized) = normalize_guest_path(path) else {
+            return Err(FilesystemMkdirError::Other);
+        };
+
+        // Packaged virtual objects are visible filesystem entries but are
+        // read-only. Creating a directory over one therefore behaves as an
+        // existing-path collision.
+        if self.size(&normalized).await.is_some() || self.list(&normalized).await.is_some() {
+            return Err(FilesystemMkdirError::AlreadyExists);
+        }
+
+        self.platform.filesystem().mkdir(&self.aid, &normalized).await
+    }
+
     pub async fn rename(
         &self,
         from: &str,
@@ -267,7 +287,7 @@ mod tests {
     use crate::{
         audio_sink::AudioSink,
         database::DatabaseRepository,
-        platform::{Filesystem, FilesystemRenameError, Platform},
+        platform::{Filesystem, FilesystemMkdirError, FilesystemRenameError, Platform},
         screen::Screen,
         time::Instant,
     };
@@ -277,6 +297,7 @@ mod tests {
     #[derive(Default)]
     struct StubFilesystem {
         files: Mutex<HashMap<(String, String), Vec<u8>>>,
+        directories: Mutex<BTreeSet<(String, String)>>,
     }
     #[async_trait::async_trait]
     impl Filesystem for StubFilesystem {
@@ -315,6 +336,48 @@ mod tests {
             self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
         }
 
+        async fn mkdir(
+            &self,
+            aid: &str,
+            path: &str,
+        ) -> core::result::Result<(), FilesystemMkdirError> {
+            if path.is_empty() {
+                return Err(FilesystemMkdirError::AlreadyExists);
+            }
+
+            let mut directories = self.directories.lock();
+            let key = (aid.to_string(), path.to_string());
+
+            if directories.contains(&key)
+                || self.files.lock().contains_key(&key)
+            {
+                return Err(FilesystemMkdirError::AlreadyExists);
+            }
+
+            let parent = path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+            if !parent.is_empty() {
+                let parent_key = (aid.to_string(), parent.to_string());
+                let mut prefix = parent.to_string();
+                prefix.push('/');
+
+                let parent_exists =
+                    directories.contains(&parent_key)
+                    || directories.iter().any(|(entry_aid, entry_path)| {
+                        entry_aid == aid && entry_path.starts_with(&prefix)
+                    })
+                    || self.files.lock().keys().any(|(entry_aid, entry_path)| {
+                        entry_aid == aid && entry_path.starts_with(&prefix)
+                    });
+
+                if !parent_exists {
+                    return Err(FilesystemMkdirError::NotFound);
+                }
+            }
+
+            directories.insert(key);
+            Ok(())
+        }
+
         async fn rename(
             &self,
             aid: &str,
@@ -336,8 +399,11 @@ mod tests {
                 format!("{path}/")
             };
             let files = self.files.lock();
+            let directories = self.directories.lock();
             let mut entries = Vec::new();
             let mut seen = BTreeSet::new();
+            let mut directory_exists =
+                path.is_empty() || directories.contains(&(aid.to_string(), path.to_string()));
 
             for ((entry_aid, entry_path), _) in files.iter() {
                 if entry_aid != aid {
@@ -350,12 +416,33 @@ mod tests {
                     continue;
                 }
                 let child = rest.split('/').next().unwrap_or(rest).to_string();
+                directory_exists = true;
+
                 if seen.insert(child.clone()) {
                     entries.push(child);
                 }
             }
 
-            Some(entries)
+            for (entry_aid, entry_path) in directories.iter() {
+                if entry_aid != aid {
+                    continue;
+                }
+                let Some(rest) = entry_path.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if rest.is_empty() {
+                    continue;
+                }
+
+                directory_exists = true;
+
+                let child = rest.split('/').next().unwrap_or(rest).to_string();
+                if seen.insert(child.clone()) {
+                    entries.push(child);
+                }
+            }
+
+            if directory_exists { Some(entries) } else { None }
         }
     }
 
