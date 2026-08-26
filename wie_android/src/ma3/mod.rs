@@ -105,8 +105,11 @@ pub const SAMPLE_RATE: u32 = 44100;
 /// output stage is stereo, so folding it down would throw that away.
 pub const CHANNELS: usize = 2;
 
-/// Notes at once, which is what the chip could hold.
-const MAX_VOICES: usize = 16;
+/// Notes at once. The reference renderer runs a single file up to thirty one
+/// simultaneous voices - its own logs show rich sequences peaking there - so a
+/// lower cap steals notes the reference keeps, thinning the music away from how
+/// it should sound. Matched to that ceiling.
+const MAX_VOICES: usize = 31;
 
 /// Source samples over which a recorded effect is ramped to silence at its end.
 /// The recordings stop at whatever level the last sample held rather than
