@@ -160,6 +160,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicSetCallback => uic::set_callback.into_body(),
         WIPICSvcId::UicSetEventHandler => uic::set_event_handler.into_body(),
         WIPICSvcId::UicSetFont => uic::set_font.into_body(),
+        WIPICSvcId::UicGetFont => uic::get_font.into_body(),
         WIPICSvcId::UicInsertText => uic::insert_text.into_body(),
         WIPICSvcId::UicDeleteText => uic::delete_text.into_body(),
         WIPICSvcId::UicSetMaxTextSize => uic::set_max_text_size.into_body(),
