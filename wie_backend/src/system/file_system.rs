@@ -242,6 +242,10 @@ impl FilesystemOverlay {
         self.platform.filesystem().rename(&self.aid, &from, &to).await
     }
 
+    pub async fn total_space(&self) -> Option<u64> {
+        self.platform.filesystem().total_space(&self.aid).await
+    }
+
     /// Lists the direct children visible through the overlay.
     ///
     /// Platform entries come first in their native enumeration order. Virtual
@@ -463,6 +467,10 @@ mod tests {
             };
             files.insert((aid.to_string(), to.to_string()), data);
             Ok(())
+        }
+
+        async fn total_space(&self, _aid: &str) -> Option<u64> {
+            Some(32 * 1024 * 1024)
         }
 
         async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {

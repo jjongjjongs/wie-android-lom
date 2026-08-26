@@ -1,6 +1,8 @@
 use std::{
+    ffi::CString,
     fs::{self, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
+    os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
 };
 
@@ -221,6 +223,34 @@ impl Filesystem for AndroidFilesystem {
             Some(36) => FilesystemRenameError::NameTooLong,          // ENAMETOOLONG
             _ => FilesystemRenameError::Other,
         })
+    }
+
+    async fn total_space(&self, aid: &str) -> Option<u64> {
+        let sanitized_aid: String = aid.chars().filter(|c| !matches!(c, '/' | '\\' | '\0')).collect();
+        if sanitized_aid.is_empty() || sanitized_aid == "." || sanitized_aid == ".." {
+            tracing::error!(aid, "total_space: invalid aid");
+            return None;
+        }
+
+        // The native LGT/Android HAL uses statfs() on the WIPI filesystem mount.
+        // The per-AID directory may not exist before the first save, so walk up
+        // to the nearest existing ancestor while staying on the same backing storage.
+        let mut probe = self.base_path.join(sanitized_aid);
+        while !probe.exists() {
+            if !probe.pop() {
+                tracing::warn!(aid, "total_space: no existing filesystem ancestor");
+                return None;
+            }
+        }
+
+        let path = CString::new(probe.as_os_str().as_bytes()).ok()?;
+        let mut stats = unsafe { core::mem::zeroed::<libc::statfs>() };
+        if unsafe { libc::statfs(path.as_ptr(), &mut stats) } != 0 {
+            tracing::warn!(aid, path = ?probe, "total_space: statfs failed");
+            return None;
+        }
+
+        Some((stats.f_bsize as u64).saturating_mul(stats.f_blocks as u64))
     }
 
     async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {

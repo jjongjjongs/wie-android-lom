@@ -335,6 +335,10 @@ mod tests {
             Err(crate::platform::FilesystemRenameError::NotFound)
         }
 
+        async fn total_space(&self, _aid: &str) -> Option<u64> {
+            None
+        }
+
         async fn list(&self, _aid: &str, _path: &str) -> Option<Vec<String>> {
             None
         }

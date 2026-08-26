@@ -173,6 +173,11 @@ pub trait Filesystem: Send + Sync {
         to: &str,
     ) -> core::result::Result<(), FilesystemRenameError>;
 
+    /// Total byte capacity of the storage backing this application's filesystem.
+    ///
+    /// `None` means the platform could not query the backing filesystem.
+    async fn total_space(&self, aid: &str) -> Option<u64>;
+
     /// Lists direct child basenames of a directory.
     ///
     /// Files and directories are returned alike. `Some(Vec::new())` means an

@@ -202,6 +202,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsMkDir => filesystem::mkdir.into_body(),
         WIPICSvcId::FsRmDir => filesystem::rmdir.into_body(),
         WIPICSvcId::FsList => filesystem::list.into_body(),
+        WIPICSvcId::FsTotalSpace => fs_total_space.into_body(),
         WIPICSvcId::Unk8 => database::exists_database.into_body(),
         WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),
@@ -428,6 +429,38 @@ async fn unk5(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
     Ok(0)
 }
 
+/// `MC_fsTotalSpace` (canonical WIPI-C service 0x19b).
+///
+/// Native flow:
+/// - zero a three-word dfs_df result;
+/// - dfs_df() the WIPI filesystem mount;
+/// - on success take the total-space word;
+/// - pass the value through the common signed-size helper.
+///
+/// LGTH_fileTotalSpace / AND_fileTotalSpace compute `f_bsize * f_blocks`.
+/// The native common helper saturates values above signed 32-bit range to
+/// `INT_MAX`; a dfs_df failure becomes `-1`.
+async fn fs_total_space(
+    context: &mut dyn WIPICContext,
+    _a0: u32,
+    _a1: u32,
+    _a2: u32,
+    _a3: u32,
+) -> Result<u32> {
+    let Some(total) = context.system().filesystem().total_space().await else {
+        tracing::debug!("MC_fsTotalSpace() -> -1");
+        return Ok(u32::MAX);
+    };
+
+    let total = clamp_native_fs_space(total);
+    tracing::debug!("MC_fsTotalSpace() -> {total}");
+    Ok(total)
+}
+
+fn clamp_native_fs_space(total: u64) -> u32 {
+    core::cmp::min(total, i32::MAX as u64) as u32
+}
+
 /// `MC_fsAvailable` - free bytes on the storage a title saves to.
 ///
 /// The vendor call asks the device for real free space; there is no equivalent
@@ -608,6 +641,23 @@ fn unix_seconds_to_utc(timestamp: i64) -> (i32, i32, i32, i32, i32, i32) {
     let second = (seconds_of_day % 60) as i32;
 
     (year, month, day, hour, minute, second)
+}
+
+#[cfg(test)]
+mod fs_total_space_tests {
+    use super::clamp_native_fs_space;
+
+    #[test]
+    fn native_fs_total_space_preserves_handset_scale_capacity() {
+        assert_eq!(clamp_native_fs_space(32 * 1024 * 1024), 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn native_fs_total_space_saturates_at_signed_int_max() {
+        assert_eq!(clamp_native_fs_space(i32::MAX as u64), i32::MAX as u32);
+        assert_eq!(clamp_native_fs_space(i32::MAX as u64 + 1), i32::MAX as u32);
+        assert_eq!(clamp_native_fs_space(u64::MAX), i32::MAX as u32);
+    }
 }
 
 fn civil_from_days(days: i64) -> (i32, i32, i32) {

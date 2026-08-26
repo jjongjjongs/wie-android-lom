@@ -3421,6 +3421,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "jni 0.21.1",
+ "libc",
  "md5",
  "polling",
  "smaf_player",

@@ -14,6 +14,7 @@ polling = { workspace = true }
 tracing = { workspace = true }
 
 jni = "^0.21"
+libc = { workspace = true }
 tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
 
 wie_backend = { workspace = true }
