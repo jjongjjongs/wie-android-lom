@@ -10,7 +10,7 @@ use core::cmp::min;
 use hashbrown::HashMap;
 use spin::Mutex;
 
-use wie_backend::Filesystem;
+use wie_backend::{Filesystem, FilesystemRenameError};
 
 /// In-memory `Filesystem` implementation for tests.
 #[derive(Default)]
@@ -66,6 +66,82 @@ impl Filesystem for MemoryFilesystem {
 
     async fn remove(&self, aid: &str, path: &str) -> bool {
         self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
+    }
+
+    async fn rename(
+        &self,
+        aid: &str,
+        from: &str,
+        to: &str,
+    ) -> core::result::Result<(), FilesystemRenameError> {
+        if from == to {
+            return Ok(());
+        }
+
+        let mut files = self.files.lock();
+        let aid_owned = aid.to_string();
+        let from_owned = from.to_string();
+        let to_owned = to.to_string();
+
+        if let Some(data) = files.remove(&(aid_owned.clone(), from_owned.clone())) {
+            let mut to_prefix = to_owned.clone();
+            to_prefix.push('/');
+
+            if files.keys().any(|(entry_aid, entry_path)| {
+                entry_aid == aid && entry_path.starts_with(&to_prefix)
+            }) {
+                files.insert((aid_owned, from_owned), data);
+                return Err(FilesystemRenameError::Other);
+            }
+
+            // POSIX rename replaces an existing regular file destination.
+            files.insert((aid.to_string(), to_owned), data);
+            return Ok(());
+        }
+
+        let mut from_prefix = from_owned.clone();
+        from_prefix.push('/');
+
+        let subtree = files
+            .keys()
+            .filter(|(entry_aid, entry_path)| {
+                entry_aid == aid && entry_path.starts_with(&from_prefix)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if subtree.is_empty() {
+            return Err(FilesystemRenameError::NotFound);
+        }
+
+        if files.contains_key(&(aid.to_string(), to_owned.clone())) {
+            return Err(FilesystemRenameError::Other);
+        }
+
+        let mut to_prefix = to_owned.clone();
+        to_prefix.push('/');
+        if files.keys().any(|(entry_aid, entry_path)| {
+            entry_aid == aid && entry_path.starts_with(&to_prefix)
+        }) {
+            return Err(FilesystemRenameError::CrossDeviceOrNotEmpty);
+        }
+
+        let mut moved = Vec::new();
+        for key in subtree {
+            let suffix = key
+                .1
+                .strip_prefix(&from_prefix)
+                .unwrap()
+                .to_string();
+            let data = files.remove(&key).unwrap();
+            moved.push(((aid.to_string(), format!("{to_prefix}{suffix}")), data));
+        }
+
+        for (key, data) in moved {
+            files.insert(key, data);
+        }
+
+        Ok(())
     }
 
     async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {

@@ -160,6 +160,39 @@ impl FilesystemOverlay {
         self.platform.filesystem().remove(&self.aid, &normalized).await
     }
 
+    pub async fn rename(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> core::result::Result<(), crate::platform::FilesystemRenameError> {
+        use crate::platform::FilesystemRenameError;
+
+        let Some(from) = normalize_guest_path(from) else {
+            return Err(FilesystemRenameError::Other);
+        };
+        let Some(to) = normalize_guest_path(to) else {
+            return Err(FilesystemRenameError::Other);
+        };
+
+        // Platform objects shadow virtual files. A source that exists only in
+        // the archive is read-only and cannot be renamed.
+        if !self.platform.filesystem().exists(&self.aid, &from).await
+            && self.platform.filesystem().list(&self.aid, &from).await.is_none()
+        {
+            if self.virtual_files.lock().contains_key(&from)
+                || {
+                    let mut prefix = from.clone();
+                    prefix.push('/');
+                    self.virtual_files.lock().keys().any(|key| key.starts_with(&prefix))
+                }
+            {
+                return Err(FilesystemRenameError::Other);
+            }
+        }
+
+        self.platform.filesystem().rename(&self.aid, &from, &to).await
+    }
+
     /// Lists the direct children visible through the overlay.
     ///
     /// Platform entries come first in their native enumeration order. Virtual
@@ -234,7 +267,7 @@ mod tests {
     use crate::{
         audio_sink::AudioSink,
         database::DatabaseRepository,
-        platform::{Filesystem, Platform},
+        platform::{Filesystem, FilesystemRenameError, Platform},
         screen::Screen,
         time::Instant,
     };
@@ -280,6 +313,20 @@ mod tests {
 
         async fn remove(&self, aid: &str, path: &str) -> bool {
             self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
+        }
+
+        async fn rename(
+            &self,
+            aid: &str,
+            from: &str,
+            to: &str,
+        ) -> core::result::Result<(), FilesystemRenameError> {
+            let mut files = self.files.lock();
+            let Some(data) = files.remove(&(aid.to_string(), from.to_string())) else {
+                return Err(FilesystemRenameError::NotFound);
+            };
+            files.insert((aid.to_string(), to.to_string()), data);
+            Ok(())
         }
 
         async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {

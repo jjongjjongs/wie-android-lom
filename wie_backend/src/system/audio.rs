@@ -310,6 +310,15 @@ mod tests {
             false
         }
 
+        async fn rename(
+            &self,
+            _aid: &str,
+            _from: &str,
+            _to: &str,
+        ) -> core::result::Result<(), crate::platform::FilesystemRenameError> {
+            Err(crate::platform::FilesystemRenameError::NotFound)
+        }
+
         async fn list(&self, _aid: &str, _path: &str) -> Option<Vec<String>> {
             None
         }

@@ -79,6 +79,15 @@ pub trait Platform: Send + Sync {
 
 /// Platform filesystem abstraction. Every method is scoped by `aid`;
 /// implementations MUST NOT cross aid boundaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemRenameError {
+    NotFound,
+    AlreadyExists,
+    CrossDeviceOrNotEmpty,
+    NameTooLong,
+    Other,
+}
+
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
     async fn exists(&self, aid: &str, path: &str) -> bool;
@@ -116,6 +125,19 @@ pub trait Filesystem: Send + Sync {
     async fn truncate(&self, aid: &str, path: &str, len: usize);
 
     async fn remove(&self, aid: &str, path: &str) -> bool;
+
+    /// Rename or move an existing filesystem object.
+    ///
+    /// Implementations follow the host rename operation:
+    /// - an existing regular-file destination may be replaced;
+    /// - the source is removed on success;
+    /// - no destination parent directories are created implicitly.
+    async fn rename(
+        &self,
+        aid: &str,
+        from: &str,
+        to: &str,
+    ) -> core::result::Result<(), FilesystemRenameError>;
 
     /// Lists direct child basenames of a directory.
     ///

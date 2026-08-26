@@ -69,6 +69,22 @@ impl FilesystemState {
         true
     }
 
+    fn rename_path(&mut self, from: &str, to: &str) {
+        let mut prefix = String::from(from);
+        prefix.push('/');
+
+        for entry in self.entries.values_mut() {
+            if entry.path == from {
+                entry.path = String::from(to);
+            } else if let Some(suffix) = entry.path.strip_prefix(&prefix) {
+                let mut renamed = String::from(to);
+                renamed.push('/');
+                renamed.push_str(suffix);
+                entry.path = renamed;
+            }
+        }
+    }
+
     fn close(&mut self, fd: i32) -> bool {
         self.entries.remove(&fd).is_some()
     }
@@ -554,6 +570,82 @@ pub async fn remove(
     Ok(0)
 }
 
+/// WIPI-C MC_fsRename (service 0x197).
+///
+/// Native flow:
+/// WPFS_IsPossibleAccess(2, access) -> source full path -> destination full
+/// path -> dfs_move. For paths on the same mount, dfs_move dispatches to the
+/// filesystem rename callback, which reaches POSIX rename on LGT/Android.
+///
+/// Native return mapping represented here:
+/// - inaccessible access selector => -24
+/// - bad/null source or destination => -3
+/// - path longer than 128 bytes => -11
+/// - source/destination parent missing => -12
+/// - destination conflict mapped from EEXIST => -8
+/// - cross-device/non-empty-directory class => -5
+/// - generic rename failure => -1
+/// - success => 0
+pub async fn rename(
+    context: &mut dyn WIPICContext,
+    from: WIPICWord,
+    to: WIPICWord,
+    access: WIPICWord,
+) -> Result<i32> {
+    use wie_backend::FilesystemRenameError;
+
+    tracing::debug!("MC_fsRename({from:#x}, {to:#x}, {access})");
+
+    // Native WPFS_IsPossibleAccess(2, access) precedes both path conversions.
+    // As with the other LGT filesystem calls, selectors 2/3 are accepted
+    // because WIE does not model the native per-DLET permission bitmask.
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if from == 0 {
+        return Ok(-3);
+    }
+
+    let from_bytes = read_null_terminated_string_bytes(context, from)?;
+    if from_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let from = encoding_rs::EUC_KR.decode(&from_bytes).0.into_owned();
+
+    if to == 0 {
+        return Ok(-3);
+    }
+
+    let to_bytes = read_null_terminated_string_bytes(context, to)?;
+    if to_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let to = encoding_rs::EUC_KR.decode(&to_bytes).0.into_owned();
+
+    // dfs_move explicitly rejects identical refined source/destination paths.
+    if from == to {
+        return Ok(-1);
+    }
+
+    let filesystem = context.system().filesystem().clone();
+
+    match filesystem.rename(&from, &to).await {
+        Ok(()) => {
+            // Native open file descriptors continue referring to the same
+            // renamed filesystem object. WIE descriptors store paths rather
+            // than persistent host handles, so retarget them after success.
+            context.filesystem_state().lock().rename_path(&from, &to);
+            Ok(0)
+        }
+        Err(FilesystemRenameError::NotFound) => Ok(-12),
+        Err(FilesystemRenameError::AlreadyExists) => Ok(-8),
+        Err(FilesystemRenameError::CrossDeviceOrNotEmpty) => Ok(-5),
+        Err(FilesystemRenameError::NameTooLong) => Ok(-11),
+        Err(FilesystemRenameError::Other) => Ok(-1),
+    }
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -634,7 +726,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{close, file_attribute, list, open, read, remove, seek, write};
+    use super::{close, file_attribute, list, open, read, remove, rename, seek, write};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -1403,6 +1495,135 @@ mod tests {
         }
 
         assert_eq!(read(&mut context, fd, 0x2000, 1).await.unwrap(), -1);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rename_moves_regular_file_and_preserves_data() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/old.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/old.dat\0").unwrap();
+        context.write_bytes(0x1100, b"save/new.dat\0").unwrap();
+
+        assert_eq!(rename(&mut context, 0x1000, 0x1100, 2).await.unwrap(), 0);
+        assert_eq!(context.system().filesystem().size("save/old.dat").await, None);
+        assert_eq!(context.system().filesystem().size("save/new.dat").await, Some(3));
+
+        let mut actual = [0u8; 3];
+        assert_eq!(
+            context
+                .system()
+                .filesystem()
+                .read("save/new.dat", 0, 3, &mut actual)
+                .await,
+            Some(3)
+        );
+        assert_eq!(&actual, b"abc");
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rename_overwrites_existing_regular_file_like_posix() {
+        let mut context = filesystem_test_context();
+        context.system().filesystem().write("old.dat", 0, b"source").await;
+        context.system().filesystem().write("new.dat", 0, b"dest").await;
+        context.write_bytes(0x1000, b"old.dat\0").unwrap();
+        context.write_bytes(0x1100, b"new.dat\0").unwrap();
+
+        assert_eq!(rename(&mut context, 0x1000, 0x1100, 2).await.unwrap(), 0);
+        assert_eq!(context.system().filesystem().size("old.dat").await, None);
+        assert_eq!(context.system().filesystem().size("new.dat").await, Some(6));
+
+        let mut actual = [0u8; 6];
+        assert_eq!(
+            context
+                .system()
+                .filesystem()
+                .read("new.dat", 0, 6, &mut actual)
+                .await,
+            Some(6)
+        );
+        assert_eq!(&actual, b"source");
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rename_moves_implicit_directory_subtree() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("old/a.dat", 0, b"a")
+            .await;
+        context
+            .system()
+            .filesystem()
+            .write("old/sub/b.dat", 0, b"b")
+            .await;
+        context.write_bytes(0x1000, b"old\0").unwrap();
+        context.write_bytes(0x1100, b"new\0").unwrap();
+
+        assert_eq!(rename(&mut context, 0x1000, 0x1100, 2).await.unwrap(), 0);
+        assert_eq!(context.system().filesystem().size("old/a.dat").await, None);
+        assert_eq!(context.system().filesystem().size("new/a.dat").await, Some(1));
+        assert_eq!(
+            context.system().filesystem().size("new/sub/b.dat").await,
+            Some(1)
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rename_missing_virtual_and_same_path_errors() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"missing.dat\0").unwrap();
+        context.write_bytes(0x1100, b"new.dat\0").unwrap();
+
+        assert_eq!(rename(&mut context, 0x1000, 0x1100, 2).await.unwrap(), -12);
+
+        context
+            .system()
+            .filesystem()
+            .add_virtual("virtual.dat", b"x".to_vec());
+        context.write_bytes(0x1200, b"virtual.dat\0").unwrap();
+
+        assert_eq!(rename(&mut context, 0x1200, 0x1100, 2).await.unwrap(), -1);
+
+        context.system().filesystem().write("same.dat", 0, b"x").await;
+        context.write_bytes(0x1300, b"same.dat\0").unwrap();
+
+        assert_eq!(rename(&mut context, 0x1300, 0x1300, 2).await.unwrap(), -1);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rename_matches_native_validation_order() {
+        let mut context = filesystem_test_context();
+
+        // Access check happens before either filename is processed.
+        assert_eq!(rename(&mut context, 0, 0, 0).await.unwrap(), -24);
+        assert_eq!(rename(&mut context, 0, 0, 2).await.unwrap(), -3);
+
+        context.write_bytes(0x1000, b"old.dat\0").unwrap();
+        assert_eq!(rename(&mut context, 0x1000, 0, 2).await.unwrap(), -3);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_rename_updates_open_descriptor_path() {
+        let mut context = filesystem_test_context();
+        context.system().filesystem().write("old.dat", 0, b"abc").await;
+        context.write_bytes(0x1000, b"old.dat\0").unwrap();
+        context.write_bytes(0x1100, b"new.dat\0").unwrap();
+        context.write_bytes(0x2000, &[0; 3]).unwrap();
+
+        let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
+
+        assert_eq!(rename(&mut context, 0x1000, 0x1100, 2).await.unwrap(), 0);
+        assert_eq!(seek(&mut context, fd, 0, 0).await.unwrap(), 0);
+        assert_eq!(read(&mut context, fd, 0x2000, 3).await.unwrap(), 3);
+
+        let mut actual = [0u8; 3];
+        context.read_bytes(0x2000, &mut actual).unwrap();
+        assert_eq!(&actual, b"abc");
     }
 
     #[futures_test::test]
