@@ -2750,6 +2750,94 @@ pub async fn add_menu_item(
     Ok(count as i32)
 }
 
+/// LGT `MC_uicRemoveMenuItem` (WIPI-C service 0x33b).
+///
+/// Native is a thin wrapper over `WPUic_RemoveItem` with required component type 1.
+/// NULL/invalid components and valid non-Menu components all return 0.
+///
+/// Menu item state uses +0x44 as the item count, +0x48 as the active index,
+/// +0x50 as the pointer table, +0x54 as the active-item callback, and +0x58
+/// as that callback's context.
+///
+/// Native's initial range check is unsigned `count < index`, not `index >= count`.
+/// Consequently `index == count` is not rejected before the table access; WIE
+/// preserves that control-flow shape rather than adding a stricter range rule.
+///
+/// The selected item image is destroyed, the item block is freed, and +0x44 is
+/// decremented. The pointer table itself is neither shrunk nor reallocated.
+/// Entries after the removed index are shifted one slot left when the removed
+/// index is before the new count; the stale final table word is left untouched.
+///
+/// Native does not adjust +0x48 after removal. If the removed index exactly equals
+/// the active index and +0x54 is nonzero, it invokes
+/// `callback(component, 0, +0x58 context)`. The callback result is discarded and
+/// successful removal returns 1.
+pub async fn remove_menu_item(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    index: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicRemoveMenuItem({component:#x}, {index})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) || component_type != 1 {
+        return Ok(0);
+    }
+
+    let count: WIPICWord = read_generic(context, component + 0x44)?;
+    if count < index {
+        return Ok(0);
+    }
+
+    let table: WIPICWord = read_generic(context, component + 0x50)?;
+    let slot = table.wrapping_add(index.wrapping_mul(4));
+    let item: WIPICWord = read_generic(context, slot)?;
+
+    let image: WIPICWord = read_generic(context, item)?;
+    if image != 0 {
+        graphics::destroy_image(context, WIPICIndirectPtr(image)).await?;
+    }
+    context.free_raw_unsized(item)?;
+
+    let new_count = count.wrapping_sub(1);
+    write_generic(context, component + 0x44, new_count)?;
+
+    if (index as i32) < (new_count as i32) {
+        let mut source = slot.wrapping_add(4);
+        let mut current = index.wrapping_add(1);
+
+        while (current as i32) < (new_count as i32) {
+            let next: WIPICWord = read_generic(context, source)?;
+            write_generic(context, source.wrapping_sub(4), next)?;
+
+            current = current.wrapping_add(1);
+            source = source.wrapping_add(4);
+        }
+
+        if (current as i32) == (new_count as i32) {
+            let next: WIPICWord = read_generic(context, source)?;
+            write_generic(context, source.wrapping_sub(4), next)?;
+        }
+    }
+
+    let active: WIPICWord = read_generic(context, component + 0x48)?;
+    if index == active {
+        let callback: WIPICWord = read_generic(context, component + 0x54)?;
+        if callback != 0 {
+            let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
+            context
+                .call_function(callback, &[component, 0, callback_context])
+                .await?;
+        }
+    }
+
+    Ok(1)
+}
+
 /// LGT `MC_uicGetMenuItem` (WIPI-C service 0x33a).
 ///
 /// Native is a thin wrapper over `WPUic_GetItem` with required component type 1.
@@ -2826,7 +2914,8 @@ mod tests {
         UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
         delete_text,
         add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
-        get_menu_item, get_time, insert_text, is_instance, repaint, set_bg_color, set_callback,
+        get_menu_item, get_time, insert_text, is_instance, remove_menu_item, repaint, set_bg_color,
+        set_callback,
         set_enable,
         set_event_handler,
         set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
@@ -3838,6 +3927,140 @@ mod tests {
         assert_eq!(
             uic_read_c_string(&context, 0x3100).unwrap(),
             b"Menu label"
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_remove_menu_item_shifts_native_table_and_preserves_active_index() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 1);
+
+        for (address, label, image) in [
+            (0x3000u32, b"zero\0".as_slice(), 0u32),
+            (0x3040u32, b"one\0".as_slice(), 0u32),
+            (0x3080u32, b"two\0".as_slice(), 0u32),
+        ] {
+            context.write_bytes(address, label).unwrap();
+            assert_eq!(
+                add_menu_item(&mut context, COMPONENT, address, image)
+                    .await
+                    .unwrap(),
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap() as i32 - 1
+            );
+        }
+
+        write_generic(&mut context, COMPONENT + 0x48, 2i32).unwrap();
+
+        let table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
+        let first: u32 = read_generic(&context, table).unwrap();
+        let second: u32 = read_generic(&context, table + 4).unwrap();
+        let third: u32 = read_generic(&context, table + 8).unwrap();
+
+        assert_ne!(first, second);
+        assert_ne!(second, third);
+
+        assert_eq!(
+            remove_menu_item(&mut context, COMPONENT, 1).await.unwrap(),
+            1
+        );
+
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            2
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+            2
+        );
+
+        assert_eq!(
+            read_generic::<u32, _>(&context, table).unwrap(),
+            first
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, table + 4).unwrap(),
+            third
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, table + 8).unwrap(),
+            third
+        );
+
+        assert_eq!(
+            uic_read_c_string(&context, third + 4).unwrap(),
+            b"two"
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_remove_menu_item_matches_native_validation_and_range_rule() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            remove_menu_item(&mut context, 0, 0).await.unwrap(),
+            0
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
+            write_generic(&mut context, COMPONENT + 0x50, 0x5678u32).unwrap();
+
+            assert_eq!(
+                remove_menu_item(&mut context, COMPONENT, 0)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+                3
+            );
+        }
+
+        for component_type in [2u32, 3, 4, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
+
+            assert_eq!(
+                remove_menu_item(&mut context, COMPONENT, 0)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+
+        init_component(&mut context, 1);
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x48, -1i32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x50, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x54, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
+
+        context.write_bytes(0x3000, b"only\0").unwrap();
+        assert_eq!(
+            add_menu_item(&mut context, COMPONENT, 0x3000, 0)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
+        let only: u32 = read_generic(&context, table).unwrap();
+
+        assert_eq!(
+            remove_menu_item(&mut context, COMPONENT, 2)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, table).unwrap(),
+            only
         );
     }
 
