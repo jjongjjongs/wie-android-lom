@@ -32,7 +32,7 @@ mod wave;
 use std::collections::BTreeMap;
 
 use crate::ma3::{
-    bus::{clamp_i16, mix_q15, soft_limit, stereo_gain_q15},
+    bus::{clamp_i16, mix_q15, saturate_pcm, soft_limit, stereo_gain_q15},
     tone::{Bank, DRUM_CHANNEL},
     voice::Voice,
     wave::WaveVoice,
@@ -107,15 +107,6 @@ pub const CHANNELS: usize = 2;
 
 /// Notes at once, which is what the chip could hold.
 const MAX_VOICES: usize = 16;
-
-/// Loudness the recorded effects are mixed in at, as a percentage. Decoded
-/// straight the waves land near a tenth of full scale and read as faint against
-/// the music; worse, their energy sits well below their peaks, so a gentle lift
-/// leaves the body quiet however loud the odd transient gets. They are pushed
-/// well up the scale to bring that body up to where the reference plays it, and
-/// the output limiter rounds off the peaks the push sends over rather than
-/// clipping them flat.
-const WAVE_GAIN_PERCENT: i32 = 320;
 
 /// Source samples over which a recorded effect is ramped to silence at its end.
 /// The recordings stop at whatever level the last sample held rather than
@@ -643,7 +634,7 @@ impl SynthMixer {
                 for frame in acc.chunks_exact_mut(CHANNELS) {
                     match wave.next_sample() {
                         Some(sample) => {
-                            let sample = i32::from(sample) * WAVE_GAIN_PERCENT / 100;
+                            let sample = saturate_pcm(i32::from(sample));
                             pcm_peak = pcm_peak.max(sample.unsigned_abs());
                             for slot in frame.iter_mut() {
                                 *slot += sample;

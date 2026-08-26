@@ -110,6 +110,23 @@ pub fn soft_limit(value: i64) -> i32 {
     limited.round() as i32
 }
 
+/// How hard a recorded effect is driven into the saturator below. A recorded
+/// effect carries its energy in short transients and stays faint between them,
+/// so it reads as far quieter than a sustained synthesised note that peaks no
+/// higher. Driving it well past full scale and folding it back lifts the quiet
+/// body toward the peaks - the same thing a compressor does - so the effect
+/// reads as loud as the music rather than as a distant tap.
+const PCM_DRIVE: f64 = 5.0;
+
+/// Applies that drive and folds the result back to the ceiling with tanh, which
+/// leaves the quiet body nearly linear at the driven level while easing the
+/// loud part smoothly in rather than clipping it. Returns a sixteen-bit sample.
+pub fn saturate_pcm(sample: i32) -> i32 {
+    let driven = sample as f64 * PCM_DRIVE;
+
+    (LIMIT_CEIL * (driven / LIMIT_CEIL).tanh()).round() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PERIOD_Q15, SILENT, clamp_i16, mix_q15, stereo_gain_q15};
