@@ -3158,6 +3158,76 @@ pub async fn get_active_menu_item(
     read_generic(context, component + 0x48)
 }
 
+/// LGT `MC_uicGetListItem` (WIPI-C service 0x345).
+///
+/// Native is a thin wrapper over `WPUic_GetItem` with required component type 5.
+/// Apart from the required List type, its behavior is identical to
+/// `MC_uicGetMenuItem`.
+///
+/// List item state uses +0x44 as the item count and +0x50 as the pointer table.
+/// Each table entry points to `[image: u32][NUL-terminated label]`.
+///
+/// NULL/invalid components return 0 and valid non-List components return -9.
+/// The native range test is signed `count <= index`; an out-of-range index
+/// returns 0.
+///
+/// Before writing either optional output, native requires
+/// `strlen(label) + 1 <= buflen`. If the buffer is too small it returns -18,
+/// even when the label output pointer itself is NULL. On success a non-NULL
+/// image output receives the stored image word, a non-NULL label output receives
+/// the complete NUL-terminated string, and the function returns 1.
+pub async fn get_list_item(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    index: i32,
+    label: WIPICWord,
+    buflen: i32,
+    image: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_uicGetListItem({component:#x}, {index}, {label:#x}, {buflen}, {image:#x})"
+    );
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 5 {
+        return Ok(-9);
+    }
+
+    let count: i32 = read_generic(context, component + 0x44)?;
+    if count <= index {
+        return Ok(0);
+    }
+
+    let table: WIPICWord = read_generic(context, component + 0x50)?;
+    let item: WIPICWord =
+        read_generic(context, table.wrapping_add((index as u32).wrapping_mul(4)))?;
+
+    let label_bytes = uic_read_c_string(context, item + 4)?;
+    let required = (label_bytes.len() as i32).wrapping_add(1);
+    if required > buflen {
+        return Ok(-18);
+    }
+
+    if image != 0 {
+        let stored_image: WIPICWord = read_generic(context, item)?;
+        write_generic(context, image, stored_image)?;
+    }
+
+    if label != 0 {
+        context.write_bytes(label, &label_bytes)?;
+        context.write_bytes(label + label_bytes.len() as u32, &[0])?;
+    }
+
+    Ok(1)
+}
+
 /// LGT `MC_uicGetMenuItem` (WIPI-C service 0x33a).
 ///
 /// Native is a thin wrapper over `WPUic_GetItem` with required component type 1.
@@ -3234,7 +3304,8 @@ mod tests {
         UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
         delete_text,
         add_list_item, add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
-        get_active_menu_item, get_menu_item, get_time, insert_text, is_instance, remove_menu_item,
+        get_active_menu_item, get_list_item, get_menu_item, get_time, insert_text, is_instance,
+        remove_menu_item,
         repaint, set_active_menu_item, set_bg_color, set_callback,
         set_enable,
         set_event_handler,
@@ -4552,6 +4623,148 @@ mod tests {
         assert_eq!(
             uic_read_c_string(&context, second_item + 4).unwrap(),
             b""
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_list_item_reads_native_item_layout_and_optional_outputs() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 5);
+
+        context.write_bytes(0x3000, b"List label\0").unwrap();
+        assert_eq!(
+            add_list_item(&mut context, COMPONENT, 0x3000, 0x1122_3344)
+                .await
+                .unwrap(),
+            0
+        );
+
+        context.write_bytes(0x3100, &[0xaa; 32]).unwrap();
+        write_generic(&mut context, 0x3200, 0xdead_beefu32).unwrap();
+
+        assert_eq!(
+            get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            uic_read_c_string(&context, 0x3100).unwrap(),
+            b"List label"
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3200).unwrap(),
+            0x1122_3344
+        );
+
+        context.write_bytes(0x3100, &[0xbb; 32]).unwrap();
+        write_generic(&mut context, 0x3200, 0u32).unwrap();
+
+        assert_eq!(
+            get_list_item(&mut context, COMPONENT, 0, 0, 32, 0x3200)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3200).unwrap(),
+            0x1122_3344
+        );
+
+        assert_eq!(
+            get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            uic_read_c_string(&context, 0x3100).unwrap(),
+            b"List label"
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_list_item_matches_native_validation_range_and_buffer_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            get_list_item(&mut context, 0, 0, 0x3100, 32, 0x3200)
+                .await
+                .unwrap(),
+            0
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            assert_eq!(
+                get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+
+        for component_type in [1u32, 2, 3, 4] {
+            init_component(&mut context, component_type);
+            assert_eq!(
+                get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
+                    .await
+                    .unwrap(),
+                -9
+            );
+        }
+
+        init_component(&mut context, 5);
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x48, -1i32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x50, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x54, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
+
+        context.write_bytes(0x3000, b"abcd\0").unwrap();
+        assert_eq!(
+            add_list_item(&mut context, COMPONENT, 0x3000, 0xaabb_ccdd)
+                .await
+                .unwrap(),
+            0
+        );
+
+        context.write_bytes(0x3100, &[0xcc; 16]).unwrap();
+        write_generic(&mut context, 0x3200, 0x5566_7788u32).unwrap();
+
+        assert_eq!(
+            get_list_item(&mut context, COMPONENT, 1, 0x3100, 16, 0x3200)
+                .await
+                .unwrap(),
+            0
+        );
+
+        assert_eq!(
+            get_list_item(&mut context, COMPONENT, 0, 0, 4, 0)
+                .await
+                .unwrap(),
+            -18
+        );
+        assert_eq!(
+            get_list_item(&mut context, COMPONENT, 0, 0x3100, 4, 0x3200)
+                .await
+                .unwrap(),
+            -18
+        );
+
+        let mut unchanged = [0u8; 16];
+        context.read_bytes(0x3100, &mut unchanged).unwrap();
+        assert_eq!(unchanged, [0xcc; 16]);
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3200).unwrap(),
+            0x5566_7788
+        );
+
+        assert_eq!(
+            get_list_item(&mut context, COMPONENT, 0, 0x3100, 5, 0x3200)
+                .await
+                .unwrap(),
+            1
         );
     }
 
