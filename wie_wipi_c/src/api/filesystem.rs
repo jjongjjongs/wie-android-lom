@@ -1957,5 +1957,45 @@ mod tests {
         assert_eq!(list(&mut context, 0x1000, 0x2000, 0, 1).await.unwrap(), -18);
         assert_eq!(list(&mut context, 0x1000, 0x2000, 0x8000_0000, 1).await.unwrap(), -18);
     }
+
+    #[futures_test::test]
+    async fn lgt_fs_list_null_output_and_missing_directory_match_native_errors() {
+        let mut context = filesystem_test_context();
+
+        context.write_bytes(0x1000, b"/\0").unwrap();
+        assert_eq!(list(&mut context, 0x1000, 0, 16, 1).await.unwrap(), -3);
+
+        context.write_bytes(0x1100, b"missing\0").unwrap();
+        context.write_bytes(0x2000, &[0xcc; 16]).unwrap();
+        assert_eq!(list(&mut context, 0x1100, 0x2000, 16, 1).await.unwrap(), -1);
+
+        let mut untouched = [0u8; 16];
+        context.read_bytes(0x2000, &mut untouched).unwrap();
+        assert_eq!(untouched, [0xcc; 16]);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_list_requires_one_extra_byte_for_final_empty_string() {
+        let mut context = filesystem_test_context();
+
+        context.system().filesystem().write("save/first", 0, &[1]).await;
+        context.write_bytes(0x1000, b"save\0").unwrap();
+        context.write_bytes(0x2000, &[0xcc; 16]).unwrap();
+
+        // "first\0" is six bytes. Native MH_fileList requires a seventh byte
+        // for the final empty-string terminator, so capacity 6 fails before
+        // copying the entry.
+        assert_eq!(list(&mut context, 0x1000, 0x2000, 6, 1).await.unwrap(), -18);
+
+        let mut failed = [0u8; 7];
+        context.read_bytes(0x2000, &mut failed).unwrap();
+        assert_eq!(failed, [0xcc; 7]);
+
+        assert_eq!(list(&mut context, 0x1000, 0x2000, 7, 1).await.unwrap(), 0);
+
+        let mut exact = [0u8; 7];
+        context.read_bytes(0x2000, &mut exact).unwrap();
+        assert_eq!(&exact, b"first\0\0");
+    }
 }
 
