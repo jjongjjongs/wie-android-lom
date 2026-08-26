@@ -180,6 +180,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicRemoveListItem => uic::remove_list_item.into_body(),
         WIPICSvcId::UicSetActiveListItem => uic::set_active_list_item.into_body(),
         WIPICSvcId::UicGetActiveListItem => uic::get_active_list_item.into_body(),
+        WIPICSvcId::UicSetCursorPos => uic::set_cursor_pos.into_body(),
         WIPICSvcId::UicGetTime => uic::get_time.into_body(),
         WIPICSvcId::UicAddMenuItem => uic::add_menu_item.into_body(),
         WIPICSvcId::UicGetMenuItem => uic::get_menu_item.into_body(),

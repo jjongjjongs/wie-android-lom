@@ -3306,6 +3306,71 @@ pub async fn get_active_list_item(
     read_generic(context, component + 0x48)
 }
 
+/// LGT `LGTC_uicSetCursorPos` (WIPI-C service 0x349).
+///
+/// Native first validates the component. NULL/invalid components return -1.
+/// A requested position of zero also returns -1 before the component subtype
+/// is examined.
+///
+/// Only Text (type 3) and DateTime (type 2) components are supported. Other
+/// valid component types return -1 rather than the usual UIC type error -9.
+///
+/// For Text, native measures the NUL-terminated string referenced by +0x44 and
+/// accepts a nonzero signed position only when `0 <= position <= strlen(text)`.
+/// On success it stores the position at +0x4c.
+///
+/// For DateTime, native measures the inline rendered string at +0x74 and applies
+/// the same position bound, storing successful positions at +0x94.
+///
+/// The string length is evaluated before a negative position is rejected for
+/// either supported subtype. Success returns the requested position itself;
+/// failure returns -1.
+pub async fn set_cursor_pos(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: i32,
+) -> Result<i32> {
+    tracing::debug!("LGTC_uicSetCursorPos({component:#x}, {position})");
+
+    if component == 0 {
+        return Ok(-1);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(-1);
+    }
+
+    if position == 0 {
+        return Ok(-1);
+    }
+
+    match component_type {
+        3 => {
+            let text: WIPICWord = read_generic(context, component + 0x44)?;
+            let text_len = uic_read_c_string(context, text)?.len() as i32;
+
+            if position < 0 || text_len < position {
+                return Ok(-1);
+            }
+
+            write_generic(context, component + 0x4c, position)?;
+            Ok(position)
+        }
+        2 => {
+            let text_len = uic_read_c_string(context, component + 0x74)?.len() as i32;
+
+            if position < 0 || position > text_len {
+                return Ok(-1);
+            }
+
+            write_generic(context, component + 0x94, position)?;
+            Ok(position)
+        }
+        _ => Ok(-1),
+    }
+}
+
 /// LGT `MC_uicGetActiveMenuItem` (WIPI-C service 0x33d).
 ///
 /// Native is a thin wrapper over `WPUic_GetActiveItem` with required component type 1.
@@ -3483,6 +3548,7 @@ mod tests {
         get_active_list_item, get_active_menu_item, get_list_item, get_menu_item, get_time, insert_text, is_instance,
         remove_list_item, remove_menu_item,
         repaint, set_active_list_item, set_active_menu_item, set_bg_color, set_callback,
+        set_cursor_pos,
         set_enable,
         set_event_handler,
         get_max_text_size, get_text, get_text_size, set_fg_color, set_font, set_label,
@@ -5322,6 +5388,144 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_cursor_pos_matches_native_validation_and_supported_types() {
+        let mut context = TestContext::new();
+
+        assert_eq!(set_cursor_pos(&mut context, 0, 1).await.unwrap(), -1);
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            assert_eq!(
+                set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
+                -1
+            );
+        }
+
+        for component_type in [1u32, 4, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344i32).unwrap();
+
+            assert_eq!(
+                set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
+                -1
+            );
+            assert_eq!(
+                read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
+                0x1122_3344
+            );
+        }
+
+        init_text_component(&mut context, b"abcdef\0", 32, 4);
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 0).await.unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
+            4
+        );
+
+        init_component(&mut context, 2);
+        context.write_bytes(COMPONENT + 0x74, b"12:34\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x94, 3i32).unwrap();
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 0).await.unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
+            3
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_cursor_pos_matches_native_text_bounds_and_return_value() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 32, 2);
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
+            1
+        );
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 6).await.unwrap(),
+            6
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
+            6
+        );
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 7).await.unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
+            6
+        );
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, -1).await.unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
+            6
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_cursor_pos_matches_native_datetime_bounds_and_slot() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 2);
+        context.write_bytes(COMPONENT + 0x74, b"12:34:56\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x94, 2i32).unwrap();
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
+            1
+        );
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 8).await.unwrap(),
+            8
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
+            8
+        );
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, 9).await.unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
+            8
+        );
+
+        assert_eq!(
+            set_cursor_pos(&mut context, COMPONENT, -2).await.unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
+            8
+        );
     }
 
     #[futures_test::test]
