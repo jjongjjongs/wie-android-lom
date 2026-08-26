@@ -2750,10 +2750,69 @@ pub async fn add_menu_item(
     Ok(count as i32)
 }
 
-pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: u32, psz: WIPICWord, buflen: i32, img: WIPICWord) -> Result<i32> {
-    tracing::warn!("stub MC_uicGetMenuItem({cc:#x}, {idx}, {psz:#x}, {buflen}, {img:#x})");
+/// LGT `MC_uicGetMenuItem` (WIPI-C service 0x33a).
+///
+/// Native is a thin wrapper over `WPUic_GetItem` with required component type 1.
+/// NULL/invalid components return 0 and valid non-Menu components return -9.
+///
+/// Menu item state uses +0x44 as the item count and +0x50 as the pointer table.
+/// Each table entry points to `[image: u32][NUL-terminated label]`.
+///
+/// The native range test is signed `count <= index`; an out-of-range index returns 0.
+/// It then requires `strlen(label) + 1 <= buflen`, otherwise returning -18 even when
+/// the caller did not request the label output. On success, a non-NULL image output
+/// receives the stored image word first, then a non-NULL string output receives the
+/// complete NUL-terminated label. Success returns 1.
+pub async fn get_menu_item(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    index: i32,
+    label: WIPICWord,
+    buflen: i32,
+    image: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_uicGetMenuItem({component:#x}, {index}, {label:#x}, {buflen}, {image:#x})"
+    );
 
-    Ok(0)
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 1 {
+        return Ok(-9);
+    }
+
+    let count: i32 = read_generic(context, component + 0x44)?;
+    if count <= index {
+        return Ok(0);
+    }
+
+    let table: WIPICWord = read_generic(context, component + 0x50)?;
+    let item: WIPICWord =
+        read_generic(context, table.wrapping_add((index as u32).wrapping_mul(4)))?;
+
+    let label_bytes = uic_read_c_string(context, item + 4)?;
+    let required = (label_bytes.len() as i32).wrapping_add(1);
+    if required > buflen {
+        return Ok(-18);
+    }
+
+    if image != 0 {
+        let stored_image: WIPICWord = read_generic(context, item)?;
+        write_generic(context, image, stored_image)?;
+    }
+
+    if label != 0 {
+        context.write_bytes(label, &label_bytes)?;
+        context.write_bytes(label + label_bytes.len() as u32, &[0])?;
+    }
+
+    Ok(1)
 }
 
 
@@ -2767,7 +2826,8 @@ mod tests {
         UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
         delete_text,
         add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
-        get_time, insert_text, is_instance, repaint, set_bg_color, set_callback, set_enable,
+        get_menu_item, get_time, insert_text, is_instance, repaint, set_bg_color, set_callback,
+        set_enable,
         set_event_handler,
         set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
         set_time, set_time_long, set_time_mask, uic_color_to_rgb565, uic_read_c_string,
@@ -3721,6 +3781,141 @@ mod tests {
         assert_eq!(
             uic_read_c_string(&context, second_item + 4).unwrap(),
             b""
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_menu_item_reads_native_item_layout_and_optional_outputs() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 1);
+
+        context.write_bytes(0x3000, b"Menu label\0").unwrap();
+        assert_eq!(
+            add_menu_item(&mut context, COMPONENT, 0x3000, 0x1122_3344)
+                .await
+                .unwrap(),
+            0
+        );
+
+        context.write_bytes(0x3100, &[0xaa; 32]).unwrap();
+        write_generic(&mut context, 0x3200, 0xdead_beefu32).unwrap();
+
+        assert_eq!(
+            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            uic_read_c_string(&context, 0x3100).unwrap(),
+            b"Menu label"
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3200).unwrap(),
+            0x1122_3344
+        );
+
+        context.write_bytes(0x3100, &[0xbb; 32]).unwrap();
+        write_generic(&mut context, 0x3200, 0u32).unwrap();
+
+        assert_eq!(
+            get_menu_item(&mut context, COMPONENT, 0, 0, 32, 0x3200)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3200).unwrap(),
+            0x1122_3344
+        );
+
+        assert_eq!(
+            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            uic_read_c_string(&context, 0x3100).unwrap(),
+            b"Menu label"
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_menu_item_matches_native_validation_range_and_buffer_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            get_menu_item(&mut context, 0, 0, 0x3100, 32, 0x3200)
+                .await
+                .unwrap(),
+            0
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            assert_eq!(
+                get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+
+        for component_type in [2u32, 3, 4, 5] {
+            init_component(&mut context, component_type);
+            assert_eq!(
+                get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
+                    .await
+                    .unwrap(),
+                -9
+            );
+        }
+
+        init_component(&mut context, 1);
+        context.write_bytes(0x3000, b"abcd\0").unwrap();
+        assert_eq!(
+            add_menu_item(&mut context, COMPONENT, 0x3000, 0xaabb_ccdd)
+                .await
+                .unwrap(),
+            0
+        );
+
+        context.write_bytes(0x3100, &[0xcc; 16]).unwrap();
+        write_generic(&mut context, 0x3200, 0x5566_7788u32).unwrap();
+
+        assert_eq!(
+            get_menu_item(&mut context, COMPONENT, 1, 0x3100, 16, 0x3200)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            get_menu_item(&mut context, COMPONENT, 0, 0, 4, 0)
+                .await
+                .unwrap(),
+            -18
+        );
+        assert_eq!(
+            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 4, 0x3200)
+                .await
+                .unwrap(),
+            -18
+        );
+
+        let mut unchanged = [0u8; 16];
+        context.read_bytes(0x3100, &mut unchanged).unwrap();
+        assert_eq!(unchanged, [0xcc; 16]);
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3200).unwrap(),
+            0x5566_7788
+        );
+
+        assert_eq!(
+            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 5, 0x3200)
+                .await
+                .unwrap(),
+            1
         );
     }
 

@@ -174,6 +174,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicSetMaxTextSize => uic::set_max_text_size.into_body(),
         WIPICSvcId::UicGetTime => uic::get_time.into_body(),
         WIPICSvcId::UicAddMenuItem => uic::add_menu_item.into_body(),
+        WIPICSvcId::UicGetMenuItem => uic::get_menu_item.into_body(),
         WIPICSvcId::OpenDatabase => database::open_database.into_body(),
         WIPICSvcId::ReadRecordSingle => database::stream_read.into_body(),
         WIPICSvcId::WriteRecordSingle => database::stream_write.into_body(),
