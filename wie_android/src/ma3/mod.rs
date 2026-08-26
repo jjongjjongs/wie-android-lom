@@ -426,6 +426,11 @@ pub struct SynthMixer {
     voices: BTreeMap<u32, MixerVoice>,
     next_id: u32,
     master_volume: u8,
+    /// One-shot recorded waves (a hit, a door, the logo voice), mixed into the
+    /// same output stream as the sequenced voices. Titles fire these through the
+    /// wave path; routing them here plays them on the one AudioTrack that works,
+    /// rather than a per-clip static track the device would not sound.
+    pcm: Vec<PcmOneShot>,
 }
 
 struct MixerVoice {
@@ -434,6 +439,32 @@ struct MixerVoice {
     /// decays (release tails finished), then `render` drops it, so a stop does
     /// not cut the tail.
     closing: bool,
+}
+
+/// A recorded wave playing back into the mix, resampled from its own rate to the
+/// output rate on the fly.
+struct PcmOneShot {
+    samples: Vec<i16>,
+    /// Read position in `samples`, in source samples.
+    position: f64,
+    /// Source samples advanced per output frame (source_rate / output_rate).
+    step: f64,
+}
+
+impl PcmOneShot {
+    /// Advances one output frame and returns the (linearly interpolated) mono
+    /// sample, or `None` once the wave has played out.
+    fn next_sample(&mut self) -> Option<i16> {
+        let index = self.position as usize;
+        if index >= self.samples.len() {
+            return None;
+        }
+        let current = self.samples[index] as f64;
+        let next = self.samples.get(index + 1).copied().unwrap_or(self.samples[index]) as f64;
+        let frac = self.position - index as f64;
+        self.position += self.step;
+        Some((current + (next - current) * frac) as i16)
+    }
 }
 
 impl Default for SynthMixer {
@@ -448,7 +479,18 @@ impl SynthMixer {
             voices: BTreeMap::new(),
             next_id: 1,
             master_volume: 100,
+            pcm: Vec::new(),
         }
+    }
+
+    /// Queues a recorded wave to play into the mix, resampled from `source_rate`
+    /// to the output rate.
+    pub fn push_pcm(&mut self, samples: Vec<i16>, source_rate: u32) {
+        if samples.is_empty() || source_rate == 0 {
+            return;
+        }
+        let step = f64::from(source_rate) / f64::from(SAMPLE_RATE);
+        self.pcm.push(PcmOneShot { samples, position: 0.0, step });
     }
 
     /// Opens an isolated voice and returns its id. Id 0 is never handed out, so
@@ -520,6 +562,7 @@ impl SynthMixer {
     /// Stops every voice at once (the game paused or gone).
     pub fn silence(&mut self) {
         self.voices.clear();
+        self.pcm.clear();
     }
 
     /// Renders `frames` from every voice and sums them, dropping any closed
@@ -547,6 +590,26 @@ impl SynthMixer {
 
         for id in finished {
             self.voices.remove(&id);
+        }
+
+        // Mix the one-shot recorded waves (mono) into both output channels,
+        // resampled to the output rate, and drop any that have played out.
+        if !self.pcm.is_empty() {
+            let acc = accumulator.get_or_insert_with(|| vec![0i32; frames * CHANNELS]);
+            self.pcm.retain_mut(|wave| {
+                for frame in acc.chunks_exact_mut(CHANNELS) {
+                    match wave.next_sample() {
+                        Some(sample) => {
+                            let sample = i32::from(sample);
+                            for slot in frame.iter_mut() {
+                                *slot += sample;
+                            }
+                        }
+                        None => return false,
+                    }
+                }
+                true
+            });
         }
 
         accumulator.map(|acc| acc.iter().map(|sample| clamp_i16(i64::from(*sample)) as i16).collect())
