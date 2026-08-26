@@ -3160,6 +3160,66 @@ pub async fn remove_menu_item(
     Ok(1)
 }
 
+/// LGT `MC_uicSetActiveListItem` (WIPI-C service 0x347).
+///
+/// Native is a thin wrapper over `WPUic_SetActiveItem` with required component type 5.
+/// Its behavior is otherwise identical to `MC_uicSetActiveMenuItem`.
+///
+/// NULL/invalid components return -1, while valid non-List components return -9.
+///
+/// List state uses +0x44 as the item count, +0x48 as the active index, +0x54 as the
+/// active-item callback, and +0x58 as its callback context.
+///
+/// The value -1 is always accepted and clears the active item. Every other value is
+/// accepted only when the signed comparison `selected < count` succeeds. Therefore
+/// native also accepts values below -1 when they are less than the signed count.
+///
+/// On success native returns the previous +0x48 value. It stores the new value and,
+/// only when the value changed and +0x54 is nonzero, invokes
+/// `callback(component, 0, +0x58 context)`. The callback result is discarded.
+pub async fn set_active_list_item(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    selected: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_uicSetActiveListItem({component:#x}, {selected})");
+
+    if component == 0 {
+        return Ok(-1);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(-1);
+    }
+    if component_type != 5 {
+        return Ok(-9);
+    }
+
+    let old_selected: i32 = read_generic(context, component + 0x48)?;
+
+    if selected != -1 {
+        let count: i32 = read_generic(context, component + 0x44)?;
+        if selected >= count {
+            return Ok(-1);
+        }
+    }
+
+    write_generic(context, component + 0x48, selected)?;
+
+    if selected != old_selected {
+        let callback: WIPICWord = read_generic(context, component + 0x54)?;
+        if callback != 0 {
+            let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
+            context
+                .call_function(callback, &[component, 0, callback_context])
+                .await?;
+        }
+    }
+
+    Ok(old_selected)
+}
+
 /// LGT `MC_uicSetActiveMenuItem` (WIPI-C service 0x33c).
 ///
 /// Native is a thin wrapper over `WPUic_SetActiveItem` with required component type 1.
@@ -3394,7 +3454,7 @@ mod tests {
         add_list_item, add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
         get_active_menu_item, get_list_item, get_menu_item, get_time, insert_text, is_instance,
         remove_list_item, remove_menu_item,
-        repaint, set_active_menu_item, set_bg_color, set_callback,
+        repaint, set_active_list_item, set_active_menu_item, set_bg_color, set_callback,
         set_enable,
         set_event_handler,
         get_max_text_size, get_text, get_text_size, set_fg_color, set_font, set_label,
@@ -5234,6 +5294,125 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_active_list_item_matches_native_validation_and_type_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            set_active_list_item(&mut context, 0, 0).await.unwrap(),
+            -1
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 0x1234i32).unwrap();
+
+            assert_eq!(
+                set_active_list_item(&mut context, COMPONENT, 0)
+                    .await
+                    .unwrap(),
+                -1
+            );
+            assert_eq!(
+                read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+                0x1234
+            );
+        }
+
+        for component_type in [1u32, 2, 3, 4] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 7i32).unwrap();
+
+            assert_eq!(
+                set_active_list_item(&mut context, COMPONENT, 0)
+                    .await
+                    .unwrap(),
+                -9
+            );
+            assert_eq!(
+                read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+                7
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_active_list_item_returns_old_value_and_matches_signed_range_rule() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 5);
+
+        write_generic(&mut context, COMPONENT + 0x44, 3i32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x48, -1i32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x54, 0u32).unwrap();
+        write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
+
+        assert_eq!(
+            set_active_list_item(&mut context, COMPONENT, 1)
+                .await
+                .unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+            1
+        );
+
+        assert_eq!(
+            set_active_list_item(&mut context, COMPONENT, 1)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+            1
+        );
+
+        assert_eq!(
+            set_active_list_item(&mut context, COMPONENT, -1)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+            -1
+        );
+
+        assert_eq!(
+            set_active_list_item(&mut context, COMPONENT, 3)
+                .await
+                .unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+            -1
+        );
+
+        assert_eq!(
+            set_active_list_item(&mut context, COMPONENT, -2)
+                .await
+                .unwrap(),
+            -1
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+            -2
+        );
+
+        assert_eq!(
+            set_active_list_item(&mut context, COMPONENT, i32::MIN)
+                .await
+                .unwrap(),
+            -2
+        );
+        assert_eq!(
+            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
+            i32::MIN
+        );
     }
 
     #[futures_test::test]
