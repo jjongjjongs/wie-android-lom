@@ -626,6 +626,34 @@ pub async fn set_fg_color(
     Ok(pixel)
 }
 
+/// LGT `MC_uicSetBgColor` (WIPI-C service 0x331).
+///
+/// Native validates the component, converts the WIPI 0xRRGGBB color through
+/// the active display's color-to-pixel operation, stores the resulting RGB565
+/// pixel at +0x1c, and returns that pixel value. NULL or invalid components
+/// return 0 and leave memory untouched.
+pub async fn set_bg_color(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    color: WIPICWord,
+) -> Result<WIPICWord> {
+    tracing::debug!("MC_uicSetBgColor({component:#x}, {color:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    let pixel = uic_color_to_rgb565(color);
+    write_generic(context, component + 0x1c, pixel)?;
+
+    Ok(pixel)
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2254,8 +2282,9 @@ mod tests {
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
         destroy, get_class, get_class_name, get_font, get_geometry, insert_text, is_instance,
-        repaint, set_callback, set_enable, set_event_handler, set_fg_color, set_font,
-        set_max_text_size, uic_color_to_rgb565, uic_repaint_rect, uic_skip_time_separator,
+        repaint, set_bg_color, set_callback, set_enable, set_event_handler, set_fg_color,
+        set_font, set_max_text_size, uic_color_to_rgb565, uic_repaint_rect,
+        uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -2814,6 +2843,47 @@ mod tests {
         // Raw bytes were inserted, but as a C string the visible text remains "abcd".
         assert_eq!(read_text(&context, 16), b"abcd");
         assert_eq!(read_i32(&context, 0x4c), 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_bg_color_matches_native_conversion_store_and_return() {
+        for component_type in 1u32..=5 {
+            let mut context = TestContext::new();
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x1c, 0xdead_beefu32).unwrap();
+
+            assert_eq!(
+                set_bg_color(&mut context, COMPONENT, 0x0012_3456)
+                    .await
+                    .unwrap(),
+                0x11aa
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x1c).unwrap(),
+                0x11aa
+            );
+        }
+
+        let mut context = TestContext::new();
+        assert_eq!(
+            set_bg_color(&mut context, 0, 0x00ff_0000)
+                .await
+                .unwrap(),
+            0
+        );
+
+        init_component(&mut context, 6);
+        write_generic(&mut context, COMPONENT + 0x1c, 0xaabb_ccddu32).unwrap();
+        assert_eq!(
+            set_bg_color(&mut context, COMPONENT, 0x00ff_0000)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x1c).unwrap(),
+            0xaabb_ccdd
+        );
     }
 
     #[test]
