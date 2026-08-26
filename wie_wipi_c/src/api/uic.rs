@@ -469,6 +469,55 @@ pub async fn get_geometry(
     Ok(())
 }
 
+/// LGT `MC_uicSetCallback` (WIPI-C service 0x32c).
+///
+/// Native selectors 1..=3 address the three common callback/context pairs.
+/// Selector 4 is subtype-specific: Menu/List use +0x54/+0x58, DateTime uses
+/// +0xa0/+0xa4, and Text uses +0x5c/+0x64. Selector 5 exists only for Text
+/// and uses +0x60/+0x68. The previous callback pointer is returned; invalid
+/// components, selectors, and unsupported subtype/selector pairs return 0
+/// without modifying the component.
+pub async fn set_callback(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    selector: WIPICWord,
+    callback: WIPICWord,
+    callback_context: WIPICWord,
+) -> Result<WIPICWord> {
+    tracing::debug!(
+        "MC_uicSetCallback({component:#x}, {selector}, {callback:#x}, {callback_context:#x})"
+    );
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    let (callback_offset, context_offset) = match selector {
+        1 => (0x2c, 0x38),
+        2 => (0x30, 0x3c),
+        3 => (0x34, 0x40),
+        4 => match component_type {
+            1 | 5 => (0x54, 0x58),
+            2 => (0xa0, 0xa4),
+            3 => (0x5c, 0x64),
+            _ => return Ok(0),
+        },
+        5 if component_type == 3 => (0x60, 0x68),
+        _ => return Ok(0),
+    };
+
+    let previous: WIPICWord = read_generic(context, component + callback_offset)?;
+    write_generic(context, component + context_offset, callback_context)?;
+    write_generic(context, component + callback_offset, callback)?;
+
+    Ok(previous)
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2097,7 +2146,7 @@ mod tests {
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
         destroy, get_class, get_class_name, get_geometry, insert_text, is_instance, repaint,
-        set_enable, set_max_text_size, uic_repaint_rect, uic_skip_time_separator,
+        set_callback, set_enable, set_max_text_size, uic_repaint_rect, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -2656,6 +2705,129 @@ mod tests {
         // Raw bytes were inserted, but as a C string the visible text remains "abcd".
         assert_eq!(read_text(&context, 16), b"abcd");
         assert_eq!(read_i32(&context, 0x4c), 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_callback_matches_native_common_selector_slots_and_return_value() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 4);
+
+        for (selector, callback_offset, context_offset) in [
+            (1u32, 0x2cu32, 0x38u32),
+            (2u32, 0x30u32, 0x3cu32),
+            (3u32, 0x34u32, 0x40u32),
+        ] {
+            let old = 0x1100_0000u32 + selector;
+            let new = 0x2200_0000u32 + selector;
+            let user = 0x3300_0000u32 + selector;
+
+            write_generic(&mut context, COMPONENT + callback_offset, old).unwrap();
+            write_generic(&mut context, COMPONENT + context_offset, 0xdead_beefu32).unwrap();
+
+            assert_eq!(
+                set_callback(&mut context, COMPONENT, selector, new, user)
+                    .await
+                    .unwrap(),
+                old
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + callback_offset).unwrap(),
+                new
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + context_offset).unwrap(),
+                user
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_callback_matches_native_subtype_specific_slots() {
+        for (component_type, selector, callback_offset, context_offset) in [
+            (1u32, 4u32, 0x54u32, 0x58u32),
+            (5u32, 4u32, 0x54u32, 0x58u32),
+            (2u32, 4u32, 0xa0u32, 0xa4u32),
+            (3u32, 4u32, 0x5cu32, 0x64u32),
+            (3u32, 5u32, 0x60u32, 0x68u32),
+        ] {
+            let mut context = TestContext::new();
+            init_component(&mut context, component_type);
+
+            write_generic(&mut context, COMPONENT + callback_offset, 0x1234_5678u32).unwrap();
+
+            assert_eq!(
+                set_callback(
+                    &mut context,
+                    COMPONENT,
+                    selector,
+                    0x8765_4321,
+                    0x1357_2468,
+                )
+                .await
+                .unwrap(),
+                0x1234_5678
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + callback_offset).unwrap(),
+                0x8765_4321
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + context_offset).unwrap(),
+                0x1357_2468
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_callback_rejects_invalid_selector_and_subtype_pairs() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            set_callback(&mut context, 0, 1, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            0
+        );
+
+        init_component(&mut context, 4);
+        write_generic(&mut context, COMPONENT + 0x2c, 0xaaaa_bbbbu32).unwrap();
+
+        assert_eq!(
+            set_callback(&mut context, COMPONENT, 0, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            set_callback(&mut context, COMPONENT, 6, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            set_callback(&mut context, COMPONENT, 4, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            set_callback(&mut context, COMPONENT, 5, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, COMPONENT + 0x2c).unwrap(),
+            0xaaaa_bbbb
+        );
+
+        write_generic(&mut context, COMPONENT, 6u32).unwrap();
+        assert_eq!(
+            set_callback(&mut context, COMPONENT, 1, 0x1111, 0x2222)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[futures_test::test]
