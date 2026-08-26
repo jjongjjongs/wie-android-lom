@@ -744,6 +744,38 @@ pub async fn get_label(
     Ok(WIPICIndirectPtr(UIC_EMPTY_LABEL))
 }
 
+/// LGT `MC_uicSetLabelAlignment` (WIPI-C service 0x334).
+///
+/// Native validates the component first. NULL/invalid components return 0.
+/// Valid non-Label components and alignment values outside unsigned 0..=2
+/// return -9 without modifying memory. For LabelComponent, the previous
+/// alignment at +0x48 is returned and the new value is stored there.
+pub async fn set_label_alignment(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    alignment: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicSetLabelAlignment({component:#x}, {alignment:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    if component_type != 4 || alignment > 2 {
+        return Ok(-9);
+    }
+
+    let old_alignment: i32 = read_generic(context, component + 0x48)?;
+    write_generic(context, component + 0x48, alignment)?;
+
+    Ok(old_alignment)
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2375,7 +2407,8 @@ mod tests {
         delete_text,
         destroy, get_class, get_class_name, get_font, get_geometry, get_label, insert_text,
         is_instance, repaint, set_bg_color, set_callback, set_enable, set_event_handler,
-        set_fg_color, set_font, set_label, set_max_text_size, uic_color_to_rgb565,
+        set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
+        uic_color_to_rgb565,
         uic_repaint_rect,
         uic_skip_time_separator,
     };
@@ -3092,6 +3125,81 @@ mod tests {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 0x3000u32).unwrap();
             assert_eq!(get_label(&mut context, COMPONENT).await.unwrap().0, 0);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_label_alignment_returns_previous_and_updates_native_slot() {
+        for (new_alignment, expected_old) in [(0u32, 2i32), (1u32, 0i32), (2u32, 1i32)] {
+            let mut context = TestContext::new();
+            init_component(&mut context, 4);
+            write_generic(&mut context, COMPONENT + 0x48, expected_old).unwrap();
+
+            assert_eq!(
+                set_label_alignment(&mut context, COMPONENT, new_alignment)
+                    .await
+                    .unwrap(),
+                expected_old
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
+                new_alignment
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_label_alignment_matches_native_validation_and_range_errors() {
+        let mut context = TestContext::new();
+
+        assert_eq!(
+            set_label_alignment(&mut context, 0, 1).await.unwrap(),
+            0
+        );
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 0x1122_3344u32).unwrap();
+            assert_eq!(
+                set_label_alignment(&mut context, COMPONENT, 1)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
+                0x1122_3344
+            );
+        }
+
+        for component_type in [1u32, 2, 3, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 0x5566_7788u32).unwrap();
+            assert_eq!(
+                set_label_alignment(&mut context, COMPONENT, 1)
+                    .await
+                    .unwrap(),
+                -9
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
+                0x5566_7788
+            );
+        }
+
+        init_component(&mut context, 4);
+        for alignment in [3u32, u32::MAX] {
+            write_generic(&mut context, COMPONENT + 0x48, 2u32).unwrap();
+            assert_eq!(
+                set_label_alignment(&mut context, COMPONENT, alignment)
+                    .await
+                    .unwrap(),
+                -9
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
+                2
+            );
         }
     }
 

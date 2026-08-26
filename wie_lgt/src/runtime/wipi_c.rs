@@ -165,6 +165,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicSetBgColor => uic::set_bg_color.into_body(),
         WIPICSvcId::UicSetLabel => uic::set_label.into_body(),
         WIPICSvcId::UicGetLabel => uic::get_label.into_body(),
+        WIPICSvcId::UicSetLabelAlignment => uic::set_label_alignment.into_body(),
         WIPICSvcId::UicInsertText => uic::insert_text.into_body(),
         WIPICSvcId::UicDeleteText => uic::delete_text.into_body(),
         WIPICSvcId::UicSetMaxTextSize => uic::set_max_text_size.into_body(),
