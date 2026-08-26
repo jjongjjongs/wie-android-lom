@@ -32,7 +32,7 @@ mod wave;
 use std::collections::BTreeMap;
 
 use crate::ma3::{
-    bus::{clamp_i16, mix_q15, stereo_gain_q15},
+    bus::{clamp_i16, mix_q15, saturate_pcm, soft_limit, stereo_gain_q15},
     tone::{Bank, DRUM_CHANNEL},
     voice::Voice,
     wave::WaveVoice,
@@ -107,6 +107,13 @@ pub const CHANNELS: usize = 2;
 
 /// Notes at once, which is what the chip could hold.
 const MAX_VOICES: usize = 16;
+
+/// Source samples over which a recorded effect is ramped to silence at its end.
+/// The recordings stop at whatever level the last sample held rather than
+/// decaying, so cutting straight to zero clicks on every tail; a few
+/// milliseconds of fade lands them quietly instead. Only the tail is ramped -
+/// the attack is left untouched so a hit stays sharp.
+const WAVE_FADE_OUT_SAMPLES: usize = 64;
 
 /// MIDI channels a sequence can address.
 const MIDI_CHANNELS: usize = 16;
@@ -426,6 +433,11 @@ pub struct SynthMixer {
     voices: BTreeMap<u32, MixerVoice>,
     next_id: u32,
     master_volume: u8,
+    /// One-shot recorded waves (a hit, a door, the logo voice), mixed into the
+    /// same output stream as the sequenced voices. Titles fire these through the
+    /// wave path; routing them here plays them on the one AudioTrack that works,
+    /// rather than a per-clip static track the device would not sound.
+    pcm: Vec<PcmOneShot>,
 }
 
 struct MixerVoice {
@@ -434,6 +446,43 @@ struct MixerVoice {
     /// decays (release tails finished), then `render` drops it, so a stop does
     /// not cut the tail.
     closing: bool,
+}
+
+/// A recorded wave playing back into the mix, resampled from its own rate to the
+/// output rate on the fly.
+struct PcmOneShot {
+    samples: Vec<i16>,
+    /// Read position in `samples`, in source samples.
+    position: f64,
+    /// Source samples advanced per output frame (source_rate / output_rate).
+    step: f64,
+}
+
+impl PcmOneShot {
+    /// Advances one output frame and returns the (linearly interpolated) mono
+    /// sample, or `None` once the wave has played out.
+    fn next_sample(&mut self) -> Option<i16> {
+        let index = self.position as usize;
+        if index >= self.samples.len() {
+            return None;
+        }
+        let current = self.samples[index] as f64;
+        let next = self.samples.get(index + 1).copied().unwrap_or(self.samples[index]) as f64;
+        let frac = self.position - index as f64;
+        let value = current + (next - current) * frac;
+        self.position += self.step;
+
+        // Ramp the last few samples down to zero so the effect does not cut off
+        // at a non-zero level and click; everything before the tail is untouched.
+        let remaining = self.samples.len() - 1 - index;
+        let value = if remaining < WAVE_FADE_OUT_SAMPLES {
+            value * remaining as f64 / WAVE_FADE_OUT_SAMPLES as f64
+        } else {
+            value
+        };
+
+        Some(value as i16)
+    }
 }
 
 impl Default for SynthMixer {
@@ -448,7 +497,22 @@ impl SynthMixer {
             voices: BTreeMap::new(),
             next_id: 1,
             master_volume: 100,
+            pcm: Vec::new(),
         }
+    }
+
+    /// Queues a recorded wave to play into the mix, resampled from `source_rate`
+    /// to the output rate.
+    pub fn push_pcm(&mut self, samples: Vec<i16>, source_rate: u32) {
+        if samples.is_empty() || source_rate == 0 {
+            return;
+        }
+        let step = f64::from(source_rate) / f64::from(SAMPLE_RATE);
+        self.pcm.push(PcmOneShot {
+            samples,
+            position: 0.0,
+            step,
+        });
     }
 
     /// Opens an isolated voice and returns its id. Id 0 is never handed out, so
@@ -520,6 +584,7 @@ impl SynthMixer {
     /// Stops every voice at once (the game paused or gone).
     pub fn silence(&mut self) {
         self.voices.clear();
+        self.pcm.clear();
     }
 
     /// Renders `frames` from every voice and sums them, dropping any closed
@@ -528,10 +593,12 @@ impl SynthMixer {
     pub fn render(&mut self, frames: usize) -> Option<Vec<i16>> {
         let mut accumulator: Option<Vec<i32>> = None;
         let mut finished: Vec<u32> = Vec::new();
+        let mut active_voices = 0usize;
 
         for (id, entry) in &mut self.voices {
             match entry.synth.render(frames) {
                 Some(samples) => {
+                    active_voices += 1;
                     let acc = accumulator.get_or_insert_with(|| vec![0i32; frames * CHANNELS]);
                     for (slot, sample) in acc.iter_mut().zip(samples.iter()) {
                         *slot += i32::from(*sample);
@@ -549,7 +616,50 @@ impl SynthMixer {
             self.voices.remove(&id);
         }
 
-        accumulator.map(|acc| acc.iter().map(|sample| clamp_i16(i64::from(*sample)) as i16).collect())
+        // Peak of everything the sequenced voices produced, measured before the
+        // recorded waves are added, so a diagnostic can tell whether a wave is
+        // being buried by loud concurrent music in the single summed stream.
+        let synth_peak = accumulator
+            .as_ref()
+            .map(|acc| acc.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0))
+            .unwrap_or(0);
+
+        // Mix the one-shot recorded waves (mono) into both output channels,
+        // resampled to the output rate, and drop any that have played out.
+        let pcm_active = self.pcm.len();
+        let mut pcm_peak = 0u32;
+        if !self.pcm.is_empty() {
+            let acc = accumulator.get_or_insert_with(|| vec![0i32; frames * CHANNELS]);
+            self.pcm.retain_mut(|wave| {
+                for frame in acc.chunks_exact_mut(CHANNELS) {
+                    match wave.next_sample() {
+                        Some(sample) => {
+                            let sample = saturate_pcm(i32::from(sample));
+                            pcm_peak = pcm_peak.max(sample.unsigned_abs());
+                            for slot in frame.iter_mut() {
+                                *slot += sample;
+                            }
+                        }
+                        None => return false,
+                    }
+                }
+                true
+            });
+        }
+
+        accumulator.map(|acc| {
+            let total_peak = acc.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+            // Past full scale the limiter rounds the peak off rather than
+            // clipping it; the log notes when it had to so the lift can be read
+            // against how often it reaches there.
+            let limited = total_peak > i16::MAX as u32;
+            if pcm_active > 0 {
+                tracing::info!(
+                    "[mix] pcm={pcm_active} pcm_peak={pcm_peak} voices={active_voices} synth_peak={synth_peak} total_peak={total_peak} limited={limited}"
+                );
+            }
+            acc.iter().map(|sample| soft_limit(i64::from(*sample)) as i16).collect()
+        })
     }
 }
 

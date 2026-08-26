@@ -86,6 +86,49 @@ pub fn clamp_i16(value: i64) -> i32 {
     value.clamp(i16::MIN as i64, i16::MAX as i64) as i32
 }
 
+/// Point below which the output limiter is exact, and the ceiling it bends up
+/// to. Nine tenths of full scale leaves the music untouched - it rarely reaches
+/// here - while giving the top a knee to bend through.
+const LIMIT_KNEE: f64 = 29490.0;
+const LIMIT_CEIL: f64 = i16::MAX as f64;
+
+/// Turns a summed sample into sixteen bits, staying exact below the knee and
+/// bending everything above it smoothly up to the ceiling instead of flat
+/// topping it. A recorded effect can then be lifted well up the scale for
+/// loudness while its rare peaks round off rather than clip, which is what a
+/// hard clamp turned into a harsh edge.
+pub fn soft_limit(value: i64) -> i32 {
+    let magnitude = value.unsigned_abs() as f64;
+    if magnitude <= LIMIT_KNEE {
+        return value as i32;
+    }
+
+    let span = LIMIT_CEIL - LIMIT_KNEE;
+    let limited = LIMIT_KNEE + span * ((magnitude - LIMIT_KNEE) / span).tanh();
+    let limited = if value < 0 { -limited } else { limited };
+
+    limited.round() as i32
+}
+
+/// How hard a recorded effect is driven into the saturator below. A recorded
+/// effect carries its energy in short transients and stays faint between them,
+/// so it reads as far quieter than a sustained synthesised note that peaks no
+/// higher. Driving it well past full scale and folding it back lifts the quiet
+/// body toward the peaks - the same thing a compressor does - so the effect
+/// reads as loud as the music rather than as a distant tap. Set high enough to
+/// match the sustained synthesised sounds; past here the fold starts to square
+/// the body off and read as grit rather than as more level.
+const PCM_DRIVE: f64 = 8.0;
+
+/// Applies that drive and folds the result back to the ceiling with tanh, which
+/// leaves the quiet body nearly linear at the driven level while easing the
+/// loud part smoothly in rather than clipping it. Returns a sixteen-bit sample.
+pub fn saturate_pcm(sample: i32) -> i32 {
+    let driven = sample as f64 * PCM_DRIVE;
+
+    (LIMIT_CEIL * (driven / LIMIT_CEIL).tanh()).round() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PERIOD_Q15, SILENT, clamp_i16, mix_q15, stereo_gain_q15};
