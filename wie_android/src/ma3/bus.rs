@@ -115,8 +115,10 @@ pub fn soft_limit(value: i64) -> i32 {
 /// so it reads as far quieter than a sustained synthesised note that peaks no
 /// higher. Driving it well past full scale and folding it back lifts the quiet
 /// body toward the peaks - the same thing a compressor does - so the effect
-/// reads as loud as the music rather than as a distant tap.
-const PCM_DRIVE: f64 = 5.0;
+/// reads as loud as the music rather than as a distant tap. Set high enough to
+/// match the sustained synthesised sounds; past here the fold starts to square
+/// the body off and read as grit rather than as more level.
+const PCM_DRIVE: f64 = 8.0;
 
 /// Applies that drive and folds the result back to the ceiling with tanh, which
 /// leaves the quiet body nearly linear at the driven level while easing the
