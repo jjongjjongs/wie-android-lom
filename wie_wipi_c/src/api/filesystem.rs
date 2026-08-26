@@ -479,6 +479,81 @@ pub async fn file_attribute(
     Ok(0)
 }
 
+/// WIPI-C MC_fsRemove (service 0x196).
+///
+/// Native flow:
+/// WPFS_IsPossibleAccess(2, access) -> path construction -> dfs_stat ->
+/// dfs_unlink.
+///
+/// The stat preflight is significant: a missing path returns -12 before the
+/// unlink operation is attempted.
+///
+/// Native contract representable by WIE's filesystem abstraction:
+/// - inaccessible access selector => -24
+/// - bad/null filename => -3
+/// - path longer than 128 bytes => -11
+/// - missing path => -12
+/// - directory / generic unlink failure => -1
+/// - successful regular-file removal => 0
+///
+/// Native also distinguishes a busy-file unlink failure as -8, but WIE's
+/// boolean backend remove contract does not expose the underlying failure
+/// reason.
+pub async fn remove(
+    context: &mut dyn WIPICContext,
+    path: WIPICWord,
+    access: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_fsRemove({path:#x}, {access})");
+
+    // Native uses WPFS_IsPossibleAccess(2, access). WIE does not model the
+    // per-DLET permission bitmask, so recognized access selectors 2/3 use
+    // the same compatibility adaptation as the other LGT filesystem APIs.
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if path == 0 {
+        return Ok(-3);
+    }
+
+    let path_bytes = read_null_terminated_string_bytes(context, path)?;
+    if path_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let path = encoding_rs::EUC_KR.decode(&path_bytes).0.into_owned();
+
+    let filesystem = context.system().filesystem().clone();
+
+    // MC_fsRemove performs dfs_stat before dfs_unlink. Preserve the native
+    // missing-path distinction rather than collapsing it into remove failure.
+    let is_file = filesystem.size(&path).await.is_some();
+    let is_directory = if is_file {
+        false
+    } else {
+        filesystem.list(&path).await.is_some()
+    };
+
+    if !is_file && !is_directory {
+        return Ok(-12);
+    }
+
+    // POSIX unlink does not remove directories. Native therefore reaches its
+    // generic unlink failure path for a directory.
+    if is_directory {
+        return Ok(-1);
+    }
+
+    // Virtual archive files are visible through size(), but remove() writes
+    // only to the persistent platform layer. That correctly leaves them
+    // read-only and produces the native generic unlink failure.
+    if !filesystem.remove(&path).await {
+        return Ok(-1);
+    }
+
+    Ok(0)
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -559,7 +634,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{close, file_attribute, list, open, read, seek, write};
+    use super::{close, file_attribute, list, open, read, remove, seek, write};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -1212,6 +1287,122 @@ mod tests {
         assert_eq!(u32::from_le_bytes(actual[0..4].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(actual[4..8].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(actual[8..12].try_into().unwrap()), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_remove_deletes_regular_file() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/remove.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/remove.dat\0").unwrap();
+
+        assert!(context.system().filesystem().exists("save/remove.dat").await);
+
+        assert_eq!(remove(&mut context, 0x1000, 2).await.unwrap(), 0);
+
+        assert!(!context.system().filesystem().exists("save/remove.dat").await);
+        assert_eq!(context.system().filesystem().size("save/remove.dat").await, None);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_remove_missing_path_returns_minus_12_before_unlink() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"save/missing.dat\0").unwrap();
+
+        assert_eq!(remove(&mut context, 0x1000, 2).await.unwrap(), -12);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_remove_rejects_directory_like_native_unlink() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/sub/child.dat", 0, b"x")
+            .await;
+        context.write_bytes(0x1000, b"save/sub\0").unwrap();
+
+        assert!(context.system().filesystem().list("save/sub").await.is_some());
+        assert_eq!(remove(&mut context, 0x1000, 2).await.unwrap(), -1);
+        assert!(context.system().filesystem().exists("save/sub/child.dat").await);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_remove_virtual_file_is_visible_but_read_only() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .add_virtual("res/remove.bin", b"virtual".to_vec());
+        context.write_bytes(0x1000, b"res/remove.bin\0").unwrap();
+
+        assert_eq!(
+            context.system().filesystem().size("res/remove.bin").await,
+            Some(7)
+        );
+        assert_eq!(remove(&mut context, 0x1000, 2).await.unwrap(), -1);
+        assert_eq!(
+            context.system().filesystem().size("res/remove.bin").await,
+            Some(7)
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_remove_matches_native_validation_order() {
+        let mut context = filesystem_test_context();
+
+        // Access validation precedes filename validation.
+        assert_eq!(remove(&mut context, 0, 0).await.unwrap(), -24);
+        assert_eq!(remove(&mut context, 0, 2).await.unwrap(), -3);
+
+        context
+            .system()
+            .filesystem()
+            .write("save/access.dat", 0, b"x")
+            .await;
+        context.write_bytes(0x1000, b"save/access.dat\0").unwrap();
+
+        // Recognized selectors are accepted under WIE's compatibility
+        // adaptation for the unmodelled per-DLET permission mask.
+        for access in [1, 2, 3, 100] {
+            context
+                .system()
+                .filesystem()
+                .write("save/access.dat", 0, b"x")
+                .await;
+
+            assert_eq!(remove(&mut context, 0x1000, access).await.unwrap(), 0);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_remove_open_descriptor_survives_but_future_io_sees_missing_file() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/open-remove.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/open-remove.dat\0").unwrap();
+        context.write_bytes(0x2000, &[0; 1]).unwrap();
+
+        let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
+        assert_eq!(remove(&mut context, 0x1000, 2).await.unwrap(), 0);
+
+        // WIE has no persistent host handle behind its synthetic descriptor,
+        // so unlike POSIX an already-open descriptor cannot retain the
+        // unlinked inode. Preserve the descriptor itself, while subsequent
+        // backend IO reports the missing path.
+        {
+            let state = context.filesystem_state();
+            let state = state.lock();
+            assert!(state.entry(fd).is_some());
+        }
+
+        assert_eq!(read(&mut context, fd, 0x2000, 1).await.unwrap(), -1);
     }
 
     #[futures_test::test]
