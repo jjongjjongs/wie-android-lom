@@ -144,7 +144,10 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         }
 
         let volume = self.master_volume.load(Ordering::Relaxed);
-        tracing::info!("[wave] play_wave ch={channel} rate={sampling_rate} samples={} volume={volume}", wave_data.len());
+        tracing::info!(
+            "[wave] play_wave ch={channel} rate={sampling_rate} samples={} volume={volume}",
+            wave_data.len()
+        );
         if volume == 0 {
             tracing::warn!("[wave] dropped: master volume is 0");
             return;
