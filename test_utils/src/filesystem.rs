@@ -243,6 +243,10 @@ impl Filesystem for MemoryFilesystem {
         Some(32 * 1024 * 1024)
     }
 
+    async fn available_space(&self, _aid: &str) -> Option<u64> {
+        Some(16 * 1024 * 1024)
+    }
+
     async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
         let prefix = if path.is_empty() {
             String::new()

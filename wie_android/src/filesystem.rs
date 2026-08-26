@@ -253,6 +253,34 @@ impl Filesystem for AndroidFilesystem {
         Some((stats.f_bsize as u64).saturating_mul(stats.f_blocks as u64))
     }
 
+    async fn available_space(&self, aid: &str) -> Option<u64> {
+        let sanitized_aid: String = aid.chars().filter(|c| !matches!(c, '/' | '\\' | '\0')).collect();
+        if sanitized_aid.is_empty() || sanitized_aid == "." || sanitized_aid == ".." {
+            tracing::error!(aid, "available_space: invalid aid");
+            return None;
+        }
+
+        // Native LGTH_fileAvailable / AND_fileAvailable multiply f_bavail by
+        // f_bsize. f_bavail is intentionally used instead of f_bfree because
+        // it is the space available to an unprivileged application.
+        let mut probe = self.base_path.join(sanitized_aid);
+        while !probe.exists() {
+            if !probe.pop() {
+                tracing::warn!(aid, "available_space: no existing filesystem ancestor");
+                return None;
+            }
+        }
+
+        let path = CString::new(probe.as_os_str().as_bytes()).ok()?;
+        let mut stats = unsafe { core::mem::zeroed::<libc::statfs>() };
+        if unsafe { libc::statfs(path.as_ptr(), &mut stats) } != 0 {
+            tracing::warn!(aid, path = ?probe, "available_space: statfs failed");
+            return None;
+        }
+
+        Some((stats.f_bsize as u64).saturating_mul(stats.f_bavail as u64))
+    }
+
     async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
         let sanitized_aid: String = aid.chars().filter(|c| !matches!(c, '/' | '\\' | '\0')).collect();
         if sanitized_aid.is_empty() || sanitized_aid == "." || sanitized_aid == ".." {

@@ -461,21 +461,32 @@ fn clamp_native_fs_space(total: u64) -> u32 {
     core::cmp::min(total, i32::MAX as u64) as u32
 }
 
-/// `MC_fsAvailable` - free bytes on the storage a title saves to.
+/// `MC_fsAvailable` (canonical WIPI-C service 0x19c).
 ///
-/// The vendor call asks the device for real free space; there is no equivalent
-/// here, and a title only wants to know it has room, so a generous fixed figure
-/// is returned. Zero, which the unimplemented path returned, reads as a full
-/// disk, and a game that will not write to a disk it thinks is full sits
-/// retrying the check.
-async fn fs_available(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    /// 16 MiB, more than a handset title expects and well short of anything
-    /// that would overflow its own arithmetic.
-    const FREE_BYTES: u32 = 16 * 1024 * 1024;
+/// Native flow:
+/// - zero a three-word dfs_df result;
+/// - dfs_df() the WIPI filesystem mount;
+/// - on success take the available-space word;
+/// - pass the value through the common signed-size helper.
+///
+/// LGTH_fileAvailable / AND_fileAvailable compute `f_bsize * f_bavail`.
+/// The native common helper saturates values above signed 32-bit range to
+/// `INT_MAX`; a dfs_df failure becomes `-1`.
+async fn fs_available(
+    context: &mut dyn WIPICContext,
+    _a0: u32,
+    _a1: u32,
+    _a2: u32,
+    _a3: u32,
+) -> Result<u32> {
+    let Some(available) = context.system().filesystem().available_space().await else {
+        tracing::debug!("MC_fsAvailable() -> -1");
+        return Ok(u32::MAX);
+    };
 
-    tracing::debug!("MC_fsAvailable({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x}) -> {FREE_BYTES}");
-
-    Ok(FREE_BYTES)
+    let available = clamp_native_fs_space(available);
+    tracing::debug!("MC_fsAvailable() -> {available}");
+    Ok(available)
 }
 
 /// `MC_imGetCurrentMode` (vendor export 303).
@@ -654,6 +665,14 @@ mod fs_total_space_tests {
 
     #[test]
     fn native_fs_total_space_saturates_at_signed_int_max() {
+        assert_eq!(clamp_native_fs_space(i32::MAX as u64), i32::MAX as u32);
+        assert_eq!(clamp_native_fs_space(i32::MAX as u64 + 1), i32::MAX as u32);
+        assert_eq!(clamp_native_fs_space(u64::MAX), i32::MAX as u32);
+    }
+
+    #[test]
+    fn native_fs_available_uses_same_signed_int_boundary() {
+        assert_eq!(clamp_native_fs_space(16 * 1024 * 1024), 16 * 1024 * 1024);
         assert_eq!(clamp_native_fs_space(i32::MAX as u64), i32::MAX as u32);
         assert_eq!(clamp_native_fs_space(i32::MAX as u64 + 1), i32::MAX as u32);
         assert_eq!(clamp_native_fs_space(u64::MAX), i32::MAX as u32);

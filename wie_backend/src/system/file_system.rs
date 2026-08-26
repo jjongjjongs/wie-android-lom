@@ -246,6 +246,10 @@ impl FilesystemOverlay {
         self.platform.filesystem().total_space(&self.aid).await
     }
 
+    pub async fn available_space(&self) -> Option<u64> {
+        self.platform.filesystem().available_space(&self.aid).await
+    }
+
     /// Lists the direct children visible through the overlay.
     ///
     /// Platform entries come first in their native enumeration order. Virtual
@@ -471,6 +475,10 @@ mod tests {
 
         async fn total_space(&self, _aid: &str) -> Option<u64> {
             Some(32 * 1024 * 1024)
+        }
+
+        async fn available_space(&self, _aid: &str) -> Option<u64> {
+            Some(16 * 1024 * 1024)
         }
 
         async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {

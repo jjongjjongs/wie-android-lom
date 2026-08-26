@@ -178,6 +178,13 @@ pub trait Filesystem: Send + Sync {
     /// `None` means the platform could not query the backing filesystem.
     async fn total_space(&self, aid: &str) -> Option<u64>;
 
+    /// Bytes currently available to an unprivileged application on the storage
+    /// backing this application's filesystem.
+    ///
+    /// This corresponds to native `statfs.f_bavail * f_bsize`, not `f_bfree`.
+    /// `None` means the platform could not query the backing filesystem.
+    async fn available_space(&self, aid: &str) -> Option<u64>;
+
     /// Lists direct child basenames of a directory.
     ///
     /// Files and directories are returned alike. `Some(Vec::new())` means an
