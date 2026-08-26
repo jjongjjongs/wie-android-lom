@@ -1308,6 +1308,32 @@ pub async fn delete_text(
     Ok(())
 }
 
+/// LGT `MC_uicGetMaxTextSize` (WIPI-C service 0x340).
+///
+/// Native validates the component first. NULL/invalid components return 0,
+/// valid non-Text components return -9, and valid Text components return the
+/// 32-bit max-text-size/capacity field stored at +0x48 unchanged.
+pub async fn get_max_text_size(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicGetMaxTextSize({component:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+    if component_type != 3 {
+        return Ok(-9);
+    }
+
+    read_generic(context, component + 0x48)
+}
+
 /// LGT/KTF `MC_uicSetMaxTextSize`.
 ///
 /// Native returns the previous capacity on success. Invalid/null components
@@ -3004,7 +3030,7 @@ mod tests {
         repaint, set_active_menu_item, set_bg_color, set_callback,
         set_enable,
         set_event_handler,
-        set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
+        get_max_text_size, set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
         set_time, set_time_long, set_time_mask, uic_color_to_rgb565, uic_read_c_string,
         uic_repaint_rect,
         uic_skip_time_separator,
@@ -3364,6 +3390,58 @@ mod tests {
         let end = buf.iter().position(|&byte| byte == 0).unwrap_or(buf.len());
         buf.truncate(end);
         buf
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_max_text_size_returns_native_capacity() {
+        let mut context = TestContext::new();
+        init_text_component(&mut context, b"abcdef\0", 0x1234_5678, 5);
+
+        assert_eq!(
+            get_max_text_size(&mut context, COMPONENT).await.unwrap(),
+            0x1234_5678
+        );
+
+        write_generic(&mut context, COMPONENT + 0x48, 0xffff_fffeu32).unwrap();
+        assert_eq!(
+            get_max_text_size(&mut context, COMPONENT).await.unwrap(),
+            -2
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_max_text_size_matches_native_validation_and_type_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(get_max_text_size(&mut context, 0).await.unwrap(), 0);
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 0x1122_3344u32).unwrap();
+
+            assert_eq!(
+                get_max_text_size(&mut context, COMPONENT).await.unwrap(),
+                0
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
+                0x1122_3344
+            );
+        }
+
+        for component_type in [1u32, 2, 4, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x48, 0x5566_7788u32).unwrap();
+
+            assert_eq!(
+                get_max_text_size(&mut context, COMPONENT).await.unwrap(),
+                -9
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
+                0x5566_7788
+            );
+        }
     }
 
     #[futures_test::test]
