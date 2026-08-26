@@ -17,6 +17,7 @@ pub trait WIPICContext: ByteRead + ByteWrite + Send + Sync {
     fn alloc(&mut self, size: WIPICWord) -> Result<WIPICIndirectPtr>;
     fn free(&mut self, memory: WIPICIndirectPtr) -> Result<()>;
     fn free_raw(&mut self, address: WIPICWord, size: WIPICWord) -> Result<()>;
+    fn free_raw_unsized(&mut self, address: WIPICWord) -> Result<()>;
     fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord>;
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord>;
     fn system(&mut self) -> &mut System;
@@ -161,6 +162,10 @@ pub mod test {
             Ok(())
         }
 
+        fn free_raw_unsized(&mut self, _address: WIPICWord) -> Result<()> {
+            Ok(())
+        }
+
         fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord> {
             Ok(memory.0)
         }
@@ -197,12 +202,16 @@ pub mod test {
                 .ok_or_else(|| WieError::FatalError(format!("Missing test resource: {name}")))
         }
 
-        fn set_timer(&mut self, _id: WIPICWord, _due: Instant, _callback: WIPICMethodBody) {
-            todo!()
+        fn set_timer(&mut self, id: WIPICWord, due: Instant, _callback: WIPICMethodBody) {
+            if let Some(system) = self.system.as_mut() {
+                system.event_queue().push_timer(id, due, || async { Ok(()) });
+            }
         }
 
-        fn unset_timer(&mut self, _id: WIPICWord) {
-            todo!()
+        fn unset_timer(&mut self, id: WIPICWord) {
+            if let Some(system) = self.system.as_mut() {
+                system.event_queue().cancel_timer(id);
+            }
         }
     }
 

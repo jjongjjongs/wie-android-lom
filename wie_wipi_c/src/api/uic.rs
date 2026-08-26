@@ -200,14 +200,13 @@ pub async fn create(
             context.write_bytes(component + 0x74 + formatted.len() as u32, &[0])?;
         }
         3 => {
-            let text_memory = match context.alloc(256) {
-                Ok(memory) => memory,
+            let text = match context.alloc_raw(256) {
+                Ok(address) => address,
                 Err(_) => {
                     context.free(memory)?;
                     return Ok(WIPICIndirectPtr((-17i32) as u32));
                 }
             };
-            let text = context.data_ptr(text_memory)?;
             context.write_bytes(text, &alloc::vec![0; 256])?;
 
             write_generic(context, component + 0x44, text)?;
@@ -231,8 +230,89 @@ pub async fn create(
     Ok(memory)
 }
 
-pub async fn destroy(_context: &mut dyn WIPICContext, cc: WIPICWord) -> Result<()> {
-    tracing::warn!("stub MC_uicDestroy({cc:#x})");
+/// LGT `MC_uicDestroy` (WIPI-C service 0x323).
+///
+/// Native ignores NULL/invalid components. For a valid component it first invokes
+/// the optional destroy callback at +0x2c as `(component, 0, +0x38 context)`,
+/// releases subtype-owned resources, clears the class word, then frees the
+/// component itself.
+///
+/// Menu/List item storage is a raw pointer table at +0x50. Each table entry points
+/// to a raw block laid out as `[image: u32][NUL-terminated label bytes]`.
+pub async fn destroy(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
+    tracing::debug!("MC_uicDestroy({component:#x})");
+
+    if component == 0 {
+        return Ok(());
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(());
+    }
+
+    let callback: WIPICWord = read_generic(context, component + 0x2c)?;
+    if callback != 0 {
+        let callback_context: WIPICWord = read_generic(context, component + 0x38)?;
+        context
+            .call_function(callback, &[component, 0, callback_context])
+            .await?;
+    }
+
+    match component_type {
+        1 | 5 => {
+            let count: u32 = read_generic(context, component + 0x44)?;
+            let table: WIPICWord = read_generic(context, component + 0x50)?;
+
+            if table != 0 {
+                for index in 0..count {
+                    let item: WIPICWord = read_generic(context, table + index * 4)?;
+                    if item == 0 {
+                        continue;
+                    }
+
+                    let image: WIPICWord = read_generic(context, item)?;
+                    if image != 0 {
+                        graphics::destroy_image(context, WIPICIndirectPtr(image)).await?;
+                    }
+
+                    let label_len = uic_read_c_string(context, item + 4)?.len() as u32;
+                    context.free_raw(item, label_len + 5)?;
+                }
+
+                context.free_raw_unsized(table)?;
+            }
+        }
+        2 => {
+            let enabled: u32 = read_generic(context, component + 0x20)?;
+            if enabled != 0 {
+                kernel::unset_timer(context, component + 0x98).await?;
+            }
+        }
+        3 => {
+            let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+            let capacity: u32 = read_generic(context, component + 0x48)?;
+            if text_ptr != 0 && capacity != 0 {
+                context.free_raw(text_ptr, capacity)?;
+            }
+
+            let enabled: u32 = read_generic(context, component + 0x20)?;
+            if enabled != 0 {
+                kernel::unset_timer(context, component + 0x54).await?;
+            }
+        }
+        4 => {
+            let label: WIPICWord = read_generic(context, component + 0x44)?;
+            if label != 0 {
+                let label_len = uic_read_c_string(context, label)?.len() as u32;
+                context.free_raw(label, label_len + 1)?;
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    write_generic(context, component, 0u32)?;
+    context.free(WIPICIndirectPtr(component))?;
 
     Ok(())
 }
@@ -1832,11 +1912,12 @@ pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: 
 mod tests {
     use wie_util::{ByteRead, ByteWrite, read_generic, write_generic};
 
-    use crate::context::test::TestContext;
+    use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
-        get_class, insert_text, set_max_text_size, uic_skip_time_separator,
+        destroy, get_class, insert_text, set_enable, set_max_text_size,
+        uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -1993,6 +2074,52 @@ mod tests {
         let mut formatted = [0u8; 32];
         context.read_bytes(component + 0x74, &mut formatted).unwrap();
         assert_ne!(formatted[0], 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_destroy_ignores_null_and_invalid_components() {
+        let mut context = TestContext::new();
+
+        destroy(&mut context, 0).await.unwrap();
+
+        context.write_bytes(COMPONENT, &0u32.to_le_bytes()).unwrap();
+        destroy(&mut context, COMPONENT).await.unwrap();
+
+        context.write_bytes(COMPONENT, &6u32.to_le_bytes()).unwrap();
+        destroy(&mut context, COMPONENT).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT).unwrap(), 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_destroy_clears_created_component_type() {
+        for class in [1u32, 3, 4, 5] {
+            let mut context = TestContext::new();
+            let component = create(&mut context, 0xfeedface, class).await.unwrap().0;
+
+            destroy(&mut context, component).await.unwrap();
+
+            assert_eq!(read_generic::<u32, _>(&context, component).unwrap(), 0);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_destroy_unsets_enabled_datetime_timer() {
+        let system = wie_backend::System::new(
+            alloc::boxed::Box::new(test_utils::TestPlatform::new()),
+            "test-pid",
+            "test-aid",
+            wie_backend::DefaultTaskRunner,
+        );
+        let mut context = TestContext::with_system(system);
+        let component = create(&mut context, 0, 2).await.unwrap().0;
+
+        set_enable(&mut context, component, 1).await.unwrap();
+        assert!(context.system().event_queue().has_timer(component + 0x98));
+
+        destroy(&mut context, component).await.unwrap();
+
+        assert!(!context.system().event_queue().has_timer(component + 0x98));
+        assert_eq!(read_generic::<u32, _>(&context, component).unwrap(), 0);
     }
 
     #[test]

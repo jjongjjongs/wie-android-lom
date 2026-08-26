@@ -68,6 +68,10 @@ impl WIPICContext for LgtWIPICContext {
         Ok(())
     }
 
+    fn free_raw_unsized(&mut self, address: WIPICWord) -> Result<()> {
+        Allocator::free_unsized(&mut self.core, address)
+    }
+
     fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord> {
         Ok(memory.0)
     }

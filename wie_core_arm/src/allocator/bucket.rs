@@ -96,6 +96,35 @@ impl BucketAllocator {
 
     pub fn free(core: &mut ArmCore, base_address: u32, address: u32, size: u32) -> Result<()> {
         let bucket_index = Self::find_bucket_index(size);
+        Self::free_in_bucket(core, base_address, address, bucket_index)
+    }
+
+    pub fn free_unsized(core: &mut ArmCore, base_address: u32, address: u32) -> Result<()> {
+        for (bucket_index, &(slot_size, slot_count)) in BUCKETS.iter().enumerate() {
+            let header_address = base_address + region_offset(bucket_index) as u32;
+            let header_len = header_length(bucket_index) as u32;
+            let slots_start = header_address + header_len;
+            let slots_end = slots_start + slot_size as u32 * slot_count as u32;
+
+            if address >= slots_start
+                && address < slots_end
+                && (address - slots_start) % slot_size as u32 == 0
+            {
+                return Self::free_in_bucket(core, base_address, address, bucket_index);
+            }
+        }
+
+        Err(WieError::FatalError(alloc::format!(
+            "Address {address:#x} is not a bucket allocation"
+        )))
+    }
+
+    fn free_in_bucket(
+        core: &mut ArmCore,
+        base_address: u32,
+        address: u32,
+        bucket_index: usize,
+    ) -> Result<()> {
         let (slot_size, _) = BUCKETS[bucket_index];
         let header_address = base_address + region_offset(bucket_index) as u32;
         let header_len = header_length(bucket_index);
