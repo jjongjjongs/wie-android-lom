@@ -109,12 +109,20 @@ pub const CHANNELS: usize = 2;
 const MAX_VOICES: usize = 16;
 
 /// Loudness the recorded effects are mixed in at, as a percentage. The handset
-/// played each recording back through its own output stage at about twice the
-/// stored level; decoded straight, the waves land near a tenth of full scale
-/// and read as faint and blunt against the music, so they are lifted to sit
-/// where the reference plays them. The summed stream still clamps at the end,
-/// which caps the rare loud wave rather than letting it wrap.
-const WAVE_GAIN_PERCENT: i32 = 220;
+/// played each recording back through its own output stage above the stored
+/// level; decoded straight, the waves land near a tenth of full scale and read
+/// as faint and blunt against the music, so they are lifted to sit where the
+/// reference plays them. Kept just under the point where the loudest effects
+/// would drive the summed stream past full scale, so the lift adds level
+/// without adding the hard-clip edge that reads as harshness.
+const WAVE_GAIN_PERCENT: i32 = 180;
+
+/// Source samples over which a recorded effect is ramped to silence at its end.
+/// The recordings stop at whatever level the last sample held rather than
+/// decaying, so cutting straight to zero clicks on every tail; a few
+/// milliseconds of fade lands them quietly instead. Only the tail is ramped -
+/// the attack is left untouched so a hit stays sharp.
+const WAVE_FADE_OUT_SAMPLES: usize = 64;
 
 /// MIDI channels a sequence can address.
 const MIDI_CHANNELS: usize = 16;
@@ -470,8 +478,19 @@ impl PcmOneShot {
         let current = self.samples[index] as f64;
         let next = self.samples.get(index + 1).copied().unwrap_or(self.samples[index]) as f64;
         let frac = self.position - index as f64;
+        let value = current + (next - current) * frac;
         self.position += self.step;
-        Some((current + (next - current) * frac) as i16)
+
+        // Ramp the last few samples down to zero so the effect does not cut off
+        // at a non-zero level and click; everything before the tail is untouched.
+        let remaining = self.samples.len() - 1 - index;
+        let value = if remaining < WAVE_FADE_OUT_SAMPLES {
+            value * remaining as f64 / WAVE_FADE_OUT_SAMPLES as f64
+        } else {
+            value
+        };
+
+        Some(value as i16)
     }
 }
 
