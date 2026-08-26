@@ -317,6 +317,72 @@ pub async fn destroy(context: &mut dyn WIPICContext, component: WIPICWord) -> Re
     Ok(())
 }
 
+fn uic_repaint_rect(
+    component_x: i32,
+    component_y: i32,
+    component_width: i32,
+    component_height: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> (i32, i32, i32, i32) {
+    let width = if width == -1 { component_width } else { width };
+    let height = if height == -1 { component_height } else { height };
+
+    let left = x.wrapping_add(component_x);
+    let top = y.wrapping_add(component_y);
+    let right = left.wrapping_sub(1).wrapping_add(width);
+    let bottom = top.wrapping_sub(1).wrapping_add(height);
+
+    (left, top, right, bottom)
+}
+
+/// LGT `MC_uicRepaint` (WIPI-C service 0x324).
+///
+/// Native silently ignores NULL/invalid components. For a valid component,
+/// width/height values of -1 select the component's own dimensions. The
+/// requested offset is translated by the component origin and converted to an
+/// inclusive rectangle before tail-calling `MC_grpRepaint(1, left, top, right,
+/// bottom)`.
+pub async fn repaint(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<()> {
+    tracing::debug!("MC_uicRepaint({component:#x}, {x}, {y}, {width}, {height})");
+
+    if component == 0 {
+        return Ok(());
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(());
+    }
+
+    let component_x: i32 = read_generic(context, component + 0x04)?;
+    let component_y: i32 = read_generic(context, component + 0x08)?;
+    let component_width: i32 = read_generic(context, component + 0x0c)?;
+    let component_height: i32 = read_generic(context, component + 0x10)?;
+
+    let (left, top, right, bottom) = uic_repaint_rect(
+        component_x,
+        component_y,
+        component_width,
+        component_height,
+        x,
+        y,
+        width,
+        height,
+    );
+
+    graphics::repaint(context, 1, left, top, right, bottom).await
+}
+
 /// LGT/KTF `MC_uicConfigure`.
 ///
 /// Native flags use bit 0 for position and bit 1 for dimensions.
@@ -847,9 +913,7 @@ fn uic_get_active_item_pos(selected: i32, count: i32, scroll: i32) -> Option<(i3
 }
 
 async fn uic_repaint_component(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
-    let width: i32 = read_generic(context, component + 0x0c)?;
-    let height: i32 = read_generic(context, component + 0x10)?;
-    graphics::repaint(context, 0, 0, 0, width, height).await
+    repaint(context, component, 0, 0, -1, -1).await
 }
 
 async fn uic_selection_changed(
@@ -1916,8 +1980,8 @@ mod tests {
 
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
-        destroy, get_class, insert_text, set_enable, set_max_text_size,
-        uic_skip_time_separator,
+        destroy, get_class, insert_text, repaint, set_enable, set_max_text_size,
+        uic_repaint_rect, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -2120,6 +2184,32 @@ mod tests {
 
         assert!(!context.system().event_queue().has_timer(component + 0x98));
         assert_eq!(read_generic::<u32, _>(&context, component).unwrap(), 0);
+    }
+
+    #[test]
+    fn lgt_uic_repaint_rect_matches_native_translation_and_inclusive_edges() {
+        assert_eq!(
+            uic_repaint_rect(10, 20, 100, 50, 3, 4, 7, 9),
+            (13, 24, 19, 32)
+        );
+        assert_eq!(
+            uic_repaint_rect(10, 20, 100, 50, 0, 0, -1, -1),
+            (10, 20, 109, 69)
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_repaint_ignores_null_and_invalid_components() {
+        let mut context = TestContext::new();
+
+        repaint(&mut context, 0, 1, 2, 3, 4).await.unwrap();
+
+        context.write_bytes(COMPONENT, &0u32.to_le_bytes()).unwrap();
+        repaint(&mut context, COMPONENT, 1, 2, 3, 4).await.unwrap();
+
+        context.write_bytes(COMPONENT, &6u32.to_le_bytes()).unwrap();
+        repaint(&mut context, COMPONENT, 1, 2, 3, 4).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT).unwrap(), 6);
     }
 
     #[test]
