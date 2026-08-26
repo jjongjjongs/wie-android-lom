@@ -832,6 +832,77 @@ pub async fn set_time_mask(
     Ok(old_mask)
 }
 
+/// LGT `MC_uicSetTime` (WIPI-C service 0x336).
+///
+/// Native first runs `WPUic_CheckValidComp`. NULL/invalid components therefore
+/// return 0. For an otherwise valid component, a NULL `tm` pointer or a
+/// non-DateTime component returns the validator success value 1 without
+/// modifying component memory.
+///
+/// A valid DateTimeComponent copies exactly 44 bytes from the caller's tm
+/// structure to +0x48, then tail-calls `WPUic_SetTimeStr`. The rendered string
+/// is selected by the current +0x44 mask. `WPUic_SetTimeStr` compares the old
+/// and new strings, invokes +0xa0(component, 0, +0xa4) only when they differ,
+/// and leaves that callback result in r0. Without a callback, WIE mirrors the
+/// native strcmp result as -1/0/1.
+pub async fn set_time(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    tm: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicSetTime({component:#x}, {tm:#x})");
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    if tm == 0 || component_type != 2 {
+        return Ok(1);
+    }
+
+    let mut tm_bytes = [0u8; 44];
+    context.read_bytes(tm, &mut tm_bytes)?;
+    context.write_bytes(component + 0x48, &tm_bytes)?;
+
+    let old_text = uic_read_c_string(context, component + 0x74)?;
+    let mask: WIPICWord = read_generic(context, component + 0x44)?;
+
+    let mut fields = [0i32; 11];
+    for (index, field) in fields.iter_mut().enumerate() {
+        *field = read_generic(context, component + 0x48 + index as u32 * 4)?;
+    }
+
+    let format_fields: [i32; 9] = fields[..9].try_into().unwrap();
+    let formatted = uic_format_datetime(mask, &format_fields);
+    context.write_bytes(component + 0x74, &formatted)?;
+    context.write_bytes(component + 0x74 + formatted.len() as u32, &[0])?;
+
+    let compare = match old_text.as_slice().cmp(formatted.as_slice()) {
+        core::cmp::Ordering::Less => -1,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Greater => 1,
+    };
+
+    if compare != 0 {
+        let callback: WIPICWord = read_generic(context, component + 0xa0)?;
+        if callback != 0 {
+            let callback_context: WIPICWord = read_generic(context, component + 0xa4)?;
+            return Ok(
+                context
+                    .call_function(callback, &[component, 0, callback_context])
+                    .await? as i32,
+            );
+        }
+    }
+
+    Ok(compare)
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -2464,7 +2535,7 @@ mod tests {
         destroy, get_class, get_class_name, get_font, get_geometry, get_label, insert_text,
         is_instance, repaint, set_bg_color, set_callback, set_enable, set_event_handler,
         set_fg_color, set_font, set_label, set_label_alignment, set_max_text_size,
-        set_time_mask, uic_color_to_rgb565, uic_read_c_string, uic_repaint_rect,
+        set_time, set_time_mask, uic_color_to_rgb565, uic_read_c_string, uic_repaint_rect,
         uic_skip_time_separator,
     };
 
@@ -3350,6 +3421,137 @@ mod tests {
                 read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
                 0x1234_5678
             );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_time_copies_native_tm_and_reformats() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 2);
+
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+        context
+            .write_bytes(COMPONENT + 0x74, b"old datetime\0")
+            .unwrap();
+
+        let fields = [
+            5i32,   // sec
+            4,      // min
+            3,      // hour
+            2,      // mday
+            0,      // mon
+            124,    // year
+            2,      // wday
+            1,      // yday
+            0,      // isdst
+            0x1122_3344u32 as i32,
+            0x5566_7788u32 as i32,
+        ];
+
+        for (index, value) in fields.iter().enumerate() {
+            write_generic(&mut context, 0x3000 + index as u32 * 4, *value).unwrap();
+        }
+
+        let result = set_time(&mut context, COMPONENT, 0x3000).await.unwrap();
+        assert_ne!(result, 0);
+
+        for (index, expected) in fields.iter().enumerate() {
+            assert_eq!(
+                read_generic::<i32, _>(
+                    &context,
+                    COMPONENT + 0x48 + index as u32 * 4
+                )
+                .unwrap(),
+                *expected
+            );
+        }
+
+        assert_eq!(
+            uic_read_c_string(&context, COMPONENT + 0x74).unwrap(),
+            b"2024/01/02"
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_time_returns_zero_when_rendered_text_is_unchanged() {
+        let mut context = TestContext::new();
+        init_component(&mut context, 2);
+
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+        context
+            .write_bytes(COMPONENT + 0x74, b"2024/01/02\0")
+            .unwrap();
+
+        let fields = [5i32, 4, 3, 2, 0, 124, 2, 1, 0, 0, 0];
+        for (index, value) in fields.iter().enumerate() {
+            write_generic(&mut context, 0x3000 + index as u32 * 4, *value).unwrap();
+        }
+
+        assert_eq!(
+            set_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
+            0
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_set_time_matches_native_validation_and_null_tm_contract() {
+        let mut context = TestContext::new();
+
+        assert_eq!(set_time(&mut context, 0, 0x3000).await.unwrap(), 0);
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            context
+                .write_bytes(COMPONENT + 0x48, &[0xaa; 44])
+                .unwrap();
+
+            assert_eq!(
+                set_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
+                0
+            );
+
+            let mut unchanged = [0u8; 44];
+            context
+                .read_bytes(COMPONENT + 0x48, &mut unchanged)
+                .unwrap();
+            assert_eq!(unchanged, [0xaa; 44]);
+        }
+
+        for component_type in 1u32..=5 {
+            init_component(&mut context, component_type);
+            context
+                .write_bytes(COMPONENT + 0x48, &[0xbb; 44])
+                .unwrap();
+
+            assert_eq!(
+                set_time(&mut context, COMPONENT, 0).await.unwrap(),
+                1
+            );
+
+            let mut unchanged = [0u8; 44];
+            context
+                .read_bytes(COMPONENT + 0x48, &mut unchanged)
+                .unwrap();
+            assert_eq!(unchanged, [0xbb; 44]);
+        }
+
+        for component_type in [1u32, 3, 4, 5] {
+            init_component(&mut context, component_type);
+            context
+                .write_bytes(COMPONENT + 0x48, &[0xcc; 44])
+                .unwrap();
+            context.write_bytes(0x3000, &[0x11; 44]).unwrap();
+
+            assert_eq!(
+                set_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
+                1
+            );
+
+            let mut unchanged = [0u8; 44];
+            context
+                .read_bytes(COMPONENT + 0x48, &mut unchanged)
+                .unwrap();
+            assert_eq!(unchanged, [0xcc; 44]);
         }
     }
 

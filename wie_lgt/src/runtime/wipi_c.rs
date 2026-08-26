@@ -167,6 +167,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicGetLabel => uic::get_label.into_body(),
         WIPICSvcId::UicSetLabelAlignment => uic::set_label_alignment.into_body(),
         WIPICSvcId::UicSetTimeMask => uic::set_time_mask.into_body(),
+        WIPICSvcId::UicSetTime => uic::set_time.into_body(),
         WIPICSvcId::UicInsertText => uic::insert_text.into_body(),
         WIPICSvcId::UicDeleteText => uic::delete_text.into_body(),
         WIPICSvcId::UicSetMaxTextSize => uic::set_max_text_size.into_body(),
