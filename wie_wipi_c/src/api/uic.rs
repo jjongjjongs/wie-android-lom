@@ -3371,6 +3371,36 @@ pub async fn set_cursor_pos(
     }
 }
 
+/// LGT `LGTC_uicGetCursorPos` (WIPI-C service 0x34a).
+///
+/// Native validates the component first. NULL/invalid components return -1.
+///
+/// Only Text (type 3) and DateTime (type 2) are supported. For a valid Text
+/// component native returns the signed 32-bit cursor value at +0x4c unchanged.
+/// For a valid DateTime component it returns the signed 32-bit cursor value at
+/// +0x94 unchanged. Every other valid component type returns -1.
+pub async fn get_cursor_pos(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("LGTC_uicGetCursorPos({component:#x})");
+
+    if component == 0 {
+        return Ok(-1);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(-1);
+    }
+
+    match component_type {
+        3 => read_generic(context, component + 0x4c),
+        2 => read_generic(context, component + 0x94),
+        _ => Ok(-1),
+    }
+}
+
 /// LGT `MC_uicGetActiveMenuItem` (WIPI-C service 0x33d).
 ///
 /// Native is a thin wrapper over `WPUic_GetActiveItem` with required component type 1.
@@ -3545,7 +3575,7 @@ mod tests {
         UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
         delete_text,
         add_list_item, add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
-        get_active_list_item, get_active_menu_item, get_list_item, get_menu_item, get_time, insert_text, is_instance,
+        get_active_list_item, get_active_menu_item, get_cursor_pos, get_list_item, get_menu_item, get_time, insert_text, is_instance,
         remove_list_item, remove_menu_item,
         repaint, set_active_list_item, set_active_menu_item, set_bg_color, set_callback,
         set_cursor_pos,
@@ -5385,6 +5415,58 @@ mod tests {
                 get_active_list_item(&mut context, COMPONENT)
                     .await
                     .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_cursor_pos_matches_native_validation_and_supported_types() {
+        let mut context = TestContext::new();
+
+        assert_eq!(get_cursor_pos(&mut context, 0).await.unwrap(), -1);
+
+        for component_type in [0u32, 6] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344i32).unwrap();
+            write_generic(&mut context, COMPONENT + 0x94, 0x5566_7788i32).unwrap();
+
+            assert_eq!(
+                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
+                -1
+            );
+        }
+
+        for component_type in [1u32, 4, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344i32).unwrap();
+            write_generic(&mut context, COMPONENT + 0x94, 0x5566_7788i32).unwrap();
+
+            assert_eq!(
+                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
+                -1
+            );
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_cursor_pos_returns_native_text_and_datetime_slots_unchanged() {
+        let mut context = TestContext::new();
+
+        init_component(&mut context, 3);
+        for expected in [-1i32, 0, 1, -2, i32::MIN, i32::MAX] {
+            write_generic(&mut context, COMPONENT + 0x4c, expected).unwrap();
+            assert_eq!(
+                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
+                expected
+            );
+        }
+
+        init_component(&mut context, 2);
+        for expected in [-1i32, 0, 1, -2, i32::MIN, i32::MAX] {
+            write_generic(&mut context, COMPONENT + 0x94, expected).unwrap();
+            assert_eq!(
+                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
                 expected
             );
         }
