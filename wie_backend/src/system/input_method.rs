@@ -1,8 +1,22 @@
+use alloc::vec::Vec;
+
 use encoding_rs::EUC_KR;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct KoreanState {
+    cho: Option<u8>,
+    jung: Option<u8>,
+    jong: Option<u8>,
+    vowel_state: u8,
+    consonant_scan: Option<u8>,
+    last_key: Option<i8>,
+    vowel_toggle: bool,
+}
 
 #[derive(Default)]
 pub struct InputMethod {
     current_mode: u32,
+    composition_size: usize,
     eng_key: Option<i8>,
     eng_index: usize,
     eng_char: Option<u8>,
@@ -14,6 +28,7 @@ pub struct InputMethod {
     ko_consonant_scan: Option<u8>,
     ko_last_key: Option<i8>,
     ko_vowel_toggle: bool,
+    ko_undo: Vec<KoreanState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +61,14 @@ impl InputMethod {
         self.current_mode
     }
 
+    pub fn composition_size(&self) -> usize {
+        self.composition_size
+    }
+
+    pub fn set_composition_size(&mut self, size: usize) {
+        self.composition_size = size;
+    }
+
     pub fn set_current_mode(&mut self, mode: u32) {
         self.current_mode = mode;
         self.eng_key = None;
@@ -59,6 +82,7 @@ impl InputMethod {
         self.ko_consonant_scan = None;
         self.ko_last_key = None;
         self.ko_vowel_toggle = false;
+        self.ko_undo.clear();
     }
 
     pub fn handle_input(&mut self, key: i8, event: u32) -> InputMethodOutput {
@@ -522,6 +546,48 @@ impl InputMethod {
         self.ko_consonant_scan = None;
     }
 
+    fn korean_state(&self) -> KoreanState {
+        KoreanState {
+            cho: self.ko_cho,
+            jung: self.ko_jung,
+            jong: self.ko_jong,
+            vowel_state: self.ko_vowel_state,
+            consonant_scan: self.ko_consonant_scan,
+            last_key: self.ko_last_key,
+            vowel_toggle: self.ko_vowel_toggle,
+        }
+    }
+
+    fn restore_korean_state(&mut self, state: KoreanState) {
+        self.ko_cho = state.cho;
+        self.ko_jung = state.jung;
+        self.ko_jong = state.jong;
+        self.ko_vowel_state = state.vowel_state;
+        self.ko_consonant_scan = state.consonant_scan;
+        self.ko_last_key = state.last_key;
+        self.ko_vowel_toggle = state.vowel_toggle;
+    }
+
+    fn clear_korean_input(&mut self) -> InputMethodOutput {
+        let state = self.ko_undo.pop().unwrap_or_default();
+        self.restore_korean_state(state);
+
+        let mut output = InputMethodOutput {
+            handled: true,
+            ..InputMethodOutput::default()
+        };
+
+        if let Some(ch) = self.current_korean_char() {
+            Self::put_korean_char(
+                &mut output.output1,
+                &mut output.output1_len,
+                ch,
+            );
+        }
+
+        output
+    }
+
     fn start_korean_vowel(&mut self, scan: u8) -> bool {
         let Some((state, _)) = Self::korean_vowel_transition(0, scan) else {
             return false;
@@ -611,12 +677,24 @@ impl InputMethod {
             self.reset_korean_composition();
             self.ko_last_key = None;
             self.ko_vowel_toggle = false;
+            self.ko_undo.clear();
             return output;
         }
+
+        if key == -16 {
+            return self.clear_korean_input();
+        }
+
+        // Capture before scan_korean_key mutates the key/toggle metadata.
+        let before = self.korean_state();
 
         let Some((scan, modifier)) = self.scan_korean_key(key) else {
             return InputMethodOutput::default();
         };
+
+        // A commit normally rebases CLEAR to an empty composition. Jong split
+        // is the exception: part of the old jong becomes the new live cho.
+        let mut commit_baseline = KoreanState::default();
 
         let mut output = InputMethodOutput {
             handled: true,
@@ -640,6 +718,7 @@ impl InputMethod {
                         ch,
                     );
                 }
+                self.ko_undo.push(before);
                 return output;
             }
 
@@ -721,6 +800,13 @@ impl InputMethod {
                     ch,
                 );
             }
+
+            if output.output0_len != 0 {
+                self.ko_undo.clear();
+                self.ko_undo.push(commit_baseline);
+            } else {
+                self.ko_undo.push(before);
+            }
             return output;
         }
 
@@ -750,6 +836,9 @@ impl InputMethod {
                 self.reset_korean_composition();
                 self.ko_cho = Self::korean_jong_to_cho(second);
                 self.ko_consonant_scan = self.ko_cho;
+                commit_baseline = self.korean_state();
+                commit_baseline.last_key = before.last_key;
+                commit_baseline.vowel_toggle = before.vowel_toggle;
             } else {
                 if let Some(committed) =
                     Self::compose_korean_syllable(old_cho, old_jung, 1)
@@ -764,6 +853,9 @@ impl InputMethod {
                 self.reset_korean_composition();
                 self.ko_cho = Self::korean_jong_to_cho(jong);
                 self.ko_consonant_scan = self.ko_cho;
+                commit_baseline = self.korean_state();
+                commit_baseline.last_key = before.last_key;
+                commit_baseline.vowel_toggle = before.vowel_toggle;
             }
 
             if !self.start_korean_vowel(scan) {
@@ -799,6 +891,13 @@ impl InputMethod {
                 &mut output.output1_len,
                 ch,
             );
+        }
+
+        if output.output0_len != 0 {
+            self.ko_undo.clear();
+            self.ko_undo.push(commit_baseline);
+        } else {
+            self.ko_undo.push(before);
         }
 
         output
@@ -937,6 +1036,70 @@ mod korean_input_tests {
         assert!(!flush.handled);
         assert_eq!(&flush.output0[..flush.output0_len], &[0xb0, 0xa1]);
         assert_eq!(flush.output1_len, 0);
+    }
+
+    #[test]
+    fn korean_clear_removes_single_live_unit() {
+        let mut input = InputMethod::new();
+        input.set_current_mode(3);
+
+        let giyeok = input.handle_input(b'1' as i8, 2);
+        assert_eq!(&giyeok.output1[..giyeok.output1_len], &[0xa4, 0xa1]);
+
+        let clear = input.handle_input(-16, 2);
+        assert!(clear.handled);
+        assert_eq!(clear.output0_len, 0);
+        assert_eq!(clear.output1_len, 0);
+    }
+
+    #[test]
+    fn korean_clear_restores_ga_from_gak() {
+        let mut input = InputMethod::new();
+        input.set_current_mode(3);
+
+        input.handle_input(b'1' as i8, 2);
+        input.handle_input(b'3' as i8, 2);
+        let gak = input.handle_input(b'1' as i8, 2);
+        assert_eq!(&gak.output1[..gak.output1_len], &[0xb0, 0xa2]);
+
+        let clear = input.handle_input(-16, 2);
+        assert!(clear.handled);
+        assert_eq!(clear.output0_len, 0);
+        assert_eq!(&clear.output1[..clear.output1_len], &[0xb0, 0xa1]);
+    }
+
+    #[test]
+    fn korean_clear_after_jong_split_restores_inherited_cho() {
+        let mut input = InputMethod::new();
+        input.set_current_mode(3);
+
+        input.handle_input(b'1' as i8, 2); // ㄱ
+        input.handle_input(b'3' as i8, 2); // 가
+        input.handle_input(b'1' as i8, 2); // 각
+
+        let split = input.handle_input(b'3' as i8, 2);
+        assert_eq!(&split.output0[..split.output0_len], &[0xb0, 0xa1]);
+        assert_eq!(&split.output1[..split.output1_len], &[0xb0, 0xa1]);
+
+        let clear = input.handle_input(-16, 2);
+        assert!(clear.handled);
+        assert_eq!(clear.output0_len, 0);
+        assert_eq!(&clear.output1[..clear.output1_len], &[0xa4, 0xa1]);
+    }
+
+    #[test]
+    fn korean_clear_does_not_cross_normal_commit_boundary() {
+        let mut input = InputMethod::new();
+        input.set_current_mode(3);
+
+        input.handle_input(b'1' as i8, 2);
+        let next = input.handle_input(b'2' as i8, 2);
+        assert_ne!(next.output0_len, 0);
+
+        let clear = input.handle_input(-16, 2);
+        assert!(clear.handled);
+        assert_eq!(clear.output0_len, 0);
+        assert_eq!(clear.output1_len, 0);
     }
 }
 

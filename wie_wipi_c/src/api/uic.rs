@@ -455,6 +455,1119 @@ pub async fn paint(
     Ok(())
 }
 
+
+fn uic_read_c_string(context: &dyn WIPICContext, address: WIPICWord) -> Result<alloc::vec::Vec<u8>> {
+    let mut result = alloc::vec::Vec::new();
+    let mut offset = 0u32;
+
+    loop {
+        let byte: u8 = read_generic(context, address.wrapping_add(offset))?;
+        if byte == 0 {
+            break;
+        }
+        result.push(byte);
+        offset = offset.wrapping_add(1);
+    }
+
+    Ok(result)
+}
+
+fn uic_signed_byte_width(byte: u8) -> u32 {
+    if byte & 0x80 != 0 { 2 } else { 1 }
+}
+
+fn uic_text_line_step(context: &dyn WIPICContext, component: WIPICWord) -> Result<i32> {
+    let width: i32 = read_generic(context, component + 0x0c)?;
+
+    // Native WGrText_Draw:
+    // s_MaxLineCharNum = (s_X2 + 1 - s_X1) / (font_height >> 1).
+    // WPUic_DrawText sets [s_X1, s_X2] to [x + 4, x + width - 4].
+    // The current WIE MC_grpGetFontHeight implementation returns 12.
+    Ok((width - 7) / 6)
+}
+
+fn uic_text_vertical_position(
+    text_len: i32,
+    cursor: i32,
+    step: i32,
+    direction: i32,
+) -> Option<i32> {
+    if step <= 0 || text_len <= step {
+        return None;
+    }
+
+    match direction {
+        0 => {
+            if step < cursor {
+                let next = cursor - step;
+                if next >= 0 {
+                    Some(next)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        1 => {
+            if text_len / step <= cursor / step {
+                return None;
+            }
+            let next = cursor + step;
+            if text_len >= next {
+                Some(next)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn uic_skip_time_separator(text: &[u8], cursor: usize, forward: bool) -> usize {
+    if cursor >= text.len() || !matches!(text[cursor], b':' | b'/' | b'\n') {
+        return cursor;
+    }
+
+    if forward {
+        cursor.saturating_add(1)
+    } else {
+        cursor.saturating_sub(1)
+    }
+}
+
+fn uic_get_active_item_pos(selected: i32, count: i32, scroll: i32) -> Option<(i32, i32)> {
+    if selected == -1 {
+        return Some((scroll, scroll));
+    }
+    if selected >= count {
+        return None;
+    }
+    if selected > 0 {
+        let top = selected.saturating_mul(17);
+        Some((top, top.saturating_add(17)))
+    } else {
+        Some((0, 17))
+    }
+}
+
+async fn uic_repaint_component(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
+    let width: i32 = read_generic(context, component + 0x0c)?;
+    let height: i32 = read_generic(context, component + 0x10)?;
+    graphics::repaint(context, 0, 0, 0, width, height).await
+}
+
+async fn uic_selection_changed(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    old_selected: i32,
+) -> Result<()> {
+    let selected: i32 = read_generic(context, component + 0x48)?;
+    if selected == old_selected {
+        return Ok(());
+    }
+
+    let callback: WIPICWord = read_generic(context, component + 0x54)?;
+    if callback != 0 {
+        let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
+        context
+            .call_function(callback, &[component, selected as u32, callback_context])
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn uic_handle_menu(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    key: i32,
+) -> Result<u32> {
+    let count: i32 = read_generic(context, component + 0x44)?;
+    if count <= 0 {
+        return Ok(0);
+    }
+
+    let old_selected: i32 = read_generic(context, component + 0x48)?;
+
+    match key {
+        -1 => {
+            let selected = if old_selected == -1 {
+                0
+            } else {
+                (count - 1 + old_selected).rem_euclid(count)
+            };
+            write_generic(context, component + 0x48, selected)?;
+            uic_selection_changed(context, component, old_selected).await?;
+            Ok(1)
+        }
+        -2 => {
+            let selected = if old_selected == -1 {
+                0
+            } else {
+                (old_selected + 1).rem_euclid(count)
+            };
+            write_generic(context, component + 0x48, selected)?;
+            uic_selection_changed(context, component, old_selected).await?;
+            Ok(1)
+        }
+        -5 => {
+            let callback: WIPICWord = read_generic(context, component + 0x34)?;
+            if callback != 0 {
+                let callback_context: WIPICWord = read_generic(context, component + 0x40)?;
+                context
+                    .call_function(
+                        callback,
+                        &[component, old_selected as u32, callback_context],
+                    )
+                    .await?;
+            }
+            uic_selection_changed(context, component, old_selected).await?;
+            Ok(1)
+        }
+        _ => Ok(0),
+    }
+}
+
+async fn uic_handle_list(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    key: i32,
+) -> Result<u32> {
+    let count: i32 = read_generic(context, component + 0x44)?;
+    if count <= 0 {
+        return Ok(0);
+    }
+
+    let old_selected: i32 = read_generic(context, component + 0x48)?;
+
+    if key == -5 {
+        let callback: WIPICWord = read_generic(context, component + 0x34)?;
+        if callback != 0 {
+            let callback_context: WIPICWord = read_generic(context, component + 0x40)?;
+            context
+                .call_function(
+                    callback,
+                    &[component, old_selected as u32, callback_context],
+                )
+                .await?;
+        }
+        uic_selection_changed(context, component, old_selected).await?;
+        return Ok(1);
+    }
+
+    if !matches!(key, -1 | -2) {
+        return Ok(0);
+    }
+
+    let height: i32 = read_generic(context, component + 0x10)?;
+    let mut scroll: i32 = read_generic(context, component + 0x4c)?;
+
+    let Some((top, bottom)) = uic_get_active_item_pos(old_selected, count, scroll) else {
+        return Ok(0);
+    };
+
+    if key == -1 {
+        if scroll <= top {
+            if old_selected > 0 {
+                let selected = old_selected - 1;
+                write_generic(context, component + 0x48, selected)?;
+
+                if let Some((new_top, _new_bottom)) =
+                    uic_get_active_item_pos(selected, count, scroll)
+                {
+                    if scroll > new_top {
+                        let span = bottom.saturating_add(1).saturating_sub(new_top);
+                        scroll = if span <= height {
+                            new_top
+                        } else {
+                            bottom.saturating_sub(height.saturating_sub(1))
+                        };
+                        write_generic(context, component + 0x4c, scroll)?;
+                    }
+                }
+            }
+        } else if scroll <= height {
+            write_generic(context, component + 0x4c, 0i32)?;
+        } else {
+            let candidate = scroll.saturating_sub(height);
+            scroll = if candidate < top {
+                top
+            } else {
+                (candidate / 17) * 17
+            };
+            write_generic(context, component + 0x4c, scroll)?;
+        }
+    } else {
+        let edge = scroll.saturating_add(height);
+        if edge > bottom {
+            if old_selected + 1 < count {
+                let selected = old_selected + 1;
+                write_generic(context, component + 0x48, selected)?;
+
+                if let Some((new_top, new_bottom)) =
+                    uic_get_active_item_pos(selected, count, scroll)
+                {
+                    if scroll.saturating_add(height.saturating_sub(1)) < new_bottom {
+                        let span = new_bottom.saturating_add(1).saturating_sub(new_top);
+                        scroll = if span <= height {
+                            new_bottom.saturating_sub(height.saturating_sub(1))
+                        } else {
+                            new_top
+                        };
+                        write_generic(context, component + 0x4c, scroll)?;
+                    }
+                }
+            }
+        } else {
+            scroll = (edge / 17) * 17;
+            write_generic(context, component + 0x4c, scroll)?;
+        }
+    }
+
+    uic_selection_changed(context, component, old_selected).await?;
+    Ok(1)
+}
+
+fn uic_is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn uic_days_before_month(year: i32, month: i32) -> i32 {
+    let table = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let mut result = table[(month - 1) as usize];
+    if month > 2 && uic_is_leap_year(year) {
+        result += 1;
+    }
+    result
+}
+
+fn uic_days_since_1900_03_01(year: i32, month: i32, day: i32) -> i64 {
+    let mut y = year as i64;
+    let mut m = month as i64;
+    if m <= 2 {
+        y -= 1;
+        m += 12;
+    }
+
+    let y0 = y - 1900;
+    365 * y0
+        + y0.div_euclid(4)
+        - y0.div_euclid(100)
+        + y0.div_euclid(400)
+        + ((153 * (m - 3) + 2) / 5)
+        + (day as i64 - 1)
+}
+
+fn uic_civil_from_days(days: i64) -> (i32, i32, i32) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096)
+            / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year =
+        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_param = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_param + 2) / 5 + 1;
+    let month = month_param + if month_param < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+
+    (year as i32, month as i32, day as i32)
+}
+
+fn uic_kst_tm_from_epoch_millis(epoch_millis: u64) -> [i32; 9] {
+    let seconds = (epoch_millis / 1000) as i64 + 9 * 3600;
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+
+    let (year, month, day) = uic_civil_from_days(days);
+    let hour = (seconds_of_day / 3600) as i32;
+    let minute = ((seconds_of_day % 3600) / 60) as i32;
+    let second = (seconds_of_day % 60) as i32;
+    let yday = uic_days_before_month(year, month) + day - 1;
+    let wday = (days + 4).rem_euclid(7) as i32;
+
+    [
+        second,
+        minute,
+        hour,
+        day,
+        month - 1,
+        year - 1900,
+        wday,
+        yday,
+        0,
+    ]
+}
+
+async fn uic_datetime_timer_callback(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<()> {
+    let blink: u32 = read_generic(context, component + 0x9c)?;
+    write_generic(context, component + 0x9c, u32::from(blink == 0))?;
+
+    let fields = uic_kst_tm_from_epoch_millis(context.system().platform().now().raw());
+    for (index, value) in fields.iter().enumerate() {
+        write_generic(context, component + 0x48 + (index as u32) * 4, *value)?;
+    }
+
+    let mask: u32 = read_generic(context, component + 0x44)?;
+    let formatted = uic_format_datetime(mask, &fields);
+    let text_ptr = component + 0x74;
+    context.write_bytes(text_ptr, &formatted)?;
+    context.write_bytes(text_ptr + formatted.len() as u32, &[0])?;
+
+    // WPUic_TimeTimerCB performs the component draw, invokes the paint
+    // callback, repaints the component, and re-arms the 1000 ms timer.
+    // Generic WIE has no persistent native stack graphics context, so use
+    // the component's normal paint path with an allocated temporary context.
+    let gctx_size =
+        core::mem::size_of::<wipi_types::wipic::WIPICGraphicsContext>() as u32;
+    let gctx = context.alloc_raw(gctx_size)?;
+    graphics::init_context(context, gctx).await?;
+
+    let draw: WIPICWord = read_generic(context, component + 0x24)?;
+    if draw != 0 {
+        context.call_function(draw, &[component, gctx]).await?;
+    }
+
+    let callback: WIPICWord = read_generic(context, component + 0x30)?;
+    if callback != 0 {
+        let callback_context: WIPICWord = read_generic(context, component + 0x3c)?;
+        context
+            .call_function(callback, &[component, 0, callback_context])
+            .await?;
+    }
+
+    context.free_raw(gctx, gctx_size)?;
+
+    uic_repaint_component(context, component).await?;
+
+    let timer = component + 0x98;
+    kernel::set_timer(context, timer, 1000, 0, component).await?;
+    Ok(())
+}
+
+async fn uic_datetime_finish_edit(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<u32> {
+    write_generic(context, component + 0x9c, 0u32)?;
+    kernel::unset_timer(context, component + 0x98).await?;
+    uic_datetime_timer_callback(context, component).await?;
+    Ok(1)
+}
+
+fn uic_format_datetime(mask: u32, fields: &[i32; 9]) -> alloc::vec::Vec<u8> {
+    let sec = fields[0];
+    let min = fields[1];
+    let hour = fields[2];
+    let mday = fields[3];
+    let mon = fields[4] + 1;
+    let year = fields[5] + 1900;
+
+    let text = if mask == 3 {
+        alloc::format!(
+            "{year:04}/{mon:02}/{mday:02} {hour:02}:{min:02}:{sec:02}"
+        )
+    } else if mask == 1 {
+        alloc::format!("{hour:02}:{min:02}:{sec:02}")
+    } else {
+        alloc::format!("{year:04}/{mon:02}/{mday:02}")
+    };
+
+    text.into_bytes()
+}
+
+fn uic_parse_datetime(text: &[u8]) -> Option<(i32, i32, i32, i32, i32, i32)> {
+    if text.len() < 19 {
+        return None;
+    }
+    if text[4] != b'/'
+        || text[7] != b'/'
+        || text[10] != b' '
+        || text[13] != b':'
+        || text[16] != b':'
+    {
+        return None;
+    }
+
+    let d = |a: usize, b: usize| -> Option<i32> {
+        let x = *text.get(a)?;
+        let y = *text.get(b)?;
+        if !x.is_ascii_digit() || !y.is_ascii_digit() {
+            return None;
+        }
+        Some(((x - b'0') as i32) * 10 + (y - b'0') as i32)
+    };
+
+    if !text[0..4].iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+
+    let year = ((text[0] - b'0') as i32) * 1000
+        + ((text[1] - b'0') as i32) * 100
+        + ((text[2] - b'0') as i32) * 10
+        + ((text[3] - b'0') as i32);
+
+    Some((
+        year,
+        d(5, 6)?,
+        d(8, 9)?,
+        d(11, 12)?,
+        d(14, 15)?,
+        d(17, 18)?,
+    ))
+}
+
+async fn uic_handle_datetime(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    key: i32,
+) -> Result<u32> {
+    let text_ptr = component + 0x74;
+    let mut text = uic_read_c_string(context, text_ptr)?;
+    let mut cursor: u32 = read_generic(context, component + 0x94)?;
+
+    match key {
+        -3 => {
+            if cursor > 0 {
+                cursor -= 1;
+                if (cursor as usize) < text.len()
+                    && matches!(text[cursor as usize], b':' | b'/' | b'\n')
+                {
+                    cursor = cursor.saturating_sub(1);
+                }
+                write_generic(context, component + 0x94, cursor)?;
+            }
+            return uic_datetime_finish_edit(context, component).await;
+        }
+        -4 => {
+            if cursor < text.len().saturating_sub(1) as u32 {
+                cursor += 1;
+                if (cursor as usize) < text.len()
+                    && matches!(text[cursor as usize], b':' | b'/' | b'\n')
+                {
+                    cursor += 1;
+                }
+                write_generic(context, component + 0x94, cursor)?;
+            }
+            return uic_datetime_finish_edit(context, component).await;
+        }
+        -16 => {
+            if (cursor as usize) < text.len() {
+                text[cursor as usize] = b'0';
+                context.write_bytes(text_ptr, &text)?;
+            }
+            if cursor < text.len().saturating_sub(1) as u32 {
+                cursor += 1;
+                if (cursor as usize) < text.len()
+                    && matches!(text[cursor as usize], b':' | b'/' | b'\n')
+                {
+                    cursor += 1;
+                }
+                write_generic(context, component + 0x94, cursor)?;
+            }
+            return uic_datetime_finish_edit(context, component).await;
+        }
+        _ => {}
+    }
+
+    if !(48..=57).contains(&key) {
+        return uic_datetime_finish_edit(context, component).await;
+    }
+
+    if cursor as usize >= text.len() {
+        return Ok(1);
+    }
+
+    let old = text[cursor as usize];
+    text[cursor as usize] = key as u8;
+    context.write_bytes(text_ptr, &text)?;
+
+    let mask: u32 = read_generic(context, component + 0x44)?;
+    if mask & 2 != 0 {
+        let valid = if let Some((year, month, day, hour, minute, second)) =
+            uic_parse_datetime(&text)
+        {
+            (1901..=2999).contains(&year)
+                && (1..=12).contains(&month)
+                && (1..=31).contains(&day)
+                && (0..=23).contains(&hour)
+                && (0..=59).contains(&minute)
+                && (0..=59).contains(&second)
+        } else {
+            false
+        };
+
+        if !valid {
+            context.write_bytes(text_ptr + cursor, &[old])?;
+        } else if let Some((year, month, day, hour, minute, second)) =
+            uic_parse_datetime(&text)
+        {
+            let days_in_month = match month {
+                2 if uic_is_leap_year(year) => 29,
+                2 => 28,
+                4 | 6 | 9 | 11 => 30,
+                _ => 31,
+            };
+
+            if day > days_in_month {
+                context.write_bytes(text_ptr + cursor, &[old])?;
+            } else {
+                let tm_year = year - 1900;
+                let tm_mon = month - 1;
+                let tm_yday = uic_days_before_month(year, month) + day - 1;
+                let days = uic_days_since_1900_03_01(year, month, day);
+                let tm_wday = (days + 4).rem_euclid(7) as i32;
+
+                write_generic(context, component + 0x48, second)?;
+                write_generic(context, component + 0x4c, minute)?;
+                write_generic(context, component + 0x50, hour)?;
+                write_generic(context, component + 0x54, day)?;
+                write_generic(context, component + 0x58, tm_mon)?;
+                write_generic(context, component + 0x5c, tm_year)?;
+                write_generic(context, component + 0x60, tm_wday)?;
+                write_generic(context, component + 0x64, tm_yday)?;
+
+                let fields = [
+                    second,
+                    minute,
+                    hour,
+                    day,
+                    tm_mon,
+                    tm_year,
+                    tm_wday,
+                    tm_yday,
+                    0,
+                ];
+                let formatted = uic_format_datetime(mask, &fields);
+                context.write_bytes(text_ptr, &formatted)?;
+                context.write_bytes(text_ptr + formatted.len() as u32, &[0])?;
+
+                let callback: WIPICWord = read_generic(context, component + 0xa0)?;
+                if callback != 0 {
+                    let callback_context: WIPICWord =
+                        read_generic(context, component + 0xa4)?;
+                    context
+                        .call_function(callback, &[component, 0, callback_context])
+                        .await?;
+                }
+            }
+        }
+    }
+
+    let len = uic_read_c_string(context, text_ptr)?.len() as u32;
+    cursor = read_generic(context, component + 0x94)?;
+    if cursor < len.saturating_sub(1) {
+        cursor += 1;
+        let current = uic_read_c_string(context, text_ptr)?;
+        cursor = uic_skip_time_separator(&current, cursor as usize, true) as u32;
+        write_generic(context, component + 0x94, cursor)?;
+    }
+
+    uic_datetime_finish_edit(context, component).await
+}
+
+async fn uic_text_changed_callback(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<()> {
+    let callback: WIPICWord = read_generic(context, component + 0x5c)?;
+    if callback != 0 {
+        let callback_context: WIPICWord = read_generic(context, component + 0x64)?;
+        context
+            .call_function(callback, &[component, 0, callback_context])
+            .await?;
+    }
+    Ok(())
+}
+
+fn uic_text_delete_raw(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: usize,
+    length: usize,
+) -> Result<()> {
+    let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+    if text_ptr == 0 {
+        return Ok(());
+    }
+
+    let mut text = uic_read_c_string(context, text_ptr)?;
+    if position >= text.len() || length == 0 {
+        return Ok(());
+    }
+
+    let end = position.saturating_add(length).min(text.len());
+    text.drain(position..end);
+    context.write_bytes(text_ptr, &text)?;
+    context.write_bytes(text_ptr + text.len() as u32, &[0])?;
+    write_generic(context, component + 0x4c, position as u32)?;
+    Ok(())
+}
+
+fn uic_text_insert_raw(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: usize,
+    bytes: &[u8],
+) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+
+    let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+    let capacity: u32 = read_generic(context, component + 0x48)?;
+    if text_ptr == 0 {
+        return Ok(());
+    }
+
+    let mut text = uic_read_c_string(context, text_ptr)?;
+    if text.len().saturating_add(bytes.len()) >= capacity as usize {
+        return Ok(());
+    }
+
+    let position = position.min(text.len());
+    text.splice(position..position, bytes.iter().copied());
+    context.write_bytes(text_ptr, &text)?;
+    context.write_bytes(text_ptr + text.len() as u32, &[0])?;
+    write_generic(
+        context,
+        component + 0x4c,
+        (position + bytes.len()) as u32,
+    )?;
+    Ok(())
+}
+
+async fn uic_text_delete_internal(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: usize,
+    length: usize,
+) -> Result<()> {
+    let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+    if text_ptr == 0 {
+        return Ok(());
+    }
+
+    let old = uic_read_c_string(context, text_ptr)?;
+    uic_text_delete_raw(context, component, position, length)?;
+    let current = uic_read_c_string(context, text_ptr)?;
+
+    if old != current {
+        uic_text_changed_callback(context, component).await?;
+    }
+
+    Ok(())
+}
+
+async fn uic_text_insert_internal(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    position: usize,
+    bytes: &[u8],
+) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+
+    let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+    if text_ptr == 0 {
+        return Ok(());
+    }
+
+    let old = uic_read_c_string(context, text_ptr)?;
+    uic_text_insert_raw(context, component, position, bytes)?;
+    let current = uic_read_c_string(context, text_ptr)?;
+
+    if old != current {
+        uic_text_changed_callback(context, component).await?;
+    }
+
+    Ok(())
+}
+
+async fn uic_text_insert_output(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    output: &[u8],
+) -> Result<()> {
+    if output.is_empty() {
+        return Ok(());
+    }
+
+    let cursor: u32 = read_generic(context, component + 0x4c)?;
+    uic_text_insert_internal(context, component, cursor as usize, output).await
+}
+
+async fn uic_text_remove_composition_internal(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    composition_size: usize,
+) -> Result<()> {
+    if composition_size == 0 {
+        return Ok(());
+    }
+
+    let cursor: u32 = read_generic(context, component + 0x4c)?;
+    let position = (cursor as usize).saturating_sub(composition_size);
+    uic_text_delete_internal(context, component, position, composition_size).await
+}
+
+async fn uic_text_apply_ime_output(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    output0: &[u8],
+    output1: &[u8],
+    old_composition_size: usize,
+) -> Result<()> {
+    uic_text_remove_composition_internal(context, component, old_composition_size).await?;
+
+    uic_text_insert_output(context, component, output0).await?;
+    uic_text_insert_output(context, component, output1).await?;
+
+    context
+        .system()
+        .set_input_composition_size(output1.len());
+    Ok(())
+}
+
+async fn uic_text_process_default_input(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    key: i8,
+) -> Result<()> {
+    let old_composition_size = context.system().input_composition_size();
+    let output = context.system().handle_input_method(key, 2);
+
+    let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+    let capacity: u32 = read_generic(context, component + 0x48)?;
+    let text_len = uic_read_c_string(context, text_ptr)?.len();
+
+    // Native 0x1b9af8 computes:
+    // growth = output0_len + output1_len - s_CompoSize.
+    // If growth is positive and capacity <= strlen(text) + growth, it does
+    // not alter the displayed composition. It flushes the IME with key 157
+    // and clears s_CompoSize, effectively committing the existing bytes
+    // in place.
+    let growth = output
+        .output0_len
+        .saturating_add(output.output1_len) as isize
+        - old_composition_size as isize;
+
+    if growth > 0
+        && capacity as usize <= text_len.saturating_add(growth as usize)
+    {
+        let _ = context.system().handle_input_method(-99, 2);
+        context.system().set_input_composition_size(0);
+        return Ok(());
+    }
+
+    uic_text_apply_ime_output(
+        context,
+        component,
+        &output.output0[..output.output0_len],
+        &output.output1[..output.output1_len],
+        old_composition_size,
+    )
+    .await
+}
+
+async fn uic_text_flush_removed_composition(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<()> {
+    let old_composition_size = context.system().input_composition_size();
+    if old_composition_size == 0 {
+        context.system().set_input_composition_size(0);
+        return Ok(());
+    }
+
+    uic_text_remove_composition_internal(context, component, old_composition_size).await?;
+
+    // Native LEFT/RIGHT_SOFT/RIGHT composition paths remove the visible
+    // composition first, call MC_imHandleInput(157, 502), then insert the
+    // returned committed text. Provider output1 is normally zero after
+    // this flush but preserve the complete output contract.
+    let output = context.system().handle_input_method(-99, 2);
+    uic_text_insert_output(
+        context,
+        component,
+        &output.output0[..output.output0_len],
+    )
+    .await?;
+    uic_text_insert_output(
+        context,
+        component,
+        &output.output1[..output.output1_len],
+    )
+    .await?;
+
+    context
+        .system()
+        .set_input_composition_size(output.output1_len);
+    Ok(())
+}
+
+async fn uic_text_clear(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<()> {
+    let composition_size = context.system().input_composition_size();
+    let cursor: u32 = read_generic(context, component + 0x4c)?;
+
+    if composition_size != 0 {
+        // Native intentionally uses public MC_uicDeleteText here rather
+        // than WPUic_DeleteText, so preserve its callback behavior.
+        let position = (cursor as usize).saturating_sub(composition_size);
+        delete_text(
+            context,
+            component,
+            position as i32,
+            composition_size as i32,
+        )
+        .await?;
+
+        let output = context.system().handle_input_method(-16, 2);
+
+        uic_text_insert_output(
+            context,
+            component,
+            &output.output0[..output.output0_len],
+        )
+        .await?;
+        uic_text_insert_output(
+            context,
+            component,
+            &output.output1[..output.output1_len],
+        )
+        .await?;
+
+        context
+            .system()
+            .set_input_composition_size(output.output1_len);
+        return Ok(());
+    }
+
+    let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+    let text = uic_read_c_string(context, text_ptr)?;
+
+    if cursor == 0 || cursor as usize > text.len() {
+        context.system().set_input_composition_size(0);
+        return Ok(());
+    }
+
+    let previous = (cursor - 1) as usize;
+    let width = if text[previous] & 0x80 != 0 { 2 } else { 1 };
+    let position = cursor.saturating_sub(width) as i32;
+
+    // Native no-composition CLEAR also uses public MC_uicDeleteText.
+    delete_text(context, component, position, width as i32).await?;
+    context.system().set_input_composition_size(0);
+    Ok(())
+}
+
+async fn uic_handle_text(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    key: i32,
+) -> Result<u32> {
+    let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
+    if text_ptr == 0 {
+        return Ok(0);
+    }
+
+    let old = uic_read_c_string(context, text_ptr)?;
+
+    match key {
+        -16 => {
+            uic_text_clear(context, component).await?;
+        }
+        -7 => {
+            if context.system().input_composition_size() != 0 {
+                uic_text_flush_removed_composition(context, component).await?;
+            }
+
+            let mode = context.system().current_input_mode();
+            let next_mode = if mode + 1 >= 4 { 0 } else { mode + 1 };
+            context.system().set_current_input_mode(next_mode);
+            context.system().set_input_composition_size(0);
+        }
+        -3 => {
+            if context.system().input_composition_size() != 0 {
+                uic_text_flush_removed_composition(context, component).await?;
+            }
+
+            let cursor: u32 = read_generic(context, component + 0x4c)?;
+            if cursor > 0 {
+                let text = uic_read_c_string(context, text_ptr)?;
+                let previous = (cursor - 1) as usize;
+                let width = if text[previous] & 0x80 != 0 { 2 } else { 1 };
+                write_generic(
+                    context,
+                    component + 0x4c,
+                    cursor.saturating_sub(width),
+                )?;
+            }
+
+            context.system().set_input_composition_size(0);
+        }
+        -4 => {
+            if context.system().input_composition_size() != 0 {
+                uic_text_flush_removed_composition(context, component).await?;
+            }
+
+            let mut cursor: u32 = read_generic(context, component + 0x4c)?;
+            let text = uic_read_c_string(context, text_ptr)?;
+
+            if cursor as usize == text.len() {
+                uic_text_insert_internal(context, component, text.len(), b" ").await?;
+            } else if (cursor as usize) < text.len() {
+                cursor += uic_signed_byte_width(text[cursor as usize]);
+                write_generic(
+                    context,
+                    component + 0x4c,
+                    cursor.min(text.len() as u32),
+                )?;
+            }
+
+            context.system().set_input_composition_size(0);
+        }
+        -1 => {
+            let cursor: u32 = read_generic(context, component + 0x4c)?;
+            let text = uic_read_c_string(context, text_ptr)?;
+            let step = uic_text_line_step(context, component)?;
+
+            if let Some(next) =
+                uic_text_vertical_position(text.len() as i32, cursor as i32, step, 0)
+            {
+                write_generic(context, component + 0x4c, next as u32)?;
+            }
+
+            // Native special-key common path stores the zero-initialized
+            // output1_len into s_CompoSize.
+            context.system().set_input_composition_size(0);
+        }
+        -2 => {
+            let cursor: u32 = read_generic(context, component + 0x4c)?;
+            let text = uic_read_c_string(context, text_ptr)?;
+            let step = uic_text_line_step(context, component)?;
+
+            if let Some(next) =
+                uic_text_vertical_position(text.len() as i32, cursor as i32, step, 1)
+            {
+                write_generic(context, component + 0x4c, next as u32)?;
+            }
+
+            context.system().set_input_composition_size(0);
+        }
+        _ => {
+            uic_text_process_default_input(
+                context,
+                component,
+                key as u8 as i8,
+            )
+            .await?;
+        }
+    }
+
+    let current = uic_read_c_string(context, text_ptr)?;
+    if old != current {
+        let callback: WIPICWord = read_generic(context, component + 0x5c)?;
+        if callback != 0 {
+            let callback_context: WIPICWord =
+                read_generic(context, component + 0x64)?;
+            context
+                .call_function(callback, &[component, 0, callback_context])
+                .await?;
+        }
+    }
+
+    let callback: WIPICWord = read_generic(context, component + 0x60)?;
+    if callback != 0 {
+        let callback_context: WIPICWord =
+            read_generic(context, component + 0x68)?;
+        context
+            .call_function(callback, &[component, 0, callback_context])
+            .await?;
+    }
+
+    Ok(1)
+}
+
+/// LGT `MC_uicHandleEvent` (WIPI-C service 0x328).
+///
+/// Native first invokes the optional component event handler at +0x28. A
+/// handler return value of 1 consumes the event immediately. Built-in UIC
+/// processing runs only for WIPI key events 502 (press) and 504 (release).
+/// Recognized built-in changes repaint the component before returning 1.
+pub async fn handle_event(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    event: WIPICWord,
+    key: i32,
+    extra: WIPICWord,
+) -> Result<u32> {
+    tracing::debug!(
+        "MC_uicHandleEvent({component:#x}, {event}, {key}, {extra:#x})"
+    );
+
+    if component == 0 {
+        return Ok(0);
+    }
+
+    let component_type: u32 = read_generic(context, component)?;
+    if !(1..=5).contains(&component_type) {
+        return Ok(0);
+    }
+
+    let enabled: u32 = read_generic(context, component + 0x20)?;
+    if enabled == 0 {
+        return Ok(0);
+    }
+
+    let mut result = 0;
+    let handler: WIPICWord = read_generic(context, component + 0x28)?;
+    if handler != 0 {
+        result = context
+            .call_function(
+                handler,
+                &[component, event, key as u32, extra],
+            )
+            .await?;
+        if result == 1 {
+            return Ok(1);
+        }
+    }
+
+    if !matches!(event, 502 | 504) {
+        return Ok(result);
+    }
+
+    let builtin = match component_type {
+        1 => uic_handle_menu(context, component, key).await?,
+        2 => uic_handle_datetime(context, component, key).await?,
+        3 => uic_handle_text(context, component, key).await?,
+        4 => 0,
+        5 => uic_handle_list(context, component, key).await?,
+        _ => 0,
+    };
+
+    if builtin != 0 {
+        uic_repaint_component(context, component).await?;
+        Ok(builtin)
+    } else if result != 0 {
+        uic_repaint_component(context, component).await?;
+        Ok(result)
+    } else {
+        Ok(0)
+    }
+}
+
 pub async fn get_menu_item(_context: &mut dyn WIPICContext, cc: WIPICWord, idx: u32, psz: WIPICWord, buflen: i32, img: WIPICWord) -> Result<i32> {
     tracing::warn!("stub MC_uicGetMenuItem({cc:#x}, {idx}, {psz:#x}, {buflen}, {img:#x})");
 
@@ -468,9 +1581,28 @@ mod tests {
 
     use crate::context::test::TestContext;
 
-    use super::{configure, delete_text, insert_text, set_max_text_size};
+    use super::{
+        configure, delete_text, insert_text, set_max_text_size, uic_skip_time_separator,
+    };
 
     const COMPONENT: u32 = 0x1000;
+
+    #[test]
+    fn lgt_uic_datetime_separator_skip_matches_native_single_step() {
+        assert_eq!(uic_skip_time_separator(b"12:34", 2, true), 3);
+        assert_eq!(uic_skip_time_separator(b"12/34", 2, true), 3);
+        assert_eq!(uic_skip_time_separator(b"12\n34", 2, true), 3);
+
+        // Native skips at most one separator per cursor move.
+        assert_eq!(uic_skip_time_separator(b"12::34", 2, true), 3);
+
+        // Space is part of the formatted DateTime string but is not one of
+        // the native separator bytes checked by MC_uicHandleEvent.
+        assert_eq!(uic_skip_time_separator(b"12 34", 2, true), 2);
+
+        assert_eq!(uic_skip_time_separator(b"12:34", 2, false), 1);
+        assert_eq!(uic_skip_time_separator(b"12 34", 2, false), 2);
+    }
 
     fn read_i32(context: &TestContext, offset: u32) -> i32 {
         read_generic(context, COMPONENT + offset).unwrap()

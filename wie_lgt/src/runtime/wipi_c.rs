@@ -150,6 +150,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::TimeConvert => time_convert.into_body(),
         WIPICSvcId::TimeToTm => time_to_tm.into_body(),
         WIPICSvcId::UicPaint => uic::paint.into_body(),
+        WIPICSvcId::UicHandleEvent => uic::handle_event.into_body(),
         WIPICSvcId::UicConfigure => uic::configure.into_body(),
         WIPICSvcId::UicSetEnable => uic::set_enable.into_body(),
         WIPICSvcId::UicInsertText => uic::insert_text.into_body(),
@@ -419,12 +420,42 @@ async fn im_get_current_mode(context: &mut dyn WIPICContext, a0: u32, a1: u32, a
     Ok(context.system().current_input_mode())
 }
 
+/// Normalize the public `MC_imHandleInput` key to the signed byte seen by
+/// `MH_IMAhandleInput`.
+///
+/// The native 35..57 jump table is identity. `ime_handle` then:
+/// - maps signed -3 to -16,
+/// - preserves '*', '#', digits, and values in its accepted unsigned range,
+/// - maps other out-of-range values to -99,
+/// - finally forwards only the low byte to the provider.
+fn im_provider_key(key: u32) -> i8 {
+    let signed = key as i32;
+
+    let normalized = if signed == -3 {
+        -16i32
+    } else if signed == 42
+        || signed == 35
+        || (48..=57).contains(&signed)
+    {
+        signed
+    } else {
+        let range_value = key.wrapping_sub(32);
+        if range_value > 65_499 {
+            -99
+        } else {
+            signed
+        }
+    };
+
+    normalized as u8 as i8
+}
+
 /// `MC_imHandleInput` (vendor export 304 / WIPI-C service 0x130).
 ///
-/// The LGT wrapper maps WIPI key event 503 to DIME event 2. Its provider only
-/// handles DIME events 2 and 4, so WIPI events 502 and 504 return 0 without
-/// touching the output buffers. For event 503, both output pairs are cleared
-/// before input processing and then receive committed/composing text.
+/// Native maps WIPI events 502/503/504 to DIME 1/2/3. `ime_handle` then maps
+/// those to provider events 2/3/4, while `MH_IMAhandleInput` accepts only
+/// provider events 2 and 4. Therefore 502 and 504 are processed and 503 is
+/// ignored without touching the caller's output buffers.
 async fn im_handle_input(
     context: &mut dyn WIPICContext,
     key: u32,
@@ -438,16 +469,20 @@ async fn im_handle_input(
         "MC_imHandleInput({key:#x}, {event:#x}, {output0:#x}, {output0_len:#x}, {output1:#x}, {output1_len:#x})"
     );
 
-    if event != 503 {
-        return Ok(0);
-    }
+    let provider_event = match event {
+        502 => 2,
+        504 => 4,
+        _ => return Ok(0),
+    };
 
     context.write_bytes(output0, &[0])?;
     write_generic(context, output0_len, 0u32)?;
     context.write_bytes(output1, &[0])?;
     write_generic(context, output1_len, 0u32)?;
 
-    let output = context.system().handle_input_method(key as i8, 2);
+    let output = context
+        .system()
+        .handle_input_method(im_provider_key(key), provider_event);
 
     if output.output0_len != 0 {
         context.write_bytes(output0, &output.output0[..output.output0_len])?;
@@ -578,3 +613,42 @@ async fn unk14(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u
     Ok(0)
 }
 
+#[cfg(test)]
+mod im_handle_input_tests {
+    use super::im_provider_key;
+
+    #[test]
+    fn im_provider_key_matches_native() {
+        // Native MC_imHandleInput 35..57 jump table is identity.
+        for key in 35u32..=57 {
+            assert_eq!(im_provider_key(key), key as u8 as i8);
+        }
+
+        // ime_handle special signed key.
+        assert_eq!(im_provider_key((-3i32) as u32), -16);
+
+        // Other directly supplied signed negative WIPI keys are rejected to
+        // provider flush key -99.
+        for key in [-16i32, -7, -4, -2, -1, -99] {
+            assert_eq!(im_provider_key(key as u32), -99);
+        }
+
+        // UIC masks special keys before calling the public API. These values
+        // survive ime_handle and become signed again at the provider boundary.
+        assert_eq!(im_provider_key(157), -99);
+        assert_eq!(im_provider_key(240), -16);
+        assert_eq!(im_provider_key(249), -7);
+        assert_eq!(im_provider_key(252), -4);
+        assert_eq!(im_provider_key(253), -3);
+        assert_eq!(im_provider_key(254), -2);
+        assert_eq!(im_provider_key(255), -1);
+
+        // Accepted printable/range values remain their low byte.
+        for key in [32u32, 34, 35, 36, 42, 47, 48, 57, 58, 240, 255] {
+            assert_eq!(im_provider_key(key), key as u8 as i8);
+        }
+
+        assert_eq!(im_provider_key(0), -99);
+        assert_eq!(im_provider_key(31), -99);
+    }
+}

@@ -119,6 +119,14 @@ impl System {
         self.input_method.write().set_current_mode(mode);
     }
 
+    pub fn input_composition_size(&self) -> usize {
+        self.input_method.read().composition_size()
+    }
+
+    pub fn set_input_composition_size(&self, size: usize) {
+        self.input_method.write().set_composition_size(size);
+    }
+
     pub fn handle_input_method(&self, key: i8, event: u32) -> InputMethodOutput {
         self.input_method.write().handle_input(key, event)
     }
