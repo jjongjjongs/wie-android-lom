@@ -11,7 +11,11 @@ use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{ByteRead, ByteWrite, Result, read_generic, write_generic};
 use wie_wipi_c::{
     WIPICContext, WIPICMethodBody,
-    api::{net::SharedNetworkState, serial::SharedSerialState},
+    api::{
+        filesystem::SharedFilesystemState,
+        net::SharedNetworkState,
+        serial::SharedSerialState,
+    },
 };
 
 #[derive(Clone)]
@@ -21,6 +25,7 @@ pub struct KtfWIPICContext {
     jvm: Jvm, // We need jvm to access resource in jvm. TODO is there better way to do this?
     network_state: SharedNetworkState,
     serial_state: SharedSerialState,
+    filesystem_state: SharedFilesystemState,
 }
 
 impl KtfWIPICContext {
@@ -30,6 +35,7 @@ impl KtfWIPICContext {
         jvm: Jvm,
         network_state: SharedNetworkState,
         serial_state: SharedSerialState,
+        filesystem_state: SharedFilesystemState,
     ) -> Self {
         Self {
             core,
@@ -37,6 +43,7 @@ impl KtfWIPICContext {
             jvm,
             network_state,
             serial_state,
+            filesystem_state,
         }
     }
 }
@@ -92,6 +99,10 @@ impl WIPICContext for KtfWIPICContext {
 
     fn serial_state(&self) -> SharedSerialState {
         self.serial_state.clone()
+    }
+
+    fn filesystem_state(&self) -> SharedFilesystemState {
+        self.filesystem_state.clone()
     }
 
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord> {

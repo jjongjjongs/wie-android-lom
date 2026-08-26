@@ -7,7 +7,11 @@ use wie_util::{ByteRead, ByteWrite, Result};
 
 use crate::{
     WIPICMethodBody,
-    api::{net::SharedNetworkState, serial::SharedSerialState},
+    api::{
+        filesystem::SharedFilesystemState,
+        net::SharedNetworkState,
+        serial::SharedSerialState,
+    },
     method::{ParamConverter, ResultConverter},
 };
 
@@ -24,6 +28,7 @@ pub trait WIPICContext: ByteRead + ByteWrite + Send + Sync {
     fn system(&mut self) -> &mut System;
     fn network_state(&self) -> SharedNetworkState;
     fn serial_state(&self) -> SharedSerialState;
+    fn filesystem_state(&self) -> SharedFilesystemState;
     fn spawn(&mut self, callback: WIPICMethodBody) -> Result<()>;
     async fn get_resource_size(&self, name: &str) -> Result<Option<usize>>;
     async fn read_resource(&self, name: &str) -> Result<Vec<u8>>;
@@ -96,6 +101,7 @@ pub mod test {
 
     use super::{WIPICContext, WIPICMethodBody};
     use crate::api::{
+        filesystem::{SharedFilesystemState, new_state as new_filesystem_state},
         net::{SharedNetworkState, new_state as new_network_state},
         serial::{SharedSerialState, new_state as new_serial_state},
     };
@@ -114,6 +120,7 @@ pub mod test {
         resources: Vec<(String, Vec<u8>)>,
         network_state: SharedNetworkState,
         serial_state: SharedSerialState,
+        filesystem_state: SharedFilesystemState,
     }
 
     impl TestContext {
@@ -128,6 +135,7 @@ pub mod test {
                 resources: Vec::new(),
                 network_state: new_network_state(),
                 serial_state: new_serial_state(),
+                filesystem_state: new_filesystem_state(),
             }
         }
 
@@ -141,6 +149,7 @@ pub mod test {
                 resources: Vec::new(),
                 network_state: new_network_state(),
                 serial_state: new_serial_state(),
+                filesystem_state: new_filesystem_state(),
             }
         }
 
@@ -210,6 +219,10 @@ pub mod test {
 
         fn serial_state(&self) -> SharedSerialState {
             self.serial_state.clone()
+        }
+
+        fn filesystem_state(&self) -> SharedFilesystemState {
+            self.filesystem_state.clone()
         }
 
         fn spawn(&mut self, _callback: WIPICMethodBody) -> Result<()> {

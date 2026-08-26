@@ -44,11 +44,12 @@ struct CMethodProxy {
 
 async fn handle_wipic_svc(
     core: &mut ArmCore,
-    (system, jvm, network_state, serial_state): &mut (
+    (system, jvm, network_state, serial_state, filesystem_state): &mut (
         System,
         Jvm,
         net::SharedNetworkState,
         serial::SharedSerialState,
+        filesystem::SharedFilesystemState,
     ),
     id: SvcId,
 ) -> Result<()> {
@@ -58,6 +59,7 @@ async fn handle_wipic_svc(
         jvm.clone(),
         network_state.clone(),
         serial_state.clone(),
+        filesystem_state.clone(),
     );
     let (_, lr) = core.read_pc_lr()?;
     // An unimplemented WIPI-C function is reported and skipped rather than
@@ -188,6 +190,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicRemoveMenuItem => uic::remove_menu_item.into_body(),
         WIPICSvcId::UicSetActiveMenuItem => uic::set_active_menu_item.into_body(),
         WIPICSvcId::UicGetActiveMenuItem => uic::get_active_menu_item.into_body(),
+        WIPICSvcId::FsOpen => filesystem::open.into_body(),
         WIPICSvcId::OpenDatabase => database::open_database.into_body(),
         WIPICSvcId::ReadRecordSingle => database::stream_read.into_body(),
         WIPICSvcId::WriteRecordSingle => database::stream_write.into_body(),
@@ -282,7 +285,7 @@ pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm
     core.register_svc_handler(
         SVC_CATEGORY_WIPIC,
         handle_wipic_svc,
-        &(system.clone(), jvm.clone(), net::new_state(), serial::new_state()),
+        &(system.clone(), jvm.clone(), net::new_state(), serial::new_state(), filesystem::new_state()),
     )
 }
 
