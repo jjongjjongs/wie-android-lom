@@ -11,6 +11,33 @@ use smaf::{
 
 use self::adpcm::decode_adpcm;
 
+/// Decodes linear (non-ADPCM) PCM wave data into signed 16-bit samples.
+///
+/// SMAF stores recorded sound effects - the ones a title fires for a hit, a
+/// door, a logo voice - as a stream wave that is often plain PCM rather than
+/// Yamaha ADPCM. `offset_binary` is true for OffsetBinary (unsigned, centred at
+/// half range) and false for two's complement (already signed). 8- and 16-bit
+/// depths are handled; anything else returns empty for the caller to report.
+fn decode_linear_pcm(data: &[u8], base_bit: smaf::BaseBit, offset_binary: bool) -> Vec<i16> {
+    match base_bit {
+        smaf::BaseBit::Bit8 => data
+            .iter()
+            .map(|&byte| {
+                let signed = if offset_binary { i16::from(byte) - 128 } else { i16::from(byte as i8) };
+                signed << 8
+            })
+            .collect(),
+        smaf::BaseBit::Bit16 => data
+            .chunks_exact(2)
+            .map(|pair| {
+                let raw = u16::from_le_bytes([pair[0], pair[1]]);
+                if offset_binary { (i32::from(raw) - 32768) as i16 } else { raw as i16 }
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 pub enum SmafEvent {
     Wave { channel: u8, sampling_rate: u32, data: Vec<i16> },
     MidiNoteOn { channel: u8, note: u8, velocity: u8 },
@@ -193,28 +220,52 @@ fn parse_sequence_events(
                         continue;
                     };
 
-                    match pcm.format {
+                    let channel = match pcm.channel {
+                        Channel::Mono => 1,
+                        Channel::Stereo => 2,
+                    };
+                    let decoded = match pcm.format {
                         smaf::StreamWaveFormat::YamahaADPCM => {
                             if pcm.base_bit != smaf::BaseBit::Bit4 || pcm.channel != Channel::Mono {
+                                tracing::warn!(
+                                    "[smaf] ADPCM wave skipped: base_bit={:?} channel={:?} (only Bit4/Mono decoded)",
+                                    pcm.base_bit,
+                                    pcm.channel
+                                );
                                 continue;
                             }
-
-                            let decoded = decode_adpcm(pcm.wave_data);
-                            let channel = match pcm.channel {
-                                Channel::Mono => 1,
-                                Channel::Stereo => 2,
-                            };
-                            result.push((
-                                time,
-                                SmafEvent::Wave {
-                                    channel,
-                                    sampling_rate: pcm.sampling_freq as _,
-                                    data: decoded,
-                                },
-                            ))
+                            decode_adpcm(pcm.wave_data)
                         }
-                        smaf::StreamWaveFormat::TwosComplementPCM | smaf::StreamWaveFormat::OffsetBinaryPCM => {}
+                        format @ (smaf::StreamWaveFormat::TwosComplementPCM | smaf::StreamWaveFormat::OffsetBinaryPCM) => {
+                            let offset_binary = format == smaf::StreamWaveFormat::OffsetBinaryPCM;
+                            decode_linear_pcm(pcm.wave_data, pcm.base_bit, offset_binary)
+                        }
+                    };
+                    if decoded.is_empty() {
+                        tracing::warn!(
+                            "[smaf] wave not decoded: format={:?} base_bit={:?} channel={:?} bytes={}",
+                            pcm.format,
+                            pcm.base_bit,
+                            pcm.channel,
+                            pcm.wave_data.len()
+                        );
+                        continue;
                     }
+                    tracing::info!(
+                        "[smaf] score wave: format={:?} base_bit={:?} rate={} samples={}",
+                        pcm.format,
+                        pcm.base_bit,
+                        pcm.sampling_freq,
+                        decoded.len()
+                    );
+                    result.push((
+                        time,
+                        SmafEvent::Wave {
+                            channel,
+                            sampling_rate: pcm.sampling_freq as _,
+                            data: decoded,
+                        },
+                    ))
                 } else {
                     let duration = (gate_time * (timebase_g as u32)) as usize;
                     let channel_index = (channel as usize).min(octave_shift.len() - 1);
@@ -938,14 +989,44 @@ fn parse_pcm_audio_track_events(track: &PCMAudioTrack) -> Vec<(usize, SmafEvent)
                     })
                     .unwrap();
 
-                assert!(track.format == smaf::PcmWaveFormat::Adpcm); // current decoder is adpcm only
-                assert!(track.channel == Channel::Mono); // current decoder is mono only
-
-                let decoded = decode_adpcm(pcm);
                 let channel = match track.channel {
                     Channel::Mono => 1,
                     Channel::Stereo => 2,
                 };
+                let decoded = match track.format {
+                    smaf::PcmWaveFormat::Adpcm => {
+                        if track.channel != Channel::Mono {
+                            tracing::warn!("[smaf] ADPCM PCM track skipped: channel={:?} (mono only)", track.channel);
+                            continue;
+                        }
+                        decode_adpcm(pcm)
+                    }
+                    // A PCM audio track only carries two's-complement linear PCM
+                    // or one of the heavy codecs; the codecs need a decoder we do
+                    // not have, so they are reported and skipped.
+                    smaf::PcmWaveFormat::TwosComplementPCM => decode_linear_pcm(pcm, track.base_bit, false),
+                    other => {
+                        tracing::warn!("[smaf] PCM audio track format {:?} unsupported (no decoder)", other);
+                        continue;
+                    }
+                };
+                if decoded.is_empty() {
+                    tracing::warn!(
+                        "[smaf] PCM audio track not decoded: format={:?} base_bit={:?} channel={:?} bytes={}",
+                        track.format,
+                        track.base_bit,
+                        track.channel,
+                        pcm.len()
+                    );
+                    continue;
+                }
+                tracing::info!(
+                    "[smaf] PCM audio track: format={:?} base_bit={:?} rate={} samples={}",
+                    track.format,
+                    track.base_bit,
+                    track.sampling_freq,
+                    decoded.len()
+                );
                 result.push((
                     time,
                     SmafEvent::Wave {

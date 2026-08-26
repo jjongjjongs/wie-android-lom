@@ -2636,6 +2636,7 @@ name = "smaf_player"
 version = "0.1.0"
 dependencies = [
  "smaf",
+ "tracing",
 ]
 
 [[package]]
