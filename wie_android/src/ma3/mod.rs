@@ -32,7 +32,7 @@ mod wave;
 use std::collections::BTreeMap;
 
 use crate::ma3::{
-    bus::{clamp_i16, mix_q15, stereo_gain_q15},
+    bus::{clamp_i16, mix_q15, soft_limit, stereo_gain_q15},
     tone::{Bank, DRUM_CHANNEL},
     voice::Voice,
     wave::WaveVoice,
@@ -108,14 +108,14 @@ pub const CHANNELS: usize = 2;
 /// Notes at once, which is what the chip could hold.
 const MAX_VOICES: usize = 16;
 
-/// Loudness the recorded effects are mixed in at, as a percentage. The handset
-/// played each recording back through its own output stage above the stored
-/// level; decoded straight, the waves land near a tenth of full scale and read
-/// as faint and blunt against the music, so they are lifted to sit where the
-/// reference plays them. Kept just under the point where the loudest effects
-/// would drive the summed stream past full scale, so the lift adds level
-/// without adding the hard-clip edge that reads as harshness.
-const WAVE_GAIN_PERCENT: i32 = 180;
+/// Loudness the recorded effects are mixed in at, as a percentage. Decoded
+/// straight the waves land near a tenth of full scale and read as faint against
+/// the music; worse, their energy sits well below their peaks, so a gentle lift
+/// leaves the body quiet however loud the odd transient gets. They are pushed
+/// well up the scale to bring that body up to where the reference plays it, and
+/// the output limiter rounds off the peaks the push sends over rather than
+/// clipping them flat.
+const WAVE_GAIN_PERCENT: i32 = 320;
 
 /// Source samples over which a recorded effect is ramped to silence at its end.
 /// The recordings stop at whatever level the last sample held rather than
@@ -658,13 +658,16 @@ impl SynthMixer {
 
         accumulator.map(|acc| {
             let total_peak = acc.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
-            let clamped = total_peak > 32767;
+            // Past full scale the limiter rounds the peak off rather than
+            // clipping it; the log notes when it had to so the lift can be read
+            // against how often it reaches there.
+            let limited = total_peak > i16::MAX as u32;
             if pcm_active > 0 {
                 tracing::info!(
-                    "[mix] pcm={pcm_active} pcm_peak={pcm_peak} voices={active_voices} synth_peak={synth_peak} total_peak={total_peak} clamped={clamped}"
+                    "[mix] pcm={pcm_active} pcm_peak={pcm_peak} voices={active_voices} synth_peak={synth_peak} total_peak={total_peak} limited={limited}"
                 );
             }
-            acc.iter().map(|sample| clamp_i16(i64::from(*sample)) as i16).collect()
+            acc.iter().map(|sample| soft_limit(i64::from(*sample)) as i16).collect()
         })
     }
 }
