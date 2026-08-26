@@ -108,6 +108,14 @@ pub const CHANNELS: usize = 2;
 /// Notes at once, which is what the chip could hold.
 const MAX_VOICES: usize = 16;
 
+/// Loudness the recorded effects are mixed in at, as a percentage. The handset
+/// played each recording back through its own output stage at about twice the
+/// stored level; decoded straight, the waves land near a tenth of full scale
+/// and read as faint and blunt against the music, so they are lifted to sit
+/// where the reference plays them. The summed stream still clamps at the end,
+/// which caps the rare loud wave rather than letting it wrap.
+const WAVE_GAIN_PERCENT: i32 = 220;
+
 /// MIDI channels a sequence can address.
 const MIDI_CHANNELS: usize = 16;
 
@@ -616,8 +624,8 @@ impl SynthMixer {
                 for frame in acc.chunks_exact_mut(CHANNELS) {
                     match wave.next_sample() {
                         Some(sample) => {
-                            pcm_peak = pcm_peak.max(sample.unsigned_abs() as u32);
-                            let sample = i32::from(sample);
+                            let sample = i32::from(sample) * WAVE_GAIN_PERCENT / 100;
+                            pcm_peak = pcm_peak.max(sample.unsigned_abs());
                             for slot in frame.iter_mut() {
                                 *slot += sample;
                             }
