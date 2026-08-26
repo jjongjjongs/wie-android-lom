@@ -713,6 +713,37 @@ pub async fn set_label(
     Ok(new_label)
 }
 
+/// LGT `MC_uicGetLabel` (WIPI-C service 0x333).
+///
+/// Native validates the component and accepts only LabelComponent (type 4).
+/// Invalid/NULL and non-Label components return NULL. A non-NULL +0x44 label
+/// pointer is returned unchanged. When +0x44 is NULL, native returns a
+/// provider-static empty string; WIE mirrors that stable pointer identity in
+/// reserved guest global-data memory.
+pub async fn get_label(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<WIPICIndirectPtr> {
+    tracing::debug!("MC_uicGetLabel({component:#x})");
+
+    if component == 0 {
+        return Ok(WIPICIndirectPtr(0));
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    if component_type != 4 {
+        return Ok(WIPICIndirectPtr(0));
+    }
+
+    let label: WIPICWord = read_generic(context, component + 0x44)?;
+    if label != 0 {
+        return Ok(WIPICIndirectPtr(label));
+    }
+
+    context.write_bytes(UIC_EMPTY_LABEL, &[0])?;
+    Ok(WIPICIndirectPtr(UIC_EMPTY_LABEL))
+}
+
 /// LGT/KTF `MC_uicSetEnable`.
 ///
 /// Native component types are:
@@ -1063,6 +1094,7 @@ const UIC_CLASS_NAME_DATETIME: WIPICWord = 0x7fff_1020;
 const UIC_CLASS_NAME_TEXT: WIPICWord = 0x7fff_1038;
 const UIC_CLASS_NAME_LABEL: WIPICWord = 0x7fff_1048;
 const UIC_CLASS_NAME_LIST: WIPICWord = 0x7fff_1058;
+const UIC_EMPTY_LABEL: WIPICWord = 0x7fff_1068;
 
 fn uic_class_name(component_type: WIPICWord) -> Option<(WIPICWord, &'static [u8])> {
     match component_type {
@@ -2339,10 +2371,12 @@ mod tests {
     use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
-        UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
-        destroy, get_class, get_class_name, get_font, get_geometry, insert_text, is_instance,
-        repaint, set_bg_color, set_callback, set_enable, set_event_handler, set_fg_color,
-        set_font, set_label, set_max_text_size, uic_color_to_rgb565, uic_repaint_rect,
+        UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
+        delete_text,
+        destroy, get_class, get_class_name, get_font, get_geometry, get_label, insert_text,
+        is_instance, repaint, set_bg_color, set_callback, set_enable, set_event_handler,
+        set_fg_color, set_font, set_label, set_max_text_size, uic_color_to_rgb565,
+        uic_repaint_rect,
         uic_skip_time_separator,
     };
 
@@ -3014,6 +3048,51 @@ mod tests {
         context.read_bytes(larger, &mut copied).unwrap();
         assert_eq!(&copied[..17], b"abcdefghijklmnop\0");
         assert_eq!(copied[17], 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_label_returns_native_label_pointer_or_static_empty_string() {
+        let mut context = TestContext::new();
+
+        init_component(&mut context, 4);
+        write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
+
+        let empty_first = get_label(&mut context, COMPONENT).await.unwrap();
+        let empty_second = get_label(&mut context, COMPONENT).await.unwrap();
+        assert_eq!(empty_first.0, UIC_EMPTY_LABEL);
+        assert_eq!(empty_second.0, UIC_EMPTY_LABEL);
+
+        let mut empty = [0xffu8; 1];
+        context.read_bytes(UIC_EMPTY_LABEL, &mut empty).unwrap();
+        assert_eq!(empty, [0]);
+
+        context.write_bytes(0x3000, b"native label\0").unwrap();
+        write_generic(&mut context, COMPONENT + 0x44, 0x3000u32).unwrap();
+
+        assert_eq!(
+            get_label(&mut context, COMPONENT).await.unwrap().0,
+            0x3000
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_label_returns_null_for_null_invalid_and_non_label_components() {
+        let mut context = TestContext::new();
+
+        assert_eq!(get_label(&mut context, 0).await.unwrap().0, 0);
+
+        init_component(&mut context, 0);
+        write_generic(&mut context, COMPONENT + 0x44, 0x3000u32).unwrap();
+        assert_eq!(get_label(&mut context, COMPONENT).await.unwrap().0, 0);
+
+        init_component(&mut context, 6);
+        assert_eq!(get_label(&mut context, COMPONENT).await.unwrap().0, 0);
+
+        for component_type in [1u32, 2, 3, 5] {
+            init_component(&mut context, component_type);
+            write_generic(&mut context, COMPONENT + 0x44, 0x3000u32).unwrap();
+            assert_eq!(get_label(&mut context, COMPONENT).await.unwrap().0, 0);
+        }
     }
 
     #[test]
