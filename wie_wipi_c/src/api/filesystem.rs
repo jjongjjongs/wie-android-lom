@@ -329,6 +329,95 @@ pub async fn close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
     Ok(0)
 }
 
+/// WIPI-C MC_fsSeek (service 0x194).
+///
+/// Native origins:
+/// - 0: SEEK_SET
+/// - 1: SEEK_CUR
+/// - 2: SEEK_END
+///
+/// Native additionally forbids seeking beyond EOF. On that failure the host
+/// implementation restores the previous position.
+///
+/// Return contract:
+/// - origin 0 with negative offset => -4
+/// - origin 2 with positive offset => -4
+/// - invalid origin => -9
+/// - invalid fd => -2
+/// - negative resulting position / generic seek failure => -1
+/// - resulting position beyond EOF => -4
+/// - success => new absolute file offset
+pub async fn seek(
+    context: &mut dyn WIPICContext,
+    fd: i32,
+    offset: i32,
+    origin: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_fsSeek({fd}, {offset}, {origin})");
+
+    // These checks happen in MC_fsSeek before dfs_seek validates the fd.
+    if origin == 0 && offset < 0 {
+        return Ok(-4);
+    }
+    if origin == 2 && offset > 0 {
+        return Ok(-4);
+    }
+    if !matches!(origin, 0 | 1 | 2) {
+        return Ok(-9);
+    }
+
+    let entry = {
+        let state = context.filesystem_state();
+        let state = state.lock();
+        state.entry(fd).cloned()
+    };
+
+    let Some(entry) = entry else {
+        return Ok(-2);
+    };
+
+    // Native MH/AND_fileSeek obtains EOF before performing the requested
+    // seek and rejects positions past it.
+    let filesystem = context.system().filesystem().clone();
+    let Some(file_size) = filesystem.size(&entry.path).await else {
+        return Ok(-1);
+    };
+
+    let current = entry.cursor as i64;
+    let end = file_size as i64;
+    let offset = offset as i64;
+
+    let target = match origin {
+        0 => offset,
+        1 => current + offset,
+        2 => end + offset,
+        _ => unreachable!(),
+    };
+
+    // A negative lseek target fails at the host layer and is collapsed to
+    // the native generic filesystem error.
+    if target < 0 {
+        return Ok(-1);
+    }
+
+    // MH/AND_fileSeek explicitly restores the old offset when the requested
+    // position lies beyond EOF.
+    if target > end {
+        return Ok(-4);
+    }
+
+    if target > i32::MAX as i64 {
+        return Ok(-1);
+    }
+
+    let target = target as usize;
+    if !context.filesystem_state().lock().set_cursor(fd, target) {
+        return Ok(-2);
+    }
+
+    Ok(target as i32)
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -409,7 +498,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{close, list, open, read, write};
+    use super::{close, list, open, read, seek, write};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -796,6 +885,116 @@ mod tests {
 
         let second = open(&mut context, 0x1100, 1, 1).await.unwrap();
         assert_eq!(second, 2);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_seek_set_cur_and_end_return_absolute_offset() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/seek.dat", 0, b"abcdef")
+            .await;
+        context.write_bytes(0x1000, b"save/seek.dat\0").unwrap();
+
+        let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
+
+        assert_eq!(seek(&mut context, fd, 3, 0).await.unwrap(), 3);
+        assert_eq!(seek(&mut context, fd, 2, 1).await.unwrap(), 5);
+        assert_eq!(seek(&mut context, fd, -2, 2).await.unwrap(), 4);
+        assert_eq!(seek(&mut context, fd, 0, 2).await.unwrap(), 6);
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_seek_matches_native_validation_order() {
+        let mut context = filesystem_test_context();
+
+        // MC_fsSeek performs these argument checks before dfs_seek gets a
+        // chance to reject the fd.
+        assert_eq!(seek(&mut context, 77, -1, 0).await.unwrap(), -4);
+        assert_eq!(seek(&mut context, 77, 1, 2).await.unwrap(), -4);
+        assert_eq!(seek(&mut context, 77, 0, 3).await.unwrap(), -9);
+        assert_eq!(seek(&mut context, 77, 0, -1).await.unwrap(), -9);
+
+        assert_eq!(seek(&mut context, 0, 0, 0).await.unwrap(), -2);
+        assert_eq!(seek(&mut context, -1, 0, 0).await.unwrap(), -2);
+        assert_eq!(seek(&mut context, 77, 0, 0).await.unwrap(), -2);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_seek_rejects_beyond_eof_and_preserves_cursor() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/seek-bound.dat", 0, b"abcdef")
+            .await;
+        context.write_bytes(0x1000, b"save/seek-bound.dat\0").unwrap();
+
+        let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
+        assert_eq!(seek(&mut context, fd, 3, 0).await.unwrap(), 3);
+
+        // Native MH/AND_fileSeek restores the prior cursor if the requested
+        // result lies past EOF.
+        assert_eq!(seek(&mut context, fd, 7, 0).await.unwrap(), -4);
+        assert_eq!(seek(&mut context, fd, 4, 1).await.unwrap(), -4);
+
+        {
+            let state = context.filesystem_state();
+            let state = state.lock();
+            assert_eq!(state.entry(fd).unwrap().cursor, 3);
+        }
+
+        // A negative resulting SEEK_CUR position is a host lseek failure,
+        // which reaches MC_fsSeek as the generic -1 path.
+        assert_eq!(seek(&mut context, fd, -4, 1).await.unwrap(), -1);
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 3);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_seek_append_cursor_changes_but_write_still_uses_eof() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/seek-append.dat", 0, b"abcde")
+            .await;
+        context.write_bytes(0x1000, b"save/seek-append.dat\0").unwrap();
+        context.write_bytes(0x2000, b"XY").unwrap();
+
+        let fd = open(&mut context, 0x1000, 2, 1).await.unwrap();
+
+        assert_eq!(seek(&mut context, fd, 1, 0).await.unwrap(), 1);
+        {
+            let state = context.filesystem_state();
+            let state = state.lock();
+            assert_eq!(state.entry(fd).unwrap().cursor, 1);
+        }
+
+        // O_APPEND ignores that cursor for placement.
+        assert_eq!(write(&mut context, fd, 0x2000, 2).await.unwrap(), 2);
+
+        let mut actual = [0u8; 7];
+        assert_eq!(
+            context
+                .system()
+                .filesystem()
+                .read("save/seek-append.dat", 0, 7, &mut actual)
+                .await,
+            Some(7)
+        );
+        assert_eq!(&actual, b"abcdeXY");
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 7);
     }
 
     #[futures_test::test]

@@ -195,7 +195,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsRead => filesystem::read.into_body(),
         WIPICSvcId::FsWrite => filesystem::write.into_body(),
         WIPICSvcId::FsClose => filesystem::close.into_body(),
-        WIPICSvcId::Unk12 => database::seek_record_single.into_body(),
+        WIPICSvcId::FsSeek => filesystem::seek.into_body(),
         WIPICSvcId::Unk9 => database::list_record_info.into_body(),
         WIPICSvcId::DeleteRecord => database::delete_database.into_body(),
         WIPICSvcId::ListRecord => database::list_record.into_body(),
