@@ -101,9 +101,12 @@ pub mod test {
 
     const TEST_MEMORY_SIZE: usize = 0x20000;
     const TEST_ALLOC_START: usize = 0x10000;
+    const TEST_GLOBAL_DATA_BASE: u32 = 0x7fff_0000;
+    const TEST_GLOBAL_DATA_SIZE: usize = 0x4000;
 
     pub struct TestContext {
         memory: [u8; TEST_MEMORY_SIZE],
+        global_data: [u8; TEST_GLOBAL_DATA_SIZE],
         last_alloc: usize,
         system: Option<System>,
         resources: Vec<(String, Vec<u8>)>,
@@ -116,6 +119,7 @@ pub mod test {
         pub fn new() -> Self {
             Self {
                 memory: [0; TEST_MEMORY_SIZE],
+                global_data: [0; TEST_GLOBAL_DATA_SIZE],
                 last_alloc: TEST_ALLOC_START,
                 system: None,
                 resources: Vec::new(),
@@ -127,6 +131,7 @@ pub mod test {
         pub fn with_system(system: System) -> Self {
             Self {
                 memory: [0; TEST_MEMORY_SIZE],
+                global_data: [0; TEST_GLOBAL_DATA_SIZE],
                 last_alloc: TEST_ALLOC_START,
                 system: Some(system),
                 resources: Vec::new(),
@@ -217,7 +222,24 @@ pub mod test {
 
     impl ByteWrite for TestContext {
         fn write_bytes(&mut self, address: u32, data: &[u8]) -> wie_util::Result<()> {
-            self.memory[address as usize..(address + data.len() as u32) as usize].copy_from_slice(data);
+            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32)
+                .contains(&address)
+            {
+                let start = (address - TEST_GLOBAL_DATA_BASE) as usize;
+                let end = start + data.len();
+                if end > TEST_GLOBAL_DATA_SIZE {
+                    return Err(WieError::InvalidMemoryAccess(address));
+                }
+                self.global_data[start..end].copy_from_slice(data);
+                return Ok(());
+            }
+
+            let start = address as usize;
+            let end = start + data.len();
+            if end > TEST_MEMORY_SIZE {
+                return Err(WieError::InvalidMemoryAccess(address));
+            }
+            self.memory[start..end].copy_from_slice(data);
 
             Ok(())
         }
@@ -225,7 +247,24 @@ pub mod test {
 
     impl ByteRead for TestContext {
         fn read_bytes(&self, address: u32, result: &mut [u8]) -> wie_util::Result<usize> {
-            result.copy_from_slice(&self.memory[address as usize..(address as usize + result.len())]);
+            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32)
+                .contains(&address)
+            {
+                let start = (address - TEST_GLOBAL_DATA_BASE) as usize;
+                let end = start + result.len();
+                if end > TEST_GLOBAL_DATA_SIZE {
+                    return Err(WieError::InvalidMemoryAccess(address));
+                }
+                result.copy_from_slice(&self.global_data[start..end]);
+                return Ok(result.len());
+            }
+
+            let start = address as usize;
+            let end = start + result.len();
+            if end > TEST_MEMORY_SIZE {
+                return Err(WieError::InvalidMemoryAccess(address));
+            }
+            result.copy_from_slice(&self.memory[start..end]);
 
             Ok(result.len())
         }

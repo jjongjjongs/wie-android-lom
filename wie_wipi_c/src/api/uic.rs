@@ -768,6 +768,48 @@ pub async fn set_max_text_size(
     Ok(old_capacity as i32)
 }
 
+const UIC_CLASS_NAME_MENU: WIPICWord = 0x7fff_1010;
+const UIC_CLASS_NAME_DATETIME: WIPICWord = 0x7fff_1020;
+const UIC_CLASS_NAME_TEXT: WIPICWord = 0x7fff_1038;
+const UIC_CLASS_NAME_LABEL: WIPICWord = 0x7fff_1048;
+const UIC_CLASS_NAME_LIST: WIPICWord = 0x7fff_1058;
+
+fn uic_class_name(component_type: WIPICWord) -> Option<(WIPICWord, &'static [u8])> {
+    match component_type {
+        1 => Some((UIC_CLASS_NAME_MENU, b"MenuComponent\0")),
+        2 => Some((UIC_CLASS_NAME_DATETIME, b"DateTimeComponent\0")),
+        3 => Some((UIC_CLASS_NAME_TEXT, b"TextComponent\0")),
+        4 => Some((UIC_CLASS_NAME_LABEL, b"LabelComponent\0")),
+        5 => Some((UIC_CLASS_NAME_LIST, b"ListComponent\0")),
+        _ => None,
+    }
+}
+
+/// LGT `MC_uicGetClassName` (WIPI-C service 0x326).
+///
+/// Native validates the component and returns one of five provider-static
+/// NUL-terminated class-name pointers. Invalid/NULL components return NULL.
+/// WIE mirrors the native table's stable pointer identity in reserved guest
+/// global-data memory, preserving the native relative spacing between strings.
+pub async fn get_class_name(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<WIPICIndirectPtr> {
+    tracing::debug!("MC_uicGetClassName({component:#x})");
+
+    if component == 0 {
+        return Ok(WIPICIndirectPtr(0));
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    let Some((address, name)) = uic_class_name(component_type) else {
+        return Ok(WIPICIndirectPtr(0));
+    };
+
+    context.write_bytes(address, name)?;
+    Ok(WIPICIndirectPtr(address))
+}
+
 /// LGT `MC_uicPaint` (WIPI-C service 0x325).
 ///
 /// Native contract:
@@ -1980,7 +2022,7 @@ mod tests {
 
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
-        destroy, get_class, insert_text, repaint, set_enable, set_max_text_size,
+        destroy, get_class, get_class_name, insert_text, repaint, set_enable, set_max_text_size,
         uic_repaint_rect, uic_skip_time_separator,
     };
 
@@ -2017,6 +2059,43 @@ mod tests {
         context.write_bytes(0x3040, b"UnknownComponent\0").unwrap();
         let result = get_class(&mut context, 0x3040).await.unwrap();
         assert!(result.0 == u32::MAX);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_class_name_returns_native_names_at_stable_guest_pointers() {
+        for (class, expected_ptr, expected_name) in [
+            (1u32, 0x7fff_1010u32, b"MenuComponent\0".as_slice()),
+            (2u32, 0x7fff_1020u32, b"DateTimeComponent\0".as_slice()),
+            (3u32, 0x7fff_1038u32, b"TextComponent\0".as_slice()),
+            (4u32, 0x7fff_1048u32, b"LabelComponent\0".as_slice()),
+            (5u32, 0x7fff_1058u32, b"ListComponent\0".as_slice()),
+        ] {
+            let mut context = TestContext::new();
+            context.write_bytes(COMPONENT, &class.to_le_bytes()).unwrap();
+
+            let first = get_class_name(&mut context, COMPONENT).await.unwrap();
+            let second = get_class_name(&mut context, COMPONENT).await.unwrap();
+
+            assert_eq!(first.0, expected_ptr);
+            assert_eq!(second.0, expected_ptr);
+
+            let mut actual = alloc::vec![0u8; expected_name.len()];
+            context.read_bytes(expected_ptr, &mut actual).unwrap();
+            assert_eq!(actual.as_slice(), expected_name);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_class_name_returns_null_for_null_and_invalid_components() {
+        let mut context = TestContext::new();
+
+        assert_eq!(get_class_name(&mut context, 0).await.unwrap().0, 0);
+
+        context.write_bytes(COMPONENT, &0u32.to_le_bytes()).unwrap();
+        assert_eq!(get_class_name(&mut context, COMPONENT).await.unwrap().0, 0);
+
+        context.write_bytes(COMPONENT, &6u32.to_le_bytes()).unwrap();
+        assert_eq!(get_class_name(&mut context, COMPONENT).await.unwrap().0, 0);
     }
 
     #[futures_test::test]
