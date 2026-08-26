@@ -47,9 +47,17 @@ impl FilesystemState {
         fd
     }
 
-    #[cfg(test)]
     fn entry(&self, fd: i32) -> Option<&FileEntry> {
         self.entries.get(&fd)
+    }
+
+    fn advance_cursor(&mut self, fd: i32, count: usize) -> bool {
+        let Some(entry) = self.entries.get_mut(&fd) else {
+            return false;
+        };
+
+        entry.cursor = entry.cursor.wrapping_add(count);
+        true
     }
 }
 
@@ -138,6 +146,68 @@ pub async fn open(
     Ok(context.filesystem_state().lock().register(path, mode, cursor))
 }
 
+/// WIPI-C MC_fsRead (service 0x191).
+///
+/// Native contract:
+/// - null buffer or signed size <= 0 => -1
+/// - invalid fd => -2
+/// - EOF => -23
+/// - other read failure => -1
+/// - successful short/full read returns its byte count
+pub async fn read(
+    context: &mut dyn WIPICContext,
+    fd: i32,
+    buffer: WIPICWord,
+    size: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_fsRead({fd}, {buffer:#x}, {size})");
+
+    if buffer == 0 || size <= 0 {
+        return Ok(-1);
+    }
+
+    let entry = {
+        let state = context.filesystem_state();
+        let state = state.lock();
+        state.entry(fd).cloned()
+    };
+
+    let Some(entry) = entry else {
+        return Ok(-2);
+    };
+
+    // Native modes 2 and 4 are opened O_WRONLY. Their POSIX read fails
+    // with EBADF; the native wrapper ultimately maps that path to -1.
+    if matches!(entry.mode, 2 | 4) {
+        return Ok(-1);
+    }
+
+    let size = size as usize;
+    let mut data = alloc::vec![0u8; size];
+
+    let filesystem = context.system().filesystem().clone();
+    let Some(read) = filesystem
+        .read(&entry.path, entry.cursor, size, &mut data)
+        .await
+    else {
+        return Ok(-1);
+    };
+
+    if read == 0 {
+        return Ok(-23);
+    }
+
+    context.write_bytes(buffer, &data[..read])?;
+
+    let state = context.filesystem_state();
+    let mut state = state.lock();
+    if !state.advance_cursor(fd, read) {
+        return Ok(-2);
+    }
+
+    Ok(read as i32)
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -218,7 +288,7 @@ mod tests {
 
     use crate::context::{WIPICContext, test::TestContext};
 
-    use super::{list, open};
+    use super::{list, open, read};
 
     fn filesystem_test_context() -> TestContext {
         let system = System::new(Box::new(TestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
@@ -306,6 +376,112 @@ mod tests {
         // Mode validation follows path construction.
         assert_eq!(open(&mut context, 0x1000, 3, 1).await.unwrap(), -9);
         assert_eq!(open(&mut context, 0x1000, 1, 1).await.unwrap(), -12);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_read_returns_data_and_advances_cursor() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/read.dat", 0, b"abcdef")
+            .await;
+        context.write_bytes(0x1000, b"save/read.dat\0").unwrap();
+        context.write_bytes(0x2000, &[0xcc; 8]).unwrap();
+
+        let fd = open(&mut context, 0x1000, 1, 1).await.unwrap();
+        assert_eq!(fd, 1);
+
+        assert_eq!(read(&mut context, fd, 0x2000, 4).await.unwrap(), 4);
+
+        let mut first = [0u8; 8];
+        context.read_bytes(0x2000, &mut first).unwrap();
+        assert_eq!(&first[..4], b"abcd");
+        assert_eq!(&first[4..], &[0xcc; 4]);
+
+        {
+            let state = context.filesystem_state();
+            let state = state.lock();
+            assert_eq!(state.entry(fd).unwrap().cursor, 4);
+        }
+
+        context.write_bytes(0x2100, &[0xcc; 8]).unwrap();
+        assert_eq!(read(&mut context, fd, 0x2100, 4).await.unwrap(), 2);
+
+        let mut second = [0u8; 8];
+        context.read_bytes(0x2100, &mut second).unwrap();
+        assert_eq!(&second[..2], b"ef");
+        assert_eq!(&second[2..], &[0xcc; 6]);
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_read_eof_returns_minus_23_without_advancing() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/eof.dat", 0, b"x")
+            .await;
+        context.write_bytes(0x1000, b"save/eof.dat\0").unwrap();
+        context.write_bytes(0x2000, &[0xcc; 4]).unwrap();
+
+        let fd = open(&mut context, 0x1000, 1, 1).await.unwrap();
+
+        assert_eq!(read(&mut context, fd, 0x2000, 1).await.unwrap(), 1);
+        assert_eq!(read(&mut context, fd, 0x2001, 1).await.unwrap(), -23);
+
+        let state = context.filesystem_state();
+        let state = state.lock();
+        assert_eq!(state.entry(fd).unwrap().cursor, 1);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_read_matches_native_validation_and_mode_errors() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/write-only.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/write-only.dat\0").unwrap();
+
+        // MC_fsRead checks buffer/size before dfs_read validates fd.
+        assert_eq!(read(&mut context, 77, 0, 1).await.unwrap(), -1);
+        assert_eq!(read(&mut context, 77, 0x2000, 0).await.unwrap(), -1);
+        assert_eq!(read(&mut context, 77, 0x2000, -1).await.unwrap(), -1);
+
+        assert_eq!(read(&mut context, 0, 0x2000, 1).await.unwrap(), -2);
+        assert_eq!(read(&mut context, 77, 0x2000, 1).await.unwrap(), -2);
+
+        let append_fd = open(&mut context, 0x1000, 2, 1).await.unwrap();
+        let trunc_fd = open(&mut context, 0x1000, 4, 1).await.unwrap();
+
+        // Both native modes are O_WRONLY and read ultimately maps to -1.
+        assert_eq!(read(&mut context, append_fd, 0x2000, 1).await.unwrap(), -1);
+        assert_eq!(read(&mut context, trunc_fd, 0x2000, 1).await.unwrap(), -1);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_read_supports_virtual_read_only_files() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .add_virtual("res/data.bin", b"virtual".to_vec());
+
+        context.write_bytes(0x1000, b"res/data.bin\0").unwrap();
+        context.write_bytes(0x2000, &[0; 7]).unwrap();
+
+        let fd = open(&mut context, 0x1000, 1, 1).await.unwrap();
+        assert_eq!(read(&mut context, fd, 0x2000, 7).await.unwrap(), 7);
+
+        let mut actual = [0u8; 7];
+        context.read_bytes(0x2000, &mut actual).unwrap();
+        assert_eq!(&actual, b"virtual");
     }
 
     #[futures_test::test]
