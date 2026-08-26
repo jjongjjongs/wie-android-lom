@@ -1,8 +1,92 @@
+use alloc::{boxed::Box, vec::Vec};
+
 use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic};
 
 use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 
-use crate::{api::{graphics, kernel}, context::WIPICContext};
+use crate::{
+    WIPICResult,
+    api::{graphics, kernel},
+    context::WIPICContext,
+    method::MethodBody,
+};
+
+const UIC_DRAW_MARKER_BASE: WIPICWord = 0xffff_f100;
+const UIC_TIMER_MARKER_TIME: WIPICWord = 0xffff_f201;
+const UIC_TIMER_MARKER_TEXT: WIPICWord = 0xffff_f202;
+
+fn uic_draw_marker(component_type: WIPICWord) -> WIPICWord {
+    UIC_DRAW_MARKER_BASE + component_type
+}
+
+async fn uic_dispatch_draw(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    graphics_context: WIPICWord,
+) -> Result<()> {
+    let draw: WIPICWord = read_generic(context, component + 0x24)?;
+    if (UIC_DRAW_MARKER_BASE + 1..=UIC_DRAW_MARKER_BASE + 5).contains(&draw) {
+        // MC_uicCreate stores provider-private WPUic_Draw* function pointers here.
+        // Generic WIE cannot execute those LGT .so addresses, so native-created
+        // components use an internal marker until those private draw routines are
+        // ported independently. Application-installed callbacks still execute.
+        return Ok(());
+    }
+
+    if draw != 0 {
+        context
+            .call_function(draw, &[component, graphics_context])
+            .await?;
+    }
+
+    Ok(())
+}
+
+fn uic_schedule_component_timer(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    component_type: WIPICWord,
+    delay: u64,
+) -> Result<()> {
+    struct UicTimerCallback {
+        component: WIPICWord,
+        component_type: WIPICWord,
+    }
+
+    #[async_trait::async_trait]
+    impl MethodBody<WieError> for UicTimerCallback {
+        async fn call(
+            &self,
+            context: &mut dyn WIPICContext,
+            _: Box<[WIPICWord]>,
+        ) -> Result<WIPICResult> {
+            match self.component_type {
+                2 => uic_datetime_timer_callback(context, self.component).await?,
+                3 => uic_text_timer_callback(context, self.component).await?,
+                _ => {}
+            }
+
+            Ok(WIPICResult { results: Vec::new() })
+        }
+    }
+
+    let timer = match component_type {
+        2 => component + 0x98,
+        3 => component + 0x54,
+        _ => return Ok(()),
+    };
+    let due = context.system().platform().now() + delay;
+    context.set_timer(
+        timer,
+        due,
+        Box::new(UicTimerCallback {
+            component,
+            component_type,
+        }),
+    );
+
+    Ok(())
+}
 
 /// LGT `MC_uicCreateApplicationContext` (WIPI-C service 0x320).
 ///
@@ -40,10 +124,111 @@ pub async fn get_class(
     Ok(WIPICIndirectPtr(class))
 }
 
-pub async fn create(_context: &mut dyn WIPICContext, pac: WIPICWord, cls: WIPICWord) -> Result<WIPICIndirectPtr> {
-    tracing::warn!("stub MC_uicCreate({pac:#x}, {cls:#x})");
+/// LGT `MC_uicCreate` (WIPI-C service 0x322).
+///
+/// The provider ignores `pac`, accepts class ids 1..=5, allocates a zeroed
+/// type-specific object, copies the default graphics-context fields into the
+/// common header, and then initializes the subtype state. Invalid classes
+/// return -1; allocation failure returns -17.
+pub async fn create(
+    context: &mut dyn WIPICContext,
+    pac: WIPICWord,
+    cls: WIPICWord,
+) -> Result<WIPICIndirectPtr> {
+    tracing::debug!("MC_uicCreate({pac:#x}, {cls:#x})");
 
-    Ok(WIPICIndirectPtr(0))
+    let size = match cls {
+        1 | 5 => 92,
+        2 => 168,
+        3 => 108,
+        4 => 76,
+        _ => return Ok(WIPICIndirectPtr(u32::MAX)),
+    };
+
+    let memory = match context.alloc(size) {
+        Ok(memory) => memory,
+        Err(_) => return Ok(WIPICIndirectPtr((-17i32) as u32)),
+    };
+    let component = context.data_ptr(memory)?;
+    context.write_bytes(component, &alloc::vec![0; size as usize])?;
+
+    let font = graphics::get_font(context, 0, 0, 0).await? as u32;
+
+    write_generic(context, component, cls)?;
+    write_generic(context, component + 0x04, 0u32)?;
+    write_generic(context, component + 0x08, 0u32)?;
+    write_generic(context, component + 0x0c, 0x7fffu32)?;
+    write_generic(context, component + 0x10, 0x7fffu32)?;
+    write_generic(context, component + 0x14, font)?;
+    write_generic(context, component + 0x18, 0u32)?;
+    write_generic(context, component + 0x1c, 0x00ff_ffffu32)?;
+    write_generic(context, component + 0x20, 0u32)?;
+    write_generic(context, component + 0x24, uic_draw_marker(cls))?;
+    write_generic(context, component + 0x28, 0u32)?;
+    write_generic(context, component + 0x2c, 0u32)?;
+    write_generic(context, component + 0x30, 0u32)?;
+    write_generic(context, component + 0x34, 0u32)?;
+    write_generic(context, component + 0x38, 0u32)?;
+    write_generic(context, component + 0x3c, 0u32)?;
+    write_generic(context, component + 0x40, 0u32)?;
+
+    match cls {
+        1 | 5 => {
+            write_generic(context, component + 0x44, 0u32)?;
+            write_generic(context, component + 0x48, -1i32)?;
+            write_generic(context, component + 0x4c, 0u32)?;
+            write_generic(context, component + 0x50, 0u32)?;
+            write_generic(context, component + 0x54, 0u32)?;
+            write_generic(context, component + 0x58, 0u32)?;
+        }
+        2 => {
+            write_generic(context, component + 0x44, 3u32)?;
+            write_generic(context, component + 0x94, 0u32)?;
+            write_generic(context, component + 0x98, UIC_TIMER_MARKER_TIME)?;
+            write_generic(context, component + 0x9c, 1u32)?;
+            write_generic(context, component + 0xa0, 0u32)?;
+            write_generic(context, component + 0xa4, 0u32)?;
+
+            let fields =
+                uic_kst_tm_from_epoch_millis(context.system().platform().now().raw());
+            for (index, value) in fields.iter().enumerate() {
+                write_generic(context, component + 0x48 + (index as u32) * 4, *value)?;
+            }
+
+            let formatted = uic_format_datetime(3, &fields);
+            context.write_bytes(component + 0x74, &formatted)?;
+            context.write_bytes(component + 0x74 + formatted.len() as u32, &[0])?;
+        }
+        3 => {
+            let text_memory = match context.alloc(256) {
+                Ok(memory) => memory,
+                Err(_) => {
+                    context.free(memory)?;
+                    return Ok(WIPICIndirectPtr((-17i32) as u32));
+                }
+            };
+            let text = context.data_ptr(text_memory)?;
+            context.write_bytes(text, &alloc::vec![0; 256])?;
+
+            write_generic(context, component + 0x44, text)?;
+            write_generic(context, component + 0x48, 256u32)?;
+            write_generic(context, component + 0x4c, 0u32)?;
+            write_generic(context, component + 0x50, 0u32)?;
+            write_generic(context, component + 0x54, UIC_TIMER_MARKER_TEXT)?;
+            write_generic(context, component + 0x58, 1u32)?;
+            write_generic(context, component + 0x5c, 0u32)?;
+            write_generic(context, component + 0x60, 0u32)?;
+            write_generic(context, component + 0x64, 0u32)?;
+            write_generic(context, component + 0x68, 0u32)?;
+        }
+        4 => {
+            write_generic(context, component + 0x44, 0u32)?;
+            write_generic(context, component + 0x48, 2u32)?;
+        }
+        _ => unreachable!(),
+    }
+
+    Ok(memory)
 }
 
 pub async fn destroy(_context: &mut dyn WIPICContext, cc: WIPICWord) -> Result<()> {
@@ -124,7 +309,12 @@ pub async fn set_enable(
             write_generic(context, component + 0x9c, 1u32)?;
             let timer = component + 0x98;
             if !context.system().event_queue().has_timer(timer) {
-                kernel::set_timer(context, timer, 1000, 0, component).await?;
+                let callback: WIPICWord = read_generic(context, timer)?;
+                if callback == UIC_TIMER_MARKER_TIME {
+                    uic_schedule_component_timer(context, component, 2, 1000)?;
+                } else {
+                    kernel::set_timer(context, timer, 1000, 0, component).await?;
+                }
             }
         }
         (2, 0) => {
@@ -135,7 +325,12 @@ pub async fn set_enable(
             write_generic(context, component + 0x58, 1u32)?;
             let timer = component + 0x54;
             if !context.system().event_queue().has_timer(timer) {
-                kernel::set_timer(context, timer, 500, 0, component).await?;
+                let callback: WIPICWord = read_generic(context, timer)?;
+                if callback == UIC_TIMER_MARKER_TEXT {
+                    uic_schedule_component_timer(context, component, 3, 500)?;
+                } else {
+                    kernel::set_timer(context, timer, 500, 0, component).await?;
+                }
             }
         }
         (3, 0) => {
@@ -433,12 +628,13 @@ pub async fn set_max_text_size(
 /// - NULL or invalid component types (outside 1..=5) are silent no-ops.
 /// - NULL graphics context is a silent no-op.
 /// - property 148 selects screen framebuffer 0 or 3 before draw dispatch.
-/// - component +0x24 is invoked as `(component, graphics_context)`.
+/// - component +0x24 identifies the provider-private type-specific draw routine.
 /// - callback +0x30, when present, is then invoked as
 ///   `(component, 0, component+0x3c context)`.
 ///
-/// `MC_uicCreate` remains a separate API: it is responsible for populating
-/// the type-specific +0x24 draw function pointer.
+/// Native stores LGT-internal WPUic_Draw* addresses at +0x24. Components created
+/// by generic WIE store internal markers instead so those provider addresses are
+/// never mistaken for application ARM callbacks.
 pub async fn paint(
     context: &mut dyn WIPICContext,
     component: WIPICWord,
@@ -461,10 +657,7 @@ pub async fn paint(
     // performs the same framebuffer selection before actual rendering.
     let _ = graphics::get_screen_framebuffer(context, 0).await?;
 
-    let draw: WIPICWord = read_generic(context, component + 0x24)?;
-    context
-        .call_function(draw, &[component, graphics_context])
-        .await?;
+    uic_dispatch_draw(context, component, graphics_context).await?;
 
     let callback: WIPICWord = read_generic(context, component + 0x30)?;
     if callback != 0 {
@@ -851,10 +1044,7 @@ async fn uic_datetime_timer_callback(
     let gctx = context.alloc_raw(gctx_size)?;
     graphics::init_context(context, gctx).await?;
 
-    let draw: WIPICWord = read_generic(context, component + 0x24)?;
-    if draw != 0 {
-        context.call_function(draw, &[component, gctx]).await?;
-    }
+    uic_dispatch_draw(context, component, gctx).await?;
 
     let callback: WIPICWord = read_generic(context, component + 0x30)?;
     if callback != 0 {
@@ -869,7 +1059,48 @@ async fn uic_datetime_timer_callback(
     uic_repaint_component(context, component).await?;
 
     let timer = component + 0x98;
-    kernel::set_timer(context, timer, 1000, 0, component).await?;
+    let callback: WIPICWord = read_generic(context, timer)?;
+    if callback == UIC_TIMER_MARKER_TIME {
+        uic_schedule_component_timer(context, component, 2, 1000)?;
+    } else {
+        kernel::set_timer(context, timer, 1000, 0, component).await?;
+    }
+    Ok(())
+}
+
+async fn uic_text_timer_callback(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+) -> Result<()> {
+    let blink: u32 = read_generic(context, component + 0x58)?;
+    write_generic(context, component + 0x58, u32::from(blink == 0))?;
+
+    let gctx_size =
+        core::mem::size_of::<wipi_types::wipic::WIPICGraphicsContext>() as u32;
+    let gctx = context.alloc_raw(gctx_size)?;
+    graphics::init_context(context, gctx).await?;
+
+    uic_dispatch_draw(context, component, gctx).await?;
+
+    let callback: WIPICWord = read_generic(context, component + 0x30)?;
+    if callback != 0 {
+        let callback_context: WIPICWord = read_generic(context, component + 0x3c)?;
+        context
+            .call_function(callback, &[component, 0, callback_context])
+            .await?;
+    }
+
+    context.free_raw(gctx, gctx_size)?;
+    uic_repaint_component(context, component).await?;
+
+    let timer = component + 0x54;
+    let callback: WIPICWord = read_generic(context, timer)?;
+    if callback == UIC_TIMER_MARKER_TEXT {
+        uic_schedule_component_timer(context, component, 3, 500)?;
+    } else {
+        kernel::set_timer(context, timer, 500, 0, component).await?;
+    }
+
     Ok(())
 }
 
@@ -1604,8 +1835,8 @@ mod tests {
     use crate::context::test::TestContext;
 
     use super::{
-        configure, delete_text, get_class, insert_text, set_max_text_size,
-        uic_skip_time_separator,
+        UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
+        get_class, insert_text, set_max_text_size, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -1641,6 +1872,127 @@ mod tests {
         context.write_bytes(0x3040, b"UnknownComponent\0").unwrap();
         let result = get_class(&mut context, 0x3040).await.unwrap();
         assert!(result.0 == u32::MAX);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_create_rejects_invalid_class_like_native() {
+        let mut context = TestContext::new();
+
+        assert_eq!(create(&mut context, 0x12345678, 0).await.unwrap().0, u32::MAX);
+        assert_eq!(create(&mut context, 0x12345678, 6).await.unwrap().0, u32::MAX);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_create_initializes_menu_list_label_and_text_layouts() {
+        for class in [1u32, 3, 4, 5] {
+            let mut context = TestContext::new();
+            let component = create(&mut context, 0xdeadbeef, class).await.unwrap().0;
+
+            assert_ne!(component, 0);
+            assert_eq!(read_generic::<u32, _>(&context, component).unwrap(), class);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x04).unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x08).unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x0c).unwrap(), 0x7fff);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x10).unwrap(), 0x7fff);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x18).unwrap(), 0);
+            assert_eq!(
+                read_generic::<u32, _>(&context, component + 0x1c).unwrap(),
+                0x00ff_ffff
+            );
+            assert_eq!(
+                read_generic::<u32, _>(&context, component + 0x24).unwrap(),
+                UIC_DRAW_MARKER_BASE + class
+            );
+            for offset in [0x20u32, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40] {
+                assert_eq!(read_generic::<u32, _>(&context, component + offset).unwrap(), 0);
+            }
+
+            match class {
+                1 | 5 => {
+                    assert_eq!(read_generic::<u32, _>(&context, component + 0x44).unwrap(), 0);
+                    assert_eq!(read_generic::<i32, _>(&context, component + 0x48).unwrap(), -1);
+                    for offset in [0x4cu32, 0x50, 0x54, 0x58] {
+                        assert_eq!(
+                            read_generic::<u32, _>(&context, component + offset).unwrap(),
+                            0
+                        );
+                    }
+                }
+                3 => {
+                    let text_ptr =
+                        read_generic::<u32, _>(&context, component + 0x44).unwrap();
+                    assert_ne!(text_ptr, 0);
+                    assert_eq!(read_generic::<u8, _>(&context, text_ptr).unwrap(), 0);
+                    assert_eq!(
+                        read_generic::<u32, _>(&context, component + 0x48).unwrap(),
+                        256
+                    );
+                    assert_eq!(
+                        read_generic::<u32, _>(&context, component + 0x54).unwrap(),
+                        UIC_TIMER_MARKER_TEXT
+                    );
+                    assert_eq!(
+                        read_generic::<u32, _>(&context, component + 0x58).unwrap(),
+                        1
+                    );
+                    for offset in [0x4cu32, 0x50, 0x5c, 0x60, 0x64, 0x68] {
+                        assert_eq!(
+                            read_generic::<u32, _>(&context, component + offset).unwrap(),
+                            0
+                        );
+                    }
+                }
+                4 => {
+                    assert_eq!(read_generic::<u32, _>(&context, component + 0x44).unwrap(), 0);
+                    assert_eq!(read_generic::<u32, _>(&context, component + 0x48).unwrap(), 2);
+                }
+                _ => unreachable!(),
+            }
+
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_create_initializes_datetime_layout() {
+        let system = wie_backend::System::new(
+            alloc::boxed::Box::new(test_utils::TestPlatform::new()),
+            "test-pid",
+            "test-aid",
+            wie_backend::DefaultTaskRunner,
+        );
+        let mut context = TestContext::with_system(system);
+        let component = create(&mut context, 0x13572468, 2).await.unwrap().0;
+
+        assert_ne!(component, 0);
+        assert_eq!(read_generic::<u32, _>(&context, component).unwrap(), 2);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x04).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x08).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x0c).unwrap(), 0x7fff);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x10).unwrap(), 0x7fff);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x18).unwrap(), 0);
+        assert_eq!(
+            read_generic::<u32, _>(&context, component + 0x1c).unwrap(),
+            0x00ff_ffff
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, component + 0x24).unwrap(),
+            UIC_DRAW_MARKER_BASE + 2
+        );
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x44).unwrap(), 3);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x94).unwrap(), 0);
+        assert_eq!(
+            read_generic::<u32, _>(&context, component + 0x98).unwrap(),
+            super::UIC_TIMER_MARKER_TIME
+        );
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x9c).unwrap(), 1);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0xa0).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0xa4).unwrap(), 0);
+
+        let mut formatted = [0u8; 32];
+        context.read_bytes(component + 0x74, &mut formatted).unwrap();
+        assert_ne!(formatted[0], 0);
     }
 
     #[test]
