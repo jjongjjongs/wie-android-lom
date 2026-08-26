@@ -152,6 +152,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicRepaint => uic::repaint.into_body(),
         WIPICSvcId::UicPaint => uic::paint.into_body(),
         WIPICSvcId::UicGetClassName => uic::get_class_name.into_body(),
+        WIPICSvcId::UicIsInstance => uic::is_instance.into_body(),
         WIPICSvcId::UicHandleEvent => uic::handle_event.into_body(),
         WIPICSvcId::UicConfigure => uic::configure.into_body(),
         WIPICSvcId::UicSetEnable => uic::set_enable.into_body(),

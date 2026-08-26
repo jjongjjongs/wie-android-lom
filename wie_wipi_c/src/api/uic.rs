@@ -810,6 +810,34 @@ pub async fn get_class_name(
     Ok(WIPICIndirectPtr(address))
 }
 
+/// LGT `MC_uicIsInstance` (WIPI-C service 0x327).
+///
+/// Native validates the component, rejects a NULL class-name pointer, then
+/// compares the supplied NUL-terminated string with the exact provider class
+/// name for component types 1..=5. It returns 1 only for an exact `strcmp`
+/// match and 0 otherwise.
+pub async fn is_instance(
+    context: &mut dyn WIPICContext,
+    component: WIPICWord,
+    psz: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_uicIsInstance({component:#x}, {psz:#x})");
+
+    if component == 0 || psz == 0 {
+        return Ok(0);
+    }
+
+    let component_type: WIPICWord = read_generic(context, component)?;
+    let Some((_, native_name)) = uic_class_name(component_type) else {
+        return Ok(0);
+    };
+
+    let supplied = read_null_terminated_string_bytes(context, psz)?;
+    let native_name = &native_name[..native_name.len() - 1];
+
+    Ok(i32::from(supplied.as_slice() == native_name))
+}
+
 /// LGT `MC_uicPaint` (WIPI-C service 0x325).
 ///
 /// Native contract:
@@ -2022,8 +2050,8 @@ mod tests {
 
     use super::{
         UIC_DRAW_MARKER_BASE, UIC_TIMER_MARKER_TEXT, configure, create, delete_text,
-        destroy, get_class, get_class_name, insert_text, repaint, set_enable, set_max_text_size,
-        uic_repaint_rect, uic_skip_time_separator,
+        destroy, get_class, get_class_name, insert_text, is_instance, repaint, set_enable,
+        set_max_text_size, uic_repaint_rect, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -2096,6 +2124,49 @@ mod tests {
 
         context.write_bytes(COMPONENT, &6u32.to_le_bytes()).unwrap();
         assert_eq!(get_class_name(&mut context, COMPONENT).await.unwrap().0, 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_is_instance_matches_exact_native_class_names() {
+        for (class, name) in [
+            (1u32, b"MenuComponent\0".as_slice()),
+            (2u32, b"DateTimeComponent\0".as_slice()),
+            (3u32, b"TextComponent\0".as_slice()),
+            (4u32, b"LabelComponent\0".as_slice()),
+            (5u32, b"ListComponent\0".as_slice()),
+        ] {
+            let mut context = TestContext::new();
+            context.write_bytes(COMPONENT, &class.to_le_bytes()).unwrap();
+            context.write_bytes(0x3000, name).unwrap();
+
+            assert_eq!(is_instance(&mut context, COMPONENT, 0x3000).await.unwrap(), 1);
+
+            context.write_bytes(0x3040, b"UnknownComponent\0").unwrap();
+            assert_eq!(is_instance(&mut context, COMPONENT, 0x3040).await.unwrap(), 0);
+
+            let mut lower = name[..name.len() - 1].to_vec();
+            lower[0] = lower[0].to_ascii_lowercase();
+            lower.push(0);
+            context.write_bytes(0x3080, &lower).unwrap();
+            assert_eq!(is_instance(&mut context, COMPONENT, 0x3080).await.unwrap(), 0);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_is_instance_returns_zero_for_null_and_invalid_inputs() {
+        let mut context = TestContext::new();
+        context.write_bytes(0x3000, b"MenuComponent\0").unwrap();
+
+        assert_eq!(is_instance(&mut context, 0, 0x3000).await.unwrap(), 0);
+
+        context.write_bytes(COMPONENT, &1u32.to_le_bytes()).unwrap();
+        assert_eq!(is_instance(&mut context, COMPONENT, 0).await.unwrap(), 0);
+
+        context.write_bytes(COMPONENT, &0u32.to_le_bytes()).unwrap();
+        assert_eq!(is_instance(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
+
+        context.write_bytes(COMPONENT, &6u32.to_le_bytes()).unwrap();
+        assert_eq!(is_instance(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
     }
 
     #[futures_test::test]
