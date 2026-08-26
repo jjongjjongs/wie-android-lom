@@ -146,7 +146,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::ImGetCurrentMode => im_get_current_mode.into_body(),
         WIPICSvcId::ImHandleInput => im_handle_input.into_body(),
         WIPICSvcId::UicCreateApplicationContext => uic::create_application_context.into_body(),
-        WIPICSvcId::TimeComponent => time_component.into_body(),
+        WIPICSvcId::UicGetClass => uic::get_class.into_body(),
         WIPICSvcId::TimeConvert => time_convert.into_body(),
         WIPICSvcId::TimeToTm => time_to_tm.into_body(),
         WIPICSvcId::UicPaint => uic::paint.into_body(),

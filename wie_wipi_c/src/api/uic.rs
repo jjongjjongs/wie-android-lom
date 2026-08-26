@@ -13,12 +13,31 @@ pub async fn create_application_context(_context: &mut dyn WIPICContext) -> Resu
     Ok(WIPICIndirectPtr(0))
 }
 
-pub async fn get_class(context: &mut dyn WIPICContext, psz: WIPICWord) -> Result<WIPICIndirectPtr> {
-    let name_bytes = read_null_terminated_string_bytes(context, psz)?;
-    let name = encoding_rs::EUC_KR.decode(&name_bytes).0;
-    tracing::warn!("stub MC_uicGetClass({name})");
+/// LGT `MC_uicGetClass` (WIPI-C service 0x321).
+///
+/// Native returns component class ids 1..=5 for the five exact class names
+/// and -1 for NULL or an unknown class name.
+pub async fn get_class(
+    context: &mut dyn WIPICContext,
+    psz: WIPICWord,
+) -> Result<WIPICIndirectPtr> {
+    tracing::debug!("MC_uicGetClass({psz:#x})");
 
-    Ok(WIPICIndirectPtr(0))
+    if psz == 0 {
+        return Ok(WIPICIndirectPtr(u32::MAX));
+    }
+
+    let name = read_null_terminated_string_bytes(context, psz)?;
+    let class = match name.as_slice() {
+        b"MenuComponent" => 1,
+        b"DateTimeComponent" => 2,
+        b"TextComponent" => 3,
+        b"LabelComponent" => 4,
+        b"ListComponent" => 5,
+        _ => u32::MAX,
+    };
+
+    Ok(WIPICIndirectPtr(class))
 }
 
 pub async fn create(_context: &mut dyn WIPICContext, pac: WIPICWord, cls: WIPICWord) -> Result<WIPICIndirectPtr> {
@@ -1585,10 +1604,44 @@ mod tests {
     use crate::context::test::TestContext;
 
     use super::{
-        configure, delete_text, insert_text, set_max_text_size, uic_skip_time_separator,
+        configure, delete_text, get_class, insert_text, set_max_text_size,
+        uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
+
+    #[futures_test::test]
+    async fn lgt_uic_get_class_matches_native_class_name_table() {
+        let mut context = TestContext::new();
+
+        for (address, name, expected) in [
+            (0x3000u32, b"MenuComponent\0".as_slice(), 1u32),
+            (0x3040u32, b"DateTimeComponent\0".as_slice(), 2u32),
+            (0x3080u32, b"TextComponent\0".as_slice(), 3u32),
+            (0x30c0u32, b"LabelComponent\0".as_slice(), 4u32),
+            (0x3100u32, b"ListComponent\0".as_slice(), 5u32),
+        ] {
+            context.write_bytes(address, name).unwrap();
+            let result = get_class(&mut context, address).await.unwrap();
+            assert!(result.0 == expected);
+        }
+    }
+
+    #[futures_test::test]
+    async fn lgt_uic_get_class_returns_minus_one_for_null_and_unknown() {
+        let mut context = TestContext::new();
+
+        let result = get_class(&mut context, 0).await.unwrap();
+        assert!(result.0 == u32::MAX);
+
+        context.write_bytes(0x3000, b"menucomponent\0").unwrap();
+        let result = get_class(&mut context, 0x3000).await.unwrap();
+        assert!(result.0 == u32::MAX);
+
+        context.write_bytes(0x3040, b"UnknownComponent\0").unwrap();
+        let result = get_class(&mut context, 0x3040).await.unwrap();
+        assert!(result.0 == u32::MAX);
+    }
 
     #[test]
     fn lgt_uic_datetime_separator_skip_matches_native_single_step() {
