@@ -547,6 +547,208 @@ pub async fn list_records_lgt(
     Ok(metadata.active_count as i32)
 }
 
+/// LGT canonical `MC_dbSortRecords` (service 0x1fc).
+///
+/// Native ABI:
+/// `MC_dbSortRecords(handle, output_ids, capacity, comparator, filter)`.
+///
+/// Verified native contract:
+/// - unknown handle -> -2;
+/// - null output or non-positive signed capacity -> -9;
+/// - the active record-id list is first built by `MC_dbListRecords`;
+/// - any negative result from that internal list operation collapses to -1;
+/// - an empty database therefore returns -1 because ListRecords is invoked with
+///   capacity zero;
+/// - candidate ids are processed in ascending active-id order;
+/// - `filter`, when non-null, is invoked as `filter(candidate_payload)` and a
+///   signed result <= 0 excludes that record;
+/// - `comparator`, when non-null, is invoked as
+///   `comparator(existing_payload, candidate_payload)`;
+/// - a signed comparator result > 0 inserts the candidate before the existing
+///   element; otherwise scanning continues;
+/// - with a null comparator, native uses bytewise `memcmp` over exactly the
+///   fixed record size with the same `> 0` insertion rule;
+/// - only record ids are written to the caller's array; payloads are not
+///   modified;
+/// - when an accepted record is encountered with `capacity <= accepted_count`,
+///   native returns -18;
+/// - success returns the number of records accepted by the filter.
+///
+/// Native ignores the return values of its payload `MC_fsSeek`/`MC_fsRead`
+/// calls. Canonical LGT records have fixed-size retained payload slots, so the
+/// repository adaptation uses those slots directly. If malformed backend state
+/// lacks a payload, the calloc-initialized scratch semantics are approximated
+/// with a zero-filled fixed-size record rather than introducing a failure that
+/// native would not return.
+pub async fn sort_records_lgt(
+    context: &mut dyn WIPICContext,
+    db_id: i32,
+    buf_ptr: WIPICWord,
+    capacity: i32,
+    comparator: WIPICWord,
+    filter: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_dbSortRecords({db_id:#x}, {buf_ptr:#x}, {capacity}, {comparator:#x}, {filter:#x}) [LGT]"
+    );
+
+    let Some(handle) = load_handle(context, db_id)? else {
+        return Ok(-2);
+    };
+
+    if buf_ptr == 0 || capacity <= 0 {
+        return Ok(-9);
+    }
+
+    let Some(mut repository_db) = open_db_for_handle(context, &handle).await else {
+        return Ok(-2);
+    };
+
+    let Some(metadata) = load_lgt_metadata(repository_db.as_mut()).await else {
+        return Ok(-1);
+    };
+
+    // Native allocates active_count * 4 and immediately delegates to
+    // MC_dbListRecords with active_count as the signed capacity. In particular,
+    // active_count == 0 makes that call return -9, which SortRecords maps to -1.
+    if metadata.active_count == 0 {
+        return Ok(-1);
+    }
+
+    let active_count = metadata.active_count as i32;
+    if active_count <= 0 {
+        // The internal ListRecords uses a signed capacity and therefore fails
+        // for wrapped/malformed counts with the same generic SortRecords error.
+        return Ok(-1);
+    }
+
+    let mut record_ids = Vec::new();
+    let next_record_id = metadata.next_record_id as i32;
+    if next_record_id > 1 {
+        let mut record_id = 1i32;
+        while record_id < next_record_id {
+            if !metadata
+                .free_ids
+                .iter()
+                .any(|&free_id| free_id == record_id as u32)
+            {
+                record_ids.push(record_id as u32);
+            }
+            record_id = record_id.wrapping_add(1);
+        }
+    }
+
+    // This is the observable equivalent of the internal MC_dbListRecords
+    // capacity guard. Any negative result there is collapsed by SortRecords to
+    // -1 rather than propagated.
+    if (record_ids.len() as i32) > active_count {
+        return Ok(-1);
+    }
+
+    let record_size = metadata.record_size as usize;
+    let mut sorted_ids: Vec<u32> = Vec::new();
+
+    for candidate_id in record_ids {
+        // Native scratch is calloc(record_size * 2). Failed/short payload reads
+        // do not become API failures; unread bytes therefore retain zero/prior
+        // scratch contents. Canonical records are fixed-size, while malformed
+        // missing/short backend entries are represented by zero-filled tails.
+        let mut candidate = vec![0u8; record_size];
+        if let Some(data) = repository_db.get(candidate_id).await {
+            let take = data.len().min(record_size);
+            candidate[..take].copy_from_slice(&data[..take]);
+        }
+
+        let candidate_ptr = if record_size == 0 {
+            0
+        } else {
+            let ptr = context.alloc_raw(metadata.record_size)?;
+            context.write_bytes(ptr, &candidate)?;
+            ptr
+        };
+
+        let filter_result = if filter != 0 {
+            let value = context.call_function(filter, &[candidate_ptr]).await? as i32;
+            Some(value)
+        } else {
+            None
+        };
+
+        if let Some(result) = filter_result {
+            if candidate_ptr != 0 {
+                context.free_raw(candidate_ptr, metadata.record_size)?;
+            }
+            if result <= 0 {
+                continue;
+            }
+        }
+
+        // Native checks capacity only after the filter accepted the candidate.
+        if capacity <= sorted_ids.len() as i32 {
+            if candidate_ptr != 0 {
+                context.free_raw(candidate_ptr, metadata.record_size)?;
+            }
+            return Ok(-18);
+        }
+
+        let mut insert_at = sorted_ids.len();
+
+        for (index, &existing_id) in sorted_ids.iter().enumerate() {
+            let mut existing = vec![0u8; record_size];
+            if let Some(data) = repository_db.get(existing_id).await {
+                let take = data.len().min(record_size);
+                existing[..take].copy_from_slice(&data[..take]);
+            }
+
+            let comparison = if comparator != 0 {
+                let existing_ptr = if record_size == 0 {
+                    0
+                } else {
+                    let ptr = context.alloc_raw(metadata.record_size)?;
+                    context.write_bytes(ptr, &existing)?;
+                    ptr
+                };
+
+                let value = context
+                    .call_function(comparator, &[existing_ptr, candidate_ptr])
+                    .await? as i32;
+
+                if existing_ptr != 0 {
+                    context.free_raw(existing_ptr, metadata.record_size)?;
+                }
+
+                value
+            } else {
+                use core::cmp::Ordering;
+
+                match existing.as_slice().cmp(candidate.as_slice()) {
+                    Ordering::Less => -1,
+                    Ordering::Equal => 0,
+                    Ordering::Greater => 1,
+                }
+            };
+
+            if comparison > 0 {
+                insert_at = index;
+                break;
+            }
+        }
+
+        if candidate_ptr != 0 {
+            context.free_raw(candidate_ptr, metadata.record_size)?;
+        }
+
+        sorted_ids.insert(insert_at, candidate_id);
+    }
+
+    for (index, &record_id) in sorted_ids.iter().enumerate() {
+        let offset = (index as u32).wrapping_mul(4);
+        write_generic(context, buf_ptr.wrapping_add(offset), record_id)?;
+    }
+
+    Ok(sorted_ids.len() as i32)
+}
+
 /// LGT canonical `MC_dbDeleteRecord` (service 0x1fa).
 ///
 /// Native ABI: `MC_dbDeleteRecord(handle, record_id)`.
@@ -1360,7 +1562,7 @@ mod tests {
 
     use test_utils::TestPlatform;
     use wie_backend::{DefaultTaskRunner, System};
-    use wie_util::{ByteRead, ByteWrite};
+    use wie_util::{ByteRead, ByteWrite, read_generic};
 
     use crate::context::test::TestContext;
 
@@ -1368,8 +1570,8 @@ mod tests {
         LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
         exists_database, insert_record_lgt, list_record_info, list_records_lgt, load_handle,
         load_lgt_metadata, open_database, open_database_lgt, open_db_for_handle,
-        select_record, select_record_lgt, store_lgt_metadata, stream_read, stream_write,
-        update_record, update_record_lgt,
+        select_record, select_record_lgt, sort_records_lgt, store_lgt_metadata, stream_read,
+        stream_write, update_record, update_record_lgt,
     };
 
     #[futures_test::test]
@@ -1694,6 +1896,160 @@ mod tests {
                 .await
                 .unwrap(),
             -1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_sort_records_validates_arguments_and_empty_database() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            sort_records_lgt(&mut context, 0x1234, 0x3000, 4, 0, 0)
+                .await
+                .unwrap(),
+            -2
+        );
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sort_records_lgt(&mut context, db_id, 0, 4, 0, 0)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            sort_records_lgt(&mut context, db_id, 0x3000, 0, 0, 0)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            sort_records_lgt(&mut context, db_id, 0x3000, -1, 0, 0)
+                .await
+                .unwrap(),
+            -9
+        );
+
+        // Native delegates to ListRecords with active_count == 0, receives -9,
+        // and collapses that negative result to -1.
+        assert_eq!(
+            sort_records_lgt(&mut context, db_id, 0x3000, 4, 0, 0)
+                .await
+                .unwrap(),
+            -1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_sort_records_memcmp_orders_ids_by_fixed_payload() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        context.write_bytes(0x2100, &[3, 0, 0, 0]).unwrap();
+        context.write_bytes(0x2110, &[1, 0, 0, 0]).unwrap();
+        context.write_bytes(0x2120, &[2, 0, 0, 0]).unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2100, 4)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2110, 4)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2120, 4)
+                .await
+                .unwrap(),
+            3
+        );
+
+        assert_eq!(
+            sort_records_lgt(&mut context, db_id, 0x3000, 3, 0, 0)
+                .await
+                .unwrap(),
+            3
+        );
+
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3000).unwrap(),
+            2
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3004).unwrap(),
+            3
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3008).unwrap(),
+            1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_sort_records_skips_deleted_ids_and_checks_output_capacity() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        for (ptr, bytes) in [
+            (0x2100, [4, 0, 0, 0]),
+            (0x2110, [3, 0, 0, 0]),
+            (0x2120, [2, 0, 0, 0]),
+            (0x2130, [1, 0, 0, 0]),
+        ] {
+            context.write_bytes(ptr, &bytes).unwrap();
+            insert_record_lgt(&mut context, db_id, ptr, 4)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 2).await.unwrap(),
+            0
+        );
+
+        // Three active records remain. Capacity two permits two accepted
+        // insertions, then the third accepted candidate hits native <= check.
+        assert_eq!(
+            sort_records_lgt(&mut context, db_id, 0x3000, 2, 0, 0)
+                .await
+                .unwrap(),
+            -18
+        );
+
+        assert_eq!(
+            sort_records_lgt(&mut context, db_id, 0x3000, 3, 0, 0)
+                .await
+                .unwrap(),
+            3
+        );
+
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3000).unwrap(),
+            4
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3004).unwrap(),
+            3
+        );
+        assert_eq!(
+            read_generic::<u32, _>(&context, 0x3008).unwrap(),
+            1
         );
     }
 
