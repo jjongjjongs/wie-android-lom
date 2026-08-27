@@ -167,6 +167,34 @@ impl Network for AndroidNetwork {
         Ok(handle)
     }
 
+    fn bind(&self, socket: i32, address: u32, port: u16) -> Result<(), NetworkError> {
+        let mut inner = self.inner.lock().unwrap_or_else(|x| x.into_inner());
+        let Some(entry) = inner.sockets.get_mut(&socket) else {
+            return Err(NetworkError::InvalidSocket);
+        };
+
+        match entry {
+            Socket::Udp(_) => {
+                // A std UdpSocket cannot be rebound, so bind a fresh one to the
+                // requested local address and swap it in, keeping the old socket
+                // if the new bind fails.
+                let local = SocketAddr::new(IpAddr::V4(Self::ipv4(address)), port);
+                let bound = UdpSocket::bind(local).map_err(|error| Self::map_io(&error))?;
+                bound.set_nonblocking(true).map_err(|error| Self::map_io(&error))?;
+                self.unregister_socket(entry);
+                *entry = Socket::Udp(bound);
+                self.register_socket(socket, entry)
+            }
+            Socket::Tcp(_) => {
+                // A std TcpStream picks its local address at connect time and
+                // offers no pre-connect bind. The reference's bind on a stream
+                // socket only records that local address, so accept it as a
+                // no-op success rather than failing a game that binds first.
+                Ok(())
+            }
+        }
+    }
+
     fn connect(&self, socket: i32, address: u32, port: u16) -> NetworkPoll<()> {
         let remote = SocketAddr::new(IpAddr::V4(Self::ipv4(address)), port);
 
@@ -349,5 +377,29 @@ impl Network for AndroidNetwork {
         }
 
         pending.pop_front()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wie_backend::Network;
+
+    // MC_netSocketBind (0x25f): the datagram path rebinds a fresh UdpSocket to
+    // the requested local address, the stream path is an accepted no-op, and an
+    // unknown socket is rejected as the native's find_socket_obj null -> -2.
+    #[test]
+    fn bind_udp_rebinds_tcp_noop_unknown_rejected() {
+        let net = AndroidNetwork::new();
+        // 127.0.0.1 in the WIPI address encoding connect() also uses.
+        let loopback = u32::from_le_bytes([127, 0, 0, 1]);
+
+        let udp = net.socket(2, 2).expect("udp socket");
+        assert!(net.bind(udp, loopback, 0).is_ok());
+
+        let tcp = net.socket(2, 1).expect("tcp socket");
+        assert!(net.bind(tcp, loopback, 0).is_ok());
+
+        assert!(matches!(net.bind(0x7fff_ffff, loopback, 0), Err(NetworkError::InvalidSocket)));
     }
 }

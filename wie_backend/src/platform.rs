@@ -38,6 +38,13 @@ pub trait Network: Send + Sync {
         port: u16,
     ) -> NetworkPoll<()>;
 
+    fn bind(
+        &self,
+        socket: i32,
+        address: u32,
+        port: u16,
+    ) -> Result<(), NetworkError>;
+
     fn read(&self, socket: i32, buf: &mut [u8]) -> Result<usize, NetworkError>;
 
     fn write(&self, socket: i32, buf: &[u8]) -> Result<usize, NetworkError>;

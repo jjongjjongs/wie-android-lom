@@ -230,6 +230,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SocketWrite => net::socket_write.into_body(),
         WIPICSvcId::SocketRead => net::socket_read.into_body(),
         WIPICSvcId::SocketClose => net::socket_close.into_body(),
+        WIPICSvcId::SocketBind => net::socket_bind.into_body(),
         WIPICSvcId::SetReadCallback => net::set_read_callback.into_body(),
         WIPICSvcId::SetWriteCallback => net::set_write_callback.into_body(),
         WIPICSvcId::SerialOpen => serial::open.into_body(),

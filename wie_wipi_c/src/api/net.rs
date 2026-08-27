@@ -659,6 +659,45 @@ pub async fn socket_read(
     }
 }
 
+/// `MC_netSocketBind` (0x25f) @ native 0x1b2ef0.
+///
+/// Binds a socket to a local address. ABI: r0 = socket, r1 = address,
+/// r2 = port; the native stores the port as a 16-bit `sockaddr_in.sin_port`, so
+/// only its low sixteen bits are used. Unlike read/write there is no buffer
+/// gate, and it accepts both stream and datagram sockets. The native gates, in
+/// order: `WPNet_IsAvailable()` < 0 -> -14; `find_socket_obj()` == null -> -2;
+/// socket family (`[sock+0x10]`) != 2 -> -16; socket type (`[sock+0x14]`) not in
+/// {1,2} -> -16. It then calls `dsocket_bind`, mapping 0 -> 0, -2077 -> -2,
+/// -2022 -> -9, -2107 -> -14, anything else -> -1.
+///
+/// WIE only ever creates AF_INET sockets of type 1 or 2 (see `socket`), so the
+/// family and type gates hold for any socket that exists; the backend honours
+/// the bind for datagram sockets and accepts it as a no-op for stream sockets,
+/// which std binds at connect time.
+pub async fn socket_bind(context: &mut dyn WIPICContext, socket: i32, address: WIPICWord, port: WIPICWord) -> Result<i32> {
+    let state = context.network_state();
+    if !state.lock().is_available() {
+        return Ok(M_E_NOTCONN);
+    }
+
+    let Some(socket_type) = state.lock().socket_type(socket) else {
+        return Ok(M_E_BADFD);
+    };
+
+    if socket_type != 1 && socket_type != 2 {
+        return Ok(M_E_NOTSUP);
+    }
+
+    let Some(network) = context.system().platform().network() else {
+        return Ok(M_E_NOTCONN);
+    };
+
+    Ok(match network.bind(socket, address, port as u16) {
+        Ok(()) => 0,
+        Err(error) => map_network_error(error),
+    })
+}
+
 fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {
     let state = context.network_state();
 
