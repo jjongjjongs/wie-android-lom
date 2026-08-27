@@ -207,6 +207,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsGetCounts => filesystem::get_counts.into_body(),
         WIPICSvcId::FsTell => filesystem::tell.into_body(),
         WIPICSvcId::FsIsExist => filesystem::is_exist.into_body(),
+        WIPICSvcId::FsGetMountedNames => filesystem::get_mounted_names.into_body(),
         WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),
         WIPICSvcId::Close => net::close.into_body(),

@@ -842,6 +842,60 @@ pub async fn is_exist(
     }
 }
 
+/// WIPI-C MC_fsGetMountedNames (canonical service 0x1a1).
+///
+/// Native flow:
+/// - zero the caller-provided output buffer;
+/// - query "wipi root" control command 7 for selectors 100 through 104;
+/// - skip empty mount-name slots;
+/// - pack each non-empty name consecutively as NUL-terminated strings;
+/// - return the number of packed mount names;
+/// - return -18 when the caller's buffer cannot hold the next complete name.
+///
+/// The native LGT runtime can expose several physical WIPI mounts
+/// (`/f/FMEM`, `/f/HDD`, `/f/ODD`, `/f/NFS`, `/f/VODD`). WIE currently
+/// presents one logical filesystem root rather than a physical mount table,
+/// so that root is represented by the canonical primary FMEM mount.
+pub async fn get_mounted_names(
+    context: &mut dyn WIPICContext,
+    output: WIPICWord,
+    output_size: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_fsGetMountedNames({output:#x}, {output_size})");
+
+    // Native passes output_size directly to memset(), so a negative value has
+    // no safely reproducible guest-visible contract. Reject it before the
+    // signed value can become an enormous host-side length.
+    if output_size < 0 {
+        return Ok(-18);
+    }
+
+    let output_size = output_size as usize;
+
+    // Match the native initial memset() without allocating a host buffer whose
+    // size is controlled directly by the guest.
+    let zeroes = [0u8; 256];
+    let mut cleared = 0usize;
+    while cleared < output_size {
+        let chunk_size = (output_size - cleared).min(zeroes.len());
+        context.write_bytes(
+            output.wrapping_add(cleared as u32),
+            &zeroes[..chunk_size],
+        )?;
+        cleared += chunk_size;
+    }
+
+    const MOUNT_NAME: &[u8] = b"/f/FMEM\0";
+
+    if output_size < MOUNT_NAME.len() {
+        return Ok(-18);
+    }
+
+    context.write_bytes(output, MOUNT_NAME)?;
+
+    Ok(1)
+}
+
 /// WIPI-C MC_fsGetCounts (canonical service 0x19e).
 ///
 /// Native flow:
@@ -1060,7 +1114,7 @@ mod tests {
     use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
-        close, file_attribute, get_counts, is_exist, list, mkdir, open, read, remove, rename, rmdir,
+        close, file_attribute, get_counts, get_mounted_names, is_exist, list, mkdir, open, read, remove, rename, rmdir,
         seek, set_mode, tell, write,
     };
 
@@ -2204,6 +2258,55 @@ mod tests {
         for access in [1, 2, 3, 100] {
             assert_eq!(is_exist(&mut context, PATH, access).await.unwrap(), -11);
         }
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_get_mounted_names_returns_primary_mount_and_zeros_buffer() {
+        const OUTPUT: u32 = 0x2000;
+
+        let mut context = filesystem_test_context();
+        context.write_bytes(OUTPUT, &[0xcc; 12]).unwrap();
+
+        assert_eq!(
+            get_mounted_names(&mut context, OUTPUT, 12).await.unwrap(),
+            1
+        );
+
+        let mut actual = [0u8; 12];
+        context.read_bytes(OUTPUT, &mut actual).unwrap();
+
+        assert_eq!(&actual[..8], b"/f/FMEM\0");
+        assert_eq!(&actual[8..], &[0; 4]);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_get_mounted_names_rejects_short_buffer_after_zeroing_it() {
+        const OUTPUT: u32 = 0x2000;
+
+        let mut context = filesystem_test_context();
+        context.write_bytes(OUTPUT, &[0xcc; 7]).unwrap();
+
+        assert_eq!(
+            get_mounted_names(&mut context, OUTPUT, 7).await.unwrap(),
+            -18
+        );
+
+        let mut actual = [0u8; 7];
+        context.read_bytes(OUTPUT, &mut actual).unwrap();
+
+        assert_eq!(actual, [0; 7]);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_get_mounted_names_zero_size_returns_short_buffer() {
+        let mut context = filesystem_test_context();
+
+        assert_eq!(
+            get_mounted_names(&mut context, 0x2000, 0)
+                .await
+                .unwrap(),
+            -18
+        );
     }
 
     #[futures_test::test]
