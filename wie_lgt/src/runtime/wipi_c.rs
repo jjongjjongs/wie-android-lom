@@ -837,10 +837,13 @@ async fn unk10(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u
     Ok(0)
 }
 
-/// Whether `id` is a high-frequency drawing/UI service excluded from the
-/// diagnostic call trace: framebuffer, graphics, IME and UIC services.
+/// Whether `id` is a high-frequency service excluded from the diagnostic call
+/// trace: the per-frame timer set/unset (0x7a-0x7d) plus framebuffer, graphics,
+/// IME and UIC drawing services. Skipping these keeps the trace to the notable
+/// start-up calls (properties, resources, filesystem, network, exit) instead of
+/// flooding the bounded log with a title's render/timer loop.
 fn is_high_frequency_svc(id: u32) -> bool {
-    matches!(id, 0x32..=0x36 | 0xc8..=0xf3 | 0x12c..=0x130 | 0x320..=0x34a)
+    matches!(id, 0x7a..=0x7d | 0x32..=0x36 | 0xc8..=0xf3 | 0x12c..=0x130 | 0x320..=0x34a)
 }
 
 /// `MC_knlExit` (service 0x68). The applet is asking to terminate, passing its

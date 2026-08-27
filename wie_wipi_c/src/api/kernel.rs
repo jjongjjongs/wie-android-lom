@@ -42,8 +42,16 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
         "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
-        "PHONENUMBER" => "", // putting this cause some game to fail authentication
-        "MIN" => "01000000000",
+        // A local start-up auth check reads PHONENUMBER and treats an empty value
+        // as an unauthorised handset, then exits (observed in 이노티아 연대기 2,
+        // which reads only this property and then calls MC_knlExit with no network
+        // traffic at all). There is no server to verify a specific number against,
+        // so any valid-format subscriber number satisfies the check. MIN carries
+        // the same number so a title that cross-checks them agrees. A title bound
+        // to one specific original number cannot be authorised in an emulator
+        // regardless, so a valid placeholder is the best default.
+        "PHONENUMBER" => "01012345678",
+        "MIN" => "01012345678",
         "ANNUN_CALL" => "0",
         "ANNUN_SMS" => "0",
         "ANNUN_SILENT" => "0",
@@ -374,7 +382,7 @@ mod test {
 
         assert_eq!(get_system_property(&mut context, id, out, 16).await.unwrap(), 0);
         let result = read_null_terminated_string_bytes(&context, out).unwrap();
-        assert_eq!(String::from_utf8(result).unwrap(), "01000000000");
+        assert_eq!(String::from_utf8(result).unwrap(), "01012345678");
 
         Ok(())
     }
