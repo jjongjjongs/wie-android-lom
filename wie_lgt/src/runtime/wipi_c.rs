@@ -200,6 +200,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::DeleteRecord => database::delete_record_lgt.into_body(),
         WIPICSvcId::ListRecords => database::list_records_lgt.into_body(),
         WIPICSvcId::SortRecords => database::sort_records_lgt.into_body(),
+        WIPICSvcId::GetAccessMode => database::get_access_mode_lgt.into_body(),
         WIPICSvcId::FsRead => filesystem::read.into_body(),
         WIPICSvcId::FsWrite => filesystem::write.into_body(),
         WIPICSvcId::FsClose => filesystem::close.into_body(),

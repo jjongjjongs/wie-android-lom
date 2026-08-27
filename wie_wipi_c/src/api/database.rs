@@ -365,6 +365,72 @@ pub async fn open_database_lgt(
     open_database(context, ptr_name, 0, access).await
 }
 
+/// LGT canonical `MC_dbGetAccessMode` (service 0x1fd).
+///
+/// Native ABI: `MC_dbGetAccessMode(name)`.
+///
+/// Verified native contract:
+/// - null `name` -> -9;
+/// - names longer than 123 bytes -> -9;
+/// - constructs both `name.db` and `name.idx`;
+/// - probes access namespaces in the exact order 1, 2, 3;
+/// - an access matches only when both companion files exist there;
+/// - returns the first matching access selector;
+/// - if no namespace contains both files -> -12.
+///
+/// Native access 1/2/3 map to distinct filesystem namespaces. WIE's
+/// database repository intentionally collapses those namespaces into one
+/// logical database key, as do the existing LGT open/delete adaptations.
+/// Consequently, once a logical database exists, the only faithful result
+/// representable under the native first-match ordering is access 1.
+///
+/// Packaged databases share that logical namespace and are likewise treated
+/// as present at the canonical first access selector.
+///
+/// WIE repository keys are UTF-8 strings, so invalid UTF-8 is rejected with
+/// the established database-name adaptation (-22) after the native byte-length
+/// validation.
+pub async fn get_access_mode_lgt(
+    context: &mut dyn WIPICContext,
+    ptr_name: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_dbGetAccessMode({ptr_name:#x}) [LGT]");
+
+    if ptr_name == 0 {
+        return Ok(-9);
+    }
+
+    let name_bytes = read_null_terminated_string_bytes(context, ptr_name)?;
+
+    // Native checks strlen(name) > 123 before constructing the two
+    // 128-byte stack buffers used for `name.db` and `name.idx`.
+    if name_bytes.len() > 123 {
+        return Ok(-9);
+    }
+
+    let Ok(name) = String::from_utf8(name_bytes) else {
+        return Ok(-22);
+    };
+
+    if read_packaged_database(context, &name).await?.is_some() {
+        return Ok(1);
+    }
+
+    let system = context.system();
+    let pid = system.pid().to_owned();
+
+    if system
+        .platform()
+        .database_repository()
+        .exists(&name, &pid)
+        .await
+    {
+        Ok(1)
+    } else {
+        Ok(-12)
+    }
+}
+
 /// LGT canonical `MC_dbInsertRecord` (service 0x1f7).
 ///
 /// Native ABI: `MC_dbInsertRecord(handle, data, length)`.
@@ -1568,11 +1634,70 @@ mod tests {
 
     use super::{
         LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
-        exists_database, insert_record_lgt, list_record_info, list_records_lgt, load_handle,
+        exists_database, get_access_mode_lgt, insert_record_lgt, list_record_info, list_records_lgt, load_handle,
         load_lgt_metadata, open_database, open_database_lgt, open_db_for_handle,
         select_record, select_record_lgt, sort_records_lgt, store_lgt_metadata, stream_read,
         stream_write, update_record, update_record_lgt,
     };
+
+    #[futures_test::test]
+    async fn lgt_native_get_access_mode_matches_native_validation_and_missing_database() {
+        const NAME: u32 = 0x1000;
+
+        let mut context = database_test_context();
+
+        assert_eq!(
+            get_access_mode_lgt(&mut context, 0).await.unwrap(),
+            -9
+        );
+
+        let long_name = alloc::vec![b'a'; 124];
+        context.write_bytes(NAME, &long_name).unwrap();
+        context.write_bytes(NAME + 124, &[0]).unwrap();
+
+        assert_eq!(
+            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
+            -9
+        );
+
+        context.write_bytes(NAME, b"missing\0").unwrap();
+
+        assert_eq!(
+            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
+            -12
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_get_access_mode_returns_first_representable_namespace() {
+        const NAME: u32 = 0x1000;
+
+        let mut context = database_test_context();
+        context.write_bytes(NAME, b"records\0").unwrap();
+
+        // The WIE repository collapses native access namespaces 1/2/3.
+        // Create through access 3 to make that adaptation explicit:
+        // MC_dbGetAccessMode still returns native first-match selector 1.
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 3)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        assert_eq!(
+            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
+            1
+        );
+
+        assert_eq!(
+            close_database_lgt(&mut context, db_id).await.unwrap(),
+            0
+        );
+
+        assert_eq!(
+            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
+            1
+        );
+    }
 
     #[futures_test::test]
     async fn lgt_native_insert_record_validates_handle_and_arguments() {
