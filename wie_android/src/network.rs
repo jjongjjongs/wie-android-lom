@@ -213,6 +213,27 @@ impl Network for AndroidNetwork {
         }
     }
 
+    fn recv_from(&self, socket: i32, buf: &mut [u8]) -> Result<(usize, u32, u16), NetworkError> {
+        let inner = self.inner.lock().unwrap_or_else(|x| x.into_inner());
+        let Some(entry) = inner.sockets.get(&socket) else {
+            return Err(NetworkError::InvalidSocket);
+        };
+
+        match entry {
+            Socket::Udp(udp) => {
+                let (read, from) = udp.recv_from(buf).map_err(|error| Self::map_io(&error))?;
+                // Re-encode the sender's IPv4 address into the WIPI 32-bit form
+                // (the inverse of `ipv4`), so it matches what connect/send_to take.
+                let address = match from {
+                    SocketAddr::V4(v4) => u32::from_le_bytes(v4.ip().octets()),
+                    SocketAddr::V6(_) => 0,
+                };
+                Ok((read, address, from.port()))
+            }
+            Socket::Tcp(_) => Err(NetworkError::Unsupported),
+        }
+    }
+
     fn connect(&self, socket: i32, address: u32, port: u16) -> NetworkPoll<()> {
         let remote = SocketAddr::new(IpAddr::V4(Self::ipv4(address)), port);
 
@@ -440,5 +461,44 @@ mod tests {
         assert_eq!(&buf[..n], payload);
 
         assert!(matches!(net.send_to(0x7fff_ffff, payload, loopback, port), Err(NetworkError::InvalidSocket)));
+    }
+
+    // MC_netSocketRcvFrom (0x262): a datagram socket receives a packet and
+    // reports the sender's address and port in the WIPI encoding.
+    #[test]
+    fn recv_from_round_trip_reports_sender() {
+        let loopback = u32::from_le_bytes([127, 0, 0, 1]);
+        let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("peer");
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let peer_port = peer.local_addr().unwrap().port();
+
+        let net = AndroidNetwork::new();
+        let udp = net.socket(2, 2).expect("udp socket");
+
+        // The backend socket sends first so the peer learns its source address;
+        // the peer then replies and the backend receives, naming the peer.
+        net.send_to(udp, b"ping", loopback, peer_port).unwrap();
+        let mut probe = [0u8; 64];
+        let (_, backend_src) = peer.recv_from(&mut probe).expect("peer recv");
+        peer.send_to(b"pong-reply", backend_src).expect("peer send");
+
+        let mut buf = [0u8; 64];
+        let mut got = None;
+        for _ in 0..200 {
+            match net.recv_from(udp, &mut buf) {
+                Ok(x) => {
+                    got = Some(x);
+                    break;
+                }
+                Err(NetworkError::WouldBlock) => thread::sleep(Duration::from_millis(5)),
+                Err(other) => panic!("recv_from: {other:?}"),
+            }
+        }
+        let (read, address, port) = got.expect("recv_from delivered");
+        assert_eq!(&buf[..read], b"pong-reply");
+        assert_eq!(address, loopback);
+        assert_eq!(port, peer_port);
+
+        assert!(matches!(net.recv_from(0x7fff_ffff, &mut buf), Err(NetworkError::InvalidSocket)));
     }
 }

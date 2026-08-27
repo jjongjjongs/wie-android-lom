@@ -762,6 +762,69 @@ pub async fn socket_send_to(
     })
 }
 
+/// `MC_netSocketRcvFrom` (0x262) @ native 0x1b2c30.
+///
+/// Receives a datagram and reports the sender. ABI: r0 = socket, r1 = buffer,
+/// r2 = length, r3 = out-address pointer, 5th arg = out-port pointer. The native
+/// gates in order: buffer == 0 || length <= 0 -> -9; out-address == 0 ||
+/// out-port == 0 -> -9; `WPNet_IsAvailable()` < 0 -> -14; `find_socket_obj()` ==
+/// null -> -2; family (`[sock+0x10]`) != 2 -> -16; type (`[sock+0x14]`) != 2 ->
+/// -16. On success it writes the sender's port (a 16-bit `sin_port`) through the
+/// out-port pointer and the sender's address (32 bits) through the out-address
+/// pointer, and returns the byte count. `dsocket_recvfrom` maps -2077 -> -2,
+/// -2022 -> -9, -2011 -> -19, -4006 -> -16, -2107 -> -14, anything else -> -1.
+pub async fn socket_recv_from(
+    context: &mut dyn WIPICContext,
+    socket: i32,
+    buffer: WIPICWord,
+    length: i32,
+    out_address: WIPICWord,
+    out_port: WIPICWord,
+) -> Result<i32> {
+    if buffer == 0 || length <= 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    if out_address == 0 || out_port == 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let state = context.network_state();
+    if !state.lock().is_available() {
+        return Ok(M_E_NOTCONN);
+    }
+
+    let Some(socket_type) = state.lock().socket_type(socket) else {
+        return Ok(M_E_BADFD);
+    };
+
+    if socket_type != 2 {
+        return Ok(M_E_NOTSUP);
+    }
+
+    let mut data = alloc::vec![0u8; length as usize];
+
+    let result = {
+        let Some(network) = context.system().platform().network() else {
+            return Ok(M_E_NOTCONN);
+        };
+
+        network.recv_from(socket, &mut data)
+    };
+
+    match result {
+        Ok((read, address, port)) => {
+            context.write_bytes(buffer, &data[..read])?;
+            // The native writes the sender's port as a 16-bit sin_port and its
+            // address as a 32-bit word, both little-endian on ARM.
+            context.write_bytes(out_port, &port.to_le_bytes())?;
+            context.write_bytes(out_address, &address.to_le_bytes())?;
+            Ok(read as i32)
+        }
+        Err(error) => Ok(map_network_error(error)),
+    }
+}
+
 fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {
     let state = context.network_state();
 

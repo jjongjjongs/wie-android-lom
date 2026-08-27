@@ -57,6 +57,14 @@ pub trait Network: Send + Sync {
         port: u16,
     ) -> Result<usize, NetworkError>;
 
+    /// Receives a datagram, returning `(bytes, sender_address, sender_port)`
+    /// where the address is in the same WIPI encoding `connect`/`send_to` take.
+    fn recv_from(
+        &self,
+        socket: i32,
+        buf: &mut [u8],
+    ) -> Result<(usize, u32, u16), NetworkError>;
+
     fn close(&self, socket: i32) -> Result<(), NetworkError>;
 
     fn poll_event(&self) -> Option<NetworkEvent>;
