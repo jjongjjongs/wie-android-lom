@@ -431,6 +431,45 @@ pub async fn get_access_mode_lgt(
     }
 }
 
+/// LGT canonical `MC_dbGetNumberOfRecords` (service 0x1fe).
+///
+/// Native ABI: `MC_dbGetNumberOfRecords(handle)`.
+///
+/// Verified native contract:
+/// - the argument is an opened database handle;
+/// - an unknown/closed handle returns -2;
+/// - a valid handle returns its native active-record-count field at +0x20;
+/// - the 32-bit field is returned verbatim, with no range or sign validation.
+///
+/// WIE persists the corresponding LGT field as `metadata.active_count`.
+/// Preserve the native raw 32-bit return semantics with a bit-preserving
+/// `u32 -> i32` cast, including malformed/wrapped states such as
+/// `active_count == 0xffff_ffff` returning -1.
+pub async fn get_number_of_records_lgt(
+    context: &mut dyn WIPICContext,
+    db_id: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_dbGetNumberOfRecords({db_id:#x}) [LGT]");
+
+    let Some(handle) = load_handle(context, db_id)? else {
+        return Ok(-2);
+    };
+
+    let Some(mut repository_db) = open_db_for_handle(context, &handle).await else {
+        return Ok(-2);
+    };
+
+    let Some(metadata) = load_lgt_metadata(repository_db.as_mut()).await else {
+        // A canonical LGT-opened handle always has the `.idx`-equivalent
+        // metadata. WIE cannot reproduce a valid native handle whose backing
+        // metadata disappeared independently, so collapse that host-state
+        // inconsistency to the existing database generic failure.
+        return Ok(-1);
+    };
+
+    Ok(metadata.active_count as i32)
+}
+
 /// LGT canonical `MC_dbInsertRecord` (service 0x1f7).
 ///
 /// Native ABI: `MC_dbInsertRecord(handle, data, length)`.
@@ -1634,8 +1673,9 @@ mod tests {
 
     use super::{
         LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
-        exists_database, get_access_mode_lgt, insert_record_lgt, list_record_info, list_records_lgt, load_handle,
-        load_lgt_metadata, open_database, open_database_lgt, open_db_for_handle,
+        exists_database, get_access_mode_lgt, get_number_of_records_lgt, insert_record_lgt,
+        list_record_info, list_records_lgt, load_handle, load_lgt_metadata, open_database,
+        open_database_lgt, open_db_for_handle,
         select_record, select_record_lgt, sort_records_lgt, store_lgt_metadata, stream_read,
         stream_write, update_record, update_record_lgt,
     };
@@ -1696,6 +1736,125 @@ mod tests {
         assert_eq!(
             get_access_mode_lgt(&mut context, NAME).await.unwrap(),
             1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_get_number_of_records_validates_handle_and_tracks_active_count() {
+        const NAME: u32 = 0x1000;
+        const DATA: u32 = 0x2000;
+
+        let mut context = database_test_context();
+        context.write_bytes(NAME, b"records\0").unwrap();
+        context.write_bytes(DATA, &[1, 2, 3, 4]).unwrap();
+
+        assert_eq!(
+            get_number_of_records_lgt(&mut context, 0x1234)
+                .await
+                .unwrap(),
+            -2
+        );
+
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        assert_eq!(
+            get_number_of_records_lgt(&mut context, db_id)
+                .await
+                .unwrap(),
+            0
+        );
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, DATA, 4)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, DATA, 4)
+                .await
+                .unwrap(),
+            2
+        );
+
+        assert_eq!(
+            get_number_of_records_lgt(&mut context, db_id)
+                .await
+                .unwrap(),
+            2
+        );
+
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 1)
+                .await
+                .unwrap(),
+            0
+        );
+
+        assert_eq!(
+            get_number_of_records_lgt(&mut context, db_id)
+                .await
+                .unwrap(),
+            1
+        );
+
+        assert_eq!(
+            close_database_lgt(&mut context, db_id)
+                .await
+                .unwrap(),
+            0
+        );
+
+        assert_eq!(
+            get_number_of_records_lgt(&mut context, db_id)
+                .await
+                .unwrap(),
+            -2
+        );
+
+        let reopened = open_database_lgt(&mut context, NAME, 99, 0, 1)
+            .await
+            .unwrap();
+        assert!(reopened > 0);
+
+        assert_eq!(
+            get_number_of_records_lgt(&mut context, reopened)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_get_number_of_records_returns_raw_wrapped_count() {
+        const NAME: u32 = 0x1000;
+
+        let mut context = database_test_context();
+        context.write_bytes(NAME, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        // Native MC_dbDeleteRecord accepts id 0 while next_record_id > 0
+        // and decrements the unsigned active-count field from 0 to
+        // 0xffff_ffff. MC_dbGetNumberOfRecords simply LDRs that field.
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 0)
+                .await
+                .unwrap(),
+            0
+        );
+
+        assert_eq!(
+            get_number_of_records_lgt(&mut context, db_id)
+                .await
+                .unwrap(),
+            -1
         );
     }
 
