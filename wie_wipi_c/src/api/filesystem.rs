@@ -764,6 +764,65 @@ pub async fn rename(
     }
 }
 
+/// WIPI-C MC_fsGetCounts (canonical service 0x19e).
+///
+/// Native flow:
+/// - WPFS_IsPossibleAccess(1, access);
+/// - access 1/2/3: WPFS_MakeFullPathName(path, access);
+/// - access 100: bypass WPFS_MakeFullPathName and pass the original path
+///   directly to the "wipi root" filesystem;
+/// - dfs_control_dev(command 2);
+/// - MH/AND_fileGetCounts uses opendir/readdir and counts every direct entry
+///   except "." and "..".
+///
+/// Native return behavior represented here:
+/// - inaccessible/unknown access selector => -24;
+/// - null filename => -3;
+/// - access 1/2/3 path longer than 128 bytes => -11;
+/// - missing/non-directory/open failure => -1;
+/// - existing empty directory => 0;
+/// - otherwise => number of direct child entries.
+///
+/// Access 100 intentionally does not inherit the 128-byte
+/// WPFS_MakeFullPathName limit because the native wrapper bypasses that helper.
+pub async fn get_counts(
+    context: &mut dyn WIPICContext,
+    path: WIPICWord,
+    access: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_fsGetCounts({path:#x}, {access})");
+
+    // Native WPFS_IsPossibleAccess(1, access) executes before path handling.
+    // WIE does not model the per-DLET permission bitmap used for selectors
+    // 2/3, so all recognized selectors use the established compatibility
+    // adaptation used by the neighboring LGT filesystem services.
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if path == 0 {
+        return Ok(-3);
+    }
+
+    let path_bytes = read_null_terminated_string_bytes(context, path)?;
+
+    // Only selectors 1/2/3 call WPFS_MakeFullPathName. Selector 100 passes
+    // the original path directly to dfs_control_dev("wipi root", 2, path).
+    if access != 100 && path_bytes.len() > 128 {
+        return Ok(-11);
+    }
+
+    let path = encoding_rs::EUC_KR.decode(&path_bytes).0.into_owned();
+
+    let Some(entries) = context.system().filesystem().list(&path).await else {
+        // MH/AND_fileGetCounts returns -1 when opendir fails. The enclosing
+        // DFS/WIPI-C translation leaves that class as the generic -1 result.
+        return Ok(-1);
+    };
+
+    Ok(i32::try_from(entries.len()).unwrap_or(i32::MAX))
+}
+
 /// WIPI-C MC_fsSetMode (canonical service 0x19d).
 ///
 /// Native flow:
@@ -922,8 +981,8 @@ mod tests {
     use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
-        close, file_attribute, list, mkdir, open, read, remove, rename, rmdir, seek, set_mode,
-        write,
+        close, file_attribute, get_counts, list, mkdir, open, read, remove, rename, rmdir, seek,
+        set_mode, write,
     };
 
     fn filesystem_test_context() -> TestContext {
@@ -1966,6 +2025,54 @@ mod tests {
         let mut actual = [0u8; 3];
         context.read_bytes(0x2000, &mut actual).unwrap();
         assert_eq!(&actual, b"abc");
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_get_counts_counts_direct_children_and_empty_directory() {
+        let mut context = filesystem_test_context();
+
+        context.system().filesystem().mkdir("save").await.unwrap();
+        context.system().filesystem().mkdir("save/empty").await.unwrap();
+        context.system().filesystem().mkdir("save/sub").await.unwrap();
+        context.system().filesystem().write("save/a.dat", 0, b"a").await;
+        context.system().filesystem().write("save/b.dat", 0, b"b").await;
+        context.system().filesystem().write("save/sub/nested.dat", 0, b"n").await;
+
+        context.write_bytes(0x1000, b"save\0").unwrap();
+        context.write_bytes(0x1100, b"save/empty\0").unwrap();
+        context.write_bytes(0x1200, b"save/sub\0").unwrap();
+
+        // Direct children only: a.dat, b.dat, empty, sub.
+        assert_eq!(get_counts(&mut context, 0x1000, 1).await.unwrap(), 4);
+        assert_eq!(get_counts(&mut context, 0x1100, 1).await.unwrap(), 0);
+        assert_eq!(get_counts(&mut context, 0x1200, 1).await.unwrap(), 1);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_get_counts_matches_native_validation_and_access_100_path_rule() {
+        let mut context = filesystem_test_context();
+
+        context.write_bytes(0x1000, b"missing\0").unwrap();
+
+        // Access validation precedes all path handling.
+        assert_eq!(get_counts(&mut context, 0, 0).await.unwrap(), -24);
+        assert_eq!(get_counts(&mut context, 0, 1).await.unwrap(), -3);
+        assert_eq!(get_counts(&mut context, 0x1000, 1).await.unwrap(), -1);
+
+        // Selectors 1/2/3 pass through WPFS_MakeFullPathName and enforce its
+        // 128-byte input limit. Selector 100 bypasses that helper.
+        let long_dir = "a".repeat(129);
+        let long_file = alloc::format!("{long_dir}/child.dat");
+        context.system().filesystem().write(&long_file, 0, b"x").await;
+
+        let mut long_path = long_dir.as_bytes().to_vec();
+        long_path.push(0);
+        context.write_bytes(0x2000, &long_path).unwrap();
+
+        assert_eq!(get_counts(&mut context, 0x2000, 1).await.unwrap(), -11);
+        assert_eq!(get_counts(&mut context, 0x2000, 2).await.unwrap(), -11);
+        assert_eq!(get_counts(&mut context, 0x2000, 3).await.unwrap(), -11);
+        assert_eq!(get_counts(&mut context, 0x2000, 100).await.unwrap(), 1);
     }
 
     #[futures_test::test]
