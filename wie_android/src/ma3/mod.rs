@@ -24,7 +24,7 @@
 //! - [`tables`] is the chip's own data.
 
 mod bus;
-mod tables;
+pub(crate) mod tables;
 mod tone;
 mod voice;
 mod wave;

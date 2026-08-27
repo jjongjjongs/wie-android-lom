@@ -15,6 +15,7 @@ mod filesystem;
 mod logging;
 mod ma3;
 mod network;
+mod oma3;
 mod platform;
 mod runner;
 
