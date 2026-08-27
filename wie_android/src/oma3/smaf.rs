@@ -16,7 +16,7 @@
 #![allow(clippy::collapsible_if, clippy::too_many_arguments)]
 
 use super::synth::CompactTone;
-use super::tone::{decode_compact_tone, FormatError};
+use super::tone::{FormatError, decode_compact_tone};
 
 type Result<T> = core::result::Result<T, FormatError>;
 
@@ -170,11 +170,7 @@ fn compact_modulation_bucket(v: i32) -> i32 {
 }
 
 fn mtr_status_len_for_format(format: i32) -> i32 {
-    if format != 0 && format != 4 {
-        16
-    } else {
-        2
-    }
+    if format != 0 && format != 4 { 16 } else { 2 }
 }
 
 fn read_compact_gate(byte: i32, low: i32, has_extra: bool) -> i32 {

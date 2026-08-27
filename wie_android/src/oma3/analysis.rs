@@ -32,30 +32,18 @@ fn combined_gain7(a: i32, b: i32) -> i32 {
 }
 
 fn safe_channel(v: i32) -> i32 {
-    if !(0..16).contains(&v) {
-        0
-    } else {
-        v
-    }
+    if !(0..16).contains(&v) { 0 } else { v }
 }
 
 fn safe_track(v: i32) -> i32 {
-    if !(0..16).contains(&v) {
-        0
-    } else {
-        v
-    }
+    if !(0..16).contains(&v) { 0 } else { v }
 }
 
 fn effective_bank(channel: i32, bank_msb: i32, bank_lsb: i32) -> i32 {
     let msb = bank_msb & 0xFF;
     let lsb = bank_lsb & 255;
     if msb == 0 && lsb == 0 {
-        if channel == 9 {
-            128
-        } else {
-            0
-        }
+        if channel == 9 { 128 } else { 0 }
     } else if msb == 124 {
         lsb
     } else if msb == 125 {
@@ -67,11 +55,7 @@ fn effective_bank(channel: i32, bank_msb: i32, bank_lsb: i32) -> i32 {
 
 fn mobile_bank_remap(value: i32) -> i32 {
     let v = value & 127;
-    if v < 10 {
-        v + 1
-    } else {
-        0
-    }
+    if v < 10 { v + 1 } else { 0 }
 }
 
 fn put_le32(dst: &mut [u8], at: usize, value: i64) {
@@ -914,11 +898,7 @@ impl<'a> Collector<'a> {
                     continue;
                 }
                 let byte = track.channel_status[byte_index] as i32;
-                if ch & 1 != 0 {
-                    byte & 15
-                } else {
-                    (byte & 255) >> 4
-                }
+                if ch & 1 != 0 { byte & 15 } else { (byte & 255) >> 4 }
             };
             if status & 3 == 3 {
                 let s = &mut self.channels[track_no as usize][ch as usize];
