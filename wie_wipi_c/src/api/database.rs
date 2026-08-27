@@ -487,6 +487,67 @@ pub async fn delete_record_ktf(context: &mut dyn WIPICContext, a0: i32, a1: i32)
     Ok(0)
 }
 
+/// LGT canonical `MC_dbDeleteDataBase` (service 0x1f6).
+///
+/// Native ABI: `MC_dbDeleteDataBase(name, access)`.
+///
+/// Verified native contract:
+/// - null `name` -> -9;
+/// - `access` must be 1, 2 or 3, otherwise -9;
+/// - deletion is name-based and does not search the open-database handle list;
+/// - the native `.db` file is removed first and `.idx` second;
+/// - a missing database ultimately maps to -1;
+/// - successful removal returns 0.
+///
+/// WIE stores a database as one logical repository entry rather than separate
+/// `.db` / `.idx` files, so repository deletion is the corresponding atomic
+/// operation. Open handles are deliberately not invalidated here: the native
+/// function performs no database-handle lookup before unlinking its files.
+pub async fn delete_database_lgt(
+    context: &mut dyn WIPICContext,
+    ptr_name: WIPICWord,
+    access: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_dbDeleteDataBase({ptr_name:#x}, access={access}) [LGT]");
+
+    if ptr_name == 0 {
+        return Ok(-9);
+    }
+
+    if !matches!(access, 1..=3) {
+        return Ok(-9);
+    }
+
+    // Native treats the name as raw C bytes. WIE repository keys are UTF-8,
+    // so invalid encoding is a host-side safety adaptation.
+    let Ok(name) = String::from_utf8(read_null_terminated_string_bytes(context, ptr_name)?) else {
+        return Ok(-22);
+    };
+
+    let system = context.system();
+    let pid = system.pid().to_owned();
+
+    if !system
+        .platform()
+        .database_repository()
+        .exists(&name, &pid)
+        .await
+    {
+        return Ok(-1);
+    }
+
+    if system
+        .platform()
+        .database_repository()
+        .delete(&name, &pid)
+        .await
+    {
+        Ok(0)
+    } else {
+        Ok(-1)
+    }
+}
+
 pub async fn delete_database(context: &mut dyn WIPICContext, ptr_name: WIPICWord, flags: i32) -> Result<i32> {
     tracing::debug!("MC_dbDeleteDataBase({ptr_name:#x}, {flags})");
 
@@ -740,7 +801,63 @@ mod tests {
 
     use crate::context::test::TestContext;
 
-    use super::{close_database_lgt, delete_database, exists_database, list_record_info, open_database, open_database_lgt, select_record, stream_read, stream_write, update_record};
+    use super::{close_database_lgt, delete_database, delete_database_lgt, exists_database, list_record_info, open_database, open_database_lgt, select_record, stream_read, stream_write, update_record};
+
+    #[futures_test::test]
+    async fn lgt_native_delete_database_validates_arguments() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            delete_database_lgt(&mut context, 0, 1).await.unwrap(),
+            -9
+        );
+        assert_eq!(
+            delete_database_lgt(&mut context, 0x1000, 0).await.unwrap(),
+            -9
+        );
+        assert_eq!(
+            delete_database_lgt(&mut context, 0x1000, 4).await.unwrap(),
+            -9
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_delete_database_missing_returns_minus_one() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            delete_database_lgt(&mut context, 0x1000, 1)
+                .await
+                .unwrap(),
+            -1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_delete_database_removes_existing_database() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        assert_eq!(
+            delete_database_lgt(&mut context, 0x1000, 1)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            delete_database_lgt(&mut context, 0x1000, 1)
+                .await
+                .unwrap(),
+            -1
+        );
+    }
 
     #[futures_test::test]
     async fn lgt_native_close_database_rejects_unknown_handle_with_minus_two() {
