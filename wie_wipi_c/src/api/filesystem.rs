@@ -131,6 +131,11 @@ pub async fn open(
     let filesystem = context.system().filesystem().clone();
     let exists = filesystem.exists(&path).await;
 
+    // Logged at info: a start-up auth/DRM check often hinges on a license or
+    // save file, and whether the game finds it (and what it reads back) is the
+    // clearest signal for why a title bails during start-up.
+    tracing::info!("MC_fsOpen({path:?}, mode={mode}) exists={exists}");
+
     let cursor = match mode {
         1 => {
             if !exists {
