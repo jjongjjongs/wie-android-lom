@@ -19,3 +19,4 @@
 
 pub mod synth;
 pub mod tables;
+pub mod tone;
