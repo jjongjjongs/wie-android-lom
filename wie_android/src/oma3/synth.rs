@@ -203,6 +203,56 @@ pub fn phase_step_q32_from_hz(hz: f64, sample_rate: i32) -> i64 {
     }
 }
 
+/// `roundSix` - round to six decimal places, as the reference does before it
+/// multiplies a base frequency by a power of two.
+fn round_six(v: f64) -> f64 {
+    (v * 1_000_000.0 + 0.5).floor() / 1_000_000.0
+}
+
+/// `contextFrequency` - the frequency a wave/FM key sounds at for a given base
+/// key and scaling mode.
+fn context_frequency(base_key: i32, mode: i32, key: i32) -> f64 {
+    let index = (key & 127) as usize;
+    if base_key & 0xFF == 69 && mode == 100 {
+        return MA3_FREQ_BASE[index];
+    }
+    let scale = if mode == 5 || mode == 10 || mode == 20 || mode == 50 {
+        mode
+    } else {
+        100
+    };
+    let exponent = (index as f64 - 69.0) * scale as f64 / 100.0 / 12.0;
+    MA3_FREQ_BASE[(base_key & 127) as usize] * round_six(2f64.powf(exponent))
+}
+
+/// `wavePitchRatioForContext` - the Q16 resample ratio a recorded sample plays
+/// at for a bank context, key, mode and host transpose.
+pub fn wave_pitch_ratio_for_context(bank: i32, key: i32, mode: i32, host_transpose: i32) -> i32 {
+    if bank & 128 != 0 {
+        return 65536;
+    }
+    // The bank context picks the base key, the scaling mode and the per-semitone
+    // transpose multiplier, exactly as the reference switch.
+    let (base_key, freq_mode, transpose_mul) = match bank & 0xFF {
+        115 => (66, 50, 2),
+        116 => (45, 50, 2),
+        117 => (61, 50, 2),
+        118 | 119 => (69, 50, 2),
+        122 | 127 => (69, 20, 5),
+        123 | 126 => (69, 5, 20),
+        124 | 125 => (69, 10, 10),
+        _ => (69, 100, 1),
+    };
+    let clamped = clamp(key, 0, 127);
+    let effective = if mode == 0 || mode == 2 {
+        clamp(clamped + host_transpose * transpose_mul, 0, 127)
+    } else {
+        clamped
+    };
+    let ratio = context_frequency(base_key, freq_mode, effective) * 65536.0 * 0.003_822_63 + 0.5;
+    ratio.clamp(1.0, 4_294_967_295.0) as i64 as i32
+}
+
 /// `pitchHz(int, int, int)`.
 pub fn pitch_hz(note: i32, bend: i32, mut range: i32) -> f64 {
     let base = 2f64.powf((note as f64 - 69.0) / 12.0) * 440.0;
