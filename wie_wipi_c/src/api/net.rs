@@ -848,6 +848,45 @@ pub async fn socket_recv_from(
     }
 }
 
+/// `MC_netSocketAccept` (0x264) @ native 0x1b21d8.
+///
+/// Accepts a pending connection on a listening stream socket. ABI: r0 = socket,
+/// r1 = out-address pointer, r2 = out-port pointer (the peer's address and port
+/// are written there on success). The native gates in order: no process network
+/// object -> -14; `find_socket_obj()` == null -> -2; the network object is not
+/// available -> -14. It then `dsocket_listen`s the socket and `dsocket_accept`s:
+/// a ready connection allocates a new socket object and returns its handle with
+/// the peer written back; otherwise the lower result maps -2077 -> -2,
+/// -2022 -> -9, -2011/-4005 -> -19, -2107 -> -14, -4006 -> -16, else -1.
+///
+/// WIE has no TCP-server backend - no target game acts as a server - so a
+/// listening socket never has a pending connection. Accept therefore validates
+/// faithfully and reports -19 (would-block), the same result a real idle
+/// listener gives when nothing has connected yet. Returning a freshly accepted
+/// connection is deferred until a game needs server-side sockets.
+pub async fn socket_accept(
+    context: &mut dyn WIPICContext,
+    socket: i32,
+    _out_address: WIPICWord,
+    _out_port: WIPICWord,
+) -> Result<i32> {
+    let state = context.network_state();
+
+    if !state.lock().has_process_network() {
+        return Ok(M_E_NOTCONN);
+    }
+
+    if state.lock().socket_type(socket).is_none() {
+        return Ok(M_E_BADFD);
+    }
+
+    if !state.lock().is_available() {
+        return Ok(M_E_NOTCONN);
+    }
+
+    Ok(M_E_WOULDBLOCK)
+}
+
 /// `MC_netGetHostAddr` (0x263) @ native 0x1b236c.
 ///
 /// Resolves a host name to an IPv4 address and delivers it through a callback.

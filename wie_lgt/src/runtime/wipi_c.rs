@@ -235,6 +235,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SocketSendTo => net::socket_send_to.into_body(),
         WIPICSvcId::SocketRcvFrom => net::socket_recv_from.into_body(),
         WIPICSvcId::GetHostAddr => net::get_host_addr.into_body(),
+        WIPICSvcId::SocketAccept => net::socket_accept.into_body(),
         WIPICSvcId::SetReadCallback => net::set_read_callback.into_body(),
         WIPICSvcId::SetWriteCallback => net::set_write_callback.into_body(),
         WIPICSvcId::SerialOpen => serial::open.into_body(),
