@@ -119,6 +119,24 @@ impl LgtEmulator {
             system.filesystem().add_virtual(filename, data.clone())
         }
 
+        // Certification/auth files are sometimes packaged inside a folder (e.g.
+        // "인증파일/certification"), but a title reads them from its data-dir
+        // root. Expose such a file under its bare name too so the read resolves
+        // and the title's offline auth check passes instead of falling through
+        // to an online billing handshake that cannot complete. A real root copy
+        // always takes precedence.
+        const AUTH_FILES: [&str; 3] = ["certification", "cert.c2s", "certi.pzx"];
+        for (filename, data) in files {
+            let filename = filename.trim_start_matches("P/");
+            if let Some((_, base)) = filename.rsplit_once('/')
+                && AUTH_FILES.contains(&base)
+                && !files.keys().any(|k| k.trim_start_matches("P/") == base)
+            {
+                tracing::info!("exposing nested auth file {filename:?} at data-dir root as {base:?}");
+                system.filesystem().add_virtual(base, data.clone());
+            }
+        }
+
         Allocator::init(&mut core)?;
 
         let main_class_name = main_class_name.map(|x| x.replace('.', "/"));
