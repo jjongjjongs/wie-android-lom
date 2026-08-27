@@ -17,4 +17,5 @@
 //! littering each item with an attribute.
 #![allow(dead_code, unused_imports)]
 
+pub mod synth;
 pub mod tables;
