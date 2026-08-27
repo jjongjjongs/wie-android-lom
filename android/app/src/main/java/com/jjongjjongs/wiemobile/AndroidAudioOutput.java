@@ -112,6 +112,18 @@ final class AndroidAudioOutput {
         }
     }
 
+    /**
+     * Re-arms audio for a newly started game. A prior game's exit calls
+     * {@link #release()}, which stops the MMF pump thread; the pump is otherwise
+     * only started in the constructor, so without this a second game would play
+     * no sound. Idempotent: safe to call when audio is already running.
+     */
+    synchronized void start() {
+        PcmStreamWriter.resume();
+        MmfAudioPump.start();
+        midiEnabled = true;
+    }
+
     synchronized void pause() {
         ZenoniaAudioOverride.pause();
         PcmStreamWriter.pause();

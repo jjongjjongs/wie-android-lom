@@ -841,6 +841,11 @@ public final class MainActivity extends Activity {
                 runtimeDir.mkdirs();
             }
 
+            // A previous game's exit (onBackPressed) released the audio pump;
+            // re-arm it here so this game produces sound. Idempotent for the
+            // first game, where the pump is already running.
+            audioOutput.start();
+
             String message = NativeBridge.nativeStart(buffer.toByteArray(), runtimeDir.getAbsolutePath());
             running = NativeBridge.nativeRunning() != 0;
 
