@@ -192,6 +192,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::UicGetActiveMenuItem => uic::get_active_menu_item.into_body(),
         WIPICSvcId::FsOpen => filesystem::open.into_body(),
         WIPICSvcId::OpenDatabase => database::open_database_lgt.into_body(),
+        WIPICSvcId::CloseDatabase => database::close_database_lgt.into_body(),
         WIPICSvcId::FsRead => filesystem::read.into_body(),
         WIPICSvcId::FsWrite => filesystem::write.into_body(),
         WIPICSvcId::FsClose => filesystem::close.into_body(),

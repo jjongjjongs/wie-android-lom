@@ -223,6 +223,37 @@ pub async fn open_database_lgt(
     open_database(context, ptr_name, 0, access).await
 }
 
+/// LGT canonical `MC_dbCloseDataBase` (service 0x1f5).
+///
+/// Native first searches the global database-handle list. A handle not found
+/// there returns -2. On success the native implementation flushes its header
+/// and index state, closes both backing files, removes the handle from the
+/// global list, frees it, and returns 0.
+///
+/// WIE keeps its logical database buffer write-through, so there is no pending
+/// native-style `.db` / `.idx` metadata to flush here.
+pub async fn close_database_lgt(context: &mut dyn WIPICContext, db_id: i32) -> Result<i32> {
+    tracing::debug!("MC_dbCloseDataBase({db_id:#x}) [LGT]");
+
+    let Some(mut handle) = load_handle(context, db_id)? else {
+        return Ok(-2);
+    };
+
+    if handle.buffer_ptr != 0 && handle.buffer_capacity > 0 {
+        context.free_raw(handle.buffer_ptr, handle.buffer_capacity)?;
+    }
+
+    // Native removes the handle from its global database list before freeing
+    // it. WIE has no equivalent host-side list, so invalidate the guest
+    // sentinel first; otherwise freed memory can still look like a live
+    // DatabaseHandle on a repeated close.
+    handle.magic = 0;
+    write_generic(context, db_id as _, handle)?;
+    context.free_raw(db_id as _, size_of::<DatabaseHandle>() as _)?;
+
+    Ok(0)
+}
+
 pub async fn close_database(context: &mut dyn WIPICContext, db_id: i32) -> Result<i32> {
     tracing::debug!("MC_dbCloseDataBase({db_id:#x})");
 
@@ -709,7 +740,41 @@ mod tests {
 
     use crate::context::test::TestContext;
 
-    use super::{delete_database, exists_database, list_record_info, open_database, open_database_lgt, select_record, stream_read, stream_write, update_record};
+    use super::{close_database_lgt, delete_database, exists_database, list_record_info, open_database, open_database_lgt, select_record, stream_read, stream_write, update_record};
+
+    #[futures_test::test]
+    async fn lgt_native_close_database_rejects_unknown_handle_with_minus_two() {
+        let mut context = database_test_context();
+
+        assert_eq!(
+            close_database_lgt(&mut context, 0).await.unwrap(),
+            -2
+        );
+        assert_eq!(
+            close_database_lgt(&mut context, 0x1234).await.unwrap(),
+            -2
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_close_database_invalidates_closed_handle() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        assert_eq!(
+            close_database_lgt(&mut context, db_id).await.unwrap(),
+            0
+        );
+        assert_eq!(
+            close_database_lgt(&mut context, db_id).await.unwrap(),
+            -2
+        );
+    }
 
     #[futures_test::test]
     async fn lgt_native_open_database_validates_arguments() {
