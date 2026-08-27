@@ -464,6 +464,71 @@ pub async fn insert_record_lgt(
 /// WIE stores fixed records as separate backend entries, so reproduce that raw
 /// byte-stream view by concatenating successive record slots. Only the starting
 /// id is checked against the free-list, matching the native pre-read validation.
+/// LGT canonical `MC_dbDeleteRecord` (service 0x1fa).
+///
+/// Native ABI: `MC_dbDeleteRecord(handle, record_id)`.
+///
+/// Verified native contract:
+/// - unknown handle -> -2;
+/// - record id at/after `next_record_id` -> -22;
+/// - negative record id -> -1;
+/// - record id 0 is not rejected and is handled like any other non-negative id;
+/// - an id already present in the free-list -> -22;
+/// - deletion appends the id to the free-list without touching the `.db` payload;
+/// - active count is decremented with native 32-bit wrapping arithmetic;
+/// - index persistence/allocation failures collapse to -1;
+/// - success returns 0.
+///
+/// The native implementation also refreshes its internal modification timestamp.
+/// As with `MC_dbUpdateRecord`, that header field is not exposed by the audited DB
+/// exports, so the repository adaptation keeps the existing metadata format.
+pub async fn delete_record_lgt(
+    context: &mut dyn WIPICContext,
+    db_id: i32,
+    rec_id: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_dbDeleteRecord({db_id:#x}, {rec_id}) [LGT]");
+
+    let Some(handle) = load_handle(context, db_id)? else {
+        return Ok(-2);
+    };
+
+    let Some(mut repository_db) = open_db_for_handle(context, &handle).await else {
+        return Ok(-2);
+    };
+
+    let Some(mut metadata) = load_lgt_metadata(repository_db.as_mut()).await else {
+        return Ok(-1);
+    };
+
+    // Native tests the upper bound before testing for a negative id.
+    if (metadata.next_record_id as i32) <= rec_id {
+        return Ok(-22);
+    }
+
+    // Native deliberately permits record id zero here.
+    if rec_id < 0 {
+        return Ok(-1);
+    }
+
+    let record_id = rec_id as u32;
+    if metadata.free_ids.iter().any(|&id| id == record_id) {
+        return Ok(-22);
+    }
+
+    // Native deletion is index-only. The physical `.db` bytes remain intact.
+    // Preserving the backend slot is required both for SelectRecord over-read
+    // semantics and for later LIFO reuse by InsertRecord.
+    metadata.free_ids.push(record_id);
+    metadata.active_count = metadata.active_count.wrapping_sub(1);
+
+    if !store_lgt_metadata(repository_db.as_mut(), &metadata).await {
+        return Ok(-1);
+    }
+
+    Ok(0)
+}
+
 /// LGT canonical `MC_dbUpdateRecord` (service 0x1f9).
 ///
 /// Native ABI: `MC_dbUpdateRecord(handle, record_id, buffer, length)`.
@@ -1217,7 +1282,7 @@ mod tests {
     use crate::context::test::TestContext;
 
     use super::{
-        LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt,
+        LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
         exists_database, insert_record_lgt, list_record_info, load_handle,
         load_lgt_metadata, open_database, open_database_lgt, open_db_for_handle,
         select_record, select_record_lgt, store_lgt_metadata, stream_read, stream_write,
@@ -1364,6 +1429,154 @@ mod tests {
         assert_eq!(metadata.next_record_id, 6);
         assert_eq!(metadata.active_count, 5);
         assert!(metadata.free_ids.is_empty());
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_delete_record_matches_native_id_validation() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            delete_record_lgt(&mut context, 0x1234, 1)
+                .await
+                .unwrap(),
+            -2
+        );
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2100, 4)
+                .await
+                .unwrap(),
+            1
+        );
+
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 2)
+                .await
+                .unwrap(),
+            -22
+        );
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, -1)
+                .await
+                .unwrap(),
+            -1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_delete_record_preserves_payload_and_reuses_id_lifo() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
+        context.write_bytes(0x2110, &[5, 6, 7, 8]).unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2100, 4)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2110, 4)
+                .await
+                .unwrap(),
+            2
+        );
+
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 2)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let handle = load_handle(&mut context, db_id).unwrap().unwrap();
+        {
+            let mut repository_db =
+                open_db_for_handle(&mut context, &handle).await.unwrap();
+
+            assert_eq!(
+                repository_db.get(2).await.unwrap(),
+                vec![5, 6, 7, 8]
+            );
+
+            let metadata =
+                load_lgt_metadata(repository_db.as_mut()).await.unwrap();
+
+            assert_eq!(metadata.free_ids, vec![2]);
+            assert_eq!(metadata.active_count, 1);
+            assert_eq!(metadata.next_record_id, 3);
+        }
+
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 2)
+                .await
+                .unwrap(),
+            -22
+        );
+
+        context.write_bytes(0x2120, &[9, 9, 9, 9]).unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2120, 4)
+                .await
+                .unwrap(),
+            2
+        );
+
+        let repository_db =
+            open_db_for_handle(&mut context, &handle).await.unwrap();
+
+        assert_eq!(
+            repository_db.get(2).await.unwrap(),
+            vec![9, 9, 9, 9]
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_delete_record_accepts_zero_and_wraps_active_count() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 0)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let handle = load_handle(&mut context, db_id).unwrap().unwrap();
+        let mut repository_db =
+            open_db_for_handle(&mut context, &handle).await.unwrap();
+
+        let metadata =
+            load_lgt_metadata(repository_db.as_mut()).await.unwrap();
+
+        assert_eq!(metadata.free_ids, vec![0]);
+        assert_eq!(metadata.active_count, u32::MAX);
+        assert_eq!(metadata.next_record_id, 1);
+
+        assert_eq!(
+            delete_record_lgt(&mut context, db_id, 0)
+                .await
+                .unwrap(),
+            -22
+        );
     }
 
     #[futures_test::test]
