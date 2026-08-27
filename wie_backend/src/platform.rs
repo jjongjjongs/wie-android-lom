@@ -75,6 +75,17 @@ pub trait Network: Send + Sync {
     /// address (or `0xFFFF_FFFF` on failure) through [`Self::poll_event`].
     fn resolve_host(&self, host: &str, query_id: u32);
 
+    /// Resolves `host` to an IPv4 address in the WIPI encoding, blocking until
+    /// the lookup completes, or `0xFFFF_FFFF` on failure.
+    ///
+    /// This is the synchronous counterpart to [`Self::resolve_host`], used by the
+    /// HTTP exchange, which resolves the target and then drives connect/send/recv
+    /// through the same socket primitives. The default returns the failure
+    /// sentinel so a backend without name resolution rejects every host.
+    fn resolve_host_blocking(&self, _host: &str) -> u32 {
+        0xFFFF_FFFF
+    }
+
     fn poll_event(&self) -> Option<NetworkEvent>;
 }
 

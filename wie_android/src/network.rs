@@ -244,6 +244,10 @@ impl Network for AndroidNetwork {
         });
     }
 
+    fn resolve_host_blocking(&self, host: &str) -> u32 {
+        Self::resolve_ipv4(host)
+    }
+
     fn recv_from(&self, socket: i32, buf: &mut [u8]) -> Result<(usize, u32, u16), NetworkError> {
         let inner = self.inner.lock().unwrap_or_else(|x| x.into_inner());
         let Some(entry) = inner.sockets.get(&socket) else {

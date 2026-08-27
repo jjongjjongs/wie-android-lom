@@ -1,4 +1,10 @@
-use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 
 use spin::Mutex;
 use wipi_types::wipic::WIPICWord;
@@ -57,15 +63,22 @@ struct HttpObject {
     request_headers: String,
     proxy_addr: u32,
     proxy_port: u16,
+    /// Mirrors the native `[obj+0xc]` committed flag: set the moment
+    /// `MC_netHttpConnect` starts the exchange, which freezes the request
+    /// configuration.
     connected: bool,
-    /// Response fields, populated by `MC_netHttpConnect` in the network unit and
-    /// only ever read once `connected` is set, so their defaults are never
-    /// observed by the response getters before then.
+    /// Mirrors the native `[obj+0xcc]` received flag: set once the response has
+    /// been received and parsed. The response getters gate on this - matching
+    /// `WPNet_ParsePacket`, which returns -1 until then.
+    response_ready: bool,
+    /// Response fields, populated when the exchange completes.
     response_code: i32,
     response_message: String,
     content_type: String,
     content_encoding: String,
     content_length: i32,
+    /// All response headers in receipt order, for `MC_netHttpGetHeaderField`.
+    response_headers: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -492,6 +505,10 @@ const M_E_TIMEOUT: i32 = -20;
 /// First opaque handle `MC_netHttpOpen` hands out. The value only has to be a
 /// stable positive id distinct from a socket fd; the game treats it as opaque.
 const HTTP_HANDLE_BASE: i32 = 0x4000_0000;
+
+/// Consecutive would-block yields the HTTP exchange tolerates on send or receive
+/// before abandoning a stalled socket, so a silent peer can never wedge the task.
+const HTTP_IDLE_POLL_LIMIT: u32 = 60_000;
 
 fn map_network_error(error: wie_backend::NetworkError) -> i32 {
     use wie_backend::NetworkError;
@@ -1556,12 +1573,12 @@ pub async fn http_get_header_field(
     out_ptr: WIPICWord,
     out_len: i32,
 ) -> Result<i32> {
-    let connected = {
+    let (connected, response_ready) = {
         let state = context.network_state();
         let state = state.lock();
         match state.http_get(handle) {
             None => return Ok(M_E_BADFD),
-            Some(object) => object.connected,
+            Some(object) => (object.connected, object.response_ready),
         }
     };
 
@@ -1576,29 +1593,375 @@ pub async fn http_get_header_field(
         return Ok(M_E_INVALID);
     }
 
-    // Connected-object response parsing arrives with the network path.
-    Ok(M_E_ERROR)
+    // Before the response is received the parser has nothing to match against,
+    // exactly as the native parser walks an empty packet list and finds nothing.
+    if !response_ready {
+        return Ok(M_E_ERROR);
+    }
+
+    let name = read_cstring(context, name_ptr)?;
+
+    let value = {
+        let state = context.network_state();
+        let state = state.lock();
+        let object = state.http_get(handle).expect("validated above");
+        object
+            .response_headers
+            .iter()
+            .find(|(header, _)| header.eq_ignore_ascii_case(&name))
+            .map(|(_, value)| value.clone())
+    };
+
+    let Some(value) = value else {
+        return Ok(M_E_ERROR);
+    };
+
+    if value.len() as i32 >= out_len {
+        return Ok(M_E_INVALID);
+    }
+
+    write_cstring(context, out_ptr, value.as_bytes())?;
+    Ok(value.len() as i32)
+}
+
+/// Serialises the configured request into the exact byte stream the native
+/// `MC_netHttpConnect` emits.
+///
+/// Request line: `"{METHOD} {target} HTTP/1.0\r\n"`, where `target` is the path
+/// for a direct connection or the absolute `http://host[:port]path` form when a
+/// proxy is set. The accumulated request headers follow (each already
+/// `"key: value"`), terminated by `\r\n`. A `POST` with a body then appends the
+/// native's `"Accept-Ranges: bytes\r\n"`, a `"Content-Length: {n}\r\n"` and the
+/// blank line before the body; every other request ends with the blank line.
+fn build_http_request(object: &HttpObject) -> Vec<u8> {
+    let mut request = Vec::new();
+    request.extend_from_slice(object.method.as_bytes());
+    request.push(b' ');
+
+    if object.proxy_addr != 0 {
+        request.extend_from_slice(b"http://");
+        request.extend_from_slice(object.host.as_bytes());
+        if object.port != 0 {
+            request.extend_from_slice(alloc::format!(":{}", object.port).as_bytes());
+        }
+    }
+    request.extend_from_slice(object.path.as_bytes());
+    request.push(b' ');
+    request.extend_from_slice(b"HTTP/1.0\r\n");
+
+    if !object.request_headers.is_empty() {
+        request.extend_from_slice(object.request_headers.as_bytes());
+        request.extend_from_slice(b"\r\n");
+    }
+
+    if object.method == "POST" && !object.post_body.is_empty() {
+        request.extend_from_slice(b"Accept-Ranges: bytes\r\n");
+        request.extend_from_slice(alloc::format!("Content-Length: {}\r\n", object.post_body.len()).as_bytes());
+        request.extend_from_slice(b"\r\n");
+        request.extend_from_slice(&object.post_body);
+    } else {
+        request.extend_from_slice(b"\r\n");
+    }
+
+    request
+}
+
+/// The subset of a parsed HTTP response the WIPI-C getters expose.
+struct ParsedResponse {
+    code: i32,
+    message: String,
+    headers: Vec<(String, String)>,
+    content_type: String,
+    content_encoding: String,
+    content_length: i32,
+    // The MC_net HTTP API exposes only the headers and status; the response body
+    // is parsed for completeness (and covered by tests) but has no C-API reader.
+    #[allow(dead_code)]
+    body: Vec<u8>,
+}
+
+/// Parses a full HTTP response into the fields the native `HttpParser` extracts:
+/// the status code and reason phrase, every header, and the `Content-Type`,
+/// `Content-Encoding` and `Content-Length` shortcuts. Returns `None` when the
+/// status line is missing or malformed.
+fn parse_http_response(data: &[u8]) -> Option<ParsedResponse> {
+    let split = find_subsequence(data, b"\r\n\r\n");
+    let (header_bytes, body) = match split {
+        Some(index) => (&data[..index], data[index + 4..].to_vec()),
+        None => (data, Vec::new()),
+    };
+
+    let header_str = String::from_utf8_lossy(header_bytes);
+    let mut lines = header_str.split("\r\n");
+
+    let status = lines.next()?;
+    let mut status_parts = status.splitn(3, ' ');
+    let _version = status_parts.next()?;
+    let code = status_parts.next()?.parse::<i32>().ok()?;
+    let message = status_parts.next().unwrap_or("").to_string();
+
+    let mut headers = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+
+    let lookup = |target: &str| -> Option<&str> {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(target))
+            .map(|(_, value)| value.as_str())
+    };
+
+    let content_type = lookup("Content-Type").unwrap_or("").to_string();
+    let content_encoding = lookup("Content-Encoding").unwrap_or("").to_string();
+    let content_length = lookup("Content-Length")
+        .map(|value| {
+            value
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .fold(0i64, |acc, b| acc.saturating_mul(10).saturating_add((b - b'0') as i64))
+                .min(i32::MAX as i64) as i32
+        })
+        .unwrap_or(0);
+
+    Some(ParsedResponse {
+        code,
+        message,
+        headers,
+        content_type,
+        content_encoding,
+        content_length,
+        body,
+    })
+}
+
+/// Finds the first index of `needle` in `haystack`.
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
 /// `MC_netHttpConnect` (0x268) @ native 0x1b25ec.
 ///
-/// Serialises the configured request, opens the backing socket to the host (or
-/// proxy) and drives the exchange to completion, flipping the object's committed
-/// flag so the response getters may parse. This is the network path implemented
-/// in a later unit.
+/// Serialises the configured request, resolves the host and drives the socket
+/// exchange to completion, then invokes the game's completion callback. ABI:
+/// r0 = object, r1 = callback, r2 = callback context. Returns 0 once the
+/// exchange is under way. The native gates, in order: no WIPI network permission
+/// (not modelled here); `WPNet_IsAvailable() < 0` -> -14; a null/unknown object
+/// -> -2; a socket already connecting -> -7; a null callback -> -1.
 ///
-/// Until that lands, the connect faithfully reports that the request could not be
-/// carried out rather than masquerading as the native success (0): a null/unknown
-/// object is -2 and any live object reports -14 (no reachable network path yet).
-pub async fn http_connect(context: &mut dyn WIPICContext, handle: i32) -> Result<i32> {
-    let state = context.network_state();
-    let state = state.lock();
-    if state.http_get(handle).is_none() {
-        return Ok(M_E_BADFD);
+/// The native flow resolves the host (`MC_netGetHostAddr`), connects the backing
+/// socket, sends the request, receives the response into a packet list and calls
+/// the game callback as `callback(object, socket, result, context)` with result 0
+/// on success and -1 on failure (`WPNet_GetHostAddrCB` @0x1b3bf8). WIE reproduces
+/// that observable flow on the async executor: it sets the committed flag,
+/// returns 0, and runs the resolve/connect/send/receive/parse sequence in a
+/// spawned task that finally invokes the same callback.
+pub async fn http_connect(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    callback: WIPICWord,
+    callback_context: WIPICWord,
+) -> Result<i32> {
+    if !context.network_state().lock().has_process_network() {
+        return Ok(M_E_NOTCONN);
     }
 
-    tracing::warn!("stub MC_netHttpConnect({handle:#x}); network path not yet implemented");
-    Ok(M_E_NOTCONN)
+    let request = {
+        let state = context.network_state();
+        let mut state = state.lock();
+        let Some(object) = state.http_get_mut(handle) else {
+            return Ok(M_E_BADFD);
+        };
+
+        // A second connect on an already-committed object mirrors the native
+        // socket-connect-pending result.
+        if object.connected {
+            return Ok(-7);
+        }
+
+        if callback == 0 {
+            return Ok(M_E_ERROR);
+        }
+
+        if object.method.is_empty() {
+            return Ok(M_E_ERROR);
+        }
+
+        let request = build_http_request(object);
+        object.connected = true;
+        request
+    };
+
+    struct HttpExchange {
+        handle: i32,
+        request: Vec<u8>,
+        callback: WIPICWord,
+        callback_context: WIPICWord,
+    }
+
+    #[async_trait::async_trait]
+    impl MethodBody<WieError> for HttpExchange {
+        async fn call(
+            &self,
+            context: &mut dyn WIPICContext,
+            _: Box<[WIPICWord]>,
+        ) -> Result<WIPICResult> {
+            let outcome = run_http_exchange(context, self.handle, &self.request).await?;
+
+            let (socket, result) = match outcome {
+                Some(socket) => (socket, 0),
+                None => (0, u32::MAX),
+            };
+
+            if self.callback != 0 {
+                context
+                    .call_function(self.callback, &[self.handle as WIPICWord, socket as WIPICWord, result, self.callback_context])
+                    .await?;
+            }
+
+            Ok(WIPICResult { results: Vec::new() })
+        }
+    }
+
+    context.spawn(Box::new(HttpExchange {
+        handle,
+        request,
+        callback,
+        callback_context,
+    }))?;
+
+    Ok(0)
+}
+
+/// Drives the resolve/connect/send/receive/parse sequence for one HTTP request.
+///
+/// Returns the backing socket fd on success (with the object's response fields
+/// populated and `response_ready` set), or `None` on any failure. Every network
+/// operation is polled non-blocking with a 1ms yield between attempts, matching
+/// the emulator's cooperative executor; only host resolution blocks, on the
+/// backend's DNS.
+async fn run_http_exchange(context: &mut dyn WIPICContext, handle: i32, request: &[u8]) -> Result<Option<i32>> {
+    let Some((socket, host, port)) = ({
+        let state = context.network_state();
+        let state = state.lock();
+        state.http_get(handle).map(|object| (object.socket, object.host.clone(), object.port))
+    }) else {
+        return Ok(None);
+    };
+
+    // Resolve the host.
+    let address = {
+        let system = context.system();
+        let Some(network) = system.platform().network() else {
+            return Ok(None);
+        };
+        network.resolve_host_blocking(&host)
+    };
+    if address == 0xFFFF_FFFF {
+        return Ok(None);
+    }
+
+    // Connect the backing socket, polling the async connect until it settles.
+    loop {
+        let poll = {
+            let system = context.system();
+            let Some(network) = system.platform().network() else {
+                return Ok(None);
+            };
+            network.connect(socket, address, port)
+        };
+        match poll {
+            wie_backend::NetworkPoll::Ready(Ok(())) => break,
+            wie_backend::NetworkPoll::Ready(Err(_)) => return Ok(None),
+            wie_backend::NetworkPoll::Pending => context.system().sleep(1).await,
+        }
+    }
+
+    // Send the whole request. A stalled socket is abandoned after the idle cap
+    // so the task can never spin forever.
+    let mut sent = 0;
+    let mut idle = 0;
+    while sent < request.len() {
+        let result = {
+            let system = context.system();
+            let Some(network) = system.platform().network() else {
+                return Ok(None);
+            };
+            network.write(socket, &request[sent..])
+        };
+        match result {
+            Ok(0) => return Ok(None),
+            Ok(written) => {
+                sent += written;
+                idle = 0;
+            }
+            Err(wie_backend::NetworkError::WouldBlock) => {
+                idle += 1;
+                if idle > HTTP_IDLE_POLL_LIMIT {
+                    return Ok(None);
+                }
+                context.system().sleep(1).await;
+            }
+            Err(_) => return Ok(None),
+        }
+    }
+
+    // Receive the response until the server closes the connection (HTTP/1.0) or
+    // the idle cap is hit.
+    let mut response = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let mut idle = 0;
+    loop {
+        let result = {
+            let system = context.system();
+            let Some(network) = system.platform().network() else {
+                return Ok(None);
+            };
+            network.read(socket, &mut buffer)
+        };
+        match result {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&buffer[..read]);
+                idle = 0;
+            }
+            Err(wie_backend::NetworkError::WouldBlock) => {
+                idle += 1;
+                if idle > HTTP_IDLE_POLL_LIMIT {
+                    break;
+                }
+                context.system().sleep(1).await;
+            }
+            Err(_) => break,
+        }
+    }
+
+    let Some(parsed) = parse_http_response(&response) else {
+        return Ok(None);
+    };
+
+    let state = context.network_state();
+    let mut state = state.lock();
+    let Some(object) = state.http_get_mut(handle) else {
+        return Ok(None);
+    };
+    object.response_code = parsed.code;
+    object.response_message = parsed.message;
+    object.content_type = parsed.content_type;
+    object.content_encoding = parsed.content_encoding;
+    object.content_length = parsed.content_length;
+    object.response_headers = parsed.headers;
+    object.response_ready = true;
+
+    Ok(Some(socket))
 }
 
 /// `MC_netHttpGetResponseCode` (0x26f) @ native 0x1b18c0.
@@ -1679,8 +2042,8 @@ pub async fn http_get_encoding(
 }
 
 /// Shared response-getter gate: mirrors `WPNet_ParsePacket`, rejecting a
-/// null/unknown object with -2 and an unparsed (not-yet-connected) object with
-/// -1. Returns a clone-free borrow of the object for the caller to read.
+/// null/unknown object with -2 and an object whose response has not yet been
+/// received and parsed with -1. Returns an owned copy for the caller to read.
 fn http_response_field(
     context: &mut dyn WIPICContext,
     handle: i32,
@@ -1689,7 +2052,7 @@ fn http_response_field(
     let state = state.lock();
     match state.http_get(handle) {
         None => Err(M_E_BADFD),
-        Some(object) if !object.connected => Err(M_E_ERROR),
+        Some(object) if !object.response_ready => Err(M_E_ERROR),
         Some(object) => Ok(object.clone()),
     }
 }
@@ -2072,6 +2435,79 @@ mod network_state_tests {
         assert_eq!(state.http_remove(a).unwrap().socket, 5);
         assert!(state.http_get(a).is_none());
         assert!(state.http_get(b).is_some());
+    }
+
+    #[test]
+    fn build_http_request_matches_native_framing() {
+        // GET with no headers: request line then the terminating blank line.
+        let get = HttpObject {
+            method: "GET".into(),
+            path: "/index.html".into(),
+            ..Default::default()
+        };
+        assert_eq!(build_http_request(&get), b"GET /index.html HTTP/1.0\r\n\r\n".to_vec());
+
+        // GET with accumulated headers.
+        let mut with_headers = get.clone();
+        with_headers.request_headers = "Accept: text/html\r\nUser-Agent: WIE".into();
+        assert_eq!(
+            build_http_request(&with_headers),
+            b"GET /index.html HTTP/1.0\r\nAccept: text/html\r\nUser-Agent: WIE\r\n\r\n".to_vec()
+        );
+
+        // POST adds the native's Accept-Ranges + Content-Length before the body.
+        let post = HttpObject {
+            method: "POST".into(),
+            path: "/submit".into(),
+            post_body: b"ab=cd".to_vec(),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_http_request(&post),
+            b"POST /submit HTTP/1.0\r\nAccept-Ranges: bytes\r\nContent-Length: 5\r\n\r\nab=cd".to_vec()
+        );
+
+        // A proxy turns the target into an absolute URI.
+        let proxied = HttpObject {
+            method: "GET".into(),
+            host: "example.com".into(),
+            port: 8080,
+            path: "/p".into(),
+            proxy_addr: 0x0100_007f,
+            ..Default::default()
+        };
+        assert_eq!(
+            build_http_request(&proxied),
+            b"GET http://example.com:8080/p HTTP/1.0\r\n\r\n".to_vec()
+        );
+    }
+
+    #[test]
+    fn parse_http_response_extracts_status_headers_and_body() {
+        let raw = b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\nContent-Encoding: gzip\r\nX-Custom: hi\r\n\r\nhello";
+        let parsed = parse_http_response(raw).unwrap();
+
+        assert_eq!(parsed.code, 200);
+        assert_eq!(parsed.message, "OK");
+        assert_eq!(parsed.content_type, "text/html");
+        assert_eq!(parsed.content_length, 5);
+        assert_eq!(parsed.content_encoding, "gzip");
+        assert_eq!(parsed.body, b"hello".to_vec());
+        assert_eq!(
+            parsed.headers.iter().find(|(name, _)| name == "X-Custom").map(|(_, value)| value.as_str()),
+            Some("hi")
+        );
+
+        // A multi-word reason phrase is preserved; missing shortcut headers
+        // default rather than failing the parse.
+        let not_found = parse_http_response(b"HTTP/1.1 404 Not Found\r\n\r\n").unwrap();
+        assert_eq!(not_found.code, 404);
+        assert_eq!(not_found.message, "Not Found");
+        assert_eq!(not_found.content_length, 0);
+        assert_eq!(not_found.content_type, "");
+
+        // A malformed status line is rejected.
+        assert!(parse_http_response(b"garbage\r\n\r\n").is_none());
     }
 
     #[test]
