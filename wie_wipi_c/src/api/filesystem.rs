@@ -434,6 +434,30 @@ pub async fn seek(
     Ok(target as i32)
 }
 
+/// WIPI-C MC_fsTell (canonical service 0x19f).
+///
+/// Native flow is `dfs_control(fd, 4, 0, 0, 0)`. The filesystem fcontrol
+/// callback handles command 4 by issuing `lseek(fd, 0, SEEK_CUR)`.
+///
+/// Native externally visible contract:
+/// - valid descriptor => current absolute file offset
+/// - invalid, nonpositive, or closed descriptor => -2
+/// - any other tell failure => -1
+///
+/// WIE synthetic descriptors already store their current offset directly.
+pub async fn tell(context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
+    tracing::debug!("MC_fsTell({fd})");
+
+    let state = context.filesystem_state();
+    let state = state.lock();
+
+    let Some(entry) = state.entry(fd) else {
+        return Ok(-2);
+    };
+
+    Ok(i32::try_from(entry.cursor).unwrap_or(i32::MAX))
+}
+
 /// WIPI-C MC_fsFileAttribute (service 0x195).
 ///
 /// Native output is three 32-bit words:
@@ -972,6 +996,7 @@ pub async fn list(
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use alloc::{boxed::Box, vec, vec::Vec};
 
     use test_utils::TestPlatform;
@@ -982,7 +1007,7 @@ mod tests {
 
     use super::{
         close, file_attribute, get_counts, list, mkdir, open, read, remove, rename, rmdir, seek,
-        set_mode, write,
+        set_mode, tell, write,
     };
 
     fn filesystem_test_context() -> TestContext {
@@ -1441,6 +1466,58 @@ mod tests {
         let state = context.filesystem_state();
         let state = state.lock();
         assert_eq!(state.entry(fd).unwrap().cursor, 3);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_tell_returns_current_cursor_after_seek_read_and_write() {
+        const BUFFER: u32 = 0x1000;
+
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .truncate("save/tell.dat", 6)
+            .await;
+        context
+            .system()
+            .filesystem()
+            .write("save/tell.dat", 0, &[1, 2, 3, 4, 5, 6])
+            .await;
+
+        let fd = context
+            .filesystem_state()
+            .lock()
+            .register(String::from("save/tell.dat"), 8, 0);
+
+        assert_eq!(tell(&mut context, fd).await.unwrap(), 0);
+
+        assert_eq!(seek(&mut context, fd, 3, 0).await.unwrap(), 3);
+        assert_eq!(tell(&mut context, fd).await.unwrap(), 3);
+
+        assert_eq!(read(&mut context, fd, BUFFER, 2).await.unwrap(), 2);
+        assert_eq!(tell(&mut context, fd).await.unwrap(), 5);
+
+        context.write_bytes(BUFFER, &[9]).unwrap();
+        assert_eq!(write(&mut context, fd, BUFFER, 1).await.unwrap(), 1);
+        assert_eq!(tell(&mut context, fd).await.unwrap(), 6);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_tell_invalid_nonpositive_and_closed_descriptors_return_minus_2() {
+        let mut context = filesystem_test_context();
+
+        assert_eq!(tell(&mut context, 0).await.unwrap(), -2);
+        assert_eq!(tell(&mut context, -1).await.unwrap(), -2);
+        assert_eq!(tell(&mut context, 12345).await.unwrap(), -2);
+
+        let fd = context
+            .filesystem_state()
+            .lock()
+            .register(String::from("save/tell.dat"), 1, 4);
+
+        assert_eq!(tell(&mut context, fd).await.unwrap(), 4);
+        assert_eq!(close(&mut context, fd).await.unwrap(), 0);
+        assert_eq!(tell(&mut context, fd).await.unwrap(), -2);
     }
 
     #[futures_test::test]
