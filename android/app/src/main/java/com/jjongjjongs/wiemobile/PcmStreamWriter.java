@@ -15,6 +15,16 @@ public final class PcmStreamWriter {
     private static final String TAG = "WIE-PcmWriter";
     private static final int HEADER_BYTES = 10;
     private static final int MAX_QUEUED_BYTES = 44100 * 2 * 2 / 2; // 500 ms stereo PCM16
+    /** Target AudioTrack buffer, matching the reference player's ~120 ms. The
+     *  emulator delivers audio in coarse, jittery bursts (one per game tick, tens
+     *  of milliseconds apart at a low frame rate), so a small low-latency buffer
+     *  drains between them and the stream breaks up; a buffer this size rides over
+     *  the gaps. */
+    private static final int TRACK_BUFFER_MS = 180;
+    /** How much to buffer before starting playback, so the first few jittery
+     *  chunks do not drain the track before the next one arrives. Must stay below
+     *  the track buffer so the prefilling writes never block a stopped track. */
+    private static final int PREFILL_MS = 90;
     private static final Object LOCK = new Object();
     private static final ArrayDeque<Packet> QUEUE = new ArrayDeque<>();
 
@@ -26,6 +36,9 @@ public final class PcmStreamWriter {
     private static boolean paused;
     private static boolean stopping;
     private static boolean wasSilence;
+    /** Frames written into the current track that have not yet been counted
+     *  toward the prefill; playback starts once this reaches the prefill target. */
+    private static int prefillFrames;
     private static short lastLeft;
     private static short lastRight;
 
@@ -145,7 +158,12 @@ public final class PcmStreamWriter {
                     if (written <= 0) throw new IllegalStateException("AudioTrack write=" + written);
                     offset += written;
                 }
-                if (current.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) current.play();
+                // Hold playback until the buffer has a cushion, so the first few
+                // jittery chunks do not drain the track before the next arrives.
+                if (current.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+                    prefillFrames += packet.pcm.length / (packet.channels * 2);
+                    if (prefillFrames >= packet.rate * PREFILL_MS / 1000) current.play();
+                }
             } catch (RuntimeException e) {
                 Log.e(TAG, "PCM output failed", e);
                 synchronized (LOCK) { closeTrackLocked(); }
@@ -192,7 +210,11 @@ public final class PcmStreamWriter {
         int mask = channelCount == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
         int minimum = AudioTrack.getMinBufferSize(sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT);
         if (minimum <= 0) return null;
-        int bufferBytes = minimum;
+        int frameBytes = channelCount * 2;
+        // A buffer large enough to ride over the game thread's bursty delivery,
+        // like the reference player's, rather than the device minimum. Not the
+        // low-latency path: that forces a tiny buffer, which is what breaks up.
+        int bufferBytes = Math.max(minimum, sampleRate * frameBytes * TRACK_BUFFER_MS / 1000);
         try {
             AudioTrack result;
             if (Build.VERSION.SDK_INT >= 26) {
@@ -208,7 +230,6 @@ public final class PcmStreamWriter {
                                 .build())
                         .setBufferSizeInBytes(bufferBytes)
                         .setTransferMode(AudioTrack.MODE_STREAM)
-                        .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                         .build();
             } else {
                 result = new AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, mask,
@@ -218,9 +239,7 @@ public final class PcmStreamWriter {
                 result.release();
                 return null;
             }
-            if (Build.VERSION.SDK_INT >= 23) {
-                result.setBufferSizeInFrames(Math.max(256, sampleRate / 25)); // target 40 ms
-            }
+            prefillFrames = 0;
             Log.i(TAG, "opened " + sampleRate + "Hz channels=" + channelCount
                     + " buffer=" + bufferBytes + " frames=" + result.getBufferSizeInFrames());
             return result;
