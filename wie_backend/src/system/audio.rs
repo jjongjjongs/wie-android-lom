@@ -62,8 +62,8 @@ impl Audio {
         audio_handle: AudioHandle,
         repeat: bool,
     ) -> Result<(Arc<AtomicBool>, Arc<AtomicBool>), AudioError> {
-        let player = match self.files.get(&audio_handle) {
-            Some(AudioFile::Smaf(data)) => SmafPlayer::new(data),
+        let data = match self.files.get(&audio_handle) {
+            Some(AudioFile::Smaf(data)) => data.clone(),
             None => return Err(AudioError::InvalidHandle),
         };
         let volume = self.volumes.get(&audio_handle).ok_or(AudioError::InvalidHandle)?.clone();
@@ -71,15 +71,43 @@ impl Audio {
         self.stop(audio_handle);
         self.sink.set_master_volume(volume.load(Ordering::Relaxed));
 
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        self.playing.insert(audio_handle, stop_flag.clone());
+
+        // Offer the file to the sink's own renderer first. When it takes it, the
+        // sink plays the pre-rendered stream and this task only watches for the
+        // stop flag (looping) or the clip's length (one-shot).
+        if let Some(duration_ms) = self.sink.play_smaf(&data, repeat) {
+            let system_clone = system.clone();
+            let sink_clone = self.sink.clone();
+            let stop_flag_clone = stop_flag.clone();
+            let completed_clone = completed.clone();
+            system.spawn(async move || {
+                let mut elapsed = 0u64;
+                loop {
+                    if stop_flag_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if !repeat && elapsed >= u64::from(duration_ms) {
+                        completed_clone.store(true, Ordering::Release);
+                        break;
+                    }
+                    system_clone.sleep(50).await;
+                    elapsed += 50;
+                }
+                sink_clone.stop_smaf();
+                Ok(())
+            });
+            return Ok((completed, stop_flag));
+        }
+
+        // Otherwise stream the sequence live as MIDI events.
+        let player = SmafPlayer::new(&data);
         let mut system_clone = system.clone();
         let sink_clone = self.sink.clone();
-
-        let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_clone = stop_flag.clone();
-        let completed = Arc::new(AtomicBool::new(false));
         let completed_clone = completed.clone();
-
-        self.playing.insert(audio_handle, stop_flag.clone());
 
         // TODO use dedicated audio player task
         system.spawn(async move || {
@@ -229,8 +257,8 @@ impl SmafPlayer {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{string::String, vec::Vec};
     use alloc::{boxed::Box, sync::Arc, vec};
+    use alloc::{string::String, vec::Vec};
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use smaf_player::SmafEvent;
@@ -310,37 +338,19 @@ mod tests {
             false
         }
 
-        async fn mkdir(
-            &self,
-            _aid: &str,
-            _path: &str,
-        ) -> core::result::Result<(), crate::platform::FilesystemMkdirError> {
+        async fn mkdir(&self, _aid: &str, _path: &str) -> core::result::Result<(), crate::platform::FilesystemMkdirError> {
             Err(crate::platform::FilesystemMkdirError::NotFound)
         }
 
-        async fn rmdir(
-            &self,
-            _aid: &str,
-            _path: &str,
-        ) -> core::result::Result<(), crate::platform::FilesystemRmDirError> {
+        async fn rmdir(&self, _aid: &str, _path: &str) -> core::result::Result<(), crate::platform::FilesystemRmDirError> {
             Err(crate::platform::FilesystemRmDirError::NotFound)
         }
 
-        async fn rename(
-            &self,
-            _aid: &str,
-            _from: &str,
-            _to: &str,
-        ) -> core::result::Result<(), crate::platform::FilesystemRenameError> {
+        async fn rename(&self, _aid: &str, _from: &str, _to: &str) -> core::result::Result<(), crate::platform::FilesystemRenameError> {
             Err(crate::platform::FilesystemRenameError::NotFound)
         }
 
-        async fn set_mode(
-            &self,
-            _aid: &str,
-            _path: &str,
-            _mode: u32,
-        ) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+        async fn set_mode(&self, _aid: &str, _path: &str, _mode: u32) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
             Err(crate::platform::FilesystemSetModeError::NotFound)
         }
 

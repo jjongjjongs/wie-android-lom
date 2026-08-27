@@ -441,6 +441,19 @@ pub struct SynthMixer {
     /// wave path; routing them here plays them on the one AudioTrack that works,
     /// rather than a per-clip static track the device would not sound.
     pcm: Vec<PcmOneShot>,
+    /// A whole `.mmf` rendered up front by the faithful [`crate::oma3`] port and
+    /// mixed in here as one interleaved-stereo stream, so background music sounds
+    /// exactly as the reference plays it instead of being re-sequenced live.
+    song: Option<SongPlayback>,
+}
+
+/// A pre-rendered song mixed into the output, optionally looping.
+struct SongPlayback {
+    /// Interleaved stereo at the output rate, as [`crate::oma3`] renders it.
+    samples: Vec<i16>,
+    /// Read position into `samples`.
+    position: usize,
+    repeat: bool,
 }
 
 struct MixerVoice {
@@ -501,7 +514,23 @@ impl SynthMixer {
             next_id: 1,
             master_volume: 100,
             pcm: Vec::new(),
+            song: None,
         }
+    }
+
+    /// Installs a pre-rendered song as the music stream, replacing any previous
+    /// one. `samples` is interleaved stereo at [`SAMPLE_RATE`].
+    pub fn set_song(&mut self, samples: Vec<i16>, repeat: bool) {
+        self.song = Some(SongPlayback {
+            samples,
+            position: 0,
+            repeat,
+        });
+    }
+
+    /// Stops the pre-rendered song, if one is playing.
+    pub fn stop_song(&mut self) {
+        self.song = None;
     }
 
     /// Queues a recorded wave to play into the mix, resampled from `source_rate`
@@ -650,6 +679,36 @@ impl SynthMixer {
             });
         }
 
+        // Mix the pre-rendered song, scaled by the master volume, looping or
+        // finishing at its end.
+        let master_volume = i32::from(self.master_volume);
+        let mut song_ended = false;
+        if let Some(song) = &mut self.song {
+            // A one-shot that has already played out contributes nothing and
+            // must not force an otherwise-silent buffer into existence.
+            let exhausted = (song.samples.is_empty() || !song.repeat) && song.position >= song.samples.len();
+            if exhausted {
+                song_ended = true;
+            } else {
+                let acc = accumulator.get_or_insert_with(|| vec![0i32; frames * CHANNELS]);
+                for slot in acc.iter_mut() {
+                    if song.position >= song.samples.len() {
+                        if song.repeat && !song.samples.is_empty() {
+                            song.position = 0;
+                        } else {
+                            song_ended = true;
+                            break;
+                        }
+                    }
+                    *slot += i32::from(song.samples[song.position]) * master_volume / 100;
+                    song.position += 1;
+                }
+            }
+        }
+        if song_ended {
+            self.song = None;
+        }
+
         accumulator.map(|acc| {
             let total_peak = acc.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
             // Past full scale the limiter rounds the peak off rather than
@@ -748,7 +807,38 @@ fn wav(samples: &[i16]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHANNELS, Channel, MAX_VOICES, SAMPLE_RATE, Synth, modulation_depth};
+    use super::{CHANNELS, Channel, MAX_VOICES, SAMPLE_RATE, Synth, SynthMixer, modulation_depth};
+
+    #[test]
+    fn song_mixes_then_finishes() {
+        let mut mixer = SynthMixer::new();
+        // Two stereo frames.
+        mixer.set_song(vec![100, 100, 200, 200], false);
+        // One frame at a time: the song plays out, then the mixer goes silent.
+        let first = mixer.render(1).expect("song frame");
+        assert_eq!(first, vec![100, 100]);
+        let second = mixer.render(1).expect("song frame");
+        assert_eq!(second, vec![200, 200]);
+        assert!(mixer.render(1).is_none(), "a one-shot song stops at its end");
+    }
+
+    #[test]
+    fn song_loops_when_repeating() {
+        let mut mixer = SynthMixer::new();
+        mixer.set_song(vec![100, 100], true);
+        assert_eq!(mixer.render(1), Some(vec![100, 100]));
+        assert_eq!(mixer.render(1), Some(vec![100, 100]), "a repeating song wraps");
+        mixer.stop_song();
+        assert!(mixer.render(1).is_none(), "stopping clears the song");
+    }
+
+    #[test]
+    fn song_scales_by_master_volume() {
+        let mut mixer = SynthMixer::new();
+        mixer.set_master_volume(50);
+        mixer.set_song(vec![100, 100], false);
+        assert_eq!(mixer.render(1), Some(vec![50, 50]));
+    }
 
     /// A four operator voice, as one of the library's own files sends it.
     const VOICE: &[u8] = &[

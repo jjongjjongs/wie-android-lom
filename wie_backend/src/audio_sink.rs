@@ -19,4 +19,17 @@ pub trait AudioSink: Sync + Send {
     fn midi_control_change(&self, voice: u32, channel_id: u8, control: u8, value: u8);
     fn midi_pitch_bend(&self, voice: u32, channel_id: u8, value: u16);
     fn midi_sysex(&self, voice: u32, data: &[u8]);
+
+    /// Offers a whole SMAF/MMF file to the sink to render and play on its own,
+    /// returning the clip length in milliseconds if it took ownership. A sink
+    /// with a faithful offline renderer plays the file that way - identical to
+    /// the reference - instead of the caller streaming MIDI events into
+    /// `midi_*`. Returning `None` (the default) means the sink declined and the
+    /// caller should fall back to the live event path.
+    fn play_smaf(&self, _data: &[u8], _repeat: bool) -> Option<u32> {
+        None
+    }
+
+    /// Stops a file started through [`Self::play_smaf`].
+    fn stop_smaf(&self) {}
 }
