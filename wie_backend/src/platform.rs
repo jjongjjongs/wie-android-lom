@@ -26,6 +26,9 @@ pub enum NetworkEvent {
     ConnectFailed(i32),
     Readable(i32),
     Writable(i32),
+    /// A `MC_netGetHostAddr` resolution finished. `address` is the resolved IPv4
+    /// in the WIPI encoding, or `0xFFFF_FFFF` when the host could not be resolved.
+    HostResolved { query_id: u32, address: u32 },
 }
 
 pub trait Network: Send + Sync {
@@ -66,6 +69,11 @@ pub trait Network: Send + Sync {
     ) -> Result<(usize, u32, u16), NetworkError>;
 
     fn close(&self, socket: i32) -> Result<(), NetworkError>;
+
+    /// Starts resolving `host` and, when it finishes, delivers a
+    /// [`NetworkEvent::HostResolved`] carrying `query_id` and the resolved
+    /// address (or `0xFFFF_FFFF` on failure) through [`Self::poll_event`].
+    fn resolve_host(&self, host: &str, query_id: u32);
 
     fn poll_event(&self) -> Option<NetworkEvent>;
 }

@@ -1,9 +1,9 @@
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 
 use spin::Mutex;
 use wipi_types::wipic::WIPICWord;
 
-use wie_util::{Result, WieError};
+use wie_util::{Result, WieError, read_null_terminated_string_bytes};
 
 use crate::{WIPICResult, context::WIPICContext, method::MethodBody};
 
@@ -37,6 +37,10 @@ pub struct NetworkState {
     sockets: BTreeMap<i32, SocketCallbacks>,
     dispatcher_started: bool,
     dispatcher_generation: u64,
+    /// In-flight `MC_netGetHostAddr` resolutions, keyed by query id, holding the
+    /// game's `(callback, context)` until the `HostResolved` event delivers.
+    dns_queries: BTreeMap<u32, (WIPICWord, WIPICWord)>,
+    next_query_id: u32,
 }
 
 pub type SharedNetworkState = Arc<Mutex<NetworkState>>;
@@ -193,6 +197,13 @@ impl NetworkState {
                 let entry = self.sockets.get(&socket)?;
                 (socket, entry.write_callback, 0, entry.write_context)
             }
+            wie_backend::NetworkEvent::HostResolved { query_id, address } => {
+                let (callback, context) = self.dns_queries.remove(&query_id)?;
+                // The DNS callback takes (address, context); reuse the first
+                // array slot for the address (a bit-preserving i32 round trip)
+                // and the second for the context. The third slot is unused.
+                (address as i32, callback, context, 0)
+            }
         };
 
         (callback != 0).then_some((
@@ -201,12 +212,24 @@ impl NetworkState {
         ))
     }
 
+    fn begin_dns_query(&mut self, callback: WIPICWord, context: WIPICWord) -> u32 {
+        let query_id = self.next_query_id;
+        self.next_query_id = self.next_query_id.wrapping_add(1);
+        self.dns_queries.insert(query_id, (callback, context));
+        query_id
+    }
+
+    fn take_dns_query(&mut self, query_id: u32) -> Option<(WIPICWord, WIPICWord)> {
+        self.dns_queries.remove(&query_id)
+    }
+
     fn has_callbacks(&self) -> bool {
-        self.sockets.values().any(|entry| {
-            entry.connect_callback != 0
-                || entry.read_callback != 0
-                || entry.write_callback != 0
-        })
+        !self.dns_queries.is_empty()
+            || self.sockets.values().any(|entry| {
+                entry.connect_callback != 0
+                    || entry.read_callback != 0
+                    || entry.write_callback != 0
+            })
     }
 
     fn start_dispatcher(&mut self) -> Option<u64> {
@@ -823,6 +846,49 @@ pub async fn socket_recv_from(
         }
         Err(error) => Ok(map_network_error(error)),
     }
+}
+
+/// `MC_netGetHostAddr` (0x263) @ native 0x1b236c.
+///
+/// Resolves a host name to an IPv4 address and delivers it through a callback.
+/// ABI: r0 = DNS server address, r1 = host name, r2 = callback, r3 = callback
+/// context. The native rejects a null host name, DNS server or callback with
+/// -9. A dotted-decimal host resolves synchronously via `MC_utilInetAddrInt`;
+/// any other name is resolved on a worker thread. Either way the callback is
+/// invoked as `callback(address, context)`, where `address` is the resolved
+/// IPv4 in the WIPI encoding or `0xFFFF_FFFF` when it cannot be resolved (the
+/// same sentinel `MC_utilInetAddrInt` returns for a malformed address). The call
+/// itself returns 0 once the lookup is under way.
+///
+/// WIE has no subnet HAL, so it ignores the specific DNS server (validating only
+/// that it is non-null) and resolves through the host OS resolver on a worker
+/// thread, delivering the result as a `HostResolved` event that the network
+/// dispatcher turns into the callback.
+pub async fn get_host_addr(
+    context: &mut dyn WIPICContext,
+    dns_server: WIPICWord,
+    host_name: WIPICWord,
+    callback: WIPICWord,
+    callback_context: WIPICWord,
+) -> Result<i32> {
+    if host_name == 0 || dns_server == 0 || callback == 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let host = String::from_utf8_lossy(&read_null_terminated_string_bytes(context, host_name)?).into_owned();
+
+    let query_id = context.network_state().lock().begin_dns_query(callback, callback_context);
+
+    {
+        let Some(network) = context.system().platform().network() else {
+            context.network_state().lock().take_dns_query(query_id);
+            return Ok(M_E_ERROR);
+        };
+        network.resolve_host(&host, query_id);
+    }
+
+    ensure_event_dispatcher(context)?;
+    Ok(0)
 }
 
 fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {

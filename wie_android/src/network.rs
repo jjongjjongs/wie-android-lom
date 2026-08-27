@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -71,6 +71,22 @@ impl AndroidNetwork {
         // sockaddr_in.sin_addr. On little-endian ARM those in-memory bytes are
         // therefore the network-order IPv4 octets.
         Ipv4Addr::from(address.to_le_bytes())
+    }
+
+    /// Resolves `host` (a dotted-decimal IPv4 or a hostname) to the first IPv4
+    /// address in the WIPI encoding, or `0xFFFF_FFFF` when it cannot be resolved
+    /// - the same sentinel the reference's `MC_utilInetAddrInt` returns.
+    fn resolve_ipv4(host: &str) -> u32 {
+        match (host, 0u16).to_socket_addrs() {
+            Ok(addrs) => addrs
+                .filter_map(|addr| match addr {
+                    SocketAddr::V4(v4) => Some(u32::from_le_bytes(v4.ip().octets())),
+                    SocketAddr::V6(_) => None,
+                })
+                .next()
+                .unwrap_or(0xFFFF_FFFF),
+            Err(_) => 0xFFFF_FFFF,
+        }
     }
 
     fn register_socket(&self, handle: i32, socket: &Socket) -> Result<(), NetworkError> {
@@ -211,6 +227,21 @@ impl Network for AndroidNetwork {
             // out of contract.
             Socket::Tcp(_) => Err(NetworkError::Unsupported),
         }
+    }
+
+    fn resolve_host(&self, host: &str, query_id: u32) {
+        // The reference resolves a hostname on a dedicated thread and delivers
+        // the result through its event processor; do the same so the emulator
+        // never blocks on DNS. A dotted-decimal address resolves immediately.
+        let host = host.to_string();
+        let pending = self.pending_events.clone();
+        thread::spawn(move || {
+            let address = Self::resolve_ipv4(&host);
+            pending
+                .lock()
+                .unwrap_or_else(|x| x.into_inner())
+                .push_back(NetworkEvent::HostResolved { query_id, address });
+        });
     }
 
     fn recv_from(&self, socket: i32, buf: &mut [u8]) -> Result<(usize, u32, u16), NetworkError> {
@@ -368,6 +399,9 @@ impl Network for AndroidNetwork {
                 | NetworkEvent::ConnectFailed(fd)
                 | NetworkEvent::Readable(fd)
                 | NetworkEvent::Writable(fd) => *fd != socket,
+                // A host resolution is not tied to a socket, so closing one
+                // never drops it.
+                NetworkEvent::HostResolved { .. } => true,
             });
 
         Ok(())
@@ -500,5 +534,30 @@ mod tests {
         assert_eq!(port, peer_port);
 
         assert!(matches!(net.recv_from(0x7fff_ffff, &mut buf), Err(NetworkError::InvalidSocket)));
+    }
+
+    fn wait_for_resolved(net: &AndroidNetwork, query_id: u32) -> u32 {
+        for _ in 0..400 {
+            if let Some(NetworkEvent::HostResolved { query_id: id, address }) = net.poll_event() {
+                if id == query_id {
+                    return address;
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("host resolution for query {query_id} never delivered");
+    }
+
+    // MC_netGetHostAddr (0x263): a dotted-decimal host resolves to the WIPI
+    // address encoding, and an unresolvable host yields the 0xFFFFFFFF sentinel.
+    #[test]
+    fn resolve_host_numeric_and_failure() {
+        let net = AndroidNetwork::new();
+
+        net.resolve_host("127.0.0.1", 7);
+        assert_eq!(wait_for_resolved(&net, 7), u32::from_le_bytes([127, 0, 0, 1]));
+
+        net.resolve_host("no-such-host.invalid.", 8);
+        assert_eq!(wait_for_resolved(&net, 8), 0xFFFF_FFFF);
     }
 }
