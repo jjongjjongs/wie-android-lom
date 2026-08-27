@@ -302,7 +302,7 @@ pub async fn connect(
     Ok(0)
 }
 
-pub async fn close(context: &mut dyn WIPICContext) -> Result<()> {
+pub async fn close(context: &mut dyn WIPICContext) -> Result<i32> {
     let sockets = context.network_state().lock().close_process();
 
     if let Some(network) = context.system().platform().network() {
@@ -311,7 +311,7 @@ pub async fn close(context: &mut dyn WIPICContext) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(0)
 }
 
 pub async fn socket_close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
@@ -828,6 +828,26 @@ mod network_state_tests {
         // A stale dispatcher must not stop the current one.
         state.stop_dispatcher(old_generation);
         assert!(state.dispatcher_is_current(new_generation));
+    }
+
+    #[test]
+    fn process_close_native_result_type_is_i32() {
+        // MC_netClose is an int-returning API. Binding close(context) itself
+        // to Future<Output = Result<i32>> prevents it from regressing to
+        // Result<()>, whose generic WIPI-C conversion emits no r0 result word.
+        fn require_close_result<'a>(
+            context: &'a mut dyn WIPICContext,
+        ) {
+            fn require_i32_future<'a, F>(_: F)
+            where
+                F: core::future::Future<Output = Result<i32>> + 'a,
+            {
+            }
+
+            require_i32_future(close(context));
+        }
+
+        let _ = require_close_result;
     }
 
     #[test]
