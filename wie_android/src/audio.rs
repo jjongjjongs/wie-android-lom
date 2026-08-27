@@ -211,16 +211,27 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         if analysis.notes.is_empty() && analysis.audio_events.is_empty() {
             return None;
         }
-        let pcm = crate::oma3::analysis::render(&analysis, smaf.total_ticks, SAMPLE_RATE as i32);
-        let samples: Vec<i16> = pcm.iter().map(|&s| (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16).collect();
-        let frames = (samples.len() / CHANNELS) as u64;
+        let total_ticks = smaf.total_ticks;
+        let frames = crate::oma3::analysis::rendered_frame_count(&analysis, total_ticks, SAMPLE_RATE as i32) as u64;
         let duration_ms = (frames * 1000 / u64::from(SAMPLE_RATE)) as u32;
         tracing::info!(
-            "[smaf] oma3 rendered {} notes, {} audio events, {frames} frames ({duration_ms}ms), repeat={repeat}, id={id}",
+            "[smaf] oma3 accepted {} notes, {} audio events, {frames} frames ({duration_ms}ms), repeat={repeat}, id={id}",
             analysis.notes.len(),
             analysis.audio_events.len()
         );
-        self.shared.mixer().set_song(id, samples, repeat);
+
+        // Render off this thread. An FM-heavy sequence takes hundreds of
+        // milliseconds to a second to render, and doing it inline stalls the
+        // caller - the game's timer - and with it the audio pump that shares the
+        // loop, so the stream underruns and the sound breaks up. Hand the finished
+        // stream to the mixer when it is ready; the clip is silent for the render's
+        // length, which is far shorter than a note of the music it starts.
+        let shared = self.shared.clone();
+        std::thread::spawn(move || {
+            let pcm = crate::oma3::analysis::render(&analysis, total_ticks, SAMPLE_RATE as i32);
+            let samples: Vec<i16> = pcm.iter().map(|&s| (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16).collect();
+            shared.mixer().set_song(id, samples, repeat);
+        });
         Some(duration_ms)
     }
 
