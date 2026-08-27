@@ -48,6 +48,88 @@ const MIN_BUFFER_CAPACITY: u32 = 64;
 const DATABASE_HANDLE_MAGIC: u32 = 0x4D434442;
 const MAX_NAME_LEN: usize = 31; // leave a byte for null terminator inside the 32-byte field
 
+// LGT's native database keeps fixed-record metadata in the companion `.idx` file.
+// WIE's repository only exposes numbered records, so reserve backend record 0 for
+// the LGT-only metadata that must survive close/reopen. Backend allocation starts at
+// record 1, and the generic/KTF paths never use record 0 as a normal data record.
+const LGT_METADATA_RECORD_ID: u32 = 0;
+const LGT_METADATA_MAGIC: u32 = 0x4C475444; // "LGTD"
+const LGT_METADATA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LgtDatabaseMetadata {
+    record_size: u32,
+    next_record_id: u32,
+    active_count: u32,
+    free_ids: Vec<u32>,
+}
+
+impl LgtDatabaseMetadata {
+    fn new(record_size: u32) -> Self {
+        Self {
+            record_size,
+            next_record_id: 1,
+            active_count: 0,
+            free_ids: Vec::new(),
+        }
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut data = Vec::with_capacity(20 + self.free_ids.len() * 4);
+        data.extend_from_slice(&LGT_METADATA_MAGIC.to_le_bytes());
+        data.extend_from_slice(&LGT_METADATA_VERSION.to_le_bytes());
+        data.extend_from_slice(&self.record_size.to_le_bytes());
+        data.extend_from_slice(&self.next_record_id.to_le_bytes());
+        data.extend_from_slice(&self.active_count.to_le_bytes());
+        data.extend_from_slice(&(self.free_ids.len() as u32).to_le_bytes());
+        for id in &self.free_ids {
+            data.extend_from_slice(&id.to_le_bytes());
+        }
+        data
+    }
+
+    fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() < 24 {
+            return None;
+        }
+
+        let word = |offset: usize| -> u32 {
+            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+        };
+
+        if word(0) != LGT_METADATA_MAGIC || word(4) != LGT_METADATA_VERSION {
+            return None;
+        }
+
+        let free_count = word(20) as usize;
+        let expected_len = 24usize.checked_add(free_count.checked_mul(4)?)?;
+        if data.len() != expected_len {
+            return None;
+        }
+
+        let mut free_ids = Vec::with_capacity(free_count);
+        for offset in (24..expected_len).step_by(4) {
+            free_ids.push(word(offset));
+        }
+
+        Some(Self {
+            record_size: word(8),
+            next_record_id: word(12),
+            active_count: word(16),
+            free_ids,
+        })
+    }
+}
+
+async fn load_lgt_metadata(db: &mut dyn Database) -> Option<LgtDatabaseMetadata> {
+    let data = db.get(LGT_METADATA_RECORD_ID).await?;
+    LgtDatabaseMetadata::decode(&data)
+}
+
+async fn store_lgt_metadata(db: &mut dyn Database, metadata: &LgtDatabaseMetadata) -> bool {
+    db.set(LGT_METADATA_RECORD_ID, &metadata.encode()).await
+}
+
 pub async fn open_database(context: &mut dyn WIPICContext, ptr_name: WIPICWord, mode: i32, r#type: i32) -> Result<i32> {
     tracing::debug!("MC_dbOpenDataBase({ptr_name:#x}, {mode}, {type})");
 
@@ -217,10 +299,151 @@ pub async fn open_database_lgt(
         }
     }
 
+    // Native persists record size, next id, active count and the free-list in
+    // the `.idx` file. Preserve the equivalent state in reserved backend record
+    // 0. Once present, persisted metadata wins over a later caller-supplied
+    // record_size, matching native reopen semantics.
+    {
+        let mut repository_db = system
+            .platform()
+            .database_repository()
+            .open(&name, &pid)
+            .await;
+
+        if load_lgt_metadata(repository_db.as_mut()).await.is_none() {
+            let effective_record_size = if record_size > 0 {
+                record_size as u32
+            } else {
+                // A legacy WIE repository may predate LGT metadata. Native
+                // would have the size in `.idx`; the closest migration source
+                // available here is an existing positive record.
+                let ids = repository_db.get_record_ids().await;
+                let mut derived = 0u32;
+                for id in ids {
+                    if id == LGT_METADATA_RECORD_ID {
+                        continue;
+                    }
+                    if let Some(data) = repository_db.get(id).await {
+                        derived = derived.max(data.len() as u32);
+                    }
+                }
+                derived
+            };
+
+            if effective_record_size > 0 {
+                let mut positive_ids: Vec<u32> = repository_db
+                    .get_record_ids()
+                    .await
+                    .into_iter()
+                    .filter(|&id| id != LGT_METADATA_RECORD_ID)
+                    .collect();
+                positive_ids.sort_unstable();
+
+                let next_record_id = positive_ids
+                    .last()
+                    .copied()
+                    .and_then(|id| id.checked_add(1))
+                    .unwrap_or(1);
+
+                let mut metadata = LgtDatabaseMetadata::new(effective_record_size);
+                metadata.next_record_id = next_record_id;
+                metadata.active_count = positive_ids.len() as u32;
+
+                // Exact historic deletion order cannot be reconstructed from a
+                // legacy repository that never stored it. Leave the migrated
+                // free-list empty rather than inventing an ordering.
+                if !store_lgt_metadata(repository_db.as_mut(), &metadata).await {
+                    return Ok(-1);
+                }
+            }
+        }
+    }
+
     // Mode 0 in the existing WIE helper preserves existing contents.  The
     // LGT wrapper has already performed the native create/existence checks,
     // so this does not inherit the KTF-oriented mode interpretation.
     open_database(context, ptr_name, 0, access).await
+}
+
+/// LGT canonical `MC_dbInsertRecord` (service 0x1f7).
+///
+/// Native ABI: `MC_dbInsertRecord(handle, data, length)`.
+///
+/// Verified native contract:
+/// - unknown handle -> -2;
+/// - null data or non-positive length -> -9;
+/// - length larger than the database's fixed record size -> -21;
+/// - deleted record ids are reused in LIFO order;
+/// - otherwise `next_record_id` is allocated and incremented;
+/// - short input is zero-padded to exactly the fixed record size;
+/// - success returns the allocated positive record id;
+/// - persistence failures collapse to -1.
+pub async fn insert_record_lgt(
+    context: &mut dyn WIPICContext,
+    db_id: i32,
+    buf_ptr: WIPICWord,
+    buf_len: i32,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_dbInsertRecord({db_id:#x}, {buf_ptr:#x}, {buf_len}) [LGT]"
+    );
+
+    let Some(handle) = load_handle(context, db_id)? else {
+        return Ok(-2);
+    };
+
+    if buf_ptr == 0 || buf_len <= 0 {
+        return Ok(-9);
+    }
+
+    let Some(mut repository_db) = open_db_for_handle(context, &handle).await else {
+        return Ok(-2);
+    };
+
+    let Some(mut metadata) = load_lgt_metadata(repository_db.as_mut()).await else {
+        return Ok(-1);
+    };
+
+    let buf_len = buf_len as u32;
+    if buf_len > metadata.record_size {
+        return Ok(-21);
+    }
+
+    let record_id = if let Some(id) = metadata.free_ids.pop() {
+        id
+    } else {
+        let id = metadata.next_record_id;
+        let Some(next) = id.checked_add(1) else {
+            return Ok(-1);
+        };
+        metadata.next_record_id = next;
+        id
+    };
+
+    if record_id == 0 {
+        return Ok(-1);
+    }
+
+    let mut record = vec![0u8; metadata.record_size as usize];
+    context.read_bytes(buf_ptr, &mut record[..buf_len as usize])?;
+
+    if !repository_db.set(record_id, &record).await {
+        return Ok(-1);
+    }
+
+    let Some(active_count) = metadata.active_count.checked_add(1) else {
+        return Ok(-1);
+    };
+    metadata.active_count = active_count;
+
+    if !store_lgt_metadata(repository_db.as_mut(), &metadata).await {
+        // Native may already have written the data record before failing while
+        // updating `.idx`; preserve that partial-write ordering rather than
+        // rolling the record back.
+        return Ok(-1);
+    }
+
+    Ok(record_id as i32)
 }
 
 /// LGT canonical `MC_dbCloseDataBase` (service 0x1f5).
@@ -793,7 +1016,7 @@ async fn read_packaged_database(context: &mut dyn WIPICContext, name: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, vec};
 
     use test_utils::TestPlatform;
     use wie_backend::{DefaultTaskRunner, System};
@@ -801,7 +1024,154 @@ mod tests {
 
     use crate::context::test::TestContext;
 
-    use super::{close_database_lgt, delete_database, delete_database_lgt, exists_database, list_record_info, open_database, open_database_lgt, select_record, stream_read, stream_write, update_record};
+    use super::{
+        LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt,
+        exists_database, insert_record_lgt, list_record_info, load_handle,
+        load_lgt_metadata, open_database, open_database_lgt, open_db_for_handle,
+        select_record, store_lgt_metadata, stream_read, stream_write, update_record,
+    };
+
+    #[futures_test::test]
+    async fn lgt_native_insert_record_validates_handle_and_arguments() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, 0x1234, 0x2000, 4)
+                .await
+                .unwrap(),
+            -2
+        );
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0, 4)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2000, 0)
+                .await
+                .unwrap(),
+            -9
+        );
+
+        context.write_bytes(0x2000, &[1, 2, 3, 4, 5]).unwrap();
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2000, 5)
+                .await
+                .unwrap(),
+            -21
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_insert_record_returns_ids_and_zero_pads_fixed_records() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 8, 1, 1)
+            .await
+            .unwrap();
+        context.write_bytes(0x2000, &[1, 2, 3]).unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2000, 3)
+                .await
+                .unwrap(),
+            1
+        );
+
+        context.write_bytes(0x2010, &[4, 5, 6, 7, 8, 9, 10, 11]).unwrap();
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2010, 8)
+                .await
+                .unwrap(),
+            2
+        );
+
+        let handle = load_handle(&mut context, db_id).unwrap().unwrap();
+        let mut db = open_db_for_handle(&mut context, &handle).await.unwrap();
+
+        assert_eq!(
+            db.get(1).await.unwrap(),
+            vec![1, 2, 3, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            db.get(2).await.unwrap(),
+            vec![4, 5, 6, 7, 8, 9, 10, 11]
+        );
+
+        let metadata = load_lgt_metadata(db.as_mut()).await.unwrap();
+        assert_eq!(metadata.record_size, 8);
+        assert_eq!(metadata.next_record_id, 3);
+        assert_eq!(metadata.active_count, 2);
+        assert!(metadata.free_ids.is_empty());
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_insert_record_reuses_persisted_free_ids_lifo() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        let handle = load_handle(&mut context, db_id).unwrap().unwrap();
+        {
+            let mut db = open_db_for_handle(&mut context, &handle).await.unwrap();
+            let metadata = LgtDatabaseMetadata {
+                record_size: 4,
+                next_record_id: 6,
+                active_count: 2,
+                free_ids: vec![2, 4, 5],
+            };
+            assert!(store_lgt_metadata(db.as_mut(), &metadata).await);
+        }
+
+        context.write_bytes(0x2000, &[9, 8, 7, 6]).unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2000, 4)
+                .await
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2000, 4)
+                .await
+                .unwrap(),
+            4
+        );
+
+        assert_eq!(close_database_lgt(&mut context, db_id).await.unwrap(), 0);
+
+        let reopened = open_database_lgt(&mut context, 0x1000, 99, 1, 1)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, reopened, 0x2000, 4)
+                .await
+                .unwrap(),
+            2
+        );
+
+        let handle = load_handle(&mut context, reopened).unwrap().unwrap();
+        let mut db = open_db_for_handle(&mut context, &handle).await.unwrap();
+        let metadata = load_lgt_metadata(db.as_mut()).await.unwrap();
+
+        assert_eq!(metadata.record_size, 4);
+        assert_eq!(metadata.next_record_id, 6);
+        assert_eq!(metadata.active_count, 5);
+        assert!(metadata.free_ids.is_empty());
+    }
 
     #[futures_test::test]
     async fn lgt_native_delete_database_validates_arguments() {
