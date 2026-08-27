@@ -696,7 +696,12 @@ fn render_file(smaf: &[u8]) -> Vec<u8> {
         }
 
         match event {
-            SmafEvent::MidiNoteOn { channel, note, velocity } => synth.note_on(channel, note, velocity),
+            SmafEvent::MidiNoteOn { channel, note, velocity } => {
+                if std::env::var("WIE_DUMP_NOTES").is_ok() {
+                    println!("[note] t={time} ch={channel} note={note} vel={velocity}");
+                }
+                synth.note_on(channel, note, velocity)
+            }
             SmafEvent::MidiNoteOff { channel, note, .. } => synth.note_off(channel, note),
             SmafEvent::MidiProgramChange { channel, program } => synth.program_change(channel, program),
             SmafEvent::MidiControlChange { channel, control, value } => synth.control_change(channel, control, value),
