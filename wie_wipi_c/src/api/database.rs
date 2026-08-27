@@ -235,8 +235,8 @@ pub async fn open_database(context: &mut dyn WIPICContext, ptr_name: WIPICWord, 
 /// WIE's database repository exposes one logical database instead of the
 /// native `.db` / `.idx` pair.  For the valid native create/open forms we
 /// reproduce the externally visible existence/create behaviour and then use
-/// the existing WIE database handle implementation.  Native record-size
-/// metadata is not representable by the current repository interface.
+/// the existing WIE database handle implementation. Native fixed-record
+/// metadata is persisted in the reserved LGT metadata record described below.
 pub async fn open_database_lgt(
     context: &mut dyn WIPICContext,
     ptr_name: WIPICWord,
@@ -468,6 +468,48 @@ pub async fn get_number_of_records_lgt(
     };
 
     Ok(metadata.active_count as i32)
+}
+
+/// LGT canonical `MC_dbGetRecordSize` (service 0x1ff).
+///
+/// Native ABI: `MC_dbGetRecordSize(handle)`.
+///
+/// Verified native contract:
+/// - the argument is an opened database handle;
+/// - an unknown/closed handle returns -2;
+/// - a valid handle returns its fixed-record-size field at +0x30;
+/// - the 32-bit field is returned verbatim, with no range or sign validation.
+///
+/// Native `MC_dbOpenDataBase` initializes +0x30 from the `.idx` header when
+/// reopening an existing database, or from the caller-supplied record size when
+/// creating a new one. Select/insert/update/sort all use that same field as the
+/// fixed record width. WIE persists the equivalent value in
+/// `LgtDatabaseMetadata.record_size`.
+///
+/// Preserve the native raw 32-bit return semantics with a bit-preserving
+/// `u32 -> i32` cast.
+pub async fn get_record_size_lgt(
+    context: &mut dyn WIPICContext,
+    db_id: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_dbGetRecordSize({db_id:#x}) [LGT]");
+
+    let Some(handle) = load_handle(context, db_id)? else {
+        return Ok(-2);
+    };
+
+    let Some(mut repository_db) = open_db_for_handle(context, &handle).await else {
+        return Ok(-2);
+    };
+
+    let Some(metadata) = load_lgt_metadata(repository_db.as_mut()).await else {
+        // A canonical LGT-opened handle always has the `.idx`-equivalent
+        // metadata. Missing WIE metadata is therefore a host-state
+        // inconsistency rather than a native representable handle state.
+        return Ok(-1);
+    };
+
+    Ok(metadata.record_size as i32)
 }
 
 /// LGT canonical `MC_dbInsertRecord` (service 0x1f7).
@@ -1673,8 +1715,8 @@ mod tests {
 
     use super::{
         LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
-        exists_database, get_access_mode_lgt, get_number_of_records_lgt, insert_record_lgt,
-        list_record_info, list_records_lgt, load_handle, load_lgt_metadata, open_database,
+        exists_database, get_access_mode_lgt, get_number_of_records_lgt, get_record_size_lgt,
+        insert_record_lgt, list_record_info, list_records_lgt, load_handle, load_lgt_metadata, open_database,
         open_database_lgt, open_db_for_handle,
         select_record, select_record_lgt, sort_records_lgt, store_lgt_metadata, stream_read,
         stream_write, update_record, update_record_lgt,
@@ -1736,6 +1778,79 @@ mod tests {
         assert_eq!(
             get_access_mode_lgt(&mut context, NAME).await.unwrap(),
             1
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_get_record_size_validates_handle_and_persists_created_size() {
+        const NAME: u32 = 0x1000;
+
+        let mut context = database_test_context();
+        context.write_bytes(NAME, b"records\0").unwrap();
+
+        assert_eq!(
+            get_record_size_lgt(&mut context, 0x1234).await.unwrap(),
+            -2
+        );
+
+        let db_id = open_database_lgt(&mut context, NAME, 12, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        assert_eq!(
+            get_record_size_lgt(&mut context, db_id).await.unwrap(),
+            12
+        );
+
+        assert_eq!(
+            close_database_lgt(&mut context, db_id).await.unwrap(),
+            0
+        );
+
+        assert_eq!(
+            get_record_size_lgt(&mut context, db_id).await.unwrap(),
+            -2
+        );
+
+        // Native reopen loads record size from the persisted `.idx` header;
+        // the later caller-supplied value does not replace it.
+        let reopened = open_database_lgt(&mut context, NAME, 99, 0, 1)
+            .await
+            .unwrap();
+        assert!(reopened > 0);
+
+        assert_eq!(
+            get_record_size_lgt(&mut context, reopened).await.unwrap(),
+            12
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_get_record_size_returns_raw_32bit_field() {
+        const NAME: u32 = 0x1000;
+
+        let mut context = database_test_context();
+        context.write_bytes(NAME, b"records\0").unwrap();
+
+        // create==1 only requires signed record_size > 0, so the canonical
+        // creation path cannot directly create a negative/raw-high-bit value.
+        // Mutate only the persisted LGT metadata to verify the getter's native
+        // bit-preserving LDR semantics independently of open validation.
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        let handle = load_handle(&mut context, db_id).unwrap().unwrap();
+        let mut repository_db = open_db_for_handle(&mut context, &handle).await.unwrap();
+        let mut metadata = load_lgt_metadata(repository_db.as_mut()).await.unwrap();
+        metadata.record_size = 0xffff_ffff;
+        assert!(store_lgt_metadata(repository_db.as_mut(), &metadata).await);
+
+        assert_eq!(
+            get_record_size_lgt(&mut context, db_id).await.unwrap(),
+            -1
         );
     }
 
