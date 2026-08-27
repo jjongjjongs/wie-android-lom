@@ -209,6 +209,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsIsExist => filesystem::is_exist.into_body(),
         WIPICSvcId::FsGetMountedNames => filesystem::get_mounted_names.into_body(),
         WIPICSvcId::FsTotalSpaceEx => fs_total_space_ex.into_body(),
+        WIPICSvcId::FsAvailableEx => fs_available_ex.into_body(),
         WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),
         WIPICSvcId::Close => net::close.into_body(),
@@ -503,6 +504,36 @@ async fn fs_total_space_ex(
     Ok(total)
 }
 
+/// `MC_fsAvailableEx` / `LGTC_fsAvailableEx`
+/// (canonical WIPI-C service 0x1a3).
+///
+/// Native flow is the same as `MC_fsTotalSpaceEx`, except filesystem control
+/// command 6 is used and the HAL computes `statfs.f_bsize * statfs.f_bavail`.
+/// Valid access selectors are 1, 2, 3 and 100, and successful values are
+/// saturated to `INT_MAX`.
+///
+/// WIE exposes one logical backing filesystem rather than the native physical
+/// mount/device split, so every valid native access selector maps to that same
+/// backing filesystem's available capacity.
+async fn fs_available_ex(
+    context: &mut dyn WIPICContext,
+    access: i32,
+) -> Result<u32> {
+    if !is_native_fs_space_ex_access(access) {
+        tracing::debug!("MC_fsAvailableEx({access}) -> -24");
+        return Ok((-24i32) as u32);
+    }
+
+    let Some(available) = context.system().filesystem().available_space().await else {
+        tracing::debug!("MC_fsAvailableEx({access}) -> -1");
+        return Ok(u32::MAX);
+    };
+
+    let available = clamp_native_fs_space(available);
+    tracing::debug!("MC_fsAvailableEx({access}) -> {available}");
+    Ok(available)
+}
+
 /// `MC_fsAvailable` (canonical WIPI-C service 0x19c).
 ///
 /// Native flow:
@@ -718,6 +749,17 @@ mod fs_total_space_tests {
         assert!(is_native_fs_space_ex_access(2));
         assert!(is_native_fs_space_ex_access(3));
         assert!(is_native_fs_space_ex_access(100));
+
+        for access in [-1, 0, 4, 99, 101, i32::MAX] {
+            assert!(!is_native_fs_space_ex_access(access));
+        }
+    }
+
+    #[test]
+    fn native_fs_available_ex_uses_total_space_ex_access_contract() {
+        for access in [1, 2, 3, 100] {
+            assert!(is_native_fs_space_ex_access(access));
+        }
 
         for access in [-1, 0, 4, 99, 101, i32::MAX] {
             assert!(!is_native_fs_space_ex_access(access));
