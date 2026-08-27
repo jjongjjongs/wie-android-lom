@@ -49,6 +49,14 @@ pub trait Network: Send + Sync {
 
     fn write(&self, socket: i32, buf: &[u8]) -> Result<usize, NetworkError>;
 
+    fn send_to(
+        &self,
+        socket: i32,
+        buf: &[u8],
+        address: u32,
+        port: u16,
+    ) -> Result<usize, NetworkError>;
+
     fn close(&self, socket: i32) -> Result<(), NetworkError>;
 
     fn poll_event(&self) -> Option<NetworkEvent>;

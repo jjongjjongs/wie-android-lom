@@ -714,6 +714,54 @@ pub async fn get_max_packet_length(_context: &mut dyn WIPICContext) -> Result<i3
     Ok(MAX_PACKET_LENGTH)
 }
 
+/// `MC_netSocketSendTo` (0x261) @ native 0x1b2d78.
+///
+/// Sends a datagram to an explicit address. ABI: r0 = socket, r1 = buffer,
+/// r2 = length, r3 = address, 5th arg = port (stored as a 16-bit sin_port).
+/// Unlike write the length must be strictly positive, and only datagram sockets
+/// are accepted. The native gates in order: buffer == 0 || length <= 0 -> -9;
+/// `WPNet_IsAvailable()` < 0 -> -14; `find_socket_obj()` == null -> -2; family
+/// (`[sock+0x10]`) != 2 -> -16; type (`[sock+0x14]`) != 2 (datagram) -> -16.
+/// `dsocket_sendto` then maps 0.. -> the sent count, -2077 -> -2, -2022 -> -9,
+/// -2011/-4005 -> -19, -2107 -> -14, -4006 -> -16, anything else -> -1.
+pub async fn socket_send_to(
+    context: &mut dyn WIPICContext,
+    socket: i32,
+    buffer: WIPICWord,
+    length: i32,
+    address: WIPICWord,
+    port: WIPICWord,
+) -> Result<i32> {
+    if buffer == 0 || length <= 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let state = context.network_state();
+    if !state.lock().is_available() {
+        return Ok(M_E_NOTCONN);
+    }
+
+    let Some(socket_type) = state.lock().socket_type(socket) else {
+        return Ok(M_E_BADFD);
+    };
+
+    if socket_type != 2 {
+        return Ok(M_E_NOTSUP);
+    }
+
+    let mut data = alloc::vec![0u8; length as usize];
+    context.read_bytes(buffer, &mut data)?;
+
+    let Some(network) = context.system().platform().network() else {
+        return Ok(M_E_NOTCONN);
+    };
+
+    Ok(match network.send_to(socket, &data, address, port as u16) {
+        Ok(sent) => sent as i32,
+        Err(error) => map_network_error(error),
+    })
+}
+
 fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {
     let state = context.network_state();
 

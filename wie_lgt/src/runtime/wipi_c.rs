@@ -232,6 +232,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SocketClose => net::socket_close.into_body(),
         WIPICSvcId::SocketBind => net::socket_bind.into_body(),
         WIPICSvcId::GetMaxPacketLength => net::get_max_packet_length.into_body(),
+        WIPICSvcId::SocketSendTo => net::socket_send_to.into_body(),
         WIPICSvcId::SetReadCallback => net::set_read_callback.into_body(),
         WIPICSvcId::SetWriteCallback => net::set_write_callback.into_body(),
         WIPICSvcId::SerialOpen => serial::open.into_body(),

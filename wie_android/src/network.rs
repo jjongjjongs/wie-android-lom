@@ -195,6 +195,24 @@ impl Network for AndroidNetwork {
         }
     }
 
+    fn send_to(&self, socket: i32, buf: &[u8], address: u32, port: u16) -> Result<usize, NetworkError> {
+        let inner = self.inner.lock().unwrap_or_else(|x| x.into_inner());
+        let Some(entry) = inner.sockets.get(&socket) else {
+            return Err(NetworkError::InvalidSocket);
+        };
+
+        match entry {
+            Socket::Udp(udp) => {
+                let remote = SocketAddr::new(IpAddr::V4(Self::ipv4(address)), port);
+                udp.send_to(buf, remote).map_err(|error| Self::map_io(&error))
+            }
+            // The reference restricts sendto to datagram sockets (type == 2);
+            // the wipi-c layer already gates on that, so a stream socket here is
+            // out of contract.
+            Socket::Tcp(_) => Err(NetworkError::Unsupported),
+        }
+    }
+
     fn connect(&self, socket: i32, address: u32, port: u16) -> NetworkPoll<()> {
         let remote = SocketAddr::new(IpAddr::V4(Self::ipv4(address)), port);
 
@@ -401,5 +419,26 @@ mod tests {
         assert!(net.bind(tcp, loopback, 0).is_ok());
 
         assert!(matches!(net.bind(0x7fff_ffff, loopback, 0), Err(NetworkError::InvalidSocket)));
+    }
+
+    // MC_netSocketSendTo (0x261): a datagram socket delivers to the addressed
+    // receiver and returns the sent length; an unknown socket is rejected.
+    #[test]
+    fn send_to_delivers_datagram() {
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("receiver");
+        receiver.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let loopback = u32::from_le_bytes([127, 0, 0, 1]);
+
+        let net = AndroidNetwork::new();
+        let udp = net.socket(2, 2).expect("udp socket");
+        let payload = b"wipi-datagram";
+        assert_eq!(net.send_to(udp, payload, loopback, port).unwrap(), payload.len());
+
+        let mut buf = [0u8; 64];
+        let (n, _) = receiver.recv_from(&mut buf).expect("recv");
+        assert_eq!(&buf[..n], payload);
+
+        assert!(matches!(net.send_to(0x7fff_ffff, payload, loopback, port), Err(NetworkError::InvalidSocket)));
     }
 }
