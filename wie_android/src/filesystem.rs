@@ -2,12 +2,12 @@ use std::{
     ffi::CString,
     fs::{self, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::ffi::OsStrExt,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Component, Path, PathBuf},
 };
 
 use wie_backend::{
-    Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError,
+    Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemSetModeError, FilesystemRmDirError,
 };
 
 /// Persistent filesystem rooted at the app-private directory Java passes to
@@ -222,6 +222,23 @@ impl Filesystem for AndroidFilesystem {
             Some(18) | Some(39) => FilesystemRenameError::CrossDeviceOrNotEmpty, // EXDEV / ENOTEMPTY
             Some(36) => FilesystemRenameError::NameTooLong,          // ENAMETOOLONG
             _ => FilesystemRenameError::Other,
+        })
+    }
+
+    async fn set_mode(
+        &self,
+        aid: &str,
+        path: &str,
+        mode: u32,
+    ) -> core::result::Result<(), FilesystemSetModeError> {
+        let path = self.path_for(aid, path).ok_or(FilesystemSetModeError::Other)?;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|error| {
+            match error.raw_os_error() {
+                Some(2) => FilesystemSetModeError::NotFound,    // ENOENT
+                Some(36) => FilesystemSetModeError::NameTooLong, // ENAMETOOLONG
+                _ => FilesystemSetModeError::Other,
+            }
         })
     }
 

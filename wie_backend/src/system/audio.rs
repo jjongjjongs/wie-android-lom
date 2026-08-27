@@ -335,6 +335,15 @@ mod tests {
             Err(crate::platform::FilesystemRenameError::NotFound)
         }
 
+        async fn set_mode(
+            &self,
+            _aid: &str,
+            _path: &str,
+            _mode: u32,
+        ) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+            Err(crate::platform::FilesystemSetModeError::NotFound)
+        }
+
         async fn total_space(&self, _aid: &str) -> Option<u64> {
             None
         }

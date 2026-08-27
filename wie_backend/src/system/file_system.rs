@@ -242,6 +242,31 @@ impl FilesystemOverlay {
         self.platform.filesystem().rename(&self.aid, &from, &to).await
     }
 
+    pub async fn set_mode(
+        &self,
+        path: &str,
+        mode: u32,
+    ) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+        use crate::platform::FilesystemSetModeError;
+
+        let Some(normalized) = normalize_guest_path(path) else {
+            return Err(FilesystemSetModeError::Other);
+        };
+
+        // A packaged virtual file is visible through the overlay but has no
+        // writable persistent object whose host permissions can be changed.
+        if !self.platform.filesystem().exists(&self.aid, &normalized).await
+            && self.virtual_files.lock().contains_key(&normalized)
+        {
+            return Err(FilesystemSetModeError::Other);
+        }
+
+        self.platform
+            .filesystem()
+            .set_mode(&self.aid, &normalized, mode)
+            .await
+    }
+
     pub async fn total_space(&self) -> Option<u64> {
         self.platform.filesystem().total_space(&self.aid).await
     }
@@ -471,6 +496,19 @@ mod tests {
             };
             files.insert((aid.to_string(), to.to_string()), data);
             Ok(())
+        }
+
+        async fn set_mode(
+            &self,
+            aid: &str,
+            path: &str,
+            _mode: u32,
+        ) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+            if self.files.lock().contains_key(&(aid.to_string(), path.to_string())) {
+                Ok(())
+            } else {
+                Err(crate::platform::FilesystemSetModeError::NotFound)
+            }
         }
 
         async fn total_space(&self, _aid: &str) -> Option<u64> {

@@ -764,6 +764,83 @@ pub async fn rename(
     }
 }
 
+/// WIPI-C MC_fsSetMode (canonical service 0x19d).
+///
+/// Native flow:
+/// WPFS_IsPossibleAccess(1, access) -> WPFS_MakeFullPathName ->
+/// public mode translation -> dfs_chmod.
+///
+/// Public modes map to owner permission bits:
+/// - 0x10 -> 0400
+/// - 0x20 -> 0200
+/// - 0x30 -> 0600
+///
+/// Native return contract represented here:
+/// - inaccessible access selector => -24
+/// - bad/null filename => -3
+/// - path longer than 128 bytes => -11
+/// - invalid public mode => -9
+/// - missing path or directory => -12
+/// - generic chmod failure => -1
+/// - success => 0
+pub async fn set_mode(
+    context: &mut dyn WIPICContext,
+    path: WIPICWord,
+    mode: i32,
+    access: WIPICWord,
+) -> Result<i32> {
+    use wie_backend::FilesystemSetModeError;
+
+    tracing::debug!("MC_fsSetMode({path:#x}, {mode:#x}, {access})");
+
+    // Native WPFS_IsPossibleAccess(1, access) is evaluated first.
+    // WIE does not model the per-DLET permission bitmap, so recognized
+    // selectors 2/3 retain the compatibility adaptation used by the other
+    // canonical LGT filesystem services.
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if path == 0 {
+        return Ok(-3);
+    }
+
+    let path_bytes = read_null_terminated_string_bytes(context, path)?;
+    if path_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let path = encoding_rs::EUC_KR.decode(&path_bytes).0.into_owned();
+
+    // MC_fsSetMode performs this switch only after path construction.
+    let host_mode = match mode {
+        0x10 => 0o400,
+        0x20 => 0o200,
+        0x30 => 0o600,
+        _ => return Ok(-9),
+    };
+
+    let filesystem = context.system().filesystem().clone();
+
+    // The native HAL stat() preflight accepts only a regular file.
+    let is_file = filesystem.size(&path).await.is_some();
+    let is_directory = if is_file {
+        false
+    } else {
+        filesystem.list(&path).await.is_some()
+    };
+
+    if !is_file || is_directory {
+        return Ok(-12);
+    }
+
+    match filesystem.set_mode(&path, host_mode).await {
+        Ok(()) => Ok(0),
+        Err(FilesystemSetModeError::NotFound) => Ok(-12),
+        Err(FilesystemSetModeError::NameTooLong) => Ok(-11),
+        Err(FilesystemSetModeError::Other) => Ok(-1),
+    }
+}
+
 /// WIPI-C MC_fsList.
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
@@ -845,7 +922,8 @@ mod tests {
     use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
-        close, file_attribute, list, mkdir, open, read, remove, rename, rmdir, seek, write,
+        close, file_attribute, list, mkdir, open, read, remove, rename, rmdir, seek, set_mode,
+        write,
     };
 
     fn filesystem_test_context() -> TestContext {
@@ -1888,6 +1966,41 @@ mod tests {
         let mut actual = [0u8; 3];
         context.read_bytes(0x2000, &mut actual).unwrap();
         assert_eq!(&actual, b"abc");
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_set_mode_matches_native_validation_order_and_modes() {
+        let mut context = filesystem_test_context();
+        context
+            .system()
+            .filesystem()
+            .write("save/mode.dat", 0, b"abc")
+            .await;
+        context.write_bytes(0x1000, b"save/mode.dat\0").unwrap();
+
+        // Access validation precedes path construction and mode validation.
+        assert_eq!(set_mode(&mut context, 0, 0x77, 0).await.unwrap(), -24);
+        assert_eq!(set_mode(&mut context, 0, 0x77, 1).await.unwrap(), -3);
+
+        // Public mode validation occurs after successful path construction.
+        assert_eq!(set_mode(&mut context, 0x1000, 0x77, 1).await.unwrap(), -9);
+
+        assert_eq!(set_mode(&mut context, 0x1000, 0x10, 1).await.unwrap(), 0);
+        assert_eq!(set_mode(&mut context, 0x1000, 0x20, 1).await.unwrap(), 0);
+        assert_eq!(set_mode(&mut context, 0x1000, 0x30, 1).await.unwrap(), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_set_mode_missing_and_directory_return_minus_12() {
+        let mut context = filesystem_test_context();
+        context.write_bytes(0x1000, b"save/missing.dat\0").unwrap();
+        context.write_bytes(0x1100, b"save/dir\0").unwrap();
+
+        assert_eq!(set_mode(&mut context, 0x1000, 0x10, 1).await.unwrap(), -12);
+
+        context.system().filesystem().mkdir("save").await.unwrap();
+        context.system().filesystem().mkdir("save/dir").await.unwrap();
+        assert_eq!(set_mode(&mut context, 0x1100, 0x10, 1).await.unwrap(), -12);
     }
 
     #[futures_test::test]

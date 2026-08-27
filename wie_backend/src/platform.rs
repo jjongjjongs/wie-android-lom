@@ -104,6 +104,13 @@ pub enum FilesystemRenameError {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemSetModeError {
+    NotFound,
+    NameTooLong,
+    Other,
+}
+
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
     async fn exists(&self, aid: &str, path: &str) -> bool;
@@ -172,6 +179,17 @@ pub trait Filesystem: Send + Sync {
         from: &str,
         to: &str,
     ) -> core::result::Result<(), FilesystemRenameError>;
+
+    /// Replace the permission bits of one regular file.
+    ///
+    /// The LGT WIPI-C filesystem exposes only owner read/write combinations:
+    /// 0400, 0200 and 0600.
+    async fn set_mode(
+        &self,
+        aid: &str,
+        path: &str,
+        mode: u32,
+    ) -> core::result::Result<(), FilesystemSetModeError>;
 
     /// Total byte capacity of the storage backing this application's filesystem.
     ///

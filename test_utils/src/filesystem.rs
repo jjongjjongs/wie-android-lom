@@ -12,6 +12,7 @@ use spin::Mutex;
 
 use wie_backend::{
     Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError,
+    FilesystemSetModeError,
 };
 
 /// In-memory `Filesystem` implementation for tests.
@@ -237,6 +238,19 @@ impl Filesystem for MemoryFilesystem {
         }
 
         Ok(())
+    }
+
+    async fn set_mode(
+        &self,
+        aid: &str,
+        path: &str,
+        _mode: u32,
+    ) -> core::result::Result<(), FilesystemSetModeError> {
+        if self.files.lock().contains_key(&(aid.to_string(), path.to_string())) {
+            Ok(())
+        } else {
+            Err(FilesystemSetModeError::NotFound)
+        }
     }
 
     async fn total_space(&self, _aid: &str) -> Option<u64> {

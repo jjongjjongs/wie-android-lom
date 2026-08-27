@@ -203,6 +203,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsRmDir => filesystem::rmdir.into_body(),
         WIPICSvcId::FsList => filesystem::list.into_body(),
         WIPICSvcId::FsTotalSpace => fs_total_space.into_body(),
+        WIPICSvcId::FsSetMode => filesystem::set_mode.into_body(),
         WIPICSvcId::Unk8 => database::exists_database.into_body(),
         WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),

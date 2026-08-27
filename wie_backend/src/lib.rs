@@ -16,7 +16,7 @@ pub use self::{
     audio_sink::AudioSink,
     database::{Database, DatabaseRepository, RecordId},
     executor::{AsyncCallable, AsyncCallableResult},
-    platform::{Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError, Network, NetworkError, NetworkEvent, NetworkPoll, Platform},
+    platform::{Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError, FilesystemSetModeError, Network, NetworkError, NetworkEvent, NetworkPoll, Platform},
     screen::Screen,
     system::{Event, FilesystemOverlay, KeyCode, System},
     task_runner::{DefaultTaskRunner, TaskRunner},
