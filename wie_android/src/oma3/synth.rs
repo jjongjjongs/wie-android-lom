@@ -1172,4 +1172,40 @@ mod render_tests {
             assert!((buf[i] - g).abs() < 1e-6, "sample {i}: got {}, want {g}", buf[i]);
         }
     }
+
+    /// A note whose operators use key-level scaling and tremolo (boss.mmf's
+    /// fourth note, tone 3, key 52) - paths the first-note golden never hits.
+    #[test]
+    fn render_note_with_keylevel_and_tremolo() {
+        let op0 = op(
+            [15, 2, 0, 4, 5, 15, 1, 1, 0, 0, 1, 5, 1, 2, 0, 2, 0],
+            &[0x01, 0x42, 0xf5, 0x3e, 0x54, 0x10, 0x05],
+            &[
+                0, 0, 0, 0, 0x01, 0x04, 0x02, 0x0f, 0x05, 0x0f, 0x02, 0x02, 0x01, 0x02, 0, 0x01, 0, 0, 0x05,
+            ],
+        );
+        let op1 = op(
+            [15, 2, 0, 4, 5, 5, 1, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0],
+            &[0x00, 0x42, 0xf5, 0x14, 0x44, 0x10, 0x00],
+            &[0, 0, 0, 0, 0, 0x04, 0x02, 0x0f, 0x05, 0x05, 0, 0x02, 0, 0x02, 0, 0x01, 0, 0, 0],
+        );
+        let tone = CompactTone {
+            valid: true,
+            algorithm: 0,
+            feedback: 5,
+            operators: vec![op0, op1],
+            dll_voice: vec![
+                0x81, 0x40, 0x01, 0x42, 0xf5, 0x3e, 0x54, 0x10, 0x05, 0x00, 0x42, 0xf5, 0x14, 0x44, 0x10, 0x00,
+            ],
+            ..Default::default()
+        };
+        let total = 44100;
+        let mut buf = vec![0f32; (total * 2) as usize];
+        render_note(&mut buf, total, 0, 3352, &tone, 52, 106, 64, 8192, 2, 0, 44100);
+
+        let golden: [f32; 8] = [0.0, 0.0, 0.042237025, 0.042237025, 0.106736295, 0.106736295, 0.17856625, 0.17856625];
+        for (i, &g) in golden.iter().enumerate() {
+            assert!((buf[i] - g).abs() < 1e-6, "sample {i}: got {}, want {g}", buf[i]);
+        }
+    }
 }
