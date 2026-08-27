@@ -464,6 +464,89 @@ pub async fn insert_record_lgt(
 /// WIE stores fixed records as separate backend entries, so reproduce that raw
 /// byte-stream view by concatenating successive record slots. Only the starting
 /// id is checked against the free-list, matching the native pre-read validation.
+/// LGT canonical `MC_dbListRecords` (service 0x1fb).
+///
+/// Native ABI: `MC_dbListRecords(handle, output_ids, capacity)`.
+///
+/// Verified native contract:
+/// - unknown handle -> -2;
+/// - null output or non-positive signed capacity -> -9;
+/// - signed capacity smaller than signed `active_count` -> -18;
+/// - candidate ids are scanned from 1 through `next_record_id - 1`;
+/// - ids present in the free-list are skipped;
+/// - active ids are written in ascending numeric order;
+/// - no `.db` payload is read while constructing the list;
+/// - success returns the handle's `active_count` field.
+///
+/// The native loop has an observable off-by-one capacity check: immediately
+/// before each store it rejects only when `capacity < written`, not when the
+/// two are equal. Normally the earlier `capacity < active_count` guard makes
+/// that irrelevant, but preserving it matters for malformed/internally
+/// inconsistent metadata and for the record-id-zero underflow quirk.
+pub async fn list_records_lgt(
+    context: &mut dyn WIPICContext,
+    db_id: i32,
+    buf_ptr: WIPICWord,
+    capacity: i32,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_dbListRecords({db_id:#x}, {buf_ptr:#x}, {capacity}) [LGT]"
+    );
+
+    let Some(handle) = load_handle(context, db_id)? else {
+        return Ok(-2);
+    };
+
+    if buf_ptr == 0 || capacity <= 0 {
+        return Ok(-9);
+    }
+
+    let Some(mut repository_db) = open_db_for_handle(context, &handle).await else {
+        return Ok(-2);
+    };
+
+    let Some(metadata) = load_lgt_metadata(repository_db.as_mut()).await else {
+        return Ok(-1);
+    };
+
+    // ARM CMP + BLT performs a signed comparison here.
+    if capacity < metadata.active_count as i32 {
+        return Ok(-18);
+    }
+
+    // Native returns immediately when next_record_id <= 1.
+    let next_record_id = metadata.next_record_id as i32;
+    if next_record_id <= 1 {
+        return Ok(metadata.active_count as i32);
+    }
+
+    let mut written: i32 = 0;
+    let mut record_id: i32 = 1;
+
+    while record_id < next_record_id {
+        let is_free = metadata
+            .free_ids
+            .iter()
+            .any(|&id| id == record_id as u32);
+
+        if !is_free {
+            // Exact native quirk: BLT, not BLE. Therefore capacity == written
+            // still permits this store.
+            if capacity < written {
+                return Ok(-18);
+            }
+
+            let offset = (written as u32).wrapping_mul(4);
+            write_generic(context, buf_ptr.wrapping_add(offset), record_id as u32)?;
+            written = written.wrapping_add(1);
+        }
+
+        record_id = record_id.wrapping_add(1);
+    }
+
+    Ok(metadata.active_count as i32)
+}
+
 /// LGT canonical `MC_dbDeleteRecord` (service 0x1fa).
 ///
 /// Native ABI: `MC_dbDeleteRecord(handle, record_id)`.
@@ -1283,7 +1366,7 @@ mod tests {
 
     use super::{
         LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
-        exists_database, insert_record_lgt, list_record_info, load_handle,
+        exists_database, insert_record_lgt, list_record_info, list_records_lgt, load_handle,
         load_lgt_metadata, open_database, open_database_lgt, open_db_for_handle,
         select_record, select_record_lgt, store_lgt_metadata, stream_read, stream_write,
         update_record, update_record_lgt,
@@ -1429,6 +1512,189 @@ mod tests {
         assert_eq!(metadata.next_record_id, 6);
         assert_eq!(metadata.active_count, 5);
         assert!(metadata.free_ids.is_empty());
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_list_records_validates_native_arguments_and_capacity() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            list_records_lgt(&mut context, 0x1234, 0x3000, 4)
+                .await
+                .unwrap(),
+            -2
+        );
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            list_records_lgt(&mut context, db_id, 0, 4)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            list_records_lgt(&mut context, db_id, 0x3000, 0)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            list_records_lgt(&mut context, db_id, 0x3000, -1)
+                .await
+                .unwrap(),
+            -9
+        );
+
+        context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
+        context.write_bytes(0x2110, &[5, 6, 7, 8]).unwrap();
+
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2100, 4)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            insert_record_lgt(&mut context, db_id, 0x2110, 4)
+                .await
+                .unwrap(),
+            2
+        );
+
+        assert_eq!(
+            list_records_lgt(&mut context, db_id, 0x3000, 1)
+                .await
+                .unwrap(),
+            -18
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_list_records_returns_ascending_active_ids_without_reading_payloads() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        let handle = load_handle(&mut context, db_id).unwrap().unwrap();
+        {
+            let mut repository_db =
+                open_db_for_handle(&mut context, &handle).await.unwrap();
+
+            let metadata = LgtDatabaseMetadata {
+                record_size: 4,
+                next_record_id: 7,
+                active_count: 3,
+                free_ids: vec![2, 4, 6],
+            };
+            assert!(store_lgt_metadata(repository_db.as_mut(), &metadata).await);
+
+            // Only two physical payloads exist, and one active id deliberately
+            // has no backend record. Native ListRecords never reads `.db`.
+            assert!(repository_db.set(1, &[1, 1, 1, 1]).await);
+            assert!(repository_db.set(5, &[5, 5, 5, 5]).await);
+        }
+
+        context.write_bytes(0x3000, &[0xaa; 20]).unwrap();
+
+        assert_eq!(
+            list_records_lgt(&mut context, db_id, 0x3000, 3)
+                .await
+                .unwrap(),
+            3
+        );
+
+        let mut out = [0u8; 20];
+        context.read_bytes(0x3000, &mut out).unwrap();
+
+        assert_eq!(
+            u32::from_le_bytes(out[0..4].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(out[4..8].try_into().unwrap()),
+            3
+        );
+        assert_eq!(
+            u32::from_le_bytes(out[8..12].try_into().unwrap()),
+            5
+        );
+        assert_eq!(&out[12..], &[0xaa; 8]);
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_list_records_preserves_signed_count_and_native_off_by_one_quirk() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
+            .await
+            .unwrap();
+
+        let handle = load_handle(&mut context, db_id).unwrap().unwrap();
+        {
+            let mut repository_db =
+                open_db_for_handle(&mut context, &handle).await.unwrap();
+
+            // Malformed metadata isolates the native loop behavior:
+            // active_count says one record, but ids 1 and 2 are both active.
+            let metadata = LgtDatabaseMetadata {
+                record_size: 4,
+                next_record_id: 3,
+                active_count: 1,
+                free_ids: vec![],
+            };
+            assert!(store_lgt_metadata(repository_db.as_mut(), &metadata).await);
+        }
+
+        context.write_bytes(0x3000, &[0u8; 12]).unwrap();
+
+        // Native precheck accepts capacity == active_count. Its loop then
+        // allows stores while capacity == written, hence two ids are emitted.
+        assert_eq!(
+            list_records_lgt(&mut context, db_id, 0x3000, 1)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let mut out = [0u8; 12];
+        context.read_bytes(0x3000, &mut out).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(out[0..4].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(out[4..8].try_into().unwrap()),
+            2
+        );
+
+        {
+            let mut repository_db =
+                open_db_for_handle(&mut context, &handle).await.unwrap();
+
+            // DeleteRecord(0) can produce exactly this signed-visible count.
+            let metadata = LgtDatabaseMetadata {
+                record_size: 4,
+                next_record_id: 1,
+                active_count: u32::MAX,
+                free_ids: vec![0],
+            };
+            assert!(store_lgt_metadata(repository_db.as_mut(), &metadata).await);
+        }
+
+        assert_eq!(
+            list_records_lgt(&mut context, db_id, 0x3000, 1)
+                .await
+                .unwrap(),
+            -1
+        );
     }
 
     #[futures_test::test]

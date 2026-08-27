@@ -198,6 +198,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::SelectRecord => database::select_record_lgt.into_body(),
         WIPICSvcId::UpdateRecord => database::update_record_lgt.into_body(),
         WIPICSvcId::DeleteRecord => database::delete_record_lgt.into_body(),
+        WIPICSvcId::ListRecords => database::list_records_lgt.into_body(),
         WIPICSvcId::FsRead => filesystem::read.into_body(),
         WIPICSvcId::FsWrite => filesystem::write.into_body(),
         WIPICSvcId::FsClose => filesystem::close.into_body(),
