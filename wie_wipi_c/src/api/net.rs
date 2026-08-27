@@ -532,6 +532,25 @@ pub async fn socket_connect(
     }
 }
 
+/// `MC_netSocketWrite` (0x25c) @ native 0x1b35ec.
+///
+/// ABI: r0 = socket, r1 = buffer, r2 = length. The native gates in this exact
+/// order, and WIE mirrors each one:
+///
+/// 1. buffer == 0 || length < 0  -> -9  (length == 0 is allowed through)
+/// 2. `WPNet_IsAvailable()` < 0   -> -14
+/// 3. `find_socket_obj()` == null -> -2
+/// 4. socket type (`[sock+0x14]`) != 1 (stream) -> -16
+///
+/// A billing socket (`[sock+0x18]` in {1,2}) is written through `WPBill_Write`
+/// instead of `dsocket_send`; WIE does not model billing sockets, so every
+/// socket takes the normal send path. The native returns the lower send result
+/// directly when it is >= 0 - so a partial write returns its own byte count -
+/// and maps the negative internal errors as: -2077 -> -2, -2022 -> -9,
+/// -2011/-4005 -> -19 (would-block/pending), -2107 -> -14, anything else -> -1.
+/// `map_network_error` reproduces the same public codes from the backend error
+/// variants. The call mutates no socket field: the write callback / `Writable`
+/// event path is separate (`MC_netSetWriteCB`).
 pub async fn socket_write(
     context: &mut dyn WIPICContext,
     socket: i32,
