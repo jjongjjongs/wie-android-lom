@@ -42,16 +42,18 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
         "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
-        // A local start-up auth check reads PHONENUMBER and treats an empty value
-        // as an unauthorised handset, then exits (observed in 이노티아 연대기 2,
-        // which reads only this property and then calls MC_knlExit with no network
-        // traffic at all). There is no server to verify a specific number against,
-        // so any valid-format subscriber number satisfies the check. MIN carries
-        // the same number so a title that cross-checks them agrees. A title bound
-        // to one specific original number cannot be authorised in an emulator
-        // regardless, so a valid placeholder is the best default.
-        "PHONENUMBER" => "01012345678",
-        "MIN" => "01012345678",
+        // LGT ez-i cert.c2s DRM uses the subscriber phone number as the decryption
+        // key: cert.c2s encodes "<appID><phoneNumber><checksums>" encrypted with the
+        // phone number, and the game reads PHONENUMBER, decrypts, and checks the
+        // recovered appID. A wrong number makes the decrypted-byte checksum diverge
+        // and the title exits with error 3100 (observed in 이노티아 연대기 2).
+        // 01046119269 is the number this cert was issued for, recovered by a
+        // known-plaintext attack (the first 8 decrypted bytes are the known appID
+        // and the decrypted tail equals the key, which pins it uniquely); with it
+        // the unpatched title authenticates. MIN carries the same number so a title
+        // that cross-checks them agrees.
+        "PHONENUMBER" => "01046119269",
+        "MIN" => "01046119269",
         "ANNUN_CALL" => "0",
         "ANNUN_SMS" => "0",
         "ANNUN_SILENT" => "0",
@@ -382,7 +384,7 @@ mod test {
 
         assert_eq!(get_system_property(&mut context, id, out, 16).await.unwrap(), 0);
         let result = read_null_terminated_string_bytes(&context, out).unwrap();
-        assert_eq!(String::from_utf8(result).unwrap(), "01012345678");
+        assert_eq!(String::from_utf8(result).unwrap(), "01046119269");
 
         Ok(())
     }
