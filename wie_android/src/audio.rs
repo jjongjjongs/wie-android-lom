@@ -25,8 +25,12 @@ use crate::{
     platform::Shared,
 };
 use std::{
+    collections::HashMap,
     ffi::c_void,
-    sync::atomic::{AtomicPtr, AtomicU8, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicPtr, AtomicU8, AtomicU64, Ordering},
+    },
 };
 
 /// Opcode 1 (a one-shot wave) is no longer emitted - recorded waves are mixed
@@ -40,6 +44,13 @@ const OPCODE_VIBRATE: u8 = 8;
 /// Header length shared by both commands; `AndroidAudioOutput` rejects
 /// anything shorter.
 const HEADER_LEN: usize = 10;
+
+/// Fixed gain the reference's MMF player applies to the rendered stream before
+/// the clip's own volume, from its `gain=2.0` log. Its output stage is this
+/// drive into a hard sixteen-bit clip, then the clip volume (an AudioTrack at
+/// `0.5` for a title that asks for fifty), so mid-level content keeps its full
+/// level and only peaks round off.
+const MMF_GAIN: f32 = 2.0;
 
 type WaveCallback = unsafe extern "C" fn(u8, u32, *const i16, usize) -> u8;
 
@@ -116,6 +127,15 @@ pub fn stream_command(samples: &[i16]) -> Vec<u8> {
 pub struct AndroidAudioSink {
     shared: Shared,
     master_volume: AtomicU8,
+    /// The current render generation for each audio handle. A clip is rendered
+    /// off-thread, so a stop or a replay can land while its render is still
+    /// running; the worker installs its stream only if the handle's generation
+    /// still matches the one it started with, so a stopped or superseded clip is
+    /// discarded instead of playing on. Without this a background track stopped
+    /// mid-render is re-installed after the stop and never goes away, stacking
+    /// under everything that follows.
+    render_generation: Arc<Mutex<HashMap<u32, u64>>>,
+    next_generation: AtomicU64,
 }
 
 impl AndroidAudioSink {
@@ -123,6 +143,8 @@ impl AndroidAudioSink {
         Self {
             shared,
             master_volume: AtomicU8::new(100),
+            render_generation: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: AtomicU64::new(0),
         }
     }
 }
@@ -211,20 +233,63 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         if analysis.notes.is_empty() && analysis.audio_events.is_empty() {
             return None;
         }
-        let pcm = crate::oma3::analysis::render(&analysis, smaf.total_ticks, SAMPLE_RATE as i32);
-        let samples: Vec<i16> = pcm.iter().map(|&s| (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16).collect();
-        let frames = (samples.len() / CHANNELS) as u64;
+        let total_ticks = smaf.total_ticks;
+        let frames = crate::oma3::analysis::rendered_frame_count(&analysis, total_ticks, SAMPLE_RATE as i32) as u64;
         let duration_ms = (frames * 1000 / u64::from(SAMPLE_RATE)) as u32;
         tracing::info!(
-            "[smaf] oma3 rendered {} notes, {} audio events, {frames} frames ({duration_ms}ms), repeat={repeat}, id={id}",
+            "[smaf] oma3 accepted {} notes, {} audio events, {frames} frames ({duration_ms}ms), repeat={repeat}, id={id}",
             analysis.notes.len(),
             analysis.audio_events.len()
         );
-        self.shared.mixer().set_song(id, samples, repeat);
+
+        // Render off this thread. An FM-heavy sequence takes hundreds of
+        // milliseconds to a second to render, and doing it inline stalls the
+        // caller - the game's timer - and with it the audio pump that shares the
+        // loop, so the stream underruns and the sound breaks up. Hand the finished
+        // stream to the mixer when it is ready; the clip is silent for the render's
+        // length, which is far shorter than a note of the music it starts.
+        //
+        // Claim a generation for this handle so a stop or a replay that lands
+        // while the render is still running wins: the worker installs its stream
+        // only if the handle is still on this generation, so a stopped clip does
+        // not come back and stack under everything that follows.
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        self.render_generation.lock().unwrap_or_else(|x| x.into_inner()).insert(id, generation);
+
+        let shared = self.shared.clone();
+        let render_generation = self.render_generation.clone();
+        std::thread::spawn(move || {
+            let pcm = crate::oma3::analysis::render(&analysis, total_ticks, SAMPLE_RATE as i32);
+            // The reference's player drives the rendered stream with a fixed
+            // 2x gain before the clip's own volume (its log: `gain=2.0` with the
+            // AudioTrack at 0.5), which leaves everything below half scale at its
+            // full level and only clips the peaks - a loudness lift, not a plain
+            // halving. Match it here so a sequence carries the same body it does
+            // on the handset rather than playing back at half the level.
+            let samples: Vec<i16> = pcm
+                .iter()
+                .map(|&s| (s * MMF_GAIN * 32767.0).round().clamp(-32768.0, 32767.0) as i16)
+                .collect();
+
+            // Install only if this handle is still on the generation this render
+            // began under; a stop or a newer play has otherwise superseded it.
+            // Hold the generation lock across the install (generations before
+            // mixer, the same order stop_smaf uses) so a stop cannot slip in
+            // between the check and the install.
+            let mut generations = render_generation.lock().unwrap_or_else(|x| x.into_inner());
+            if generations.get(&id) == Some(&generation) {
+                shared.mixer().set_song(id, samples, repeat);
+                generations.remove(&id);
+            }
+        });
         Some(duration_ms)
     }
 
     fn stop_smaf(&self, id: u32) {
+        // Drop any pending render for this handle first, so a render still in
+        // flight does not install its stream after the stop.
+        let mut generations = self.render_generation.lock().unwrap_or_else(|x| x.into_inner());
+        generations.remove(&id);
         self.shared.mixer().stop_song(id);
     }
 }

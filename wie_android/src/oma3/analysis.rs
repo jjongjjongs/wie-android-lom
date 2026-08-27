@@ -1572,13 +1572,13 @@ fn ticks_to_frames(ticks: i32, rate: i32) -> i32 {
     (((ticks as i64) * 4 * rate as i64 + 999) / 1000).min(2_147_483_647) as i32
 }
 
-/// `render` - mix every FM note and recording into a stereo float buffer, as
-/// the reference's top-level `OracleMa3Synth.render`.
-pub fn render(analysis: &Analysis, total_ticks: i32, rate: i32) -> Vec<f32> {
+/// How many stereo frames [`render`] produces for an analysis, sizing the
+/// buffer exactly as it does. Computing this is cheap - it never runs the synth
+/// - so the play path can learn a clip's length without paying for the render.
+pub fn rendered_frame_count(analysis: &Analysis, total_ticks: i32, rate: i32) -> i32 {
     let rate = if rate <= 0 { 48000 } else { rate };
-    let notes = &analysis.notes;
     let mut max_tick = total_ticks.max(0);
-    for note in notes {
+    for note in &analysis.notes {
         max_tick = max_tick.max(note.start_tick + note.duration_tick.max(1));
     }
     for event in &analysis.audio_events {
@@ -1592,6 +1592,15 @@ pub fn render(analysis: &Analysis, total_ticks: i32, rate: i32) -> Vec<f32> {
             ticks_to_frames(event.start_tick, rate) + resampled_frame_count(event.sample.pcm_mono.len(), event.sample.sample_rate, rate) + rate / 10;
         total = total.max(end);
     }
+    total
+}
+
+/// `render` - mix every FM note and recording into a stereo float buffer, as
+/// the reference's top-level `OracleMa3Synth.render`.
+pub fn render(analysis: &Analysis, total_ticks: i32, rate: i32) -> Vec<f32> {
+    let rate = if rate <= 0 { 48000 } else { rate };
+    let notes = &analysis.notes;
+    let total = rendered_frame_count(analysis, total_ticks, rate);
     let mut buffer = vec![0f32; (total * 2) as usize];
     for note in notes {
         if let Some(tone) = &note.tone {
