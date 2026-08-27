@@ -25,8 +25,12 @@ use crate::{
     platform::Shared,
 };
 use std::{
+    collections::HashMap,
     ffi::c_void,
-    sync::atomic::{AtomicPtr, AtomicU8, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicPtr, AtomicU8, AtomicU64, Ordering},
+    },
 };
 
 /// Opcode 1 (a one-shot wave) is no longer emitted - recorded waves are mixed
@@ -123,6 +127,15 @@ pub fn stream_command(samples: &[i16]) -> Vec<u8> {
 pub struct AndroidAudioSink {
     shared: Shared,
     master_volume: AtomicU8,
+    /// The current render generation for each audio handle. A clip is rendered
+    /// off-thread, so a stop or a replay can land while its render is still
+    /// running; the worker installs its stream only if the handle's generation
+    /// still matches the one it started with, so a stopped or superseded clip is
+    /// discarded instead of playing on. Without this a background track stopped
+    /// mid-render is re-installed after the stop and never goes away, stacking
+    /// under everything that follows.
+    render_generation: Arc<Mutex<HashMap<u32, u64>>>,
+    next_generation: AtomicU64,
 }
 
 impl AndroidAudioSink {
@@ -130,6 +143,8 @@ impl AndroidAudioSink {
         Self {
             shared,
             master_volume: AtomicU8::new(100),
+            render_generation: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: AtomicU64::new(0),
         }
     }
 }
@@ -233,7 +248,16 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         // loop, so the stream underruns and the sound breaks up. Hand the finished
         // stream to the mixer when it is ready; the clip is silent for the render's
         // length, which is far shorter than a note of the music it starts.
+        //
+        // Claim a generation for this handle so a stop or a replay that lands
+        // while the render is still running wins: the worker installs its stream
+        // only if the handle is still on this generation, so a stopped clip does
+        // not come back and stack under everything that follows.
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        self.render_generation.lock().unwrap_or_else(|x| x.into_inner()).insert(id, generation);
+
         let shared = self.shared.clone();
+        let render_generation = self.render_generation.clone();
         std::thread::spawn(move || {
             let pcm = crate::oma3::analysis::render(&analysis, total_ticks, SAMPLE_RATE as i32);
             // The reference's player drives the rendered stream with a fixed
@@ -246,12 +270,26 @@ impl wie_backend::AudioSink for AndroidAudioSink {
                 .iter()
                 .map(|&s| (s * MMF_GAIN * 32767.0).round().clamp(-32768.0, 32767.0) as i16)
                 .collect();
-            shared.mixer().set_song(id, samples, repeat);
+
+            // Install only if this handle is still on the generation this render
+            // began under; a stop or a newer play has otherwise superseded it.
+            // Hold the generation lock across the install (generations before
+            // mixer, the same order stop_smaf uses) so a stop cannot slip in
+            // between the check and the install.
+            let mut generations = render_generation.lock().unwrap_or_else(|x| x.into_inner());
+            if generations.get(&id) == Some(&generation) {
+                shared.mixer().set_song(id, samples, repeat);
+                generations.remove(&id);
+            }
         });
         Some(duration_ms)
     }
 
     fn stop_smaf(&self, id: u32) {
+        // Drop any pending render for this handle first, so a render still in
+        // flight does not install its stream after the stop.
+        let mut generations = self.render_generation.lock().unwrap_or_else(|x| x.into_inner());
+        generations.remove(&id);
         self.shared.mixer().stop_song(id);
     }
 }
