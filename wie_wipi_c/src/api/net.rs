@@ -28,6 +28,46 @@ enum ProcessNetworkState {
     Available,
 }
 
+/// A native `MC_netHttpOpen` connection object.
+///
+/// The LGT firmware keeps this as a 208-byte record threaded onto a global
+/// module-memory list; WIE keeps the same observable fields keyed by an opaque
+/// handle. `socket` is the stream socket `MC_netHttpOpen` creates eagerly (via
+/// `MC_netSocket(2, 1)`), `connected` mirrors the native `[obj+0xc]` "committed"
+/// flag that flips once `MC_netHttpConnect` runs, and `request_headers` is the
+/// same accumulation `MC_netHttpSetRequestProperty` builds - `"key: value"` for
+/// the first property and `"\r\nkey: value"` appended for each one after.
+#[derive(Clone, Default)]
+struct HttpObject {
+    socket: i32,
+    // host/port/path are parsed at open time and consumed by the request line
+    // MC_netHttpConnect emits in the network unit; they have no reader yet.
+    #[allow(dead_code)]
+    host: String,
+    /// Host byte order; the native stores the network-order `sin_port` but the
+    /// value only feeds the request line, so WIE keeps it in host order.
+    #[allow(dead_code)]
+    port: u16,
+    #[allow(dead_code)]
+    path: String,
+    /// Canonical request method: `"GET"`, `"POST"` or `"HEAD"`. `MC_netHttpOpen`
+    /// defaults it to `"GET"`.
+    method: String,
+    post_body: Vec<u8>,
+    request_headers: String,
+    proxy_addr: u32,
+    proxy_port: u16,
+    connected: bool,
+    /// Response fields, populated by `MC_netHttpConnect` in the network unit and
+    /// only ever read once `connected` is set, so their defaults are never
+    /// observed by the response getters before then.
+    response_code: i32,
+    response_message: String,
+    content_type: String,
+    content_encoding: String,
+    content_length: i32,
+}
+
 #[derive(Default)]
 pub struct NetworkState {
     process_state: ProcessNetworkState,
@@ -41,6 +81,10 @@ pub struct NetworkState {
     /// game's `(callback, context)` until the `HostResolved` event delivers.
     dns_queries: BTreeMap<u32, (WIPICWord, WIPICWord)>,
     next_query_id: u32,
+    /// Live `MC_netHttpOpen` connection objects, keyed by the opaque handle the
+    /// API hands back to the game.
+    http_objects: BTreeMap<i32, HttpObject>,
+    next_http_handle: i32,
 }
 
 pub type SharedNetworkState = Arc<Mutex<NetworkState>>;
@@ -103,9 +147,41 @@ impl NetworkState {
         self.dispatcher_generation = self.dispatcher_generation.wrapping_add(1);
         self.dispatcher_started = false;
 
+        // Native WPNet_Exit walks and frees every network object, which drops
+        // the HTTP connection list along with the sockets. An HTTP object's
+        // socket already lives in `sockets`, so returning the socket keys is
+        // enough to close them; the objects themselves are dropped here.
+        self.http_objects.clear();
+
         let sockets = self.sockets.keys().copied().collect();
         self.sockets.clear();
         sockets
+    }
+
+    fn http_alloc(&mut self, object: HttpObject) -> i32 {
+        // The native handle is the object's heap pointer; WIE hands out an
+        // opaque positive id from a distinct range so it can never be mistaken
+        // for a small socket fd. It stays below `i32::MAX` so the WIPI-C
+        // convention of "negative result is an error" holds.
+        if self.next_http_handle == 0 {
+            self.next_http_handle = HTTP_HANDLE_BASE;
+        }
+        let handle = self.next_http_handle;
+        self.next_http_handle = self.next_http_handle.wrapping_add(1);
+        self.http_objects.insert(handle, object);
+        handle
+    }
+
+    fn http_get(&self, handle: i32) -> Option<&HttpObject> {
+        self.http_objects.get(&handle)
+    }
+
+    fn http_get_mut(&mut self, handle: i32) -> Option<&mut HttpObject> {
+        self.http_objects.get_mut(&handle)
+    }
+
+    fn http_remove(&mut self, handle: i32) -> Option<HttpObject> {
+        self.http_objects.remove(&handle)
     }
 
     fn register_socket(&mut self, socket: i32, socket_type: i32) {
@@ -412,6 +488,10 @@ const M_E_NOTCONN: i32 = -14;
 const M_E_NOTSUP: i32 = -16;
 const M_E_WOULDBLOCK: i32 = -19;
 const M_E_TIMEOUT: i32 = -20;
+
+/// First opaque handle `MC_netHttpOpen` hands out. The value only has to be a
+/// stable positive id distinct from a socket fd; the game treats it as opaque.
+const HTTP_HANDLE_BASE: i32 = 0x4000_0000;
 
 fn map_network_error(error: wie_backend::NetworkError) -> i32 {
     use wie_backend::NetworkError;
@@ -1056,6 +1136,594 @@ pub async fn set_write_callback(
     Ok(0)
 }
 
+/// Splits an HTTP URL into `(host, port, path)` the way `MC_netHttpOpen` does.
+///
+/// The native parser skips an optional `scheme://` prefix, takes the authority
+/// up to the first `/`, reads an optional `:port` (leading decimal digits; a
+/// zero or absent port keeps the default 80), and uses the remainder as the
+/// path, defaulting to `"/"`. WIE reproduces the observable result; the exact
+/// slash-normalisation only affects the request line `MC_netHttpConnect` emits
+/// and is revisited there.
+fn parse_http_url(url: &str) -> (String, u16, String) {
+    let after_scheme = match url.find("://") {
+        Some(pos) => &url[pos + 3..],
+        None => url,
+    };
+
+    let (authority, path) = match after_scheme.find('/') {
+        Some(index) => (&after_scheme[..index], &after_scheme[index..]),
+        None => (after_scheme, "/"),
+    };
+    let path = if path.is_empty() { "/" } else { path };
+
+    let (host, port) = match authority.rfind(':') {
+        Some(index) => {
+            let digits: u32 = authority[index + 1..]
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .fold(0u32, |acc, b| acc.saturating_mul(10).saturating_add((b - b'0') as u32));
+            let port = if digits == 0 { 80 } else { digits.min(u16::MAX as u32) as u16 };
+            (&authority[..index], port)
+        }
+        None => (authority, 80),
+    };
+
+    (host.into(), port, path.into())
+}
+
+/// Reads a NUL-terminated guest string into an owned `String`, lossily.
+fn read_cstring(context: &mut dyn WIPICContext, ptr: WIPICWord) -> Result<String> {
+    Ok(String::from_utf8_lossy(&read_null_terminated_string_bytes(context, ptr)?).into_owned())
+}
+
+/// Writes `bytes` followed by a NUL terminator to the guest buffer at `ptr`,
+/// mirroring the native `dlib_strcpy` the getters use.
+fn write_cstring(context: &mut dyn WIPICContext, ptr: WIPICWord, bytes: &[u8]) -> Result<()> {
+    context.write_bytes(ptr, bytes)?;
+    context.write_bytes(ptr + bytes.len() as WIPICWord, &[0])?;
+    Ok(())
+}
+
+/// `MC_netHttpOpen` (0x267) @ native 0x1b3e20.
+///
+/// Creates a connection object for `url`. ABI: r0 = URL string; returns the
+/// object handle (a positive value) or an error. The native gates
+/// `WPNet_IsAvailable() < 0 -> -14` (no process network object; the connecting
+/// state is accepted), duplicates and requires a non-empty URL (`-1` otherwise),
+/// parses it into host/port/path, then eagerly creates the stream socket via
+/// `MC_netSocket(2, 1)` - any failure there is reported as `-14` - and seeds the
+/// default request method `"GET"`, an empty header set and no proxy.
+///
+/// WIE keeps the same observable object keyed by an opaque handle and creates
+/// the same backing stream socket so `MC_netHttpConnect` and `MC_netHttpClose`
+/// operate on a real fd. Allocation cannot fail in Rust, so the native `-13`
+/// out-of-memory paths do not arise.
+pub async fn http_open(context: &mut dyn WIPICContext, url_ptr: WIPICWord) -> Result<i32> {
+    if !context.network_state().lock().has_process_network() {
+        return Ok(M_E_NOTCONN);
+    }
+
+    if url_ptr == 0 {
+        return Ok(M_E_ERROR);
+    }
+
+    let url = read_cstring(context, url_ptr)?;
+    if url.is_empty() {
+        return Ok(M_E_ERROR);
+    }
+
+    let socket = {
+        let Some(network) = context.system().platform().network() else {
+            return Ok(M_E_NOTCONN);
+        };
+        match network.socket(2, 1) {
+            Ok(socket) => socket,
+            Err(_) => return Ok(M_E_NOTCONN),
+        }
+    };
+
+    let (host, port, path) = parse_http_url(&url);
+
+    let handle = {
+        let state = context.network_state();
+        let mut state = state.lock();
+        state.register_socket(socket, 1);
+        state.http_alloc(HttpObject {
+            socket,
+            host,
+            port,
+            path,
+            method: "GET".into(),
+            ..Default::default()
+        })
+    };
+
+    Ok(handle)
+}
+
+/// `MC_netHttpClose` (0x275) @ native 0x1b3154.
+///
+/// Destroys a connection object. ABI: r0 = object handle; returns 0, or -2 for a
+/// null/unknown object. The native frees the object's host, path, POST body and
+/// header buffers, unlinks any received-packet list, clears the committed flag,
+/// closes the backing socket via `MC_netSocketClose` and frees the object.
+///
+/// WIE drops the object (releasing its owned buffers), removes and closes the
+/// backing socket, and returns 0.
+pub async fn http_close(context: &mut dyn WIPICContext, handle: i32) -> Result<i32> {
+    let Some(object) = context.network_state().lock().http_remove(handle) else {
+        return Ok(M_E_BADFD);
+    };
+
+    context.network_state().lock().remove_socket(object.socket);
+    if let Some(network) = context.system().platform().network() {
+        let _ = network.close(object.socket);
+    }
+
+    Ok(0)
+}
+
+/// `MC_netHttpSetRequestMethod` (0x269) @ native 0x1b1afc.
+///
+/// Sets the request method. ABI: r0 = object, r1 = method string, r2 = POST body
+/// pointer, r3 = POST body length. The native gates a null/unknown object -> -2
+/// and an already-connected object -> -1, then requires a non-null method -> -9.
+/// It accepts `"GET"`, `"POST"` and `"HEAD"` case-insensitively, storing the
+/// canonical upper-case form; `"POST"` additionally requires a non-null body of
+/// positive length (-9 otherwise) which it copies into an owned buffer. Any other
+/// method string is -9.
+pub async fn http_set_request_method(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    method_ptr: WIPICWord,
+    body_ptr: WIPICWord,
+    body_len: i32,
+) -> Result<i32> {
+    match http_validate_config(context, handle) {
+        Ok(()) => {}
+        Err(code) => return Ok(code),
+    }
+
+    if method_ptr == 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let method = read_cstring(context, method_ptr)?;
+
+    let body = if method.eq_ignore_ascii_case("post") {
+        if body_ptr == 0 || body_len <= 0 {
+            return Ok(M_E_INVALID);
+        }
+        let mut data = alloc::vec![0u8; body_len as usize];
+        context.read_bytes(body_ptr, &mut data)?;
+        Some(data)
+    } else if method.eq_ignore_ascii_case("get") || method.eq_ignore_ascii_case("head") {
+        None
+    } else {
+        return Ok(M_E_INVALID);
+    };
+
+    let canonical = if method.eq_ignore_ascii_case("get") {
+        "GET"
+    } else if method.eq_ignore_ascii_case("post") {
+        "POST"
+    } else {
+        "HEAD"
+    };
+
+    let state = context.network_state();
+    let mut state = state.lock();
+    let object = state.http_get_mut(handle).expect("validated above");
+    object.method = canonical.into();
+    if let Some(body) = body {
+        object.post_body = body;
+    }
+
+    Ok(0)
+}
+
+/// `MC_netHttpGetRequestMethod` (0x26a) @ native 0x1b1a74.
+///
+/// Copies the current request method into the caller's buffer. ABI: r0 = object,
+/// r1 = out buffer, r2 = buffer length. Gates a null/unknown object -> -2, an
+/// already-connected object -> -1, a null buffer -> -9, and a method that would
+/// not fit (`len >= buffer length`) -> -9. On success it copies the method plus
+/// a NUL terminator and returns the method length.
+pub async fn http_get_request_method(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    out_ptr: WIPICWord,
+    out_len: i32,
+) -> Result<i32> {
+    match http_validate_config(context, handle) {
+        Ok(()) => {}
+        Err(code) => return Ok(code),
+    }
+
+    if out_ptr == 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let method = {
+        let state = context.network_state();
+        let state = state.lock();
+        state.http_get(handle).expect("validated above").method.clone()
+    };
+
+    if method.len() as i32 >= out_len {
+        return Ok(M_E_INVALID);
+    }
+
+    write_cstring(context, out_ptr, method.as_bytes())?;
+    Ok(method.len() as i32)
+}
+
+/// `MC_netHttpSetRequestProperty` (0x26b) @ native 0x1b1954.
+///
+/// Appends an HTTP request header. ABI: r0 = object, r1 = key, r2 = value. Gates
+/// a null/unknown object -> -2, an already-connected object -> -1, and a null key
+/// or value -> -9. The native accumulates the headers as one growing string:
+/// the first property is stored as `"key: value"` and every later property is
+/// appended as `"\r\nkey: value"`.
+pub async fn http_set_request_property(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    key_ptr: WIPICWord,
+    value_ptr: WIPICWord,
+) -> Result<i32> {
+    match http_validate_config(context, handle) {
+        Ok(()) => {}
+        Err(code) => return Ok(code),
+    }
+
+    if key_ptr == 0 || value_ptr == 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let key = read_cstring(context, key_ptr)?;
+    let value = read_cstring(context, value_ptr)?;
+
+    let state = context.network_state();
+    let mut state = state.lock();
+    let object = state.http_get_mut(handle).expect("validated above");
+    append_request_property(&mut object.request_headers, &key, &value);
+
+    Ok(0)
+}
+
+/// Appends `"key: value"` to the accumulated request-header string, matching the
+/// native `MC_netHttpSetRequestProperty`: the first property is stored bare and
+/// every later one is prefixed with `"\r\n"`.
+fn append_request_property(headers: &mut String, key: &str, value: &str) {
+    if !headers.is_empty() {
+        headers.push_str("\r\n");
+    }
+    headers.push_str(key);
+    headers.push_str(": ");
+    headers.push_str(value);
+}
+
+/// `MC_netHttpGetRequestProperty` (0x26c) @ native 0x1b161c.
+///
+/// Looks a previously set request header up by key. ABI: r0 = object, r1 = key,
+/// r2 = out buffer, r3 = buffer length. Gates a null/unknown object -> -2, an
+/// already-connected object -> -1, a null key or buffer -> -9, and a non-positive
+/// length -> -9. The native scans the accumulated header string line by line,
+/// matching the key case-insensitively followed by `": "`, and copies the value
+/// (up to the terminating CR) into the buffer, returning its length; a value that
+/// would overflow the buffer is -9 and a missing key is -1.
+pub async fn http_get_request_property(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    key_ptr: WIPICWord,
+    out_ptr: WIPICWord,
+    out_len: i32,
+) -> Result<i32> {
+    match http_validate_config(context, handle) {
+        Ok(()) => {}
+        Err(code) => return Ok(code),
+    }
+
+    if key_ptr == 0 || out_ptr == 0 {
+        return Ok(M_E_INVALID);
+    }
+    if out_len <= 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let key = read_cstring(context, key_ptr)?;
+
+    let value = {
+        let state = context.network_state();
+        let state = state.lock();
+        let headers = &state.http_get(handle).expect("validated above").request_headers;
+        find_request_property(headers, &key)
+    };
+
+    let Some(value) = value else {
+        return Ok(M_E_ERROR);
+    };
+
+    if value.len() as i32 >= out_len {
+        return Ok(M_E_INVALID);
+    }
+
+    write_cstring(context, out_ptr, value.as_bytes())?;
+    Ok(value.len() as i32)
+}
+
+/// Finds the value of the header whose key matches `key` case-insensitively in
+/// the accumulated `"key: value\r\nkey2: value2"` request-header string.
+fn find_request_property(headers: &str, key: &str) -> Option<String> {
+    let key = key.as_bytes();
+    for line in headers.split("\r\n") {
+        let bytes = line.as_bytes();
+        if bytes.len() >= key.len() + 2
+            && bytes[..key.len()].eq_ignore_ascii_case(key)
+            && bytes[key.len()] == b':'
+            && bytes[key.len() + 1] == b' '
+        {
+            return Some(line[key.len() + 2..].into());
+        }
+    }
+    None
+}
+
+/// `MC_netHttpSetProxy` (0x26d) @ native 0x1b0fd4.
+///
+/// Records the proxy the connection should route through. ABI: r0 = object,
+/// r1 = proxy address (WIPI IPv4 encoding), r2 = proxy port. The native validates
+/// the address first - `0` and `0xFFFF_FFFF` are rejected with -9 - then gates a
+/// null/unknown object -> -2 and an already-connected object -> -1 before storing
+/// the address and 16-bit port. Returns 0 on success.
+pub async fn http_set_proxy(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    address: WIPICWord,
+    port: WIPICWord,
+) -> Result<i32> {
+    if address == 0 || address == 0xFFFF_FFFF {
+        return Ok(M_E_INVALID);
+    }
+
+    match http_validate_config(context, handle) {
+        Ok(()) => {}
+        Err(code) => return Ok(code),
+    }
+
+    let state = context.network_state();
+    let mut state = state.lock();
+    let object = state.http_get_mut(handle).expect("validated above");
+    object.proxy_addr = address;
+    object.proxy_port = port as u16;
+
+    Ok(0)
+}
+
+/// `MC_netHttpGetProxy` (0x26e) @ native 0x1b102c.
+///
+/// Reads back the configured proxy. ABI: r0 = object, r1 = out address pointer,
+/// r2 = out port pointer. Gates a null/unknown object -> -2, an already-connected
+/// object -> -1, and a null out-address or out-port pointer -> -9. On success it
+/// writes the stored address (32-bit) and port (16-bit) and returns 0; an object
+/// with no proxy set reports address 0 and port 0.
+pub async fn http_get_proxy(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    out_address: WIPICWord,
+    out_port: WIPICWord,
+) -> Result<i32> {
+    match http_validate_config(context, handle) {
+        Ok(()) => {}
+        Err(code) => return Ok(code),
+    }
+
+    if out_address == 0 || out_port == 0 {
+        return Ok(M_E_INVALID);
+    }
+
+    let (address, port) = {
+        let state = context.network_state();
+        let state = state.lock();
+        let object = state.http_get(handle).expect("validated above");
+        (object.proxy_addr, object.proxy_port)
+    };
+
+    // The native writes the port as a 16-bit sin_port and the address as a
+    // 32-bit word, both little-endian on ARM.
+    context.write_bytes(out_port, &port.to_le_bytes())?;
+    context.write_bytes(out_address, &address.to_le_bytes())?;
+
+    Ok(0)
+}
+
+/// `MC_netHttpGetHeaderField` (0x272) @ native 0x1b18d8.
+///
+/// Copies a response header field by name. ABI: r0 = object, r1 = field name,
+/// r2 = out buffer, r3 = buffer length. Unlike the request-side getters this one
+/// requires the object to be connected: a null/unknown object -> -2, an object
+/// that has not connected -> -1, a null name -> -1, and a null buffer or a length
+/// below 1 -> -9. When connected it defers to the response parser
+/// (`HttpParser_GetHeaderField`).
+///
+/// The response parser is part of the network path implemented in a later unit;
+/// until `MC_netHttpConnect` sets the committed flag, this faithfully reports the
+/// not-connected result (-1).
+pub async fn http_get_header_field(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    name_ptr: WIPICWord,
+    out_ptr: WIPICWord,
+    out_len: i32,
+) -> Result<i32> {
+    let connected = {
+        let state = context.network_state();
+        let state = state.lock();
+        match state.http_get(handle) {
+            None => return Ok(M_E_BADFD),
+            Some(object) => object.connected,
+        }
+    };
+
+    if !connected {
+        return Ok(M_E_ERROR);
+    }
+
+    if name_ptr == 0 {
+        return Ok(M_E_ERROR);
+    }
+    if out_ptr == 0 || out_len < 1 {
+        return Ok(M_E_INVALID);
+    }
+
+    // Connected-object response parsing arrives with the network path.
+    Ok(M_E_ERROR)
+}
+
+/// `MC_netHttpConnect` (0x268) @ native 0x1b25ec.
+///
+/// Serialises the configured request, opens the backing socket to the host (or
+/// proxy) and drives the exchange to completion, flipping the object's committed
+/// flag so the response getters may parse. This is the network path implemented
+/// in a later unit.
+///
+/// Until that lands, the connect faithfully reports that the request could not be
+/// carried out rather than masquerading as the native success (0): a null/unknown
+/// object is -2 and any live object reports -14 (no reachable network path yet).
+pub async fn http_connect(context: &mut dyn WIPICContext, handle: i32) -> Result<i32> {
+    let state = context.network_state();
+    let state = state.lock();
+    if state.http_get(handle).is_none() {
+        return Ok(M_E_BADFD);
+    }
+
+    tracing::warn!("stub MC_netHttpConnect({handle:#x}); network path not yet implemented");
+    Ok(M_E_NOTCONN)
+}
+
+/// `MC_netHttpGetResponseCode` (0x26f) @ native 0x1b18c0.
+///
+/// Returns the parsed HTTP status code. ABI: r0 = object. The native lazily
+/// parses the response (`WPNet_ParsePacket`) and returns the stored code; a
+/// null/unknown object is -2 and an object that has not connected/parsed is -1.
+pub async fn http_get_response_code(context: &mut dyn WIPICContext, handle: i32) -> Result<i32> {
+    match http_response_field(context, handle) {
+        Ok(object) => Ok(object.response_code),
+        Err(code) => Ok(code),
+    }
+}
+
+/// `MC_netHttpGetLength` (0x272->0x273) @ native 0x1b1848.
+///
+/// Returns the response `Content-Length`. ABI: r0 = object. Gating matches
+/// `MC_netHttpGetResponseCode`: -2 for a null/unknown object, -1 before the
+/// response is parsed.
+pub async fn http_get_length(context: &mut dyn WIPICContext, handle: i32) -> Result<i32> {
+    match http_response_field(context, handle) {
+        Ok(object) => Ok(object.content_length),
+        Err(code) => Ok(code),
+    }
+}
+
+/// `MC_netHttpGetResponseMessage` (0x270->0x271) @ native 0x1b1860.
+///
+/// Copies the response status message. ABI: r0 = object, r1 = out buffer,
+/// r2 = buffer length. -2 for a null/unknown object, -1 before parsing, and -9
+/// when the buffer is null or too small; otherwise copies the message plus a NUL
+/// and returns its length.
+pub async fn http_get_response_message(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    out_ptr: WIPICWord,
+    out_len: i32,
+) -> Result<i32> {
+    let message = match http_response_field(context, handle) {
+        Ok(object) => object.response_message.clone(),
+        Err(code) => return Ok(code),
+    };
+    http_copy_response_string(context, &message, out_ptr, out_len, M_E_INVALID).await
+}
+
+/// `MC_netHttpGetType` (0x273->0x274) @ native 0x1b17e8.
+///
+/// Copies the response `Content-Type`. ABI matches `MC_netHttpGetResponseMessage`
+/// except a null or too-small buffer is -1, not -9.
+pub async fn http_get_type(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    out_ptr: WIPICWord,
+    out_len: i32,
+) -> Result<i32> {
+    let content_type = match http_response_field(context, handle) {
+        Ok(object) => object.content_type.clone(),
+        Err(code) => return Ok(code),
+    };
+    http_copy_response_string(context, &content_type, out_ptr, out_len, M_E_ERROR).await
+}
+
+/// `MC_netHttpGetEncoding` (0x274->0x275) @ native 0x1b1788.
+///
+/// Copies the response `Content-Encoding`. Identical gating to
+/// `MC_netHttpGetType`.
+pub async fn http_get_encoding(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+    out_ptr: WIPICWord,
+    out_len: i32,
+) -> Result<i32> {
+    let encoding = match http_response_field(context, handle) {
+        Ok(object) => object.content_encoding.clone(),
+        Err(code) => return Ok(code),
+    };
+    http_copy_response_string(context, &encoding, out_ptr, out_len, M_E_ERROR).await
+}
+
+/// Shared response-getter gate: mirrors `WPNet_ParsePacket`, rejecting a
+/// null/unknown object with -2 and an unparsed (not-yet-connected) object with
+/// -1. Returns a clone-free borrow of the object for the caller to read.
+fn http_response_field(
+    context: &mut dyn WIPICContext,
+    handle: i32,
+) -> core::result::Result<HttpObject, i32> {
+    let state = context.network_state();
+    let state = state.lock();
+    match state.http_get(handle) {
+        None => Err(M_E_BADFD),
+        Some(object) if !object.connected => Err(M_E_ERROR),
+        Some(object) => Ok(object.clone()),
+    }
+}
+
+/// Copies a parsed response string into the guest buffer with a NUL terminator,
+/// returning its length. A null buffer or one too small to hold the string plus
+/// terminator yields `too_small_code` (-9 for the response message, -1 for the
+/// type/encoding getters, matching the native).
+async fn http_copy_response_string(
+    context: &mut dyn WIPICContext,
+    value: &str,
+    out_ptr: WIPICWord,
+    out_len: i32,
+    too_small_code: i32,
+) -> Result<i32> {
+    if out_ptr == 0 || out_len <= value.len() as i32 {
+        return Ok(too_small_code);
+    }
+    write_cstring(context, out_ptr, value.as_bytes())?;
+    Ok(value.len() as i32)
+}
+
+/// Shared validation for the request-configuration getters and setters: rejects
+/// a null/unknown object with -2 and an already-connected object with -1.
+fn http_validate_config(context: &mut dyn WIPICContext, handle: i32) -> core::result::Result<(), i32> {
+    let state = context.network_state();
+    let state = state.lock();
+    match state.http_get(handle) {
+        None => Err(M_E_BADFD),
+        Some(object) if object.connected => Err(M_E_ERROR),
+        Some(_) => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod network_state_tests {
     use alloc::vec;
@@ -1333,5 +2001,96 @@ mod network_state_tests {
         state.remove_socket(21);
         assert_eq!(state.socket_type(21), None);
         assert_eq!(state.socket_type(22), Some(2));
+    }
+
+    #[test]
+    fn parse_http_url_splits_authority_port_and_path() {
+        assert_eq!(
+            parse_http_url("http://www.example.com/path/to?q=1"),
+            ("www.example.com".into(), 80, "/path/to?q=1".into())
+        );
+        // Explicit port.
+        assert_eq!(
+            parse_http_url("http://host.co.kr:8080/a"),
+            ("host.co.kr".into(), 8080, "/a".into())
+        );
+        // No path defaults to "/".
+        assert_eq!(parse_http_url("http://host"), ("host".into(), 80, "/".into()));
+        // Scheme is optional.
+        assert_eq!(parse_http_url("host/p"), ("host".into(), 80, "/p".into()));
+        // A zero or empty port keeps the default 80, matching the native.
+        assert_eq!(parse_http_url("http://host:0/"), ("host".into(), 80, "/".into()));
+        // Only the leading decimal run is taken as the port.
+        assert_eq!(parse_http_url("http://host:80x/"), ("host".into(), 80, "/".into()));
+    }
+
+    #[test]
+    fn request_property_accumulation_matches_native_format() {
+        let mut headers = String::new();
+        // First property is bare; later ones gain a CRLF prefix.
+        append_request_property(&mut headers, "Accept", "text/html");
+        assert_eq!(headers, "Accept: text/html");
+        append_request_property(&mut headers, "User-Agent", "WIE");
+        assert_eq!(headers, "Accept: text/html\r\nUser-Agent: WIE");
+    }
+
+    #[test]
+    fn find_request_property_is_case_insensitive_and_bounded() {
+        let headers = "Accept: text/html\r\nContent-Length: 42";
+        assert_eq!(find_request_property(headers, "accept").as_deref(), Some("text/html"));
+        assert_eq!(
+            find_request_property(headers, "CONTENT-LENGTH").as_deref(),
+            Some("42")
+        );
+        // A key that is only a prefix of a header name must not match.
+        assert_eq!(find_request_property(headers, "Content"), None);
+        assert_eq!(find_request_property(headers, "Missing"), None);
+    }
+
+    #[test]
+    fn http_objects_get_distinct_positive_handles_and_can_be_removed() {
+        let mut state = NetworkState::default();
+
+        let a = state.http_alloc(HttpObject {
+            socket: 5,
+            method: "GET".into(),
+            ..Default::default()
+        });
+        let b = state.http_alloc(HttpObject {
+            socket: 6,
+            method: "POST".into(),
+            ..Default::default()
+        });
+
+        assert!(a > 0 && b > 0 && a != b);
+        assert_eq!(state.http_get(a).unwrap().socket, 5);
+        assert_eq!(state.http_get(b).unwrap().method, "POST");
+
+        state.http_get_mut(a).unwrap().connected = true;
+        assert!(state.http_get(a).unwrap().connected);
+
+        assert_eq!(state.http_remove(a).unwrap().socket, 5);
+        assert!(state.http_get(a).is_none());
+        assert!(state.http_get(b).is_some());
+    }
+
+    #[test]
+    fn close_process_drops_http_objects_and_returns_their_sockets() {
+        let mut state = NetworkState::default();
+
+        let generation = state.begin_connect(0x1111, 0x2222).unwrap();
+        assert!(state.finish_connect(generation).is_some());
+
+        // MC_netHttpOpen registers the object's stream socket in `sockets`.
+        state.register_socket(9, 1);
+        let handle = state.http_alloc(HttpObject {
+            socket: 9,
+            ..Default::default()
+        });
+        assert!(state.http_get(handle).is_some());
+
+        let sockets = state.close_process();
+        assert_eq!(sockets, vec![9]);
+        assert!(state.http_get(handle).is_none());
     }
 }
