@@ -1,3 +1,4 @@
+mod lgt_cert;
 mod sprintf;
 
 use alloc::{
@@ -37,23 +38,27 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
     // Logged at info: start-up/auth checks read these, and a wrong value is a
     // common reason a title bails, so the query and its result belong in a
     // normal log capture.
+    //
+    // `recovered` backs the subscriber-number arms; it lives out here so the
+    // owned string it holds outlives the borrow the `match` yields.
+    let recovered;
     let value = match id.as_ref() {
         "RSSILEVEL" => "30",
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
         "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
-        // LGT ez-i cert.c2s DRM uses the subscriber phone number as the decryption
-        // key: cert.c2s encodes "<appID><phoneNumber><checksums>" encrypted with the
-        // phone number, and the game reads PHONENUMBER, decrypts, and checks the
-        // recovered appID. A wrong number makes the decrypted-byte checksum diverge
-        // and the title exits with error 3100 (observed in 이노티아 연대기 2).
-        // 01046119269 is the number this cert was issued for, recovered by a
-        // known-plaintext attack (the first 8 decrypted bytes are the known appID
-        // and the decrypted tail equals the key, which pins it uniquely); with it
-        // the unpatched title authenticates. MIN carries the same number so a title
-        // that cross-checks them agrees.
-        "PHONENUMBER" => "01046119269",
-        "MIN" => "01046119269",
+        // LGT ez-i cert.c2s DRM keys on the subscriber phone number: cert.c2s
+        // encodes "<appID><phoneNumber><checksums>" encrypted with the phone
+        // number, and the title reads PHONENUMBER, decrypts, and rejects a
+        // mismatch (error 3100, observed in 이노티아 연대기 2). We recover the
+        // exact number the certificate was issued for from cert.c2s itself, so
+        // an unmodified title authenticates without a per-game value. When no
+        // certificate is recoverable we fall back to a valid placeholder. MIN
+        // carries the same number so a title that cross-checks them agrees.
+        "PHONENUMBER" | "MIN" => {
+            recovered = subscriber_number(context).await;
+            recovered.as_str()
+        }
         "ANNUN_CALL" => "0",
         "ANNUN_SMS" => "0",
         "ANNUN_SILENT" => "0",
@@ -79,6 +84,25 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
     write_null_terminated_string_bytes(context, p_out, value.as_bytes())?;
 
     Ok(0)
+}
+
+/// The subscriber number to report for PHONENUMBER / MIN.
+///
+/// LGT titles use it as the key that decrypts cert.c2s, so recover the exact
+/// number the certificate was issued for from cert.c2s itself. A collection of
+/// titles dumped from one handset shares one number, so the placeholder used
+/// when no certificate is recoverable is also a working default for them.
+async fn subscriber_number(context: &mut dyn WIPICContext) -> String {
+    const FALLBACK: &str = "01046119269";
+
+    if let Ok(cert) = context.read_resource("cert.c2s").await
+        && let Some(number) = lgt_cert::recover_phone_number(&cert)
+    {
+        tracing::info!("recovered subscriber number from cert.c2s: {number:?}");
+        return number;
+    }
+
+    FALLBACK.to_string()
 }
 
 pub async fn set_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, ptr_value: WIPICWord) -> Result<()> {
