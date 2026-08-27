@@ -995,38 +995,61 @@ fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {
     Ok(())
 }
 
+/// `MC_netSetReadCB` (0x265) @ native 0x1b1538.
+///
+/// Registers the socket's readable callback. ABI: r0 = socket, r1 = callback,
+/// r2 = context. The native stores the callback (at socket +0x2c) and context
+/// (at socket +0x40) only when the socket exists and its network is available;
+/// a missing socket or unavailable network is silently skipped. It always
+/// returns 0 - there are no error codes.
 pub async fn set_read_callback(
     context: &mut dyn WIPICContext,
     socket: i32,
     callback: WIPICWord,
     callback_context: WIPICWord,
 ) -> Result<i32> {
+    let stored = {
+        let state = context.network_state();
+        let mut state = state.lock();
+        if state.is_available() {
+            state.set_read_callback(socket, callback, callback_context);
+            true
+        } else {
+            false
+        }
+    };
 
-    context
-        .network_state()
-        .lock()
-        .set_read_callback(socket, callback, callback_context);
-
-    if callback != 0 {
+    if stored && callback != 0 {
         ensure_event_dispatcher(context)?;
     }
 
     Ok(0)
 }
 
+/// `MC_netSetWriteCB` (0x266) @ native 0x1b14e8.
+///
+/// Registers the socket's writable callback. ABI: r0 = socket, r1 = callback,
+/// r2 = context. Like `MC_netSetReadCB`, the native stores the callback (at
+/// socket +0x30) and context (at socket +0x44) only when the socket exists and
+/// its network is available, and always returns 0.
 pub async fn set_write_callback(
     context: &mut dyn WIPICContext,
     socket: i32,
     callback: WIPICWord,
     callback_context: WIPICWord,
 ) -> Result<i32> {
+    let stored = {
+        let state = context.network_state();
+        let mut state = state.lock();
+        if state.is_available() {
+            state.set_write_callback(socket, callback, callback_context);
+            true
+        } else {
+            false
+        }
+    };
 
-    context
-        .network_state()
-        .lock()
-        .set_write_callback(socket, callback, callback_context);
-
-    if callback != 0 {
+    if stored && callback != 0 {
         ensure_event_dispatcher(context)?;
     }
 
