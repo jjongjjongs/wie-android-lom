@@ -788,6 +788,60 @@ pub async fn rename(
     }
 }
 
+/// WIPI-C MC_fsIsExist (canonical service 0x1a0).
+///
+/// Native flow:
+/// `WPFS_IsPossibleAccess(1, access)` -> `WPFS_MakeFullPathName` ->
+/// filesystem control command 3 -> HAL `access(path, F_OK)`.
+///
+/// Native externally visible contract representable by WIE:
+/// - inaccessible/unknown access selector => -24
+/// - null filename => -3
+/// - path longer than 128 bytes => -11
+/// - existing file or directory => 0
+/// - missing path => -12
+/// - other filesystem failure => -1
+///
+/// The native HAL can additionally distinguish host permission failures as
+/// -24. WIE's filesystem abstraction does not expose that failure reason.
+pub async fn is_exist(
+    context: &mut dyn WIPICContext,
+    path: WIPICWord,
+    access: WIPICWord,
+) -> Result<i32> {
+    tracing::debug!("MC_fsIsExist({path:#x}, {access})");
+
+    // Native performs the access check before any filename processing.
+    // WIE does not model the per-DLET permission bitmap, so the four
+    // recognized filesystem access selectors use the established
+    // compatibility policy shared by the other LGT filesystem services.
+    if !matches!(access, 1 | 2 | 3 | 100) {
+        return Ok(-24);
+    }
+
+    if path == 0 {
+        return Ok(-3);
+    }
+
+    let path_bytes = read_null_terminated_string_bytes(context, path)?;
+    if path_bytes.len() > 128 {
+        return Ok(-11);
+    }
+    let path = encoding_rs::EUC_KR.decode(&path_bytes).0.into_owned();
+
+    let filesystem = context.system().filesystem().clone();
+
+    // Native access(path, F_OK) succeeds for both regular files and
+    // directories. In WIE, regular-file presence is represented by size(),
+    // while directory presence (including explicit empty and implicit
+    // virtual directories) is represented by list().
+    if filesystem.size(&path).await.is_some() || filesystem.list(&path).await.is_some() {
+        Ok(0)
+    } else {
+        Ok(-12)
+    }
+}
+
 /// WIPI-C MC_fsGetCounts (canonical service 0x19e).
 ///
 /// Native flow:
@@ -1006,8 +1060,8 @@ mod tests {
     use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
-        close, file_attribute, get_counts, list, mkdir, open, read, remove, rename, rmdir, seek,
-        set_mode, tell, write,
+        close, file_attribute, get_counts, is_exist, list, mkdir, open, read, remove, rename, rmdir,
+        seek, set_mode, tell, write,
     };
 
     fn filesystem_test_context() -> TestContext {
@@ -2102,6 +2156,54 @@ mod tests {
         let mut actual = [0u8; 3];
         context.read_bytes(0x2000, &mut actual).unwrap();
         assert_eq!(&actual, b"abc");
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_is_exist_reports_files_directories_virtual_entries_and_missing_paths() {
+        const PATH: u32 = 0x1000;
+
+        let mut context = filesystem_test_context();
+
+        context.write_bytes(PATH, b"save/existing.dat\0").unwrap();
+        context
+            .system()
+            .filesystem()
+            .truncate("save/existing.dat", 1)
+            .await;
+        assert_eq!(is_exist(&mut context, PATH, 1).await.unwrap(), 0);
+
+        context.write_bytes(PATH, b"save/empty\0").unwrap();
+        context.system().filesystem().mkdir("save/empty").await.unwrap();
+        assert_eq!(is_exist(&mut context, PATH, 2).await.unwrap(), 0);
+
+        context.write_bytes(PATH, b"missing.dat\0").unwrap();
+        assert_eq!(is_exist(&mut context, PATH, 3).await.unwrap(), -12);
+
+        context
+            .system()
+            .filesystem()
+            .add_virtual("virtual.dat", alloc::vec![1, 2, 3]);
+        context.write_bytes(PATH, b"virtual.dat\0").unwrap();
+        assert_eq!(is_exist(&mut context, PATH, 100).await.unwrap(), 0);
+    }
+
+    #[futures_test::test]
+    async fn lgt_fs_is_exist_matches_native_validation_order_and_path_limit() {
+        const PATH: u32 = 0x1000;
+
+        let mut context = filesystem_test_context();
+
+        // WPFS_IsPossibleAccess precedes path handling.
+        assert_eq!(is_exist(&mut context, 0, 0).await.unwrap(), -24);
+        assert_eq!(is_exist(&mut context, 0, 1).await.unwrap(), -3);
+
+        let long_path = alloc::vec![b'a'; 129];
+        context.write_bytes(PATH, &long_path).unwrap();
+        context.write_bytes(PATH + 129, &[0]).unwrap();
+
+        for access in [1, 2, 3, 100] {
+            assert_eq!(is_exist(&mut context, PATH, access).await.unwrap(), -11);
+        }
     }
 
     #[futures_test::test]
