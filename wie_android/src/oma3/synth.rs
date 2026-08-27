@@ -10,26 +10,18 @@
 //! bit, not merely sound similar.
 
 use super::tables::{
-    lfo_level_q15, wave_sample_i16, DETUNE_CENTS, FEEDBACK_GAIN, FEEDBACK_SHIFT, KEYLEVEL_Q15, LEVEL_Q15, LFO_STEP_Q20, MA3_FREQ_BASE, MULTIPLE,
-    PHASE_DETUNE, PHASE_KEY_CODE,
+    DETUNE_CENTS, FEEDBACK_GAIN, FEEDBACK_SHIFT, KEYLEVEL_Q15, LEVEL_Q15, LFO_STEP_Q20, MA3_FREQ_BASE, MULTIPLE, PHASE_DETUNE, PHASE_KEY_CODE,
+    lfo_level_q15, wave_sample_i16,
 };
 
 /// `OracleMa3Synth.clamp(int, int, int)`.
 pub fn clamp(value: i32, lo: i32, hi: i32) -> i32 {
-    if value < lo {
-        lo
-    } else {
-        value.min(hi)
-    }
+    if value < lo { lo } else { value.min(hi) }
 }
 
 /// `OracleMa3Synth.clamp(double, double, double)`.
 pub fn clamp_f(value: f64, lo: f64, hi: f64) -> f64 {
-    if value < lo {
-        lo
-    } else {
-        value.min(hi)
-    }
+    if value < lo { lo } else { value.min(hi) }
 }
 
 /// `clipI16Accum` - the accumulator saturates at +/-32767, not 32768.
@@ -39,11 +31,7 @@ pub fn clip_i16_accum(value: i32) -> i32 {
 
 /// `firstNonZero`.
 pub fn first_non_zero(a: i32, b: i32) -> i32 {
-    if a != 0 {
-        a
-    } else {
-        b
-    }
+    if a != 0 { a } else { b }
 }
 
 /// `isCarrier` - whether an operator is heard directly under an algorithm.
@@ -180,11 +168,7 @@ pub fn base_phase_step_from_tail(mantissa: i32, shift: i32, mut scale: i32) -> i
         scale = 65536;
     }
     let j2 = (j * scale as i64) >> 16;
-    if j2 > 4_294_967_295 {
-        4_294_967_295
-    } else {
-        j2
-    }
+    if j2 > 4_294_967_295 { 4_294_967_295 } else { j2 }
 }
 
 /// `phaseStepFromFieldsExact`.
@@ -201,11 +185,7 @@ pub fn phase_step_from_fields_exact(base_step: i64, phase_mul: i32, phase_det: i
         j2 = if j5 <= 0 { 0 } else { unsigned_mul_div_to_uint32(j5, j2, j4) };
     }
     let mul = phase_mul & 15;
-    if mul != 0 {
-        (j2 * mul as i64) & 0xffff_ffff
-    } else {
-        j2 >> 1
-    }
+    if mul != 0 { (j2 * mul as i64) & 0xffff_ffff } else { j2 >> 1 }
 }
 
 /// `phaseStepQ32FromHz`.

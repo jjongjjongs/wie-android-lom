@@ -200,6 +200,32 @@ impl wie_backend::AudioSink for AndroidAudioSink {
     fn midi_sysex(&self, voice: u32, data: &[u8]) {
         self.shared.mixer().sysex(voice, data);
     }
+
+    /// Renders the whole file through the faithful [`crate::oma3`] port and
+    /// installs it as the music stream, so FM titles sound exactly as the
+    /// reference plays them. A file with no FM notes (a bare recorded-wave clip)
+    /// is declined so the live wave path keeps handling it.
+    fn play_smaf(&self, data: &[u8], repeat: bool) -> Option<u32> {
+        let smaf = crate::oma3::smaf::parse(data).ok()?;
+        let notes = crate::oma3::analysis::analyze(&smaf);
+        if notes.is_empty() {
+            return None;
+        }
+        let pcm = crate::oma3::analysis::render(&notes, smaf.total_ticks, SAMPLE_RATE as i32);
+        let samples: Vec<i16> = pcm.iter().map(|&s| (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16).collect();
+        let frames = (samples.len() / CHANNELS) as u64;
+        let duration_ms = (frames * 1000 / u64::from(SAMPLE_RATE)) as u32;
+        tracing::info!(
+            "[smaf] oma3 rendered {} notes, {frames} frames ({duration_ms}ms), repeat={repeat}",
+            notes.len()
+        );
+        self.shared.mixer().set_song(samples, repeat);
+        Some(duration_ms)
+    }
+
+    fn stop_smaf(&self) {
+        self.shared.mixer().stop_song();
+    }
 }
 
 #[cfg(test)]
