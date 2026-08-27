@@ -408,6 +408,12 @@ pub struct CompactOperator {
     pub am_enable: i32,
     pub ksl: i32,
     pub vib: i32,
+    pub raw: Vec<u8>,
+    pub flags: i32,
+    pub rate_scale: i32,
+    pub key_scale: i32,
+    pub op_index: i32,
+    pub carrier_hint: i32,
     pub dll: Vec<u8>,
     pub ma3: Vec<u8>,
     pub rt_ar: i32,
@@ -427,6 +433,7 @@ pub struct CompactOperator {
     pub rt_vib_enable: i32,
     pub rt_vib_depth: i32,
     pub rt_keyoff_inhibit: i32,
+    pub rt_ksl: i32,
 }
 
 const MASK32: i64 = 0xffff_ffff;
@@ -789,10 +796,17 @@ impl OperatorRuntime {
 #[derive(Clone, Default)]
 pub struct CompactTone {
     pub valid: bool,
+    pub program: i32,
+    pub bank_msb: i32,
+    pub bank_lsb: i32,
+    pub global0: i32,
+    pub global1: i32,
     pub algorithm: i32,
     pub feedback: i32,
     pub operators: Vec<CompactOperator>,
     pub dll_voice: Vec<u8>,
+    pub dll_voice_length: i32,
+    pub dll_operator_count: i32,
 }
 
 /// `PitchState.from` - the note's base hertz, envelope-rate/key-level codes and
@@ -1128,6 +1142,7 @@ mod render_tests {
             dll_voice: vec![
                 0x81, 0x00, 0x10, 0x16, 0xf0, 0x00, 0x44, 0xe0, 0x3f, 0x21, 0x2f, 0x90, 0x00, 0x00, 0xf0, 0x30,
             ],
+            ..Default::default()
         };
         let total = 44100;
         let mut buf = vec![0f32; (total * 2) as usize];
