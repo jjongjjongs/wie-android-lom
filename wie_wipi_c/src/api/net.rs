@@ -698,6 +698,22 @@ pub async fn socket_bind(context: &mut dyn WIPICContext, socket: i32, address: W
     })
 }
 
+/// The maximum datagram payload `MC_netGetMaxPacketLength` reports. The native
+/// reads this from the registered subnet driver, which is not part of the
+/// static image; WIE uses the conventional WIPI UDP payload limit - a 1500-byte
+/// Ethernet MTU less the 20-byte IPv4 and 8-byte UDP headers - pending
+/// confirmation against a device.
+const MAX_PACKET_LENGTH: i32 = 1472;
+
+/// `MC_netGetMaxPacketLength` (0x260) @ native 0x1b2eac.
+///
+/// Takes no arguments and returns the network's maximum datagram payload. The
+/// native queries the subnet HAL (`dnetwork_control_subnet(subnet, 1001, ...)`);
+/// WIE has no such HAL, so it returns the fixed [`MAX_PACKET_LENGTH`].
+pub async fn get_max_packet_length(_context: &mut dyn WIPICContext) -> Result<i32> {
+    Ok(MAX_PACKET_LENGTH)
+}
+
 fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {
     let state = context.network_state();
 
