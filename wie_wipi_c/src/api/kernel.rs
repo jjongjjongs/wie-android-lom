@@ -41,7 +41,11 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
         "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
-        "PHONENUMBER" => "", // putting this cause some game to fail authentication
+        // LGT ez-i cert.c2s DRM uses the subscriber phone number as the decryption key,
+        // so games bound to a specific number only authenticate when this matches the
+        // number their cert was issued for. Recovered for Inotia 2 (0002BA13) via
+        // known-plaintext (decrypted appID) against its cert.c2s; see docs.
+        "PHONENUMBER" => "01046119269",
         "MIN" => "01000000000",
         "ANNUN_CALL" => "0",
         "ANNUN_SMS" => "0",
