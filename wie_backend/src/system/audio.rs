@@ -78,7 +78,7 @@ impl Audio {
         // Offer the file to the sink's own renderer first. When it takes it, the
         // sink plays the pre-rendered stream and this task only watches for the
         // stop flag (looping) or the clip's length (one-shot).
-        if let Some(duration_ms) = self.sink.play_smaf(&data, repeat) {
+        if let Some(duration_ms) = self.sink.play_smaf(audio_handle, &data, repeat) {
             let system_clone = system.clone();
             let sink_clone = self.sink.clone();
             let stop_flag_clone = stop_flag.clone();
@@ -96,7 +96,7 @@ impl Audio {
                     system_clone.sleep(50).await;
                     elapsed += 50;
                 }
-                sink_clone.stop_smaf();
+                sink_clone.stop_smaf(audio_handle);
                 Ok(())
             });
             return Ok((completed, stop_flag));
