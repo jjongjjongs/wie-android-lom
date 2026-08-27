@@ -333,6 +333,22 @@ pub async fn close(context: &mut dyn WIPICContext) -> Result<i32> {
     Ok(0)
 }
 
+/// `MC_netSocketClose` (0x25e) @ native 0x1b3090.
+///
+/// Unlike read/write there is no availability, buffer or type gate. ABI:
+/// r0 = socket. The native looks up the process network object and returns 0
+/// when there is none (nothing to close); looks up the socket and returns -2
+/// when it is unknown; then clears the socket's connect-completion callback and
+/// calls `dsocket_close`. On success (0) it unlinks and frees the socket object
+/// and returns 0; on -2077 it returns -2 without freeing; on -4005 it returns
+/// -19; on anything else -1 - and in every error case the socket object stays.
+///
+/// WIE mirrors this: a Closed process network -> 0; an unknown socket -> -2;
+/// on a successful backend close it drops the socket (which also drops its
+/// callbacks, matching the native's connect-callback clear plus free) and
+/// returns 0; on a backend error it maps the code through `map_network_error`
+/// (-2 for a bad socket, -19 for would-block, -1 otherwise) and keeps the
+/// socket, as the native does.
 pub async fn socket_close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
     let state = context.network_state();
 
