@@ -178,8 +178,23 @@ pub async fn clip_get_volume(_context: &mut dyn WIPICContext, clip: WIPICWord) -
     Ok(0)
 }
 
-pub async fn clip_set_volume(_context: &mut dyn WIPICContext, clip: WIPICWord, volume: WIPICWord) -> Result<WIPICWord> {
-    tracing::warn!("stub MC_mdaClipSetVolume({clip:#x}, {volume:#x})");
+pub async fn clip_set_volume(context: &mut dyn WIPICContext, clip: WIPICWord, volume: WIPICWord) -> Result<WIPICWord> {
+    if clip == 0 {
+        return Ok(0);
+    }
+
+    // The clip carries the audio handle its data was loaded under; route the
+    // requested level (0..=100) to that handle so the rendered stream plays at
+    // the volume the title asked for. Titles set this well below full scale
+    // (Zenonia uses 50) to leave headroom, and honouring it keeps a bright,
+    // near-full-scale sequence from being driven into the output limiter and
+    // sounding harsh.
+    let mda_clip: MdaClip = read_generic(context, clip)?;
+    let handle = mda_clip.handle;
+    let level = (volume & 0xFF).min(100) as u8;
+    tracing::info!("[media] MC_mdaClipSetVolume(clip={clip:#x}, volume={volume:#x}) handle={handle:#x} level={level}");
+
+    let _ = context.system().audio().set_volume(handle, level);
 
     Ok(0)
 }
