@@ -69,6 +69,14 @@ impl NetworkState {
             return None;
         }
 
+        // Native WPNet_NetEventProcess checks the process callback before
+        // changing network-object state 2 (connecting) to state 1
+        // (available). A null callback therefore leaves the process in
+        // connecting state, so a later MC_netConnect returns -7.
+        if self.process_callback == 0 {
+            return None;
+        }
+
         self.process_state = ProcessNetworkState::Available;
         Some((self.process_callback, self.process_context))
     }
@@ -691,6 +699,24 @@ mod network_state_tests {
 
         // Reference MC_netConnect: state 1 -> -10.
         assert_eq!(state.begin_connect(0x3333, 0x4444), Err(-10));
+    }
+
+    #[test]
+    fn process_connect_with_null_callback_remains_connecting() {
+        let mut state = NetworkState::default();
+
+        let generation = state.begin_connect(0, 0x2222).unwrap();
+
+        assert_eq!(state.finish_connect(generation), None);
+        assert!(matches!(
+            state.process_state,
+            ProcessNetworkState::Connecting
+        ));
+
+        // Native event subtype 2 ignores a null callback before changing
+        // state 2 to state 1, so a subsequent MC_netConnect still sees
+        // connecting and returns -7.
+        assert_eq!(state.begin_connect(0x3333, 0x4444), Err(-7));
     }
 
     #[test]
