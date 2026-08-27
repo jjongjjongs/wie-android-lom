@@ -233,6 +233,11 @@ pub async fn read(
 
     context.write_bytes(buffer, &data[..read])?;
 
+    // The read content is logged (a bounded hex + ASCII preview) at debug so a
+    // start-up check reading a small license/cert record - e.g. cert.c2s - shows
+    // exactly what the title inspects.
+    tracing::debug!("MC_fsRead({:?}) -> {read} bytes: {}", entry.path, byte_preview(&data[..read]));
+
     let state = context.filesystem_state();
     let mut state = state.lock();
     if !state.advance_cursor(fd, read) {
@@ -240,6 +245,27 @@ pub async fn read(
     }
 
     Ok(read as i32)
+}
+
+/// Formats up to the first 48 bytes of `data` as hex plus a printable-ASCII
+/// rendering, for diagnostic logging of small records.
+fn byte_preview(data: &[u8]) -> alloc::string::String {
+    use core::fmt::Write as _;
+
+    let shown = data.len().min(48);
+    let mut out = alloc::string::String::new();
+    for byte in &data[..shown] {
+        let _ = write!(out, "{byte:02x} ");
+    }
+    out.push('|');
+    for &byte in &data[..shown] {
+        out.push(if (0x20..0x7f).contains(&byte) { byte as char } else { '.' });
+    }
+    out.push('|');
+    if data.len() > shown {
+        let _ = write!(out, " (+{} more)", data.len() - shown);
+    }
+    out
 }
 
 /// WIPI-C MC_fsWrite (service 0x192).
