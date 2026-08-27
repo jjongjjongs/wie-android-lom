@@ -256,8 +256,7 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         if analysis.notes.is_empty() && analysis.audio_events.is_empty() {
             return None;
         }
-        let total_ticks = smaf.total_ticks;
-        let frames = crate::oma3::analysis::rendered_frame_count(&analysis, total_ticks, SAMPLE_RATE as i32) as u64;
+        let frames = crate::oma3::renderer::frame_count_of(&analysis, SAMPLE_RATE as i32) as u64;
         let duration_ms = (frames * 1000 / u64::from(SAMPLE_RATE)) as u32;
         tracing::info!(
             "[smaf] oma3 accepted {} notes, {} audio events, {frames} frames ({duration_ms}ms), repeat={repeat}, id={id}",
@@ -282,7 +281,7 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         let shared = self.shared.clone();
         let render_generation = self.render_generation.clone();
         std::thread::spawn(move || {
-            let pcm = crate::oma3::analysis::render(&analysis, total_ticks, SAMPLE_RATE as i32);
+            let pcm = crate::oma3::renderer::render_all(analysis, SAMPLE_RATE as i32);
             // The reference's player drives the rendered stream with a fixed
             // 2x gain before the clip's own volume (its log: `gain=2.0` with the
             // AudioTrack at 0.5), which leaves everything below half scale at its

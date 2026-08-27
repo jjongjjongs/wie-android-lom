@@ -1122,6 +1122,32 @@ pub fn render_full(analysis: Analysis, rate: i32) -> Vec<f32> {
     out
 }
 
+/// How many stereo frames the streaming renderer produces for `analysis`,
+/// without rendering. Cheap enough for the play path to learn a song's length.
+pub fn frame_count_of(analysis: &Analysis, rate: i32) -> i32 {
+    compute_frame_count(analysis, if rate <= 0 { 48000 } else { rate })
+}
+
+/// Renders the whole song through the streaming renderer, returning interleaved
+/// stereo `f32`. Unlike [`render_full`], there is no time cap: it renders every
+/// frame the renderer reports, which is what the live play path wants.
+pub fn render_all(analysis: Analysis, rate: i32) -> Vec<f32> {
+    let mut renderer = Renderer::prepare(analysis, rate);
+    let total = renderer.frame_count().max(0);
+    let mut out = vec![0.0f32; total as usize * 2];
+    let chunk = 4096;
+    let mut pos = 0;
+    while pos < total {
+        let n = renderer.render_mix(&mut out, pos, (total - pos).min(chunk), 1.0, 1.0);
+        if n <= 0 {
+            break;
+        }
+        pos += n;
+    }
+    out.truncate(pos.max(0) as usize * 2);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     /// Render a file through the streaming renderer and check every `f32`
@@ -1163,5 +1189,31 @@ mod tests {
             max_abs
         );
         eprintln!("matched {} samples exactly", got.len());
+    }
+
+    /// The live play path renders in 4096-frame chunks via [`super::render_all`];
+    /// prove that produces the same samples as the reference's 1024-frame chunks,
+    /// so the outer chunk size never changes the output. Gated the same way, and
+    /// only meaningful for captures shorter than the harness's 40s cap.
+    #[test]
+    fn render_all_matches_the_reference() {
+        let (mmf_path, ref_path) = match (std::env::var("OMA3_STREAM_MMF"), std::env::var("OMA3_STREAM_F32")) {
+            (Ok(a), Ok(b)) => (a, b),
+            _ => return,
+        };
+        let data = std::fs::read(&mmf_path).unwrap();
+        let smaf = super::super::smaf::parse(&data).unwrap();
+        let analysis = super::super::analysis::analyze(&smaf);
+        let got = super::render_all(analysis, 44100);
+
+        let raw = std::fs::read(&ref_path).unwrap();
+        let want: Vec<f32> = raw.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        if want.len() >= 44100 * 40 * 2 {
+            return; // ref hit the 40s cap; render_all is uncapped, lengths differ.
+        }
+        assert_eq!(got.len(), want.len(), "sample count got {} want {}", got.len(), want.len());
+        let mismatches = got.iter().zip(want.iter()).filter(|(g, w)| g.to_bits() != w.to_bits()).count();
+        assert!(mismatches == 0, "{} / {} samples differ", mismatches, got.len());
+        eprintln!("render_all matched {} samples exactly", got.len());
     }
 }
