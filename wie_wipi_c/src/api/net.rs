@@ -588,6 +588,18 @@ pub async fn socket_write(
     })
 }
 
+/// `MC_netSocketRead` (0x25d) @ native 0x1b3264.
+///
+/// Structurally identical to `MC_netSocketWrite`, calling `dsocket_recv` in
+/// place of `dsocket_send`. ABI: r0 = socket, r1 = buffer, r2 = length, gated in
+/// the same order: buffer == 0 || length < 0 -> -9; `WPNet_IsAvailable()` < 0 ->
+/// -14; `find_socket_obj()` == null -> -2; socket type (`[sock+0x14]`) != 1
+/// (stream) -> -16. A billing socket (`[sock+0x18]` != 0) is read through
+/// `WPBill_Read`, which WIE does not model. The lower recv count is returned
+/// directly when it is >= 0 - so a partial read returns its own byte count and
+/// only that many bytes reach the guest buffer - and the negative internal
+/// errors map identically to write: -2077 -> -2, -2022 -> -9, -2011/-4005 -> -19
+/// (would-block/pending), -2107 -> -14, anything else -> -1.
 pub async fn socket_read(
     context: &mut dyn WIPICContext,
     socket: i32,
