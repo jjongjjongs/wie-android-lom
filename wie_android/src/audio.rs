@@ -20,10 +20,7 @@
 //! events, so [`crate::ma3`] renders the sequence here and it leaves as
 //! opcode 2.
 
-use crate::{
-    ma3::{CHANNELS, SAMPLE_RATE},
-    platform::Shared,
-};
+use crate::{ma3::SAMPLE_RATE, platform::Shared};
 use std::{
     collections::HashMap,
     ffi::c_void,
@@ -38,7 +35,6 @@ use std::{
 /// layout test, so the constant and its builder live under `cfg(test)`.
 #[cfg(test)]
 const OPCODE_PLAY_WAVE: u8 = 1;
-const OPCODE_STREAM: u8 = 2;
 const OPCODE_VIBRATE: u8 = 8;
 
 /// Header length shared by both commands; `AndroidAudioOutput` rejects
@@ -55,6 +51,45 @@ const MMF_GAIN: f32 = 2.0;
 type WaveCallback = unsafe extern "C" fn(u8, u32, *const i16, usize) -> u8;
 
 static WAVE_CALLBACK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The mixer the audio thread pulls from. The Java audio pump renders chunks on
+/// demand through [`render_audio_bytes`], clocked by its own AudioTrack, so
+/// playback advances in real time on a thread of its own rather than in the
+/// bursts the game loop delivers - which is what the reference player does and
+/// what keeps the stream from breaking up. Held here, not behind the emulator's
+/// lock, so a render never waits on a game tick.
+static AUDIO_MIXER: Mutex<Option<Arc<Mutex<crate::ma3::SynthMixer>>>> = Mutex::new(None);
+
+/// Publishes the mixer for the audio pump to pull from.
+pub fn install_audio_mixer(mixer: Arc<Mutex<crate::ma3::SynthMixer>>) {
+    *AUDIO_MIXER.lock().unwrap_or_else(|x| x.into_inner()) = Some(mixer);
+}
+
+/// Renders `frames` stereo frames from the installed mixer as little-endian
+/// sixteen-bit bytes, or an empty vector when nothing is sounding. Called by the
+/// Java audio thread; that thread's AudioTrack is the clock, so the mixer
+/// advances in real time independent of the game loop.
+pub fn render_audio_bytes(frames: usize) -> Vec<u8> {
+    if frames == 0 {
+        return Vec::new();
+    }
+    let mixer = {
+        let guard = AUDIO_MIXER.lock().unwrap_or_else(|x| x.into_inner());
+        match guard.as_ref() {
+            Some(mixer) => mixer.clone(),
+            None => return Vec::new(),
+        }
+    };
+    let rendered = mixer.lock().unwrap_or_else(|x| x.into_inner()).render(frames);
+    let Some(samples) = rendered else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    out
+}
 
 /// Installs an optional host-side low-latency wave handler.
 ///
@@ -109,21 +144,6 @@ fn play_wave_command(channel: u8, sampling_rate: u32, wave_data: &[i16]) -> Vec<
     command
 }
 
-/// Packs a chunk of the synthesiser's output for the track Java keeps open.
-pub fn stream_command(samples: &[i16]) -> Vec<u8> {
-    let mut command = Vec::with_capacity(HEADER_LEN + samples.len() * 2);
-
-    command.push(OPCODE_STREAM);
-    command.push(CHANNELS as u8);
-    command.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    command.extend_from_slice(&(samples.len() as u32).to_le_bytes());
-    for sample in samples {
-        command.extend_from_slice(&sample.to_le_bytes());
-    }
-
-    command
-}
-
 pub struct AndroidAudioSink {
     shared: Shared,
     master_volume: AtomicU8,
@@ -140,6 +160,9 @@ pub struct AndroidAudioSink {
 
 impl AndroidAudioSink {
     pub fn new(shared: Shared) -> Self {
+        // Publish the mixer so the Java audio thread can pull rendered chunks
+        // from it directly, clocked by its own AudioTrack.
+        install_audio_mixer(shared.mixer_handle());
         Self {
             shared,
             master_volume: AtomicU8::new(100),

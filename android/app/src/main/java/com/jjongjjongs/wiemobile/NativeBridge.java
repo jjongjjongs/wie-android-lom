@@ -61,6 +61,14 @@ final class NativeBridge {
      */
     static native byte[] nativePollOutput();
 
+    /**
+     * Renders up to {@code frames} stereo frames from the synthesiser as
+     * little-endian 16-bit PCM, or an empty array when nothing is sounding.
+     * Called from the audio thread, clocked by its AudioTrack, rather than the
+     * emulator thread, so it does not take the emulator lock.
+     */
+    static native byte[] nativeRenderAudio(int frames);
+
     /** Returns a pending handset backlight mode, or zero when unchanged. */
     static native int nativePollBacklightMode();
 

@@ -234,6 +234,30 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     }
 }
 
+/// `nativeRenderAudio(int frames) -> byte[]`
+///
+/// Renders up to `frames` stereo frames from the mixer as little-endian
+/// sixteen-bit PCM, or an empty array when nothing is sounding. Called by the
+/// Java audio thread on its own schedule - clocked by its AudioTrack - so it
+/// deliberately does not take the emulator lock a game tick holds; it reaches
+/// the mixer directly. See [`audio::render_audio_bytes`].
+///
+/// # Safety
+/// Called by the JVM with a valid `env` reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeRenderAudio(env: JNIEnv, _class: JClass, frames: jint) -> jbyteArray {
+    let frames = frames.max(0) as usize;
+    let pcm = std::panic::catch_unwind(AssertUnwindSafe(|| crate::audio::render_audio_bytes(frames))).unwrap_or_default();
+
+    match env.byte_array_from_slice(&pcm) {
+        Ok(array) => JByteArray::into_raw(array),
+        Err(error) => {
+            tracing::error!("Failed to allocate an audio chunk: {error}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// `nativePollBacklightMode() -> int`
 ///
 /// Returns zero when there is no pending change. Non-zero values are handset
@@ -242,14 +266,8 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBacklightMode(
-    _env: JNIEnv,
-    _class: JClass,
-) -> jint {
-    std::panic::catch_unwind(AssertUnwindSafe(|| {
-        with_runner(|runner| runner.take_backlight_mode())
-    }))
-    .unwrap_or(0) as jint
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBacklightMode(_env: JNIEnv, _class: JClass) -> jint {
+    std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_backlight_mode()))).unwrap_or(0) as jint
 }
 
 /// `nativePollPhoneCall() -> String`
@@ -259,13 +277,8 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollPhoneCall(
-    env: JNIEnv,
-    _class: JClass,
-) -> jstring {
-    let number = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-        with_runner(|runner| runner.take_phone_call())
-    })) {
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollPhoneCall(env: JNIEnv, _class: JClass) -> jstring {
+    let number = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_phone_call()))) {
         Ok(Some(number)) => number,
         Ok(None) | Err(_) => return std::ptr::null_mut(),
     };
@@ -281,13 +294,8 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBrowserUrl(
-    env: JNIEnv,
-    _class: JClass,
-) -> jstring {
-    let url = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-        with_runner(|runner| runner.take_browser_url())
-    })) {
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBrowserUrl(env: JNIEnv, _class: JClass) -> jstring {
+    let url = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_browser_url()))) {
         Ok(Some(url)) => url,
         Ok(None) | Err(_) => return std::ptr::null_mut(),
     };

@@ -65,6 +65,10 @@ final class AndroidAudioOutput {
             return thread;
         });
         midiThread.scheduleAtFixedRate(this::pumpMidi, 0, 20, TimeUnit.MILLISECONDS);
+        // The synthesiser's continuous output is pulled on its own AudioTrack-
+        // clocked thread now, rather than pushed from the game loop, so it plays
+        // in real time and does not break up.
+        MmfAudioPump.start();
     }
 
     synchronized void handle(byte[] command) {
@@ -111,6 +115,7 @@ final class AndroidAudioOutput {
     synchronized void pause() {
         ZenoniaAudioOverride.pause();
         PcmStreamWriter.pause();
+        MmfAudioPump.pause();
         midiEnabled = false;
         if (stream != null && stream.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
             try {
@@ -132,6 +137,7 @@ final class AndroidAudioOutput {
     synchronized void resume() {
         ZenoniaAudioOverride.resume();
         PcmStreamWriter.resume();
+        MmfAudioPump.resume();
         midiEnabled = true;
         if (stream != null && stream.getState() == AudioTrack.STATE_INITIALIZED
                 && stream.getPlayState() == AudioTrack.PLAYSTATE_PAUSED) {
@@ -155,6 +161,7 @@ final class AndroidAudioOutput {
     synchronized void release() {
         ZenoniaAudioOverride.release();
         PcmStreamWriter.release();
+        MmfAudioPump.release();
         if (stream != null) {
             try {
                 stream.stop();

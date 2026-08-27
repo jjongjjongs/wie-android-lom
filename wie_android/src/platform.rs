@@ -14,13 +14,7 @@ use wie_backend::{
 };
 use wie_util::Result;
 
-use crate::{
-    audio::AndroidAudioSink,
-    database::AndroidDatabaseRepository,
-    filesystem::AndroidFilesystem,
-    ma3::SynthMixer,
-    network::AndroidNetwork,
-};
+use crate::{audio::AndroidAudioSink, database::AndroidDatabaseRepository, filesystem::AndroidFilesystem, ma3::SynthMixer, network::AndroidNetwork};
 
 /// A frame handed to `Screen::paint`, kept until Java collects it.
 pub struct Frame {
@@ -39,7 +33,6 @@ pub struct Shared {
     /// Shared because `Platform::audio_sink` hands out a fresh sink whenever
     /// it is asked, and the voices have to outlive any one of them.
     mixer: Arc<Mutex<SynthMixer>>,
-    last_render: Arc<Mutex<Option<std::time::Instant>>>,
     redraw_requested: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
     backlight_mode: Arc<AtomicU8>,
@@ -52,46 +45,23 @@ pub struct Shared {
 /// oldest keeps playback current instead of drifting further behind.
 const MAX_QUEUED_AUDIO: usize = 64;
 
-/// Longest gap the synthesiser will try to fill in one go. Past this the
-/// stream has already broken, and rendering the whole backlog would only
-/// queue a burst of stale music behind the live one.
-const MAX_SYNTH_CATCHUP_MS: u32 = 120;
-
 impl Shared {
     pub fn mixer(&self) -> std::sync::MutexGuard<'_, SynthMixer> {
         self.mixer.lock().unwrap_or_else(|x| x.into_inner())
     }
 
-    /// Renders however much of the synthesiser's output the wall clock says is
-    /// owed, and queues it.
-    ///
-    /// Called once per tick rather than from the sink, because a sequence
-    /// delivers its notes in bursts and the sound between them has to keep
-    /// coming. Measuring the gap rather than assuming the tick interval is
-    /// what keeps the stream level: ticks are scheduled with a fixed delay
-    /// *after* the work, so they run slower than they are asked to, and a
-    /// fixed amount per tick would underrun by exactly that much.
-    pub fn render_synth(&self) {
-        let now = std::time::Instant::now();
-        let mut last = self.last_render.lock().unwrap_or_else(|x| x.into_inner());
-
-        let elapsed = last.replace(now).map(|previous| now.saturating_duration_since(previous));
-        drop(last);
-
-        // A first call has nothing to measure, and a long stall - the app in
-        // the background, a slow load - would ask for a chunk far too big to
-        // be worth catching up on.
-        let millis = elapsed.map(|x| x.as_millis() as u32).unwrap_or(0).clamp(0, MAX_SYNTH_CATCHUP_MS);
-        if millis == 0 {
-            return;
-        }
-
-        let frames = (crate::ma3::SAMPLE_RATE as usize * millis as usize) / 1000;
-
-        if let Some(samples) = self.mixer().render(frames) {
-            self.push_audio(crate::audio::stream_command(&samples));
-        }
+    /// A handle to the mixer for the audio pump, which pulls chunks from it on
+    /// its own thread rather than through the game loop.
+    pub fn mixer_handle(&self) -> Arc<Mutex<SynthMixer>> {
+        self.mixer.clone()
     }
+
+    /// Audio is now pulled from the mixer by the Java audio thread, clocked by
+    /// its AudioTrack (see [`crate::audio::render_audio_bytes`]), so the mixer
+    /// must not also be advanced from the game loop here - doing both would
+    /// consume the stream twice and play it at double speed. Kept as a no-op so
+    /// the tick loop's call site is undisturbed.
+    pub fn render_synth(&self) {}
 
     pub fn take_frame(&self) -> Option<Frame> {
         self.frame.lock().unwrap_or_else(|x| x.into_inner()).take()
