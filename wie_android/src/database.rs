@@ -39,6 +39,62 @@ impl AndroidDatabaseRepository {
 
         self.base_path.join(app_id).join(normalized_name)
     }
+
+    fn list_databases(&self, app_id: &str) -> Vec<String> {
+        let sanitized_app_id: String = app_id
+            .chars()
+            .filter(|c| !matches!(c, '/' | '\\' | '\0'))
+            .collect();
+        let app_id = if sanitized_app_id.is_empty()
+            || sanitized_app_id == "."
+            || sanitized_app_id == ".."
+        {
+            "_"
+        } else {
+            &sanitized_app_id
+        };
+
+        let root = self.base_path.join(app_id);
+        let Ok(entries) = fs::read_dir(root) else {
+            return Vec::new();
+        };
+
+        let mut names = Vec::new();
+
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            // A direct database directory contains numeric record files.
+            // This rejects an intermediate directory belonging only to a
+            // nested logical name such as "foo/bar".
+            let has_record = fs::read_dir(&path)
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(|record| record.ok())
+                .any(|record| {
+                    record.path().is_file()
+                        && record
+                            .file_name()
+                            .to_str()
+                            .is_some_and(|name| name.parse::<RecordId>().is_ok())
+                });
+
+            if !has_record {
+                continue;
+            }
+
+            if let Ok(name) = entry.file_name().into_string() {
+                names.push(name);
+            }
+        }
+
+        names.sort();
+        names
+    }
 }
 
 #[async_trait::async_trait]
@@ -68,6 +124,10 @@ impl wie_backend::DatabaseRepository for AndroidDatabaseRepository {
                 false
             }
         }
+    }
+
+    async fn list(&self, app_id: &str) -> Vec<String> {
+        self.list_databases(app_id)
     }
 }
 
@@ -137,6 +197,41 @@ mod tests {
     use std::path::PathBuf;
 
     use super::AndroidDatabaseRepository;
+
+    #[test]
+    fn database_list_returns_direct_database_and_skips_nested_parent() {
+        use std::{
+            fs,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "wie_android_db_list_{}_{}",
+            std::process::id(),
+            unique
+        ));
+
+        let repository = AndroidDatabaseRepository::new(base.clone());
+
+        // Canonical LGT databases contain reserved metadata record 0.
+        let direct = base.join("test-aid").join("root");
+        fs::create_dir_all(&direct).unwrap();
+        fs::write(direct.join("0"), b"metadata").unwrap();
+
+        // This represents logical name "parent/child". The root-level
+        // "parent" directory is only a path component, not a database.
+        let nested = base.join("test-aid").join("parent").join("child");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("0"), b"metadata").unwrap();
+
+        let names = repository.list_databases("test-aid");
+        assert_eq!(names, vec!["root".to_string()]);
+
+        fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn database_path_normalizes_guest_names() {

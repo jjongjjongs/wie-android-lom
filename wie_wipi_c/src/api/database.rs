@@ -512,6 +512,107 @@ pub async fn get_record_size_lgt(
     Ok(metadata.record_size as i32)
 }
 
+/// LGT canonical `MC_dbListDataBases` (service 0x200).
+///
+/// Native ABI: `MC_dbListDataBases(output, capacity)`.
+///
+/// Verified native contract:
+/// - null output or non-positive signed capacity -> -9;
+/// - a valid output buffer is zeroed across the full caller capacity first;
+/// - native filesystem access namespaces are visited in order 1, 2, 3;
+/// - an unavailable namespace (`MC_fsGetCounts == -24`) is skipped;
+/// - only direct root entries ending in `.db` are databases;
+/// - capacity accounting charges the original `.db` filename length plus NUL
+///   for each database, even though the emitted name has the suffix removed;
+/// - after a non-empty namespace scan one additional byte is required;
+/// - an empty representable namespace requires two bytes;
+/// - insufficient capacity -> -18;
+/// - successful output is suffix-free NUL-terminated names followed by one
+///   additional NUL, and the return value is the number of names.
+///
+/// WIE collapses native access namespaces 1/2/3 into one logical repository,
+/// matching the existing LGT open/delete/get-access-mode adaptations. Treat
+/// that repository as access 1 only rather than duplicating every database
+/// three times. Repository enumeration exposes only direct-root logical names;
+/// nested storage paths therefore do not become spurious parent databases.
+///
+/// Repository names are UTF-8 host strings. Their byte lengths are used for
+/// native capacity accounting because the WIPI-C output itself is byte-based.
+pub async fn list_databases_lgt(
+    context: &mut dyn WIPICContext,
+    output: WIPICWord,
+    capacity: i32,
+) -> Result<i32> {
+    tracing::debug!("MC_dbListDataBases({output:#x}, {capacity}) [LGT]");
+
+    if output == 0 || capacity <= 0 {
+        return Ok(-9);
+    }
+
+    let capacity = capacity as usize;
+
+    // Native memset(output, 0, capacity) happens before filesystem enumeration
+    // and therefore also precedes a later -18 short-buffer result.
+    let zeroes = [0u8; 256];
+    let mut cleared = 0usize;
+    while cleared < capacity {
+        let chunk_size = (capacity - cleared).min(zeroes.len());
+        context.write_bytes(
+            output.wrapping_add(cleared as u32),
+            &zeroes[..chunk_size],
+        )?;
+        cleared += chunk_size;
+    }
+
+    let system = context.system();
+    let pid = system.pid().to_owned();
+    let mut names = system.platform().database_repository().list(&pid).await;
+
+    // Native preserves MC_fsList ordering, which the repository abstraction
+    // cannot represent consistently across HashMap and host filesystems.
+    // Stabilize the collapsed namespace rather than exposing host iteration
+    // nondeterminism.
+    names.sort();
+    names.dedup();
+
+    let required = if names.is_empty() {
+        2usize
+    } else {
+        let mut required = 1usize;
+        for name in &names {
+            // Native counts strlen("name.db") + 1.
+            let Some(charged) = name.as_bytes().len().checked_add(4) else {
+                return Ok(-18);
+            };
+            let Some(next) = required.checked_add(charged) else {
+                return Ok(-18);
+            };
+            required = next;
+        }
+        required
+    };
+
+    if required > capacity {
+        return Ok(-18);
+    }
+
+    let mut cursor = 0u32;
+    for name in &names {
+        let bytes = name.as_bytes();
+        context.write_bytes(output.wrapping_add(cursor), bytes)?;
+        cursor = cursor.wrapping_add(bytes.len() as u32);
+        context.write_bytes(output.wrapping_add(cursor), &[0])?;
+        cursor = cursor.wrapping_add(1);
+    }
+
+    // Native writes one final terminator after the last stripped database
+    // name. The initial memset already guarantees the byte is zero, but issue
+    // the explicit write to preserve the observable operation.
+    context.write_bytes(output.wrapping_add(cursor), &[0])?;
+
+    Ok(names.len() as i32)
+}
+
 /// LGT canonical `MC_dbInsertRecord` (service 0x1f7).
 ///
 /// Native ABI: `MC_dbInsertRecord(handle, data, length)`.
@@ -1716,7 +1817,8 @@ mod tests {
     use super::{
         LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
         exists_database, get_access_mode_lgt, get_number_of_records_lgt, get_record_size_lgt,
-        insert_record_lgt, list_record_info, list_records_lgt, load_handle, load_lgt_metadata, open_database,
+        insert_record_lgt, list_databases_lgt, list_record_info, list_records_lgt, load_handle,
+        load_lgt_metadata, open_database,
         open_database_lgt, open_db_for_handle,
         select_record, select_record_lgt, sort_records_lgt, store_lgt_metadata, stream_read,
         stream_write, update_record, update_record_lgt,
@@ -1779,6 +1881,164 @@ mod tests {
             get_access_mode_lgt(&mut context, NAME).await.unwrap(),
             1
         );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_list_databases_validates_arguments_and_empty_capacity() {
+        const OUTPUT: u32 = 0x2000;
+
+        let mut context = database_test_context();
+
+        assert_eq!(
+            list_databases_lgt(&mut context, 0, 16).await.unwrap(),
+            -9
+        );
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, 0).await.unwrap(),
+            -9
+        );
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, -1).await.unwrap(),
+            -9
+        );
+
+        context.write_bytes(OUTPUT, &[0xcc; 2]).unwrap();
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, 1)
+                .await
+                .unwrap(),
+            -18
+        );
+
+        let mut one = [0u8; 1];
+        context.read_bytes(OUTPUT, &mut one).unwrap();
+        assert_eq!(one, [0]);
+
+        context.write_bytes(OUTPUT, &[0xcc; 2]).unwrap();
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, 2)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let mut two = [0u8; 2];
+        context.read_bytes(OUTPUT, &mut two).unwrap();
+        assert_eq!(two, [0, 0]);
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_list_databases_preserves_suffix_capacity_quirk_and_zeroes_short_buffer() {
+        const NAME: u32 = 0x1000;
+        const OUTPUT: u32 = 0x2000;
+
+        let mut context = database_test_context();
+        context.write_bytes(NAME, b"a\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+
+        // Native charges strlen("a.db") + 1 plus one namespace terminator:
+        // 5 + 1 = 6 bytes, although the emitted "a\0\0" occupies only 3.
+        context.write_bytes(OUTPUT, &[0xcc; 5]).unwrap();
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, 5)
+                .await
+                .unwrap(),
+            -18
+        );
+
+        let mut short = [0u8; 5];
+        context.read_bytes(OUTPUT, &mut short).unwrap();
+        assert_eq!(short, [0; 5]);
+
+        context.write_bytes(OUTPUT, &[0xcc; 6]).unwrap();
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, 6)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let mut exact = [0u8; 6];
+        context.read_bytes(OUTPUT, &mut exact).unwrap();
+        assert_eq!(&exact[..3], b"a\0\0");
+        assert_eq!(&exact[3..], &[0; 3]);
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_list_databases_returns_direct_names_once_in_collapsed_namespace() {
+        const NAME: u32 = 0x1000;
+        const OUTPUT: u32 = 0x2000;
+
+        let mut context = database_test_context();
+
+        context.write_bytes(NAME, b"long\0").unwrap();
+        let long_id = open_database_lgt(&mut context, NAME, 4, 1, 3)
+            .await
+            .unwrap();
+        assert!(long_id > 0);
+
+        context.write_bytes(NAME, b"a\0").unwrap();
+        let a_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(a_id > 0);
+
+        // WIE has one representable namespace, so access 3 above must not
+        // duplicate "long". Required native-style capacity is:
+        // 1 + (strlen("a") + 4) + (strlen("long") + 4) = 14.
+        context.write_bytes(OUTPUT, &[0xcc; 14]).unwrap();
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, 14)
+                .await
+                .unwrap(),
+            2
+        );
+
+        let mut actual = [0u8; 14];
+        context.read_bytes(OUTPUT, &mut actual).unwrap();
+        assert_eq!(&actual[..8], b"a\0long\0\0");
+        assert_eq!(&actual[8..], &[0; 6]);
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_list_databases_omits_nested_logical_names() {
+        const NAME: u32 = 0x1000;
+        const OUTPUT: u32 = 0x2000;
+
+        let mut context = database_test_context();
+
+        context.write_bytes(NAME, b"parent/child\0").unwrap();
+        let nested_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(nested_id > 0);
+
+        context.write_bytes(NAME, b"root\0").unwrap();
+        let root_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
+            .await
+            .unwrap();
+        assert!(root_id > 0);
+
+        // Native MC_dbListDataBases scans "/" only. "parent/child.db"
+        // therefore does not become a root database named "parent".
+        // "root.db" is charged as strlen("root.db") + 1, plus the
+        // namespace terminator: 8 + 1 + 1 = 10.
+        context.write_bytes(OUTPUT, &[0xcc; 10]).unwrap();
+        assert_eq!(
+            list_databases_lgt(&mut context, OUTPUT, 10)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let mut actual = [0u8; 10];
+        context.read_bytes(OUTPUT, &mut actual).unwrap();
+        assert_eq!(&actual[..6], b"root\0\0");
+        assert_eq!(&actual[6..], &[0; 4]);
     }
 
     #[futures_test::test]

@@ -203,6 +203,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::GetAccessMode => database::get_access_mode_lgt.into_body(),
         WIPICSvcId::GetNumberOfRecords => database::get_number_of_records_lgt.into_body(),
         WIPICSvcId::GetRecordSize => database::get_record_size_lgt.into_body(),
+        WIPICSvcId::ListDatabases => database::list_databases_lgt.into_body(),
         WIPICSvcId::FsRead => filesystem::read.into_body(),
         WIPICSvcId::FsWrite => filesystem::write.into_body(),
         WIPICSvcId::FsClose => filesystem::close.into_body(),

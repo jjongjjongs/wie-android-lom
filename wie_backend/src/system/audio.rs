@@ -310,6 +310,10 @@ mod tests {
         async fn delete(&self, _name: &str, _app_id: &str) -> bool {
             false
         }
+
+        async fn list(&self, _app_id: &str) -> Vec<String> {
+            vec![]
+        }
     }
 
     struct NullFilesystem;

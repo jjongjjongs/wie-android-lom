@@ -70,6 +70,59 @@ impl wie_backend::DatabaseRepository for DatabaseRepository {
             }
         }
     }
+
+    async fn list(&self, app_id: &str) -> Vec<String> {
+        let sanitized_app_id: String = app_id
+            .chars()
+            .filter(|c| !matches!(c, '/' | '\\' | '\0'))
+            .collect();
+        let app_id = if sanitized_app_id.is_empty()
+            || sanitized_app_id == "."
+            || sanitized_app_id == ".."
+        {
+            "_"
+        } else {
+            &sanitized_app_id
+        };
+
+        let root = self.base_path.join(app_id).join("db");
+        let Ok(entries) = fs::read_dir(root) else {
+            return Vec::new();
+        };
+
+        let mut names = Vec::new();
+
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let has_record = fs::read_dir(&path)
+                .ok()
+                .into_iter()
+                .flatten()
+                .filter_map(|record| record.ok())
+                .any(|record| {
+                    record.path().is_file()
+                        && record
+                            .file_name()
+                            .to_str()
+                            .is_some_and(|name| name.parse::<RecordId>().is_ok())
+                });
+
+            if !has_record {
+                continue;
+            }
+
+            if let Ok(name) = entry.file_name().into_string() {
+                names.push(name);
+            }
+        }
+
+        names.sort();
+        names
+    }
 }
 
 pub struct Database {

@@ -133,6 +133,31 @@ impl DatabaseRepository for MemoryDatabaseRepository {
     async fn delete(&self, name: &str, app_id: &str) -> bool {
         self.store.lock().remove(&(app_id.to_string(), name.to_string())).is_some()
     }
+
+    async fn list(&self, app_id: &str) -> Vec<String> {
+        let store = self.store.lock();
+        let mut names: Vec<String> = store
+            .keys()
+            .filter_map(|(stored_app_id, name)| {
+                if stored_app_id != app_id {
+                    return None;
+                }
+
+                // Android/CLI normalize a guest-leading slash away. Preserve
+                // that observable storage model in the in-memory repository.
+                let name = name.trim_start_matches('/');
+                if name.is_empty() || name.contains('/') {
+                    return None;
+                }
+
+                Some(name.to_string())
+            })
+            .collect();
+
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 struct MemoryDatabase {
