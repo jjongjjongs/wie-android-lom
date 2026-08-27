@@ -208,6 +208,7 @@ async fn handle_wipic_svc(
         WIPICSvcId::FsTell => filesystem::tell.into_body(),
         WIPICSvcId::FsIsExist => filesystem::is_exist.into_body(),
         WIPICSvcId::FsGetMountedNames => filesystem::get_mounted_names.into_body(),
+        WIPICSvcId::FsTotalSpaceEx => fs_total_space_ex.into_body(),
         WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),
         WIPICSvcId::Close => net::close.into_body(),
@@ -465,6 +466,43 @@ fn clamp_native_fs_space(total: u64) -> u32 {
     core::cmp::min(total, i32::MAX as u64) as u32
 }
 
+fn is_native_fs_space_ex_access(access: i32) -> bool {
+    matches!(access, 1 | 2 | 3 | 100)
+}
+
+/// `MC_fsTotalSpaceEx` / `LGTC_fsTotalSpaceEx`
+/// (canonical WIPI-C service 0x1a2).
+///
+/// Native flow:
+/// - validate the access selector; valid values are 1, 2, 3 and 100;
+/// - build the corresponding WIPI filesystem path;
+/// - access 1 queries the "and private" device, while 2/3/100 query
+///   "wipi root" with control command 5;
+/// - the HAL computes `statfs.f_bsize * statfs.f_blocks`;
+/// - successful values are saturated to `INT_MAX`.
+///
+/// WIE exposes one logical backing filesystem rather than the native physical
+/// mount/device split, so every valid native access selector maps to that same
+/// backing filesystem capacity.
+async fn fs_total_space_ex(
+    context: &mut dyn WIPICContext,
+    access: i32,
+) -> Result<u32> {
+    if !is_native_fs_space_ex_access(access) {
+        tracing::debug!("MC_fsTotalSpaceEx({access}) -> -24");
+        return Ok((-24i32) as u32);
+    }
+
+    let Some(total) = context.system().filesystem().total_space().await else {
+        tracing::debug!("MC_fsTotalSpaceEx({access}) -> -1");
+        return Ok(u32::MAX);
+    };
+
+    let total = clamp_native_fs_space(total);
+    tracing::debug!("MC_fsTotalSpaceEx({access}) -> {total}");
+    Ok(total)
+}
+
 /// `MC_fsAvailable` (canonical WIPI-C service 0x19c).
 ///
 /// Native flow:
@@ -660,7 +698,7 @@ fn unix_seconds_to_utc(timestamp: i64) -> (i32, i32, i32, i32, i32, i32) {
 
 #[cfg(test)]
 mod fs_total_space_tests {
-    use super::clamp_native_fs_space;
+    use super::{clamp_native_fs_space, is_native_fs_space_ex_access};
 
     #[test]
     fn native_fs_total_space_preserves_handset_scale_capacity() {
@@ -672,6 +710,18 @@ mod fs_total_space_tests {
         assert_eq!(clamp_native_fs_space(i32::MAX as u64), i32::MAX as u32);
         assert_eq!(clamp_native_fs_space(i32::MAX as u64 + 1), i32::MAX as u32);
         assert_eq!(clamp_native_fs_space(u64::MAX), i32::MAX as u32);
+    }
+
+    #[test]
+    fn native_fs_total_space_ex_accepts_only_canonical_access_selectors() {
+        assert!(is_native_fs_space_ex_access(1));
+        assert!(is_native_fs_space_ex_access(2));
+        assert!(is_native_fs_space_ex_access(3));
+        assert!(is_native_fs_space_ex_access(100));
+
+        for access in [-1, 0, 4, 99, 101, i32::MAX] {
+            assert!(!is_native_fs_space_ex_access(access));
+        }
     }
 
     #[test]
