@@ -85,6 +85,10 @@ impl NetworkState {
         self.process_state == ProcessNetworkState::Available
     }
 
+    fn has_process_network(&self) -> bool {
+        self.process_state != ProcessNetworkState::Closed
+    }
+
     fn close_process(&mut self) -> Vec<i32> {
         self.process_generation = self.process_generation.wrapping_add(1);
         self.process_state = ProcessNetworkState::Closed;
@@ -376,7 +380,10 @@ pub async fn socket(context: &mut dyn WIPICContext, family: i32, socket_type: i3
         return Ok(M_E_NOTSUP);
     }
 
-    if !context.network_state().lock().is_available() {
+    // Native MC_netSocket only requires the current process to have a
+    // network object; it does not require that object's state to be
+    // available. In particular, state 2 (connecting) is accepted.
+    if !context.network_state().lock().has_process_network() {
         return Ok(M_E_NOTCONN);
     }
 
@@ -876,6 +883,31 @@ mod network_state_tests {
         assert!(state.sockets.is_empty());
         assert!(!state.has_callbacks());
         assert!(!state.dispatcher_is_current(dispatcher_generation));
+    }
+
+    #[test]
+    fn process_network_existence_matches_native_socket_gate() {
+        let mut state = NetworkState::default();
+
+        assert!(!state.has_process_network());
+
+        let generation = state.begin_connect(0, 0x2222).unwrap();
+        assert!(matches!(
+            state.process_state,
+            ProcessNetworkState::Connecting
+        ));
+
+        // Native MC_netSocket checks only whether find_network_obj_ex
+        // returns an object. It does not require state 1 (available).
+        assert!(state.has_process_network());
+        assert!(!state.is_available());
+
+        // A null callback keeps the native object in state 2.
+        assert_eq!(state.finish_connect(generation), None);
+        assert!(state.has_process_network());
+
+        state.close_process();
+        assert!(!state.has_process_network());
     }
 
     #[test]
