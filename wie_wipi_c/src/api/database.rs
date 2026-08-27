@@ -136,6 +136,93 @@ pub async fn open_database(context: &mut dyn WIPICContext, ptr_name: WIPICWord, 
     Ok(ptr_handle as _)
 }
 
+/// LGT canonical `MC_dbOpenDataBase` (service 0x1f4).
+///
+/// Native ABI:
+/// `MC_dbOpenDataBase(name, record_size, create, access)`.
+///
+/// Verified native contract:
+/// - null `name` -> -9;
+/// - `create == 0` requires the database to exist, otherwise -12;
+/// - `create == 1` permits creation, but requires `record_size > 0`,
+///   otherwise -9;
+/// - filesystem access must be 1, 2 or 3, otherwise -9;
+/// - the underlying native mode-8 file open preserves an existing database
+///   and creates the backing files only when absent.
+///
+/// WIE's database repository exposes one logical database instead of the
+/// native `.db` / `.idx` pair.  For the valid native create/open forms we
+/// reproduce the externally visible existence/create behaviour and then use
+/// the existing WIE database handle implementation.  Native record-size
+/// metadata is not representable by the current repository interface.
+pub async fn open_database_lgt(
+    context: &mut dyn WIPICContext,
+    ptr_name: WIPICWord,
+    record_size: i32,
+    create: i32,
+    access: i32,
+) -> Result<i32> {
+    tracing::debug!(
+        "MC_dbOpenDataBase({ptr_name:#x}, record_size={record_size}, create={create}, access={access})"
+    );
+
+    if ptr_name == 0 {
+        return Ok(-9);
+    }
+
+    if !matches!(access, 1..=3) {
+        return Ok(-9);
+    }
+
+    if create == 1 && record_size <= 0 {
+        return Ok(-9);
+    }
+
+    // Native builds the `.db` / `.idx` paths with sprintf/strcat and performs
+    // no explicit database-name length or encoding validation here. WIE stores
+    // the logical database name in a fixed 32-byte guest handle and uses a
+    // UTF-8 host repository key, so these two checks are safety adaptations
+    // rather than native MC_dbOpenDataBase error semantics.
+    let Ok(name) = String::from_utf8(read_null_terminated_string_bytes(context, ptr_name)?) else {
+        return Ok(-22);
+    };
+
+    if name.len() > MAX_NAME_LEN {
+        return Ok(-22);
+    }
+
+    let packaged = read_packaged_database(context, &name).await?;
+    let system = context.system();
+    let pid = system.pid().to_owned();
+    let exists = system
+        .platform()
+        .database_repository()
+        .exists(&name, &pid)
+        .await;
+
+    if !exists && packaged.is_none() {
+        if create == 0 {
+            return Ok(-12);
+        }
+
+        if create == 1 {
+            // Native MC_fsOpen mode 8 first opens read/write and, on ENOENT,
+            // retries with O_RDWR | O_CREAT.  Opening the WIE repository is
+            // the logical equivalent of materializing that backing store.
+            system
+                .platform()
+                .database_repository()
+                .open(&name, &pid)
+                .await;
+        }
+    }
+
+    // Mode 0 in the existing WIE helper preserves existing contents.  The
+    // LGT wrapper has already performed the native create/existence checks,
+    // so this does not inherit the KTF-oriented mode interpretation.
+    open_database(context, ptr_name, 0, access).await
+}
+
 pub async fn close_database(context: &mut dyn WIPICContext, db_id: i32) -> Result<i32> {
     tracing::debug!("MC_dbCloseDataBase({db_id:#x})");
 
@@ -622,7 +709,98 @@ mod tests {
 
     use crate::context::test::TestContext;
 
-    use super::{delete_database, exists_database, list_record_info, open_database, select_record, stream_read, stream_write, update_record};
+    use super::{delete_database, exists_database, list_record_info, open_database, open_database_lgt, select_record, stream_read, stream_write, update_record};
+
+    #[futures_test::test]
+    async fn lgt_native_open_database_validates_arguments() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            open_database_lgt(&mut context, 0, 32, 1, 1)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            open_database_lgt(&mut context, 0x1000, 0, 1, 1)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            open_database_lgt(&mut context, 0x1000, 32, 1, 0)
+                .await
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            open_database_lgt(&mut context, 0x1000, 32, 1, 4)
+                .await
+                .unwrap(),
+            -9
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_open_database_requires_existing_database_without_create() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        assert_eq!(
+            open_database_lgt(&mut context, 0x1000, 32, 0, 1)
+                .await
+                .unwrap(),
+            -12
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_open_database_create_materializes_database() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
+            .await
+            .unwrap();
+        assert!(db_id > 0);
+        assert_eq!(
+            exists_database(&mut context, 0x1000, 1).await.unwrap(),
+            0
+        );
+    }
+
+    #[futures_test::test]
+    async fn lgt_native_open_database_create_preserves_existing_contents() {
+        let mut context = database_test_context();
+        context.write_bytes(0x1000, b"records\0").unwrap();
+
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
+            .await
+            .unwrap();
+        context.write_bytes(0x2000, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(
+            stream_write(&mut context, db_id, 0x2000, 4)
+                .await
+                .unwrap(),
+            4
+        );
+
+        let reopened = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
+            .await
+            .unwrap();
+        assert!(reopened > 0);
+        assert_eq!(
+            stream_read(&mut context, reopened, 0x2100, 4)
+                .await
+                .unwrap(),
+            4
+        );
+
+        let mut data = [0; 4];
+        context.read_bytes(0x2100, &mut data).unwrap();
+        assert_eq!(data, [1, 2, 3, 4]);
+    }
 
     #[futures_test::test]
     async fn lgt_exists_database_reports_missing_and_existing_database() {
