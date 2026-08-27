@@ -256,7 +256,18 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         if analysis.notes.is_empty() && analysis.audio_events.is_empty() {
             return None;
         }
-        let frames = crate::oma3::renderer::frame_count_of(&analysis, SAMPLE_RATE as i32) as u64;
+        // The MA-3 renderer can only voice FM notes that resolved to a valid
+        // MA-3 tone and decoded PCM/wave events. A sequence that has neither -
+        // typically a plain-MIDI SMAF whose note-ons carry no MA-3 tone - yields
+        // a zero frame count (the reference's own `hasPlayable` gate). Decline
+        // it here so the caller falls back to the live MIDI player instead of
+        // installing a silent stream that also suppresses that fallback.
+        let frame_count = crate::oma3::renderer::frame_count_of(&analysis, SAMPLE_RATE as i32);
+        if frame_count <= 0 {
+            tracing::info!("[smaf] oma3 declined (nothing to voice), id={id}; deferring to MIDI player");
+            return None;
+        }
+        let frames = frame_count as u64;
         let duration_ms = (frames * 1000 / u64::from(SAMPLE_RATE)) as u32;
         tracing::info!(
             "[smaf] oma3 accepted {} notes, {} audio events, {frames} frames ({duration_ms}ms), repeat={repeat}, id={id}",
