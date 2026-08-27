@@ -41,6 +41,13 @@ const OPCODE_VIBRATE: u8 = 8;
 /// anything shorter.
 const HEADER_LEN: usize = 10;
 
+/// Fixed gain the reference's MMF player applies to the rendered stream before
+/// the clip's own volume, from its `gain=2.0` log. Its output stage is this
+/// drive into a hard sixteen-bit clip, then the clip volume (an AudioTrack at
+/// `0.5` for a title that asks for fifty), so mid-level content keeps its full
+/// level and only peaks round off.
+const MMF_GAIN: f32 = 2.0;
+
 type WaveCallback = unsafe extern "C" fn(u8, u32, *const i16, usize) -> u8;
 
 static WAVE_CALLBACK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -229,7 +236,16 @@ impl wie_backend::AudioSink for AndroidAudioSink {
         let shared = self.shared.clone();
         std::thread::spawn(move || {
             let pcm = crate::oma3::analysis::render(&analysis, total_ticks, SAMPLE_RATE as i32);
-            let samples: Vec<i16> = pcm.iter().map(|&s| (s * 32767.0).round().clamp(-32768.0, 32767.0) as i16).collect();
+            // The reference's player drives the rendered stream with a fixed
+            // 2x gain before the clip's own volume (its log: `gain=2.0` with the
+            // AudioTrack at 0.5), which leaves everything below half scale at its
+            // full level and only clips the peaks - a loudness lift, not a plain
+            // halving. Match it here so a sequence carries the same body it does
+            // on the handset rather than playing back at half the level.
+            let samples: Vec<i16> = pcm
+                .iter()
+                .map(|&s| (s * MMF_GAIN * 32767.0).round().clamp(-32768.0, 32767.0) as i16)
+                .collect();
             shared.mixer().set_song(id, samples, repeat);
         });
         Some(duration_ms)
