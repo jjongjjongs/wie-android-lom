@@ -13,6 +13,7 @@ struct SocketCallbacks {
     socket_type: i32,
     connect_callback: WIPICWord,
     connect_context: WIPICWord,
+    connect_pending: bool,
     read_callback: WIPICWord,
     read_context: WIPICWord,
     write_callback: WIPICWord,
@@ -142,6 +143,18 @@ impl NetworkState {
         }
     }
 
+    fn connect_is_pending(&self, socket: i32) -> bool {
+        self.sockets
+            .get(&socket)
+            .is_some_and(|entry| entry.connect_pending)
+    }
+
+    fn set_connect_pending(&mut self, socket: i32, pending: bool) {
+        if let Some(entry) = self.sockets.get_mut(&socket) {
+            entry.connect_pending = pending;
+        }
+    }
+
     fn clear_connect_callback(&mut self, socket: i32) {
         if let Some(entry) = self.sockets.get_mut(&socket) {
             entry.connect_callback = 0;
@@ -158,6 +171,7 @@ impl NetworkState {
                 let entry = self.sockets.get_mut(&socket)?;
                 let callback = entry.connect_callback;
                 let callback_context = entry.connect_context;
+                entry.connect_pending = false;
                 entry.connect_callback = 0;
                 entry.connect_context = 0;
                 (socket, callback, 0, callback_context)
@@ -166,6 +180,7 @@ impl NetworkState {
                 let entry = self.sockets.get_mut(&socket)?;
                 let callback = entry.connect_callback;
                 let callback_context = entry.connect_context;
+                entry.connect_pending = false;
                 entry.connect_callback = 0;
                 entry.connect_context = 0;
                 (socket, callback, u32::MAX, callback_context)
@@ -411,7 +426,7 @@ pub async fn socket_connect(
     callback: WIPICWord,
     callback_context: WIPICWord,
 ) -> Result<i32> {
-    if address == 0 || callback == 0 || port > u16::MAX as u32 {
+    if address == 0 || callback == 0 {
         return Ok(M_E_INVALID);
     }
 
@@ -432,9 +447,18 @@ pub async fn socket_connect(
         return Ok(M_E_NOTCONN);
     }
 
-    state
-        .lock()
-        .set_connect_callback(socket, callback, callback_context);
+    // Native stores the new callback/context before attempting the connect.
+    // If socket +0x20 is already 2 (connect pending), the repeated call
+    // therefore replaces the callback but returns -7 without starting
+    // another connect operation.
+    {
+        let mut state = state.lock();
+        state.set_connect_callback(socket, callback, callback_context);
+
+        if state.connect_is_pending(socket) {
+            return Ok(-7);
+        }
+    }
 
     let result = {
         let network = context
@@ -447,6 +471,10 @@ pub async fn socket_connect(
 
     match result {
         wie_backend::NetworkPoll::Ready(Ok(())) => {
+            // Native synchronous success posts event 205 and sets socket
+            // +0x20 to 2 until that event is processed.
+            state.lock().set_connect_pending(socket, true);
+
             struct DeferredConnect {
                 socket: i32,
             }
@@ -472,19 +500,30 @@ pub async fn socket_connect(
             }
 
             if let Err(error) = context.spawn(Box::new(DeferredConnect { socket })) {
-                state.lock().clear_connect_callback(socket);
+                let mut state = state.lock();
+                state.set_connect_pending(socket, false);
+                state.clear_connect_callback(socket);
                 return Err(error);
             }
 
             Ok(0)
         }
         wie_backend::NetworkPoll::Ready(Err(error)) => {
-            state.lock().clear_connect_callback(socket);
+            // Native has already stored socket +0x24/+0x38 at this point
+            // and does not clear them when dsocket_connect returns an
+            // immediate error. A later connect call overwrites them.
             Ok(map_network_error(error))
         }
         wie_backend::NetworkPoll::Pending => {
+            // Native maps the first dsocket_connect == -19 to public 0 and
+            // records socket +0x20 = 2. A repeated call while that state is
+            // pending returns -7.
+            state.lock().set_connect_pending(socket, true);
+
             if let Err(error) = ensure_event_dispatcher(context) {
-                state.lock().clear_connect_callback(socket);
+                let mut state = state.lock();
+                state.set_connect_pending(socket, false);
+                state.clear_connect_callback(socket);
                 return Err(error);
             }
 
@@ -758,14 +797,17 @@ mod network_state_tests {
         let mut state = NetworkState::default();
         state.register_socket(7, 1);
         state.set_connect_callback(7, 0x1234, 0x5678);
+        state.set_connect_pending(7, true);
 
         assert!(state.has_callbacks());
+        assert!(state.connect_is_pending(7));
 
         assert_eq!(
             state.take_callback_for_event(wie_backend::NetworkEvent::Connected(7)),
             Some((0x1234, [7, 0, 0x5678]))
         );
 
+        assert!(!state.connect_is_pending(7));
         assert_eq!(
             state.take_callback_for_event(wie_backend::NetworkEvent::Connected(7)),
             None
@@ -774,16 +816,42 @@ mod network_state_tests {
     }
 
     #[test]
+    fn socket_connect_pending_recall_replaces_native_callback() {
+        let mut state = NetworkState::default();
+        state.register_socket(8, 1);
+
+        state.set_connect_callback(8, 0x1111, 0x2222);
+        state.set_connect_pending(8, true);
+
+        assert!(state.connect_is_pending(8));
+
+        // Native MC_netSocketConnect stores +0x24/+0x38 before calling
+        // dsocket_connect. A repeated call while +0x20 == 2 therefore
+        // replaces the callback even though its public result is -7.
+        state.set_connect_callback(8, 0x3333, 0x4444);
+
+        assert_eq!(
+            state.take_callback_for_event(wie_backend::NetworkEvent::Connected(8)),
+            Some((0x3333, [8, 0, 0x4444]))
+        );
+        assert!(!state.connect_is_pending(8));
+    }
+
+    #[test]
     fn socket_connect_failure_callback_is_one_shot_error() {
         let mut state = NetworkState::default();
         state.register_socket(9, 1);
         state.set_connect_callback(9, 0x4321, 0x8765);
+        state.set_connect_pending(9, true);
+
+        assert!(state.connect_is_pending(9));
 
         assert_eq!(
             state.take_callback_for_event(wie_backend::NetworkEvent::ConnectFailed(9)),
             Some((0x4321, [9, u32::MAX, 0x8765]))
         );
 
+        assert!(!state.connect_is_pending(9));
         assert_eq!(
             state.take_callback_for_event(wie_backend::NetworkEvent::ConnectFailed(9)),
             None

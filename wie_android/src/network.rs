@@ -177,16 +177,15 @@ impl Network for AndroidNetwork {
             };
 
             match entry {
-                Socket::Tcp(TcpState::Disconnected) => {
+                Socket::Tcp(TcpState::Disconnected | TcpState::Failed(_)) => {
+                    // Native clears its asynchronous connect-pending state
+                    // when the failure event is delivered. The next connect
+                    // call therefore starts a fresh lower connect attempt
+                    // instead of replaying the previous failure.
                     *entry = Socket::Tcp(TcpState::Connecting);
                 }
                 Socket::Tcp(TcpState::Connecting) => return NetworkPoll::Pending,
                 Socket::Tcp(TcpState::Connected(_)) => return NetworkPoll::Ready(Ok(())),
-                Socket::Tcp(TcpState::Failed(error)) => {
-                    let error = *error;
-                    *entry = Socket::Tcp(TcpState::Disconnected);
-                    return NetworkPoll::Ready(Err(error));
-                }
                 Socket::Udp(udp) => {
                     return NetworkPoll::Ready(
                         udp.connect(remote).map_err(|error| Self::map_io(&error)),
