@@ -78,6 +78,14 @@ async fn handle_wipic_svc(
         }
     };
 
+    // Diagnostic trace of the WIPI-C call sequence, at info so it shows in a
+    // normal log capture. The high-frequency drawing/UI services are skipped so
+    // rendering does not flood the bounded log and evict the start-up calls that
+    // matter (properties, resources, network, exit).
+    if !is_high_frequency_svc(id.0) {
+        tracing::info!("wipic svc {:#x}", id.0);
+    }
+
     let method = match svc_id {
         WIPICSvcId::CletRegister => {
             return EmulatedFunction::call(&clet_register, core, jvm).await?.write(core, lr);
@@ -89,10 +97,10 @@ async fn handle_wipic_svc(
         WIPICSvcId::GetFramebufferBpp => graphics::get_framebuffer_bpp.into_body(),
         WIPICSvcId::Printk => kernel::printk.into_body(),
         WIPICSvcId::Sprintk => kernel::sprintk.into_body(),
-        WIPICSvcId::Unk13 => unk13.into_body(),
+        WIPICSvcId::KnlExit => knl_exit.into_body(),
+        WIPICSvcId::GetParentProgramId => get_parent_program_id.into_body(),
         WIPICSvcId::GetCurProgramId => kernel::get_cur_program_id.into_body(),
         WIPICSvcId::GetProgramName => kernel::get_program_name.into_body(),
-        WIPICSvcId::Exit => kernel::exit.into_body(),
         WIPICSvcId::Alloc => kernel::alloc.into_body(),
         WIPICSvcId::Calloc => kernel::calloc.into_body(),
         WIPICSvcId::Free => kernel::free.into_body(),
@@ -829,10 +837,29 @@ async fn unk10(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u
     Ok(0)
 }
 
-async fn unk13(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk13({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// Whether `id` is a high-frequency drawing/UI service excluded from the
+/// diagnostic call trace: framebuffer, graphics, IME and UIC services.
+fn is_high_frequency_svc(id: u32) -> bool {
+    matches!(id, 0x32..=0x36 | 0xc8..=0xf3 | 0x12c..=0x130 | 0x320..=0x34a)
+}
 
-    // kernel
+/// `MC_knlExit` (service 0x68). The applet is asking to terminate, passing its
+/// exit code in `a0`. A title reaches this after deciding to quit - usually a
+/// failed start-up/auth check - so it is logged at info to make that decision
+/// visible in a normal (info-level) log capture. It is currently suppressed
+/// (returns instead of stopping the applet) so the surrounding behaviour is
+/// unchanged while the upstream cause is diagnosed.
+async fn knl_exit(_context: &mut dyn WIPICContext, exit_code: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::info!("MC_knlExit(code={exit_code:#x}) - applet requested termination [{a1:#x}, {a2:#x}, {a3:#x}]");
+
+    Ok(0)
+}
+
+/// `MC_knlGetParentProgramID` (service 0x6b). Returns the id of the program that
+/// launched this one; WIE launches titles at the top level, so there is no
+/// parent and it reports 0.
+async fn get_parent_program_id(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_knlGetParentProgramID({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x}) -> 0");
 
     Ok(0)
 }

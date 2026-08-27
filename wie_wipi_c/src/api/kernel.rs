@@ -31,11 +31,12 @@ pub async fn current_time(context: &mut dyn WIPICContext) -> Result<u64> {
 }
 
 pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, p_out: WIPICWord, buf_size: WIPICWord) -> Result<i32> {
-    tracing::debug!("MC_knlGetSystemProperty({ptr_id:#x}, {p_out:#x}, {buf_size:#x})");
-
     let id_bytes = read_null_terminated_string_bytes(context, ptr_id)?;
     let id = encoding_rs::EUC_KR.decode(&id_bytes).0;
 
+    // Logged at info: start-up/auth checks read these, and a wrong value is a
+    // common reason a title bails, so the query and its result belong in a
+    // normal log capture.
     let value = match id.as_ref() {
         "RSSILEVEL" => "30",
         "BATTERYLEVEL" => "100",
@@ -53,23 +54,34 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "ROAMING_AREA" => "0",
         "DS_LOCK" => "0",
         _ => {
-            tracing::warn!("unknown system property id: {id}");
+            tracing::info!("MC_knlGetSystemProperty({id:?}) -> -9 (unknown property)");
             return Ok(-9); // M_E_INVALID
         }
     };
 
     let bytes = value.as_bytes();
     if bytes.len() + 1 > buf_size as usize {
+        tracing::info!("MC_knlGetSystemProperty({id:?}) -> -18 (buffer {buf_size} too small for {:?})", value);
         return Ok(-18); // M_E_SHORTBUF
     }
 
+    tracing::info!("MC_knlGetSystemProperty({id:?}) -> {value:?}");
     write_null_terminated_string_bytes(context, p_out, value.as_bytes())?;
 
     Ok(0)
 }
 
-pub async fn set_system_property(_context: &mut dyn WIPICContext, ptr_id: WIPICWord, ptr_value: WIPICWord) -> Result<()> {
-    tracing::warn!("stub MC_knlSetSystemProperty({ptr_id:#x}, {ptr_value:#x})");
+pub async fn set_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, ptr_value: WIPICWord) -> Result<()> {
+    // Decoded and logged at info: a title that sets a property and reads it back
+    // expects the value to survive, so seeing what it set (and not persisting it
+    // yet) helps explain a later mismatch. Persistence is a follow-up.
+    let id = encoding_rs::EUC_KR.decode(&read_null_terminated_string_bytes(context, ptr_id)?).0.into_owned();
+    let value = if ptr_value != 0 {
+        encoding_rs::EUC_KR.decode(&read_null_terminated_string_bytes(context, ptr_value)?).0.into_owned()
+    } else {
+        String::new()
+    };
+    tracing::info!("MC_knlSetSystemProperty({id:?}, {value:?}) [not persisted]");
 
     Ok(())
 }

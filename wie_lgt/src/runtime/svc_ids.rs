@@ -122,10 +122,17 @@ pub enum WIPICSvcId {
     GetFramebufferBpp = 0x36,
     Printk = 0x64,
     Sprintk = 0x65,
-    Unk13 = 0x68,
+    // Service 0x68 is MC_knlExit in the game ABI (WIE numbering = reference
+    // firmware's own table minus one, confirmed by MC_knlSetSystemProperty
+    // landing at 0x7f here vs 0x80 in the reference). It was previously
+    // mislabelled Unk13 and stubbed to a no-op, so a title that calls exit ran
+    // on past the call into undefined code instead of stopping.
+    KnlExit = 0x68,
     GetCurProgramId = 0x6a,
     GetProgramName = 0x6f,
-    Exit = 0x6b,
+    // Service 0x6b is MC_knlGetParentProgramID, not exit; routing it to the exit
+    // handler would have terminated any title that asked for its parent id.
+    GetParentProgramId = 0x6b,
     Alloc = 0x75,
     Calloc = 0x76,
     Free = 0x77,
@@ -337,10 +344,10 @@ impl TryFrom<SvcId> for WIPICSvcId {
             0x36 => Self::GetFramebufferBpp,
             0x64 => Self::Printk,
             0x65 => Self::Sprintk,
-            0x68 => Self::Unk13,
+            0x68 => Self::KnlExit,
             0x6a => Self::GetCurProgramId,
             0x6f => Self::GetProgramName,
-            0x6b => Self::Exit,
+            0x6b => Self::GetParentProgramId,
             0x75 => Self::Alloc,
             0x76 => Self::Calloc,
             0x77 => Self::Free,
