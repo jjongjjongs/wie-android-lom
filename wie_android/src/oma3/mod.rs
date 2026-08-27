@@ -19,8 +19,11 @@
 
 pub mod analysis;
 pub mod audio;
+pub mod bus;
+pub mod renderer;
 pub mod rhythm;
 pub mod smaf;
 pub mod synth;
 pub mod tables;
 pub mod tone;
+pub mod wave;

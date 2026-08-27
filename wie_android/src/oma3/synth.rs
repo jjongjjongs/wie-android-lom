@@ -227,13 +227,11 @@ fn context_frequency(base_key: i32, mode: i32, key: i32) -> f64 {
 
 /// `wavePitchRatioForContext` - the Q16 resample ratio a recorded sample plays
 /// at for a bank context, key, mode and host transpose.
-pub fn wave_pitch_ratio_for_context(bank: i32, key: i32, mode: i32, host_transpose: i32) -> i32 {
-    if bank & 128 != 0 {
-        return 65536;
-    }
-    // The bank context picks the base key, the scaling mode and the per-semitone
-    // transpose multiplier, exactly as the reference switch.
-    let (base_key, freq_mode, transpose_mul) = match bank & 0xFF {
+/// The bank-context switch shared by `wave_pitch_ratio_for_context` and
+/// `fm_pitch_tail_for_context`: maps a bank to `(base_key, freq_mode,
+/// transpose_mul)`, exactly as the reference switch does in both functions.
+fn context_switch(bank: i32) -> (i32, i32, i32) {
+    match bank & 0xFF {
         115 => (66, 50, 2),
         116 => (45, 50, 2),
         117 => (61, 50, 2),
@@ -242,15 +240,43 @@ pub fn wave_pitch_ratio_for_context(bank: i32, key: i32, mode: i32, host_transpo
         123 | 126 => (69, 5, 20),
         124 | 125 => (69, 10, 10),
         _ => (69, 100, 1),
-    };
+    }
+}
+
+/// The effective key after the context's per-semitone transpose is applied, as
+/// both context functions compute it.
+fn context_effective_key(key: i32, mode: i32, host_transpose: i32, transpose_mul: i32) -> i32 {
     let clamped = clamp(key, 0, 127);
-    let effective = if mode == 0 || mode == 2 {
+    if mode == 0 || mode == 2 {
         clamp(clamped + host_transpose * transpose_mul, 0, 127)
     } else {
         clamped
-    };
+    }
+}
+
+pub fn wave_pitch_ratio_for_context(bank: i32, key: i32, mode: i32, host_transpose: i32) -> i32 {
+    if bank & 128 != 0 {
+        return 65536;
+    }
+    let (base_key, freq_mode, transpose_mul) = context_switch(bank);
+    let effective = context_effective_key(key, mode, host_transpose, transpose_mul);
     let ratio = context_frequency(base_key, freq_mode, effective) * 65536.0 * 0.003_822_63 + 0.5;
     ratio.clamp(1.0, 4_294_967_295.0) as i64 as i32
+}
+
+/// `fmPitchTailForContext` - the fixed-point pitch tail for an FM voice in a
+/// given bank context. Returns `shift << 16 | mantissa`, matching the reference.
+pub fn fm_pitch_tail_for_context(bank: i32, key: i32, mode: i32, host_transpose: i32) -> i32 {
+    let (base_key, freq_mode, transpose_mul) = context_switch(bank);
+    let effective = context_effective_key(key, mode, host_transpose, transpose_mul);
+    let freq = context_frequency(base_key, freq_mode, effective);
+    let mut mantissa = ((freq * 21.8453333333333 + 0.5).floor() as i64).clamp(1, 130944);
+    let mut shift: i32 = 0;
+    while mantissa > 1023 && shift < 7 {
+        mantissa >>= 1;
+        shift += 1;
+    }
+    (shift << 16) | (mantissa.min(1023) as i32 & 1023)
 }
 
 /// `pitchHz(int, int, int)`.
@@ -864,6 +890,20 @@ impl PitchState {
             base_step_q32: base_phase_step_from_tail(mantissa, shift, scale),
         }
     }
+
+    /// Ported from the reference `PitchState.fromTail`: rebuilds a pitch from a
+    /// stored `(shift, mantissa)` tail rather than a MIDI key.
+    fn from_tail(shift: i32, mantissa: i32, sample_rate: i32) -> Self {
+        let shift = clamp(shift, 0, 7);
+        let mantissa = mantissa.clamp(1, 1023);
+        PitchState {
+            base_hz: hz_from_pitch_tail(mantissa, shift, sample_rate),
+            env_rate_param: env_rate_param_from_tail(mantissa, shift),
+            keylevel_code: keylevel_code_from_tail(mantissa, shift),
+            detune_key_code: phase_key_code_from_tail(mantissa, shift),
+            base_step_q32: base_phase_step_from_tail(mantissa, shift, 65536),
+        }
+    }
 }
 
 /// One running voice, ported from the reference `VoiceRuntime`: up to four
@@ -882,6 +922,7 @@ pub struct VoiceRuntime {
     op_count: usize,
     pan_l: f64,
     pan_r: f64,
+    sample_rate: i32,
 }
 
 impl VoiceRuntime {
@@ -935,6 +976,7 @@ impl VoiceRuntime {
             op_count,
             pan_l: 0.0,
             pan_r: 0.0,
+            sample_rate,
         };
         runtime.set_velocity(velocity);
         let position = clamp_f((pan as f64 - 64.0) / 64.0, -1.0, 1.0);
@@ -949,6 +991,78 @@ impl VoiceRuntime {
 
     pub fn max_release_sec(&self) -> f64 {
         self.op.iter().take(self.op_count).fold(0.05, |m, o| m.max(o.release_sec))
+    }
+
+    pub fn all_sound_off(&mut self) {
+        for i in 0..self.op_count {
+            self.op[i].all_sound_off();
+        }
+    }
+
+    pub fn is_audible(&self) -> bool {
+        self.op.iter().take(self.op_count).any(|o| o.carrier && o.is_audible())
+    }
+
+    pub fn key_state(&mut self, state: i32, reset_env: bool) {
+        if state == 1 || state == 2 || state == 255 {
+            self.fb0_prev_i16 = 0;
+            self.fb0_prev2_i16 = 0;
+            self.fb2_prev_i16 = 0;
+            self.fb2_prev2_i16 = 0;
+        }
+        for i in 0..self.op_count {
+            self.op[i].key_state(state, reset_env);
+        }
+    }
+
+    pub fn release_now(&mut self) {
+        for i in 0..self.op_count {
+            self.op[i].release_now();
+        }
+    }
+
+    pub fn set_modulation(&mut self, modulation: i32) {
+        self.channel_modulation = clamp(modulation, 0, 4);
+    }
+
+    /// Mirrors the reference `setPitch(int, int, int, int)`: the second argument
+    /// is unused by `PitchState.from`, exactly as in the reference.
+    pub fn set_pitch(&mut self, key: i32, _unused: i32, bend: i32, bend_range: i32) {
+        let pitch = PitchState::from(key, bend, bend_range, self.sample_rate);
+        for i in 0..self.op_count {
+            self.op[i].set_pitch(
+                pitch.base_hz,
+                pitch.env_rate_param,
+                pitch.keylevel_code,
+                pitch.detune_key_code,
+                pitch.base_step_q32,
+            );
+        }
+    }
+
+    pub fn set_pitch_tail(&mut self, shift: i32, mantissa: i32) {
+        let pitch = PitchState::from_tail(shift, mantissa, self.sample_rate);
+        for i in 0..self.op_count {
+            self.op[i].set_pitch(
+                pitch.base_hz,
+                pitch.env_rate_param,
+                pitch.keylevel_code,
+                pitch.detune_key_code,
+                pitch.base_step_q32,
+            );
+        }
+    }
+
+    pub fn pan_l(&self) -> f64 {
+        self.pan_l
+    }
+
+    pub fn pan_r(&self) -> f64 {
+        self.pan_r
+    }
+
+    pub fn sample_rate(&self) -> i32 {
+        self.sample_rate
     }
 
     fn run_slot_feedback(&mut self, slot: usize, position: i32, gate: i32, modulation: f64, lfo_phase: i32) -> f64 {
@@ -1068,8 +1182,110 @@ impl VoiceRuntime {
     }
 }
 
+/// A `VoiceRuntime` under a streaming sequencer: it remembers how far the note
+/// has played (`position_frames`), when the key releases (`gate_frames`) and
+/// when it goes silent (`total_frames`), so the renderer can drive it a chunk
+/// at a time and change its pitch, gate or modulation mid-note. Ported from the
+/// reference `OracleMa3Synth.StreamingVoice`.
+pub struct StreamingVoice {
+    voice: VoiceRuntime,
+    gate_frames: i32,
+    position_frames: i32,
+    total_frames: i32,
+}
+
+impl StreamingVoice {
+    pub fn new(voice: VoiceRuntime, gate_frames: i32, total_frames: i32) -> Self {
+        StreamingVoice {
+            voice,
+            gate_frames,
+            position_frames: 0,
+            total_frames: total_frames.max(0),
+        }
+    }
+
+    pub fn all_sound_off(&mut self) {
+        self.voice.all_sound_off();
+    }
+
+    pub fn position_frames(&self) -> i32 {
+        self.position_frames
+    }
+
+    pub fn total_frames(&self) -> i32 {
+        self.total_frames
+    }
+
+    pub fn is_audible(&self) -> bool {
+        self.voice.is_audible()
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.position_frames >= self.total_frames
+    }
+
+    pub fn key_state(&mut self, state: i32, on: bool) {
+        self.voice.key_state(state, on);
+    }
+
+    pub fn release_now(&mut self) {
+        self.voice.release_now();
+    }
+
+    /// Adds `count` frames starting at frame `offset` into the interleaved
+    /// stereo `buf`, panned and accumulated exactly as the reference does.
+    /// Returns how many frames were actually written.
+    pub fn render(&mut self, buf: &mut [f32], offset: usize, count: i32) -> i32 {
+        if count <= 0 || self.is_finished() {
+            return 0;
+        }
+        let frames = count.min(self.total_frames - self.position_frames);
+        let mut idx = offset * 2;
+        for _ in 0..frames {
+            let sample = self.voice.sample(self.position_frames, self.gate_frames) as f64;
+            buf[idx] += (self.voice.pan_l * sample) as f32;
+            buf[idx + 1] += (sample * self.voice.pan_r) as f32;
+            idx += 2;
+            self.position_frames += 1;
+        }
+        frames
+    }
+
+    pub fn render_sample(&mut self) -> f32 {
+        if self.is_finished() {
+            0.0
+        } else {
+            let sample = self.voice.sample(self.position_frames, self.gate_frames);
+            self.position_frames += 1;
+            sample
+        }
+    }
+
+    pub fn set_gate_frames(&mut self, gate: i32) {
+        let gate = (self.position_frames + 1).max(gate);
+        self.gate_frames = gate;
+        self.total_frames = (gate + release_frames(self.voice.max_release_sec(), self.voice.sample_rate)).max(self.voice.sample_rate / 100);
+    }
+
+    pub fn set_modulation(&mut self, modulation: i32) {
+        self.voice.set_modulation(modulation);
+    }
+
+    pub fn set_pitch(&mut self, key: i32, unused: i32, bend: i32, bend_range: i32) {
+        self.voice.set_pitch(key, unused, bend, bend_range);
+    }
+
+    pub fn set_pitch_tail(&mut self, shift: i32, mantissa: i32) {
+        self.voice.set_pitch_tail(shift, mantissa);
+    }
+
+    pub fn set_velocity(&mut self, velocity: i32) {
+        self.voice.set_velocity(velocity);
+    }
+}
+
 /// `releaseFrames` - how many frames the note's tail needs.
-fn release_frames(release_sec: f64, sample_rate: i32) -> i32 {
+pub fn release_frames(release_sec: f64, sample_rate: i32) -> i32 {
     let floor = (sample_rate / 20).max(1);
     if !release_sec.is_finite() || release_sec > 60.0 {
         return floor.max(sample_rate);

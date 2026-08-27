@@ -598,7 +598,46 @@ pub struct NoteEvent {
     pub fm_fixed_slot: i32,
     pub attenuation_master_volume: i32,
     pub attenuation_velocity_ctrl_table: bool,
+    pub fm_pitch_tail_valid: bool,
+    pub fm_pitch_tail_shift: i32,
+    pub fm_pitch_tail_mantissa: i32,
     pub tone: Option<ToneDef>,
+}
+
+/// One control-change snapshot the streaming renderer replays, as the
+/// reference's `OracleMmfAnalysis.ControlEvent`. Every control event carries the
+/// full post-change channel state so the renderer can re-derive gains and pitch.
+#[derive(Clone, Default)]
+pub struct ControlEvent {
+    pub order: i32,
+    pub tick: i32,
+    pub track: i32,
+    pub channel: i32,
+    pub volume: i32,
+    pub expression: i32,
+    pub pan: i32,
+    pub modulation: i32,
+    pub bend14: i32,
+    pub bend_range: i32,
+    pub sustain: i32,
+    pub mono_mode: i32,
+    pub all_sound_off: i32,
+    pub all_notes_off: i32,
+    pub changed_control: i32,
+    pub attenuation_master_volume: i32,
+    pub attenuation_velocity_ctrl_table: bool,
+    pub fm_fixed_cmd: i32,
+    pub fm_fixed_slot: i32,
+    pub fm_fixed_pitch_raw: i32,
+    pub fm_fixed_velocity: i32,
+    pub fm_fixed_tone: Option<ToneDef>,
+    pub fm_fixed_lookup_bank: i32,
+    pub fm_fixed_midi_key: i32,
+    pub fm_fixed_key6: i32,
+    pub fm_fixed_synth_midi_key: i32,
+    pub fm_fixed_synth_key6: i32,
+    pub fm_fixed_pan: i32,
+    pub fm_fixed_reset_env: bool,
 }
 
 struct Collector<'a> {
@@ -609,6 +648,7 @@ struct Collector<'a> {
     tones: Vec<ToneDef>,
     notes: Vec<NoteEvent>,
     audio_events: Vec<AudioEvent>,
+    controls: Vec<ControlEvent>,
     decoded_audio_samples: Vec<DecodedAudioSample>,
     setup_bulk_audio_samples: Vec<DecodedAudioSample>,
     builtin_audio_samples: Vec<DecodedAudioSample>,
@@ -631,6 +671,7 @@ impl<'a> Collector<'a> {
             tones: Vec::new(),
             notes: Vec::new(),
             audio_events: Vec::new(),
+            controls: Vec::new(),
             decoded_audio_samples: Vec::new(),
             setup_bulk_audio_samples: Vec::new(),
             builtin_audio_samples: Vec::new(),
@@ -923,6 +964,126 @@ impl<'a> Collector<'a> {
         }
     }
 
+    /// `recordControl` - snapshot a channel's post-change state as a control
+    /// event for the streaming renderer. `track`/`channel` index the channel
+    /// grid directly (already track-/channel-safe).
+    fn record_control(&mut self, tick: i32, track: i32, channel: i32, changed_control: i32) {
+        let order = self.order;
+        self.order += 1;
+        let state = &self.channels[track as usize][channel as usize];
+        let control = ControlEvent {
+            order,
+            tick,
+            track,
+            channel,
+            volume: state.volume,
+            expression: state.expression,
+            pan: state.pan,
+            modulation: state.modulation,
+            bend14: state.bend14,
+            bend_range: state.bend_range,
+            sustain: state.sustain,
+            mono_mode: state.mono_mode,
+            all_sound_off: state.all_sound_off,
+            all_notes_off: state.all_notes_off,
+            changed_control,
+            attenuation_master_volume: self.attenuation_master_volume,
+            attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
+            fm_fixed_cmd: 0,
+            fm_fixed_slot: 0,
+            fm_fixed_pitch_raw: 0,
+            fm_fixed_velocity: 0,
+            fm_fixed_tone: None,
+            fm_fixed_lookup_bank: 0,
+            fm_fixed_midi_key: 0,
+            fm_fixed_key6: 0,
+            fm_fixed_synth_midi_key: 0,
+            fm_fixed_synth_key6: 0,
+            fm_fixed_pan: 64,
+            fm_fixed_reset_env: state.fm_reset_env,
+        };
+        self.controls.push(control);
+    }
+
+    /// `recordFixedSlotControl` - the FM fixed-slot note-on/off carried by a
+    /// family-3 sample sysex while fixed-slot mode is active.
+    fn record_fixed_slot_control(&mut self, event: &EventInfo) {
+        let track = safe_track(event.track_id);
+        let slot = event.sysex_value & 15;
+        if slot >= 16 {
+            return;
+        }
+        let velocity = if event.sysex_type == 6 && event.payload.len() >= 10 {
+            event.payload[9] as i32 & 127
+        } else {
+            0
+        };
+        let synth_key = self.key6_to_midi(0);
+        let lookup = self.find_tone_for_fixed_slot(track, slot, &self.channels[track as usize][slot as usize].clone());
+        let state = &self.channels[track as usize][slot as usize];
+        let order = self.order;
+        self.order += 1;
+        let control = ControlEvent {
+            order,
+            tick: event.tick,
+            track,
+            channel: safe_channel(slot),
+            volume: state.volume,
+            expression: state.expression,
+            pan: state.pan,
+            modulation: state.modulation,
+            bend14: state.bend14,
+            bend_range: state.bend_range,
+            sustain: state.sustain,
+            mono_mode: state.mono_mode,
+            all_sound_off: state.all_sound_off,
+            all_notes_off: state.all_notes_off,
+            changed_control: (event.sysex_type & 0xFF) | 256,
+            attenuation_master_volume: self.attenuation_master_volume,
+            attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
+            fm_fixed_cmd: event.sysex_type,
+            fm_fixed_slot: safe_channel(slot),
+            fm_fixed_pitch_raw: event.sysex_arg & 65535,
+            fm_fixed_velocity: velocity & 127,
+            fm_fixed_tone: lookup.tone.clone(),
+            fm_fixed_lookup_bank: state.lookup_bank & 0xFF,
+            fm_fixed_midi_key: synth_key & 127,
+            fm_fixed_key6: 0,
+            fm_fixed_synth_midi_key: synth_key & 127,
+            fm_fixed_synth_key6: 0,
+            fm_fixed_pan: state.pan,
+            fm_fixed_reset_env: self.fm_reset_env,
+        };
+        self.controls.push(control);
+    }
+
+    /// `findToneForFixedSlot` - the tone a fixed slot plays, given the channel's
+    /// bank state, falling back to bank 0 then a built-in rhythm tone.
+    fn find_tone_for_fixed_slot(&self, track: i32, slot: i32, state: &ChannelState) -> ToneLookup {
+        let mut bank = state.lookup_bank;
+        if bank == 0 && slot == 9 && state.bank_msb == 0 && state.bank_lsb == 0 {
+            bank = 128;
+        }
+        if bank < 128 {
+            let found = self.lookup_by_bank_program(track, bank, state.program);
+            if found.found() {
+                found
+            } else {
+                self.lookup_by_bank_program(track, 0, state.program)
+            }
+        } else {
+            let found = self.lookup_by_bank_program(track, bank, 0);
+            if found.found() {
+                found
+            } else {
+                match self.create_builtin_rhythm_tone(track, 0) {
+                    Some(tone) => ToneLookup::of(tone),
+                    None => ToneLookup::empty(),
+                }
+            }
+        }
+    }
+
     fn apply_sysex(&mut self, event: &EventInfo, track: i32) {
         let track_no = safe_track(event.track_id);
         if event.sysex_family == 2 && event.sysex_type == 0 {
@@ -934,10 +1095,15 @@ impl<'a> Collector<'a> {
                 s.fm_reset_env = self.fm_reset_env;
                 s.fm_fixed_slot_mode = self.fm_fixed_slot_mode;
             }
+            for ch in 0..16 {
+                self.record_control(event.tick, track_no, ch, -1);
+            }
         } else if event.sysex_family == 2 && event.sysex_type == 4 {
             self.apply_type4_tone_sysex(track_no, &event.payload);
         } else if event.sysex_family == 2 && (event.sysex_type == 5 || event.sysex_type == 6) {
-            // Sample sysex - streamed audio, deferred.
+            // Setup-bulk sample sysex - streamed audio, handled elsewhere.
+        } else if event.sysex_family == 3 && (event.sysex_type == 5 || event.sysex_type == 6) && self.fm_fixed_slot_mode {
+            self.record_fixed_slot_control(event);
         } else if event.sysex_family == 1 && event.sysex_type == 33 && event.sysex_event_code == 33 && event.sysex_value == 1 {
             let transpose = (event.sysex_arg & 0xFF) - 12;
             if (-12..=12).contains(&transpose) {
@@ -950,6 +1116,9 @@ impl<'a> Collector<'a> {
             }
         } else if event.sysex_family == 1 && event.sysex_type == 0 && event.sysex_event_code == 23 {
             self.attenuation_master_volume = clamp7(event.sysex_value);
+            for ch in 0..16 {
+                self.record_control(event.tick, track_no, ch, -1);
+            }
         }
         let _ = track;
     }
@@ -1223,6 +1392,7 @@ impl<'a> Collector<'a> {
             attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
             pcm_stream: false,
             pcm_master_softened: false,
+            wave_record: record,
         });
         self.order += 1;
         true
@@ -1271,6 +1441,7 @@ impl<'a> Collector<'a> {
             attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
             pcm_stream: false,
             pcm_master_softened: false,
+            wave_record: tone.wave_record.clone(),
         });
         self.order += 1;
         true
@@ -1294,9 +1465,12 @@ impl<'a> Collector<'a> {
         note.render_midi_key = note.midi_key;
         note.render_key6 = note.key6;
         if note.lookup_bank & 128 == 0 {
-            // Melodic voice: render key is the note's own key. The fixed-point
-            // pitch tail the reference also stores here is not read by the
-            // ported render path, so it is not recomputed.
+            // Melodic voice: render key is the note's own key, and its FM pitch
+            // tail comes from the neutral (bank 0, mode 2) context.
+            let tail = synth::fm_pitch_tail_for_context(0, note.midi_key, 2, note.host_transpose);
+            note.fm_pitch_tail_valid = true;
+            note.fm_pitch_tail_shift = (tail >> 16) & 7;
+            note.fm_pitch_tail_mantissa = tail & 1023;
             return;
         }
         if let Some(tone) = &note.tone {
@@ -1311,6 +1485,17 @@ impl<'a> Collector<'a> {
                 }
                 note.render_midi_key = key;
                 note.render_key6 = self.midi_to_key6(key);
+                if note.tone_type == 1 {
+                    let (bank_arg, key_arg) = if tone.format == 4 && tone.params.len() > 3 {
+                        (note.lookup_bank, tone.params[3] as i32 & 255)
+                    } else {
+                        (0, note.midi_key)
+                    };
+                    let tail = synth::fm_pitch_tail_for_context(bank_arg, key_arg, 1, note.host_transpose);
+                    note.fm_pitch_tail_valid = true;
+                    note.fm_pitch_tail_shift = (tail >> 16) & 7;
+                    note.fm_pitch_tail_mantissa = tail & 1023;
+                }
             }
         }
     }
@@ -1319,13 +1504,18 @@ impl<'a> Collector<'a> {
         let track = safe_track(event.track_id);
         let channel = safe_channel(event.channel);
         match event.kind {
-            2 => self.apply_control(event, track, channel),
+            2 => {
+                self.apply_control(event, track, channel);
+                self.record_control(event.tick, track, channel, event.control);
+            }
             6 => {
                 let state = &mut self.channels[track as usize][channel as usize];
                 if event.control == 11 {
                     state.expression = clamp7(event.value);
+                    self.record_control(event.tick, track, channel, event.control);
                 } else if event.control == 129 {
                     state.modulation = event.value.min(4);
+                    self.record_control(event.tick, track, channel, event.control);
                 }
             }
             3 => self.apply_sysex(event, track),
@@ -1371,6 +1561,7 @@ impl<'a> Collector<'a> {
                     attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
                     pcm_stream: true,
                     pcm_master_softened: softened,
+                    wave_record: Vec::new(),
                 });
                 self.order += 1;
                 return;
@@ -1458,6 +1649,10 @@ impl<'a> Collector<'a> {
         self.decode_all_audio_samples();
         for i in 0..self.smaf.tracks.len() {
             self.apply_initial_channel_status(i);
+            let track_no = safe_track(self.smaf.tracks[i].id);
+            for ch in 0..16 {
+                self.record_control(0, track_no, ch, -1);
+            }
         }
         for i in 0..self.smaf.tracks.len() {
             let events = self.smaf.tracks[i].sequence.events.clone();
@@ -1466,12 +1661,15 @@ impl<'a> Collector<'a> {
             }
         }
         self.notes.sort_by(|a, b| a.start_tick.cmp(&b.start_tick).then(a.order.cmp(&b.order)));
+        self.controls.sort_by(|a, b| a.tick.cmp(&b.tick).then(a.order.cmp(&b.order)));
         self.collect_audio_events();
         self.audio_events
             .sort_by(|a, b| a.start_tick.cmp(&b.start_tick).then(a.order.cmp(&b.order)));
         Analysis {
             notes: self.notes,
             audio_events: self.audio_events,
+            controls: self.controls,
+            total_ticks: self.smaf.total_ticks,
         }
     }
 
@@ -1520,6 +1718,7 @@ impl<'a> Collector<'a> {
                         attenuation_velocity_ctrl_table: false,
                         pcm_stream: true,
                         pcm_master_softened: false,
+                        wave_record: Vec::new(),
                     });
                     self.order += 1;
                 }
@@ -1550,12 +1749,15 @@ pub struct AudioEvent {
     pub attenuation_velocity_ctrl_table: bool,
     pub pcm_stream: bool,
     pub pcm_master_softened: bool,
+    pub wave_record: Vec<u8>,
 }
 
 /// The notes and recordings a file resolves to.
 pub struct Analysis {
     pub notes: Vec<NoteEvent>,
     pub audio_events: Vec<AudioEvent>,
+    pub controls: Vec<ControlEvent>,
+    pub total_ticks: i32,
 }
 
 /// Analyze a parsed file into the notes and recordings it plays. `key_base` is
@@ -1565,7 +1767,7 @@ pub fn analyze(smaf: &Smaf) -> Analysis {
 }
 
 /// `ticksToFrames` - a tick is four milliseconds.
-fn ticks_to_frames(ticks: i32, rate: i32) -> i32 {
+pub fn ticks_to_frames(ticks: i32, rate: i32) -> i32 {
     if ticks <= 0 {
         return 0;
     }

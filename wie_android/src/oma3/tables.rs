@@ -45,6 +45,25 @@ pub fn lfo_pitch_q20(depth: usize, phase: usize) -> i64 {
     i32::from_le_bytes([LFO_PITCH[offset], LFO_PITCH[offset + 1], LFO_PITCH[offset + 2], LFO_PITCH[offset + 3]]) as i64
 }
 
+/// The wave voice's own pitch LFO, a table distinct from the FM `PITCH_Q20`.
+static WAVE_PITCH: &[u8; LFO_DEPTHS * LFO_TABLE_SIZE * 4] = include_bytes!("data/wave_pitch.bin");
+
+/// `OracleMa3LfoTables.wavePitchQ20(depth, phase)`.
+pub fn wave_pitch_q20(depth: usize, phase: usize) -> i32 {
+    let offset = ((depth & (LFO_DEPTHS - 1)) * LFO_TABLE_SIZE + (phase & (LFO_TABLE_SIZE - 1))) * 4;
+    i32::from_le_bytes([WAVE_PITCH[offset], WAVE_PITCH[offset + 1], WAVE_PITCH[offset + 2], WAVE_PITCH[offset + 3]])
+}
+
+/// The wave engine's key-scale gain table: 512 Q15 values (`4 * 128`), indexed
+/// as `(selector - 1) * 128 + code`. Reconstructed from the reference
+/// `OracleMa3WaveRuntime` keyscale table.
+static WAVE_KEYSCALE: &[u8; 512 * 2] = include_bytes!("data/wave_keyscale.bin");
+
+pub fn wave_keyscale_q15(index: usize) -> i32 {
+    let offset = (index & 511) * 2;
+    u16::from_le_bytes([WAVE_KEYSCALE[offset], WAVE_KEYSCALE[offset + 1]]) as i32
+}
+
 /// Operator frequency as a multiple of the note's, from the reference's
 /// `MULTIPLE`. Fractional entries (0.5, 10.5, 13.5) are the reason the current
 /// engine's integer `MULTIPLE_MAP` sounds wrong.
