@@ -13,10 +13,23 @@ use std::{
 
 static INIT: Once = Once::new();
 
+/// Default log directive used when `RUST_LOG` is unset.
+///
+/// Everything at info, plus debug for the WIPI-C API layer - the property,
+/// filesystem, network and media calls that explain why a title behaves as it
+/// does, which are otherwise debug-level and invisible in a normal capture. The
+/// high-frequency graphics and UI drawing services stay at info, and the CPU's
+/// cache-maintenance writes are silenced, so the full-log capture stays complete
+/// where it matters without a title's render loop flooding it. Setting `RUST_LOG`
+/// overrides this entirely.
+const DEFAULT_LOG_DIRECTIVE: &str =
+    "info,wie_wipi_c=debug,wie_wipi_c::api::graphics=info,wie_wipi_c::api::uic=info,arm32_cpu::arm=warn";
+
 /// Installs the subscriber once. Safe to call from every entry point.
 pub fn init() {
     INIT.call_once(|| {
-        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        let filter =
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_DIRECTIVE));
 
         tracing_subscriber::fmt()
             .with_env_filter(filter)
@@ -216,7 +229,16 @@ mod logcat {
 mod tests {
     use std::io::Write as _;
 
-    use super::{MAX_LINES, make_writer, reset, snapshot};
+    use super::{DEFAULT_LOG_DIRECTIVE, MAX_LINES, make_writer, reset, snapshot};
+
+    #[test]
+    fn default_log_directive_parses() {
+        // A malformed directive would be dropped, quietly reverting the full-log
+        // capture to bare info and losing the debug detail it is meant to keep.
+        tracing_subscriber::EnvFilter::builder()
+            .parse(DEFAULT_LOG_DIRECTIVE)
+            .expect("default log directive must be valid");
+    }
 
     /// The tests share one global record, so they run as one.
     #[test]
