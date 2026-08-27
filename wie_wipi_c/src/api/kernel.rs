@@ -24,22 +24,10 @@ pub struct WIPICTimer {
     fn_callback: WIPICWord,
 }
 
-/// Milliseconds `MC_knlCurrentTime` is shifted into the past (~17 years).
-///
-/// A start-up certificate/DRM check (cert.c2s) fails on a 2026 clock because a
-/// 2009-era licence's validity window is long past. The current time is reported
-/// shifted back so it lands within that window, while the shift is a constant, so
-/// elapsed-time deltas the timer/animation loops rely on are unchanged. Absolute
-/// dates a title shows will read ~17 years early, which is harmless for these
-/// preservation titles.
-const CLOCK_SHIFT_MS: u64 = 17 * 365 * 24 * 60 * 60 * 1000;
-
 pub async fn current_time(context: &mut dyn WIPICContext) -> Result<u64> {
-    let now = context.system().platform().now().raw();
-    let shifted = now.saturating_sub(CLOCK_SHIFT_MS);
-    tracing::debug!("MC_knlCurrentTime() -> {shifted} (now {now} shifted back {CLOCK_SHIFT_MS}ms)");
+    tracing::debug!("MC_knlCurrentTime()");
 
-    Ok(shifted)
+    Ok(context.system().platform().now().raw())
 }
 
 pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, p_out: WIPICWord, buf_size: WIPICWord) -> Result<i32> {
