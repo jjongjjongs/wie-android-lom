@@ -86,6 +86,44 @@ pub struct SetupBulkEntry {
     pub packed_data: Vec<u8>,
 }
 
+/// One recorded sample inside an audio track, as `AudioSampleInfo`. The
+/// reference keeps only the file offset and decodes on demand; the raw ADPCM
+/// bytes are copied here at parse time so the analysis decodes without the file.
+#[derive(Clone, Default)]
+pub struct AudioSampleInfo {
+    pub id: i32,
+    pub data: Vec<u8>,
+}
+
+/// One MTSP recorded sample, as the reference's `MtspSampleEntry`. `codec` is
+/// 1 for Yamaha ADPCM, 2 for unsigned PCM8, 3 for signed PCM8.
+#[derive(Clone, Default)]
+pub struct MtspSampleEntry {
+    pub track_id: i32,
+    pub sample_id: i32,
+    pub codec: i32,
+    pub sample_rate: i32,
+    pub data: Vec<u8>,
+}
+
+/// One recorded-audio track, as the reference's `AudioTrackInfo`.
+#[derive(Clone, Default)]
+pub struct AudioTrackInfo {
+    pub id: i32,
+    pub offset: i32,
+    pub size: i32,
+    pub format_type: i32,
+    pub sequence_type: i32,
+    pub sample_format: i32,
+    pub sample_rate: i32,
+    pub channel_count: i32,
+    pub aspi_offset: i32,
+    pub aspi_size: i32,
+    pub aspi: TextInfo,
+    pub sequence: SequenceInfo,
+    pub samples: Vec<AudioSampleInfo>,
+}
+
 /// The start/stop points a track's text chunk names, as `TextInfo`.
 #[derive(Clone, Copy, Default)]
 pub struct TextInfo {
@@ -116,12 +154,14 @@ pub struct TrackInfo {
     pub sequence: SequenceInfo,
     pub tones: Vec<ToneEntry>,
     pub setup_bulk_entries: Vec<SetupBulkEntry>,
+    pub mtsp_samples: Vec<MtspSampleEntry>,
 }
 
 /// The parsed file: the tracks and the longest track length in ticks.
 pub struct Smaf {
     pub total_ticks: i32,
     pub tracks: Vec<TrackInfo>,
+    pub audios: Vec<AudioTrackInfo>,
 }
 
 pub fn parse(data: &[u8]) -> Result<Smaf> {
@@ -171,6 +211,26 @@ fn compact_modulation_bucket(v: i32) -> i32 {
 
 fn mtr_status_len_for_format(format: i32) -> i32 {
     if format != 0 && format != 4 { 16 } else { 2 }
+}
+
+/// `atrRateDll` - the sample rate a DLL-style audio format code names.
+fn atr_rate_dll(code: i32) -> i32 {
+    match code {
+        16 => 4000,
+        17 => 8000,
+        _ => 0,
+    }
+}
+
+/// `atrRateExtended` - the sample rate an extended audio format code names.
+fn atr_rate_extended(code: i32) -> i32 {
+    match code {
+        16 => 4000,
+        17 => 8000,
+        18 => 11025,
+        32 => 16000,
+        _ => 0,
+    }
 }
 
 fn read_compact_gate(byte: i32, low: i32, has_extra: bool) -> i32 {
@@ -296,6 +356,7 @@ struct Parser<'a> {
     data: &'a [u8],
     total_ticks: i32,
     tracks: Vec<TrackInfo>,
+    audios: Vec<AudioTrackInfo>,
 }
 
 impl<'a> Parser<'a> {
@@ -304,6 +365,7 @@ impl<'a> Parser<'a> {
             data,
             total_ticks: 0,
             tracks: Vec::new(),
+            audios: Vec::new(),
         }
     }
 
@@ -522,34 +584,89 @@ impl<'a> Parser<'a> {
             return Err(err("SMAF root chunk is not MMMD"));
         }
         let end = self.checked_end(8, root.payload_size, self.data.len() as i32)?;
+        // `current` is the reference's `var5`: the audio track a following loose
+        // AspI/Atsq/Awa chunk attaches to. A plain score track clears it; an
+        // unrelated chunk carries it forward.
+        let mut current: Option<usize> = None;
         let mut pos = 8;
         while pos + 8 <= end {
             let lead = self.data[pos as usize] as i32;
             if lead != 44 && lead != 0 {
                 if let Some(chunk) = self.identify_root_child(pos, end - pos)? {
                     if chunk.base_type() != 65535 {
-                        match chunk.base_type() {
-                            3 => {
-                                let child_end = self.checked_end(chunk.payload_offset, chunk.payload_size, self.data.len() as i32)?;
-                                self.collect_opda_tracks(chunk.payload_offset, child_end)?;
-                            }
-                            4 if chunk.stream_no < 16 && self.tracks.len() < 16 => {
-                                let mut track = TrackInfo {
+                        let ty = chunk.base_type();
+                        let mut next_current = current;
+                        if ty == 3 {
+                            let child_end = self.checked_end(chunk.payload_offset, chunk.payload_size, self.data.len() as i32)?;
+                            self.collect_opda_tracks(chunk.payload_offset, child_end)?;
+                        } else if ty == 4 && chunk.stream_no < 16 && self.tracks.len() < 16 {
+                            let mut track = TrackInfo {
+                                id: chunk.stream_no,
+                                offset: chunk.payload_offset,
+                                size: chunk.payload_size,
+                                ..Default::default()
+                            };
+                            self.parse_mtr(&mut track)?;
+                            let seq = track.sequence.clone();
+                            self.tracks.push(track);
+                            self.update_total_ticks(&seq);
+                            next_current = None;
+                        } else if ty == 5 && self.audios.len() < 16 {
+                            let mut audio = AudioTrackInfo {
+                                id: chunk.stream_no,
+                                offset: chunk.payload_offset,
+                                size: chunk.payload_size,
+                                ..Default::default()
+                            };
+                            self.parse_atr(&mut audio)?;
+                            let seq = audio.sequence.clone();
+                            self.audios.push(audio);
+                            self.update_total_ticks(&seq);
+                            next_current = Some(self.audios.len() - 1);
+                        } else if ty == 14 && current.is_some() {
+                            let idx = current.unwrap();
+                            self.checked_end(chunk.payload_offset, chunk.payload_size, self.data.len() as i32)?;
+                            let aspi = self.parse_text_info(chunk.payload_offset, chunk.payload_size);
+                            let a = &mut self.audios[idx];
+                            a.aspi_offset = chunk.payload_offset;
+                            a.aspi_size = chunk.payload_size;
+                            a.aspi = aspi;
+                            next_current = Some(idx);
+                        } else if ty == 16 && current.is_some() {
+                            let idx = current.unwrap();
+                            self.checked_end(chunk.payload_offset, chunk.payload_size, self.data.len() as i32)?;
+                            let id = self.audios[idx].id;
+                            let seq = self.parse_sequence(chunk.payload_offset, chunk.payload_size, id, 2)?;
+                            self.update_total_ticks(&seq);
+                            self.audios[idx].sequence = seq;
+                            next_current = Some(idx);
+                        } else if ty == 17 && current.is_some() {
+                            let idx = current.unwrap();
+                            self.checked_end(chunk.payload_offset, chunk.payload_size, self.data.len() as i32)?;
+                            let bytes = self.copy_bytes(chunk.payload_offset, chunk.payload_size);
+                            let a = &mut self.audios[idx];
+                            if a.samples.len() < 16 {
+                                a.samples.push(AudioSampleInfo {
                                     id: chunk.stream_no,
-                                    offset: chunk.payload_offset,
-                                    size: chunk.payload_size,
-                                    ..Default::default()
-                                };
-                                self.parse_mtr(&mut track)?;
-                                let seq = track.sequence.clone();
-                                self.tracks.push(track);
-                                self.update_total_ticks(&seq);
+                                    data: bytes,
+                                });
                             }
-                            // Streamed-audio chunks are walked past; the FM path
-                            // does not decode them yet.
-                            _ => {}
+                            next_current = Some(idx);
+                        } else if ty == 13 && self.audios.len() < 16 {
+                            let mut audio = AudioTrackInfo {
+                                id: chunk.stream_no,
+                                offset: chunk.payload_offset,
+                                size: chunk.payload_size,
+                                ..Default::default()
+                            };
+                            self.parse_mwa(&mut audio)?;
+                            let seq = audio.sequence.clone();
+                            self.audios.push(audio);
+                            self.update_total_ticks(&seq);
+                            next_current = Some(self.audios.len() - 1);
                         }
                         pos += chunk.payload_size + 8;
+                        current = next_current;
                         continue;
                     }
                 }
@@ -559,6 +676,7 @@ impl<'a> Parser<'a> {
         Ok(Smaf {
             total_ticks: self.total_ticks,
             tracks: self.tracks,
+            audios: self.audios,
         })
     }
 
@@ -579,6 +697,17 @@ impl<'a> Parser<'a> {
                             self.parse_mtr(&mut track)?;
                             let seq = track.sequence.clone();
                             self.tracks.push(track);
+                            self.update_total_ticks(&seq);
+                        } else if chunk.base_type() == 5 && self.audios.len() < 16 {
+                            let mut audio = AudioTrackInfo {
+                                id: chunk.stream_no,
+                                offset: chunk.payload_offset,
+                                size: chunk.payload_size,
+                                ..Default::default()
+                            };
+                            self.parse_atr(&mut audio)?;
+                            let seq = audio.sequence.clone();
+                            self.audios.push(audio);
                             self.update_total_ticks(&seq);
                         }
                         at += chunk.payload_size + 8;
@@ -712,6 +841,8 @@ impl<'a> Parser<'a> {
                         12 => {
                             track.mtsp_offset = chunk.payload_offset;
                             track.mtsp_size = chunk.payload_size;
+                            let samples = self.parse_mtsp_samples(chunk.payload_offset, chunk.payload_size, track.id)?;
+                            track.mtsp_samples.extend(samples);
                         }
                         _ => {}
                     }
@@ -722,6 +853,185 @@ impl<'a> Parser<'a> {
             pos += 1;
         }
         Ok(())
+    }
+
+    /// `addAudioSample` - record one recorded sample (up to sixteen per track),
+    /// copying its bytes now so the analysis decodes without the file.
+    fn add_audio_sample(&self, audio: &mut AudioTrackInfo, chunk: &Chunk) {
+        if audio.samples.len() < 16 {
+            audio.samples.push(AudioSampleInfo {
+                id: chunk.stream_no,
+                data: self.copy_bytes(chunk.payload_offset, chunk.payload_size),
+            });
+        }
+    }
+
+    /// `parseAtrHeader` - the format, rate and channel count an ATR track names.
+    fn parse_atr_header(&self, at: i32, size: i32, audio: &mut AudioTrackInfo) {
+        audio.sample_format = 0;
+        audio.sample_rate = 0;
+        audio.channel_count = 1;
+        if size == 0 {
+            return;
+        }
+        audio.format_type = self.u8(at);
+        if size > 1 {
+            audio.sequence_type = self.u8(at + 1);
+        }
+        // Prefer the DLL-style rate in byte 2 when byte 3 is zero, then fall back
+        // to the extended-rate code in bytes 2, 3 or 0, exactly as the reference.
+        if size > 3 && self.u8(at + 3) == 0 && atr_rate_dll(self.u8(at + 2)) != 0 {
+            audio.sample_format = self.u8(at + 2);
+            audio.sample_rate = atr_rate_dll(audio.sample_format);
+        } else {
+            if size > 2 && atr_rate_extended(self.u8(at + 2)) != 0 {
+                audio.sample_format = self.u8(at + 2);
+            } else if size > 3 && atr_rate_extended(self.u8(at + 3)) != 0 {
+                audio.sample_format = self.u8(at + 3);
+            } else if atr_rate_extended(self.u8(at)) != 0 {
+                audio.sample_format = self.u8(at);
+            }
+            audio.sample_rate = atr_rate_extended(audio.sample_format);
+        }
+        if size > 5 && self.u8(at + 5) != 0 {
+            audio.channel_count = self.u8(at + 5);
+        }
+    }
+
+    /// `parseAtr` - a recorded-audio track: its header, then its text, sequence
+    /// and recorded samples.
+    fn parse_atr(&self, audio: &mut AudioTrackInfo) -> Result<()> {
+        self.checked_end(audio.offset, audio.size, self.data.len() as i32)?;
+        if audio.size < 6 {
+            return Err(err("ATR chunk is truncated"));
+        }
+        self.parse_atr_header(audio.offset, audio.size, audio);
+        let mut pos = 6;
+        while pos + 8 <= audio.size {
+            let at = audio.offset + pos;
+            let lead = self.data[at as usize] as i32;
+            if lead != 44 && lead != 0 && self.is_plausible_fourcc(at) {
+                let chunk = self
+                    .try_identify_chunk(6, at, audio.size - pos)
+                    .filter(|c| c.base_type() != 65535)
+                    .or_else(|| self.try_identify_chunk(5, at, audio.size - pos).filter(|c| c.base_type() != 65535));
+                if let Some(chunk) = chunk {
+                    self.checked_end(chunk.payload_offset, chunk.payload_size, self.data.len() as i32)?;
+                    match chunk.base_type() {
+                        14 => {
+                            audio.aspi_offset = chunk.payload_offset;
+                            audio.aspi_size = chunk.payload_size;
+                            audio.aspi = self.parse_text_info(chunk.payload_offset, chunk.payload_size);
+                        }
+                        16 => {
+                            let window = self.sequence_window(&audio.aspi, chunk.payload_size)?;
+                            audio.sequence = self.parse_sequence(chunk.payload_offset + window.start, window.size, audio.id, 2)?;
+                        }
+                        17 => self.add_audio_sample(audio, &chunk),
+                        8 => self.parse_audio_payload_children(audio, chunk.payload_offset, chunk.payload_offset + chunk.payload_size)?,
+                        _ => {}
+                    }
+                    pos += chunk.payload_size + 8;
+                    continue;
+                }
+            }
+            pos += 1;
+        }
+        Ok(())
+    }
+
+    /// `parseAudioPayloadChildren` - the text, sequence and samples nested inside
+    /// an audio-payload (Dch) chunk.
+    fn parse_audio_payload_children(&self, audio: &mut AudioTrackInfo, mut at: i32, end: i32) -> Result<()> {
+        while at + 8 <= end {
+            let lead = self.data[at as usize] as i32;
+            if lead != 44 && lead != 0 && self.is_plausible_fourcc(at) {
+                if let Some(chunk) = self.try_identify_chunk(6, at, end - at) {
+                    if chunk.base_type() != 65535 {
+                        self.checked_end(chunk.payload_offset, chunk.payload_size, self.data.len() as i32)?;
+                        match chunk.base_type() {
+                            14 => {
+                                audio.aspi_offset = chunk.payload_offset;
+                                audio.aspi_size = chunk.payload_size;
+                                audio.aspi = self.parse_text_info(chunk.payload_offset, chunk.payload_size);
+                            }
+                            16 => {
+                                let window = self.sequence_window(&audio.aspi, chunk.payload_size)?;
+                                audio.sequence = self.parse_sequence(chunk.payload_offset + window.start, window.size, audio.id, 2)?;
+                            }
+                            17 => self.add_audio_sample(audio, &chunk),
+                            _ => {}
+                        }
+                        at += chunk.payload_size + 8;
+                        continue;
+                    }
+                }
+            }
+            at += 1;
+        }
+        Ok(())
+    }
+
+    /// `parseMwa` - an audio track whose payload is a bare Mwa stream.
+    fn parse_mwa(&self, audio: &mut AudioTrackInfo) -> Result<()> {
+        self.checked_end(audio.offset, audio.size, self.data.len() as i32)?;
+        if audio.size > 0 {
+            self.parse_atr_header(audio.offset, audio.size, audio);
+        }
+        self.parse_audio_payload_children(audio, audio.offset, audio.offset + audio.size)
+    }
+
+    /// `parseMtspSamples` - the recorded samples an Mtsp chunk carries. Each is a
+    /// nested Mwa stream whose first three bytes name the codec and rate.
+    fn parse_mtsp_samples(&self, at: i32, size: i32, track_id: i32) -> Result<Vec<MtspSampleEntry>> {
+        let mut entries = Vec::new();
+        let end = self.checked_end(at, size, self.data.len() as i32)?;
+        let mut pos = at;
+        while pos < end {
+            let avail = end - pos;
+            if avail < 8 {
+                return Err(err("Mtsp chunk is truncated"));
+            }
+            let chunk = self.try_identify_chunk(4, pos, avail);
+            let chunk = match chunk {
+                Some(c) if c.base_type() == 13 && c.payload_size >= 3 => c,
+                _ => return Err(err("Mtsp contains an invalid Mwa stream")),
+            };
+            let codec_code = self.u8(chunk.payload_offset);
+            let rate = self.u8(chunk.payload_offset + 1) << 8 | self.u8(chunk.payload_offset + 2);
+            let (min_size, codec) = if codec_code == 1 {
+                if !(4000..=12000).contains(&rate) {
+                    return Err(err("Mtsp signed PCM8 rate is invalid"));
+                }
+                (rate / 50, 3)
+            } else if codec_code == 17 {
+                if !(4000..=12000).contains(&rate) {
+                    return Err(err("Mtsp unsigned PCM8 rate is invalid"));
+                }
+                (rate / 50, 2)
+            } else if codec_code == 32 {
+                if !(4000..=24000).contains(&rate) {
+                    return Err(err("Mtsp ADPCM4 rate is invalid"));
+                }
+                (rate / 100, 1)
+            } else {
+                return Err(err("Mtsp codec is unsupported"));
+            };
+            let payload = chunk.payload_size - 3;
+            if payload <= min_size {
+                return Err(err("Mtsp sample is truncated"));
+            }
+            let sample_id = if chunk.stream_no != 0 { chunk.stream_no - 1 } else { 0 };
+            entries.push(MtspSampleEntry {
+                track_id,
+                sample_id,
+                codec,
+                sample_rate: rate,
+                data: self.copy_bytes(chunk.payload_offset + 3, payload),
+            });
+            pos += chunk.payload_size + 8;
+        }
+        Ok(entries)
     }
 
     fn parse_tone_entries(&self, at: i32, size: i32, track_id: i32) -> Result<Vec<ToneEntry>> {
@@ -878,6 +1188,16 @@ impl<'a> Parser<'a> {
 
     fn parse_sequence_for_format(&self, at: i32, size: i32, track_id: i32, format: i32) -> Result<SequenceInfo> {
         if format != 1 && format != 2 && format != 6 {
+            self.parse_compact_sequence(at, size, track_id)
+        } else {
+            self.parse_midi_like_sequence(at, size, track_id)
+        }
+    }
+
+    /// `parseSequence` - an audio track's sequence, keyed by sequence type: a
+    /// compact stream for type 2, a MIDI-like stream otherwise.
+    fn parse_sequence(&self, at: i32, size: i32, track_id: i32, seq_type: i32) -> Result<SequenceInfo> {
+        if seq_type == 2 {
             self.parse_compact_sequence(at, size, track_id)
         } else {
             self.parse_midi_like_sequence(at, size, track_id)
@@ -1683,5 +2003,78 @@ mod tests {
         }
         eprintln!("verified {files} files, {tracks} tracks");
         assert!(files >= 40);
+    }
+
+    /// The reference rolling fingerprint over a byte range: `h = h*31 + b`,
+    /// wrapping 64-bit, kept to its low 32 bits.
+    fn byte_fp(bytes: &[u8]) -> i64 {
+        let mut h: i64 = 0;
+        for &b in bytes {
+            h = h.wrapping_mul(31).wrapping_add(b as i64);
+        }
+        h & 0xFFFF_FFFF
+    }
+
+    fn audio_fingerprint(smaf: &Smaf) -> (String, String) {
+        let mut at = String::from("AT");
+        for t in &smaf.audios {
+            at.push_str(&format!(
+                ";{},{},{},{},{},{}",
+                t.id,
+                t.format_type,
+                t.sample_rate,
+                t.channel_count,
+                t.sequence.events.len(),
+                t.samples.len(),
+            ));
+            for s in &t.samples {
+                at.push_str(&format!("/{}-{}-{}", s.id, s.data.len(), byte_fp(&s.data)));
+            }
+        }
+        let mut mt = String::from("MT");
+        for t in &smaf.tracks {
+            for m in &t.mtsp_samples {
+                mt.push_str(&format!(
+                    ";{},{},{},{},{},{}",
+                    m.track_id,
+                    m.sample_id,
+                    m.codec,
+                    m.sample_rate,
+                    m.data.len(),
+                    byte_fp(&m.data),
+                ));
+            }
+        }
+        (at, mt)
+    }
+
+    /// Parse every audio-carrying MMF and check its ATR audio tracks and MTSP
+    /// samples against the reference. Gated on `OMA3_SMAF_AUDIO_DUMP` (a
+    /// `DumpSmafAudioCompact` capture).
+    #[test]
+    fn parses_audio_like_the_reference() {
+        let dump_path = match std::env::var("OMA3_SMAF_AUDIO_DUMP") {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let dump = std::fs::read_to_string(&dump_path).unwrap();
+        let mut files = 0;
+        for line in dump.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let cols: Vec<&str> = line.split('\t').collect();
+            let path = cols[0];
+            let want_at = cols[1];
+            let want_mt = cols[2];
+            let data = std::fs::read(path).unwrap();
+            let smaf = super::parse(&data).unwrap_or_else(|e| panic!("{path}: parse failed: {}", e.0));
+            let (at, mt) = audio_fingerprint(&smaf);
+            assert_eq!(at, want_at, "{path}: audio tracks");
+            assert_eq!(mt, want_mt, "{path}: mtsp samples");
+            files += 1;
+        }
+        eprintln!("verified {files} audio files");
+        assert!(files >= 20);
     }
 }

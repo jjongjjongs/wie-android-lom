@@ -13,6 +13,7 @@
 //! flag those are allowed here rather than reshaped.
 #![allow(clippy::too_many_arguments, clippy::collapsible_if, clippy::precedence, clippy::unnecessary_cast)]
 
+use super::audio::{DecodedAudioSample, decode_yamaha_adpcm4_mono, mix_audio_event, resampled_frame_count};
 use super::rhythm;
 use super::smaf::{EventInfo, Smaf, ToneEntry};
 use super::synth::{self, CompactTone};
@@ -173,7 +174,9 @@ impl ToneDef {
             let param5 = (params[3] as i32 & 255) << 8 | params[4] as i32 & 255;
             def.param5 = param5;
             let record = params[6..20].to_vec();
-            def.wave_valid = expand_direct_type2_wave(&record, param5).is_some();
+            let wave = expand_direct_type2_wave(&record, param5);
+            def.wave_valid = wave.is_some();
+            def.wave_record = wave.map(|w| w.to_vec()).unwrap_or_default();
             def.registry_record = record;
         } else {
             def.tone_type = 1;
@@ -605,6 +608,10 @@ struct Collector<'a> {
     registry: ToneRegistry,
     tones: Vec<ToneDef>,
     notes: Vec<NoteEvent>,
+    audio_events: Vec<AudioEvent>,
+    decoded_audio_samples: Vec<DecodedAudioSample>,
+    setup_bulk_audio_samples: Vec<DecodedAudioSample>,
+    builtin_audio_samples: Vec<DecodedAudioSample>,
     order: i32,
     host_transpose: i32,
     fm_reset_env: bool,
@@ -623,6 +630,10 @@ impl<'a> Collector<'a> {
             registry: ToneRegistry::new(),
             tones: Vec::new(),
             notes: Vec::new(),
+            audio_events: Vec::new(),
+            decoded_audio_samples: Vec::new(),
+            setup_bulk_audio_samples: Vec::new(),
+            builtin_audio_samples: Vec::new(),
             order: 0,
             host_transpose: 0,
             fm_reset_env: true,
@@ -797,8 +808,13 @@ impl<'a> Collector<'a> {
     }
 
     fn apply_control(&mut self, event: &EventInfo, track: i32, channel: i32) {
+        let mut state = self.channels[track as usize][channel as usize].clone();
+        self.apply_control_state(&mut state, event);
+        self.channels[track as usize][channel as usize] = state;
+    }
+
+    fn apply_control_state(&self, state: &mut ChannelState, event: &EventInfo) {
         let value = event.value;
-        let state = &mut self.channels[track as usize][channel as usize];
         match event.control {
             0 => {
                 if event.compact {
@@ -808,7 +824,6 @@ impl<'a> Collector<'a> {
                     let bank_msb = state.bank_msb;
                     let bank_lsb = state.bank_lsb;
                     if let Some(def) = self.find_compact_local_selector(event.track_id, bank_msb, bank_lsb) {
-                        let state = &mut self.channels[track as usize][channel as usize];
                         state.lookup_bank = 1;
                         state.program = def.ordinal;
                     }
@@ -1006,6 +1021,261 @@ impl<'a> Collector<'a> {
         Some(def)
     }
 
+    /// `replaceSample` - overwrite a sample with the same audio and sample id,
+    /// or append it.
+    fn replace_sample(list: &mut Vec<DecodedAudioSample>, sample: DecodedAudioSample) {
+        if let Some(slot) = list.iter_mut().find(|s| s.audio_id == sample.audio_id && s.sample_id == sample.sample_id) {
+            *slot = sample;
+        } else {
+            list.push(sample);
+        }
+    }
+
+    /// `findAudioSampleExact` - the decoded sample for an audio and sample id.
+    fn find_audio_sample_exact(list: &[DecodedAudioSample], audio_id: i32, sample_id: i32) -> Option<DecodedAudioSample> {
+        list.iter().find(|s| s.audio_id == audio_id && s.sample_id == sample_id).cloned()
+    }
+
+    /// `findSetupBulkTone` - the type-2 wave tone in a track whose record names a
+    /// setup-bulk block.
+    fn find_setup_bulk_tone(&self, track: i32, block: i32) -> Option<&ToneDef> {
+        self.tones.iter().find(|t| {
+            t.track == track && t.tone_type == 2 && t.wave_valid && t.registry_record.len() == 14 && (t.registry_record[13] as i32 & 255) == block
+        })
+    }
+
+    /// `findSetupBulkSample` - the setup-bulk recording a type-2 tone references.
+    fn find_setup_bulk_sample(&self, tone: &ToneDef) -> Option<DecodedAudioSample> {
+        if tone.registry_record.len() != 14 {
+            return None;
+        }
+        let block = tone.registry_record[13] as i32 & 255;
+        Self::find_audio_sample_exact(&self.setup_bulk_audio_samples, 255, block)
+    }
+
+    /// `builtinWaveSample` - the recording for a built-in wave key or a type-2
+    /// wave record, cached by sample id.
+    fn builtin_wave_sample(&mut self, key: i32, record: &[u8]) -> Option<DecodedAudioSample> {
+        let key = key & 127;
+        if let Some(existing) = Self::find_audio_sample_exact(&self.builtin_audio_samples, -1, key) {
+            return Some(existing);
+        }
+        let sample = rhythm::wave_sample_for_record(key, record)?;
+        self.builtin_audio_samples.push(sample.clone());
+        Some(sample)
+    }
+
+    /// Decode every recorded sample a file carries - the audio tracks, the MTSP
+    /// streams and the setup-bulk blocks - into [`Self::decoded_audio_samples`],
+    /// exactly as the reference's `collect` does before it walks the events.
+    fn decode_all_audio_samples(&mut self) {
+        for audio in &self.smaf.audios {
+            let rate = if audio.sample_rate == 0 { 4000 } else { audio.sample_rate };
+            for s in &audio.samples {
+                let pcm = decode_yamaha_adpcm4_mono(&s.data, 0, s.data.len());
+                self.decoded_audio_samples.push(DecodedAudioSample {
+                    audio_id: audio.id,
+                    sample_id: s.id,
+                    sample_rate: rate,
+                    pcm_mono: pcm,
+                });
+            }
+        }
+        for track in &self.smaf.tracks {
+            for m in &track.mtsp_samples {
+                let pcm = if m.codec == 1 {
+                    decode_yamaha_adpcm4_mono(&m.data, 0, m.data.len())
+                } else {
+                    m.data
+                        .iter()
+                        .map(|&b| {
+                            let v = if m.codec == 2 { (b as i32 & 255) - 128 } else { b as i32 & 255 };
+                            (v << 8) as i16
+                        })
+                        .collect()
+                };
+                self.decoded_audio_samples.push(DecodedAudioSample {
+                    audio_id: m.track_id,
+                    sample_id: m.sample_id,
+                    sample_rate: m.sample_rate,
+                    pcm_mono: pcm,
+                });
+            }
+        }
+        self.load_setup_bulk_samples();
+    }
+
+    /// `loadSetupBulkSamples` - decode each setup-bulk block its type-2 tone
+    /// claims into a 48 kHz sample under audio id 255.
+    fn load_setup_bulk_samples(&mut self) {
+        for track_index in 0..self.smaf.tracks.len() {
+            let entries = self.smaf.tracks[track_index].setup_bulk_entries.clone();
+            for entry in &entries {
+                let Some(tone) = self.find_setup_bulk_tone(entry.track_id, entry.block_id) else {
+                    continue;
+                };
+                let record = &tone.registry_record;
+                let codec = record[1] as i32 & 3;
+                let hi = record[11] as i32;
+                let count = record[12] as i32 & 255 | (hi & 0xFF) << 8;
+                if codec != 0 && codec != 2 && codec != 3 {
+                    continue;
+                }
+                let packed = &entry.packed_data;
+                let cap = 1.max(packed.len() as i32 - packed.len() as i32 / 8 + 1);
+                let unpacked = unpack7(packed, 0, packed.len() as i32, cap);
+                let take = if codec == 0 { count + 1 >> 1 } else { count };
+                let end = take.max(0).min(unpacked.len() as i32);
+                if end == 0 {
+                    continue;
+                }
+                let pcm = if codec == 0 {
+                    decode_yamaha_adpcm4_mono(&unpacked, 0, end as usize)
+                } else {
+                    (0..end as usize)
+                        .map(|i| {
+                            let v = if codec == 2 {
+                                (unpacked[i] as i32 & 255) - 128
+                            } else {
+                                unpacked[i] as i32 & 255
+                            };
+                            (v << 8) as i16
+                        })
+                        .collect()
+                };
+                let sample = DecodedAudioSample {
+                    audio_id: 255,
+                    sample_id: entry.block_id,
+                    sample_rate: 48000,
+                    pcm_mono: pcm,
+                };
+                Self::replace_sample(&mut self.decoded_audio_samples, sample.clone());
+                Self::replace_sample(&mut self.setup_bulk_audio_samples, sample);
+            }
+        }
+    }
+
+    /// `wavePitchRatioQ16` - the Q16 resample ratio a recorded note plays at,
+    /// keyed by its bank context.
+    fn wave_pitch_ratio_q16(&self, note: &NoteEvent, lookup: &ToneLookup) -> i32 {
+        let tone_bank_msb = lookup.tone.as_ref().map(|t| t.bank_msb);
+        let slot_bank = lookup.slot.as_ref().map(|s| s.bank);
+        let mut ctx = 128;
+        if note.lookup_bank & 128 == 0 && note.bank_msb != 128 {
+            if tone_bank_msb == Some(128) {
+                return synth::wave_pitch_ratio_for_context(128, note.render_midi_key, 0, note.host_transpose);
+            }
+            if let Some(bank) = slot_bank {
+                if bank & 128 != 0 {
+                    return synth::wave_pitch_ratio_for_context(128, note.render_midi_key, 0, note.host_transpose);
+                }
+            }
+            if note.render_key6 & 128 != 0 {
+                ctx = 128;
+            } else if (115..=128).contains(&note.lookup_bank) {
+                ctx = note.lookup_bank;
+            } else if note.bank_msb == 124 && (115..=128).contains(&note.bank_lsb) {
+                ctx = note.bank_lsb;
+            } else if note.bank_msb == 125 {
+                ctx = note.bank_lsb + 128 & 0xFF;
+            } else {
+                ctx = note.render_midi_key;
+            }
+        }
+        synth::wave_pitch_ratio_for_context(ctx, note.render_midi_key, 0, note.host_transpose)
+    }
+
+    /// `addBuiltinWaveRhythmEvent` - emit the recording a built-in wave-rhythm
+    /// key plays, or return false if it carries none.
+    fn add_builtin_wave_rhythm_event(
+        &mut self,
+        event: &EventInfo,
+        track: i32,
+        channel: i32,
+        state: &ChannelState,
+        note: &NoteEvent,
+        key: i32,
+        q16: i32,
+    ) -> bool {
+        let record = rhythm::wave_record_for_key(key);
+        if record.is_empty() {
+            return false;
+        }
+        let Some(sample) = self.builtin_wave_sample(key, &record) else {
+            return false;
+        };
+        self.audio_events.push(AudioEvent {
+            order: self.order,
+            start_tick: event.tick,
+            duration_tick: if event.gate != 0 { event.gate } else { 1 },
+            audio_id: track,
+            sample_id: key,
+            velocity: note.velocity.max(1),
+            pan: state.pan,
+            sample,
+            track,
+            channel,
+            volume: state.volume,
+            expression: state.expression,
+            builtin_wave: true,
+            wave_pitch_ratio_q16: q16,
+            attenuation_master_volume: self.attenuation_master_volume,
+            attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
+            pcm_stream: false,
+            pcm_master_softened: false,
+        });
+        self.order += 1;
+        true
+    }
+
+    /// `addDirectType2WaveEvent` - emit the recording a direct type-2 wave tone
+    /// plays: its setup-bulk block if it names one, else its built-in bank.
+    fn add_direct_type2_wave_event(
+        &mut self,
+        event: &EventInfo,
+        track: i32,
+        channel: i32,
+        state: &ChannelState,
+        note: &NoteEvent,
+        lookup: &ToneLookup,
+        q16: i32,
+    ) -> bool {
+        let tone = match &lookup.tone {
+            Some(t) if t.tone_type == 2 && t.wave_valid => t.clone(),
+            _ => return false,
+        };
+        let bank_id = tone.wave_record[32] as i32 & 255;
+        let sample = match self.find_setup_bulk_sample(&tone) {
+            Some(s) => s,
+            None => match self.builtin_wave_sample(bank_id, &tone.wave_record) {
+                Some(s) => s,
+                None => return false,
+            },
+        };
+        self.audio_events.push(AudioEvent {
+            order: self.order,
+            start_tick: event.tick,
+            duration_tick: if event.gate != 0 { event.gate } else { 1 },
+            audio_id: -1,
+            sample_id: bank_id,
+            velocity: note.velocity.max(1),
+            pan: state.pan,
+            sample,
+            track,
+            channel,
+            volume: state.volume,
+            expression: state.expression,
+            builtin_wave: true,
+            wave_pitch_ratio_q16: q16,
+            attenuation_master_volume: self.attenuation_master_volume,
+            attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
+            pcm_stream: false,
+            pcm_master_softened: false,
+        });
+        self.order += 1;
+        true
+    }
+
     fn copy_tone_metadata(&self, note: &mut NoteEvent, lookup: &ToneLookup) {
         let slot = lookup.slot.as_ref();
         note.registry_slot = slot.map_or(-1, |s| s.slot_id);
@@ -1069,11 +1339,42 @@ impl<'a> Collector<'a> {
             return;
         }
         let state = self.channels[track as usize][channel as usize].clone();
-        // The recorded-sample note bank (bankMsb == 125) drives the streamed
-        // PCM path in the reference; that path is deferred, so those notes are
-        // dropped here rather than mis-rendered as FM voices.
+        // The recorded-sample note bank (bankMsb == 125) plays a decoded PCM
+        // sample rather than an FM voice: emit a streamed-audio event and stop.
+        // A key with no matching sample falls through to the FM note path.
         if event.key_is_midi && state.bank_msb == 125 {
-            return;
+            if let Some(sample) = Self::find_audio_sample_exact(&self.decoded_audio_samples, track, event.key & 127) {
+                let velocity = if event.value != 0 { clamp7(event.value) } else { 127 };
+                let key7 = event.key & 127;
+                let pan = if (key7 as usize) < self.pcm_sample_pan.len() && self.pcm_sample_pan[key7 as usize] >= 0 {
+                    self.pcm_sample_pan[key7 as usize]
+                } else {
+                    state.pan
+                };
+                let softened = self.attenuation_master_volume == 45;
+                self.audio_events.push(AudioEvent {
+                    order: self.order,
+                    start_tick: event.tick,
+                    duration_tick: if event.gate != 0 { event.gate } else { 1 },
+                    audio_id: track,
+                    sample_id: key7,
+                    velocity,
+                    pan,
+                    sample,
+                    track,
+                    channel,
+                    volume: state.volume,
+                    expression: state.expression,
+                    builtin_wave: false,
+                    wave_pitch_ratio_q16: 65536,
+                    attenuation_master_volume: self.attenuation_master_volume,
+                    attenuation_velocity_ctrl_table: self.attenuation_velocity_ctrl_table,
+                    pcm_stream: true,
+                    pcm_master_softened: softened,
+                });
+                self.order += 1;
+                return;
+            }
         }
         let mut note = NoteEvent {
             order: self.order,
@@ -1120,19 +1421,23 @@ impl<'a> Collector<'a> {
         note.tone = lookup.tone.clone();
         self.copy_tone_metadata(&mut note, &lookup);
         self.set_render_pitch(&mut note);
+        let q16 = self.wave_pitch_ratio_q16(&note, &lookup);
 
-        // Wave percussion and direct type-2 wave notes are streamed audio; they
-        // carry no FM voice, so they are dropped here and skipped by render.
-        if lookup.builtin_wave_key >= 0 {
+        // A built-in wave-rhythm key or a direct type-2 wave tone plays a
+        // recording, not an FM voice: emit an audio event and stop. Anything
+        // else is an FM note.
+        if lookup.builtin_wave_key >= 0 && self.add_builtin_wave_rhythm_event(event, track, channel, &state, &note, lookup.builtin_wave_key, q16) {
             return;
         }
-        if lookup.tone.as_ref().map(|t| t.tone_type) == Some(2) {
+        if lookup.tone.as_ref().map(|t| t.tone_type) == Some(2)
+            && self.add_direct_type2_wave_event(event, track, channel, &state, &note, &lookup, q16)
+        {
             return;
         }
         self.notes.push(note);
     }
 
-    fn collect(mut self) -> Vec<NoteEvent> {
+    fn collect(mut self) -> Analysis {
         self.apply_setup_attenuation_mode(2);
         if let Some(first) = self.smaf.tracks.first() {
             match first.format_type {
@@ -1150,6 +1455,7 @@ impl<'a> Collector<'a> {
         }
         let tones = self.tones.clone();
         self.registry.build_from_tones(&tones);
+        self.decode_all_audio_samples();
         for i in 0..self.smaf.tracks.len() {
             self.apply_initial_channel_status(i);
         }
@@ -1160,13 +1466,101 @@ impl<'a> Collector<'a> {
             }
         }
         self.notes.sort_by(|a, b| a.start_tick.cmp(&b.start_tick).then(a.order.cmp(&b.order)));
-        self.notes
+        self.collect_audio_events();
+        self.audio_events
+            .sort_by(|a, b| a.start_tick.cmp(&b.start_tick).then(a.order.cmp(&b.order)));
+        Analysis {
+            notes: self.notes,
+            audio_events: self.audio_events,
+        }
+    }
+
+    /// `collectAudioEvents` - the recorded-audio track events. Each audio track
+    /// keeps its own channel state and every note-on that names a decoded sample
+    /// becomes a streamed-audio event.
+    fn collect_audio_events(&mut self) {
+        if self.decoded_audio_samples.is_empty() {
+            return;
+        }
+        for audio_index in 0..self.smaf.audios.len() {
+            let audio_id = self.smaf.audios[audio_index].id;
+            let events = self.smaf.audios[audio_index].sequence.events.clone();
+            let mut channels: Vec<ChannelState> = (0..16).map(ChannelState::new).collect();
+            for event in &events {
+                let ch = safe_channel(event.channel);
+                if event.kind == 2 {
+                    self.apply_control_state(&mut channels[ch as usize], event);
+                } else if event.kind == 1 {
+                    let key = if event.compact && !event.raw.is_empty() {
+                        event.raw[0] as i32 & 63
+                    } else {
+                        event.key & 0xFF
+                    };
+                    let Some(sample) = Self::find_audio_sample_exact(&self.decoded_audio_samples, audio_id, key) else {
+                        continue;
+                    };
+                    let state = &channels[ch as usize];
+                    let velocity = if event.value != 0 { clamp7(event.value) } else { 127 };
+                    self.audio_events.push(AudioEvent {
+                        order: self.order,
+                        start_tick: event.tick,
+                        duration_tick: if event.gate != 0 { event.gate } else { 1 },
+                        audio_id,
+                        sample_id: key,
+                        velocity,
+                        pan: state.pan,
+                        sample,
+                        track: audio_id,
+                        channel: ch,
+                        volume: state.volume,
+                        expression: state.expression,
+                        builtin_wave: false,
+                        wave_pitch_ratio_q16: 65536,
+                        attenuation_master_volume: state.volume,
+                        attenuation_velocity_ctrl_table: false,
+                        pcm_stream: true,
+                        pcm_master_softened: false,
+                    });
+                    self.order += 1;
+                }
+            }
+        }
     }
 }
 
-/// Analyze a parsed file into the notes the synth renders. `key_base` is the
-/// reference's default of 24.
-pub fn analyze(smaf: &Smaf) -> Vec<NoteEvent> {
+/// One recording to play back, as the reference's `AudioEvent`. `order` is the
+/// analysis order for the tie-break in the sort.
+#[derive(Clone)]
+pub struct AudioEvent {
+    pub order: i32,
+    pub start_tick: i32,
+    pub duration_tick: i32,
+    pub audio_id: i32,
+    pub sample_id: i32,
+    pub velocity: i32,
+    pub pan: i32,
+    pub sample: DecodedAudioSample,
+    pub track: i32,
+    pub channel: i32,
+    pub volume: i32,
+    pub expression: i32,
+    pub builtin_wave: bool,
+    pub wave_pitch_ratio_q16: i32,
+    pub attenuation_master_volume: i32,
+    pub attenuation_velocity_ctrl_table: bool,
+    pub pcm_stream: bool,
+    pub pcm_master_softened: bool,
+}
+
+/// The notes and recordings a file resolves to.
+pub struct Analysis {
+    pub notes: Vec<NoteEvent>,
+    pub audio_events: Vec<AudioEvent>,
+}
+
+/// Analyze a parsed file into the notes and recordings it plays. `key_base` is
+/// the reference's default of 24.
+pub fn analyze(smaf: &Smaf) -> Analysis {
     Collector::new(smaf, 24).collect()
 }
 
@@ -1178,16 +1572,26 @@ fn ticks_to_frames(ticks: i32, rate: i32) -> i32 {
     (((ticks as i64) * 4 * rate as i64 + 999) / 1000).min(2_147_483_647) as i32
 }
 
-/// `render` - mix every FM note into a stereo float buffer, as the reference's
-/// top-level `OracleMa3Synth.render`. Streamed-audio events are not mixed yet.
-pub fn render(notes: &[NoteEvent], total_ticks: i32, rate: i32) -> Vec<f32> {
+/// `render` - mix every FM note and recording into a stereo float buffer, as
+/// the reference's top-level `OracleMa3Synth.render`.
+pub fn render(analysis: &Analysis, total_ticks: i32, rate: i32) -> Vec<f32> {
     let rate = if rate <= 0 { 48000 } else { rate };
+    let notes = &analysis.notes;
     let mut max_tick = total_ticks.max(0);
     for note in notes {
         max_tick = max_tick.max(note.start_tick + note.duration_tick.max(1));
     }
+    for event in &analysis.audio_events {
+        max_tick = max_tick.max(event.start_tick + event.duration_tick.max(1));
+    }
     let frames = ticks_to_frames(max_tick, rate) + rate;
-    let total = if frames <= 0 { rate } else { frames };
+    let mut total = if frames <= 0 { rate } else { frames };
+    // A recording can run past the tick-derived length; make room for its tail.
+    for event in &analysis.audio_events {
+        let end =
+            ticks_to_frames(event.start_tick, rate) + resampled_frame_count(event.sample.pcm_mono.len(), event.sample.sample_rate, rate) + rate / 10;
+        total = total.max(end);
+    }
     let mut buffer = vec![0f32; (total * 2) as usize];
     for note in notes {
         if let Some(tone) = &note.tone {
@@ -1211,6 +1615,10 @@ pub fn render(notes: &[NoteEvent], total_ticks: i32, rate: i32) -> Vec<f32> {
                 );
             }
         }
+    }
+    for event in &analysis.audio_events {
+        let start = ticks_to_frames(event.start_tick, rate);
+        mix_audio_event(&mut buffer, total, start, &event.sample, event.pan, event.velocity, rate);
     }
     buffer
 }
@@ -1285,7 +1693,7 @@ mod tests {
             let want: Vec<&str> = cols[4..].to_vec();
             let data = std::fs::read(path).unwrap();
             let smaf = super::super::smaf::parse(&data).unwrap_or_else(|e| panic!("{path}: parse: {}", e.0));
-            let got: Vec<String> = super::analyze(&smaf).iter().map(note_fingerprint).collect();
+            let got: Vec<String> = super::analyze(&smaf).notes.iter().map(note_fingerprint).collect();
             assert_eq!(got.len(), want.len(), "{path}: note count (got {}, want {})", got.len(), want.len());
             for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
                 if g != *w {
@@ -1324,8 +1732,8 @@ mod wav_tests {
     fn renders_fixture_pcm_like_the_reference() {
         let data = include_bytes!("data/seq/compact.mmf");
         let smaf = super::super::smaf::parse(data).unwrap();
-        let notes = super::analyze(&smaf);
-        let pcm = super::render(&notes, smaf.total_ticks, 44100);
+        let analysis = super::analyze(&smaf);
+        let pcm = super::render(&analysis, smaf.total_ticks, 44100);
         let got = to_i16(&pcm);
 
         // Reference samples from frame 1236 (where the first chord sounds).
@@ -1351,8 +1759,8 @@ mod wav_tests {
         };
         let data = std::fs::read(&mmf_path).unwrap();
         let smaf = super::super::smaf::parse(&data).unwrap();
-        let notes = super::analyze(&smaf);
-        let got = to_i16(&super::render(&notes, smaf.total_ticks, 44100));
+        let analysis = super::analyze(&smaf);
+        let got = to_i16(&super::render(&analysis, smaf.total_ticks, 44100));
 
         let wav = std::fs::read(&ref_path).unwrap();
         let ref_samples: Vec<i16> = wav[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
@@ -1364,5 +1772,75 @@ mod wav_tests {
         }
         assert!(max_diff <= 1, "max sample diff {max_diff}");
         eprintln!("matched {} samples, max diff {max_diff}", got.len());
+    }
+
+    /// The full audio-event list a file resolves to - built-in rhythm, direct
+    /// type-2 wave, streamed PCM notes and audio-track events - must match the
+    /// reference field for field, in order, with the same decoded sample.
+    /// Gated on `OMA3_AUDIO_EVENTS_DUMP` (a `DumpAudioEvents` capture).
+    #[test]
+    fn audio_events_match_the_reference() {
+        let dump_path = match std::env::var("OMA3_AUDIO_EVENTS_DUMP") {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let pcm_fp = |pcm: &[i16]| -> i64 {
+            let mut h: i64 = 0;
+            for &x in pcm {
+                h = h.wrapping_mul(31).wrapping_add(x as u16 as i64);
+            }
+            h & 0xFFFF_FFFF
+        };
+        let dump = std::fs::read_to_string(&dump_path).unwrap();
+        let mut files = 0;
+        let mut events = 0;
+        for line in dump.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let cols: Vec<&str> = line.split('\t').collect();
+            let path = cols[0];
+            let want: Vec<&str> = cols[1..].to_vec();
+            let data = std::fs::read(path).unwrap();
+            let smaf = super::super::smaf::parse(&data).unwrap();
+            let got: Vec<String> = super::analyze(&smaf)
+                .audio_events
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                        e.start_tick,
+                        e.duration_tick,
+                        e.audio_id,
+                        e.sample_id,
+                        e.velocity,
+                        e.pan,
+                        e.builtin_wave as i32,
+                        e.wave_pitch_ratio_q16,
+                        e.attenuation_master_volume,
+                        e.attenuation_velocity_ctrl_table as i32,
+                        e.pcm_stream as i32,
+                        e.pcm_master_softened as i32,
+                        e.volume,
+                        e.expression,
+                        e.track,
+                        e.channel,
+                        e.sample.audio_id,
+                        e.sample.sample_id,
+                        e.sample.sample_rate,
+                        e.sample.pcm_mono.len(),
+                        pcm_fp(&e.sample.pcm_mono),
+                    )
+                })
+                .collect();
+            assert_eq!(got.len(), want.len(), "{path}: audio event count");
+            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                assert_eq!(g, *w, "{path} event {i}");
+            }
+            files += 1;
+            events += got.len();
+        }
+        eprintln!("verified {files} files, {events} audio events");
+        assert!(files >= 30);
     }
 }
