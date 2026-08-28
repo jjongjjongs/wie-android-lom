@@ -132,16 +132,24 @@ fn blit_correctness() {
 #[ignore = "benchmark; run with --ignored --nocapture --release"]
 fn blit_throughput() {
     let pixels = 4096;
-    let frames = 3000;
+    // Overridable so a profiler (e.g. callgrind) can be handed a small,
+    // guest-dominated run without rebuilding.
+    let frames: u32 = std::env::var("WIE_BENCH_FRAMES").ok().and_then(|s| s.parse().ok()).unwrap_or(3000);
     let (src, _) = blit_fixture(pixels);
 
-    let start = std::time::Instant::now();
-    let (_, executed) = run_blit(Arm32CpuEngine::new(), pixels, frames, &src);
-    let elapsed = start.elapsed();
+    // Report the best of several reps: the fastest run is the one least
+    // perturbed by scheduler/contention noise on this shared host, so it is the
+    // most stable basis for comparing engine changes.
+    let reps: u32 = std::env::var("WIE_BENCH_REPS").ok().and_then(|s| s.parse().ok()).unwrap_or(7);
+    let mut best = f64::INFINITY;
+    let mut executed = 0u64;
+    for _ in 0..reps.max(1) {
+        let start = std::time::Instant::now();
+        let (_, e) = run_blit(Arm32CpuEngine::new(), pixels, frames, &src);
+        best = best.min(start.elapsed().as_secs_f64());
+        executed = e;
+    }
 
-    let mips = executed as f64 / elapsed.as_secs_f64() / 1.0e6;
-    std::eprintln!(
-        "[bench] Arm32CpuEngine blit: {executed} insns in {:.3}s = {mips:.1} MIPS",
-        elapsed.as_secs_f64()
-    );
+    let mips = executed as f64 / best / 1.0e6;
+    std::eprintln!("[bench] Arm32CpuEngine blit: {executed} insns, best of {reps} = {best:.3}s = {mips:.1} MIPS");
 }
