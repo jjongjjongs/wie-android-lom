@@ -27,8 +27,7 @@ final class NativeBridge {
     static native String nativeStart(
             byte[] archive,
             String runtimeDir,
-            String phoneModel,
-            String billGateway);
+            String phoneModel);
 
     /**
      * Runs the emulator for up to {@code budgetMs}.

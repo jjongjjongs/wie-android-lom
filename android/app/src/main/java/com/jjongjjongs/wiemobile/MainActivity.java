@@ -64,16 +64,6 @@ import java.nio.ShortBuffer;
 public final class MainActivity extends Activity {
     private static final String TAG = "WIE-Input";
 
-    /**
-     * Host-only handset configuration.
-     *
-     * BILL_GW_IP is not a public WIPI system property. The legacy LGT runtime
-     * obtains it from whal_sys_get_information, so it remains absent unless
-     * the user explicitly supplies the carrier gateway.
-     */
-    private static final String HOST_PREFS = "wie_host_information";
-    private static final String PREF_LGT_BILL_GW_IP = "lgt_bill_gw_ip";
-
     private static final int PICK_GAME = 1001;
     private static final int REQUEST_WRITE_DOWNLOADS = 1002;
     private static final int PICK_SAVE = 1003;
@@ -281,10 +271,6 @@ public final class MainActivity extends Activity {
         pick.setOnClickListener(v -> openPicker());
         actions.addView(pick, buttonParams(dp(12)));
 
-        Button billingGateway = flatButton("LGT 과금 GW");
-        billingGateway.setOnClickListener(v -> showBillingGatewayDialog());
-        actions.addView(billingGateway, buttonParams(dp(12)));
-
         header.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
         root.addView(header);
 
@@ -304,49 +290,6 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
         params.leftMargin = leftMargin;
         return params;
-    }
-
-    /**
-     * Configures the optional production LGT billing gateway.
-     *
-     * An empty preference deliberately means "information unavailable". There
-     * is no fallback to the mode-2 development gateway.
-     */
-    private void showBillingGatewayDialog() {
-        SharedPreferences preferences = getSharedPreferences(HOST_PREFS, MODE_PRIVATE);
-
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setHint("host:port");
-        input.setText(preferences.getString(PREF_LGT_BILL_GW_IP, ""));
-        input.setSelection(input.length());
-
-        new AlertDialog.Builder(this)
-                .setTitle("LGT 과금 게이트웨이")
-                .setMessage("MC_netBillSocket용 BILL_GW_IP입니다. 비워 두면 제공하지 않습니다.")
-                .setView(input)
-                .setNegativeButton("취소", null)
-                .setNeutralButton("삭제", (dialog, which) -> {
-                    preferences.edit().remove(PREF_LGT_BILL_GW_IP).apply();
-                    Toast.makeText(this, "LGT 과금 게이트웨이를 삭제했습니다.", Toast.LENGTH_SHORT).show();
-                })
-                .setPositiveButton("저장", (dialog, which) -> {
-                    String value = input.getText().toString().trim();
-
-                    if (value.isEmpty()) {
-                        preferences.edit().remove(PREF_LGT_BILL_GW_IP).apply();
-                    } else {
-                        preferences.edit().putString(PREF_LGT_BILL_GW_IP, value).apply();
-                    }
-
-                    Toast.makeText(
-                            this,
-                            value.isEmpty()
-                                    ? "LGT 과금 게이트웨이를 사용하지 않습니다."
-                                    : "LGT 과금 게이트웨이를 저장했습니다.",
-                            Toast.LENGTH_SHORT).show();
-                })
-                .show();
     }
 
     private void populateGames(LinearLayout list) {
@@ -905,19 +848,14 @@ public final class MainActivity extends Activity {
             // first game, where the pump is already running.
             audioOutput.start();
 
-            // Snapshot host handset information once for this emulator
-            // instance. PHONEMODEL is actual host state; BILL_GW_IP exists only
-            // when explicitly configured by the user.
+            // Snapshot the actual host handset model once for this emulator
+            // instance so legacy PHONEMODEL queries retain their host value.
             String phoneModel = Build.MODEL != null ? Build.MODEL : "";
-            String billGateway = getSharedPreferences(HOST_PREFS, MODE_PRIVATE)
-                    .getString(PREF_LGT_BILL_GW_IP, "")
-                    .trim();
 
             String message = NativeBridge.nativeStart(
                     buffer.toByteArray(),
                     runtimeDir.getAbsolutePath(),
-                    phoneModel,
-                    billGateway);
+                    phoneModel);
             running = NativeBridge.nativeRunning() != 0;
 
             runOnUiThread(() -> playerStatus.setText(running ? "게임 초기화 중..." : message));

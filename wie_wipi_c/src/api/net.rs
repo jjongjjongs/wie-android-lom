@@ -23,6 +23,13 @@ struct SocketCallbacks {
     /// 1 = MC_netBillSocket
     /// 2 = MC_netTestBillSocket
     billing_mode: u8,
+    /// Locally synthesized application response for the proven LGT
+    /// purchase operation 0x68. A fixed buffer preserves SocketCallbacks'
+    /// Copy semantics and is sufficient for the seven-byte 0x69 success
+    /// frame.
+    billing_local_response: [u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE],
+    billing_local_response_len: u8,
+    billing_local_response_offset: u8,
     /// Native socket object +0x4c..+0x83: 56-byte inbound billing header.
     billing_read_header: [u8; LGT_BILL_READ_HEADER_SIZE],
     /// Native socket object +0x1c.
@@ -44,6 +51,9 @@ impl Default for SocketCallbacks {
         Self {
             socket_type: 0,
             billing_mode: 0,
+            billing_local_response: [0u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE],
+            billing_local_response_len: 0,
+            billing_local_response_offset: 0,
             billing_read_header: [0u8; LGT_BILL_READ_HEADER_SIZE],
             billing_read_direct: false,
             connect_callback: 0,
@@ -274,6 +284,59 @@ impl NetworkState {
 
     fn billing_mode(&self, socket: i32) -> Option<u8> {
         self.sockets.get(&socket).map(|entry| entry.billing_mode)
+    }
+
+    fn queue_local_billing_response(
+        &mut self,
+        socket: i32,
+        response: [u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE],
+    ) {
+        let entry = self
+            .sockets
+            .get_mut(&socket)
+            .expect("socket metadata disappeared");
+
+        entry.billing_local_response = response;
+        entry.billing_local_response_len =
+            LGT_LOCAL_PURCHASE_RESPONSE_SIZE as u8;
+        entry.billing_local_response_offset = 0;
+    }
+
+    fn take_local_billing_response(
+        &mut self,
+        socket: i32,
+        output: &mut [u8],
+    ) -> Option<usize> {
+        let entry = self
+            .sockets
+            .get_mut(&socket)
+            .expect("socket metadata disappeared");
+
+        let length = entry.billing_local_response_len as usize;
+        let offset = entry.billing_local_response_offset as usize;
+
+        if length == 0 || offset >= length {
+            entry.billing_local_response_len = 0;
+            entry.billing_local_response_offset = 0;
+            return None;
+        }
+
+        let read = output.len().min(length - offset);
+
+        output[..read].copy_from_slice(
+            &entry.billing_local_response[offset..offset + read],
+        );
+
+        let next = offset + read;
+
+        if next == length {
+            entry.billing_local_response_len = 0;
+            entry.billing_local_response_offset = 0;
+        } else {
+            entry.billing_local_response_offset = next as u8;
+        }
+
+        Some(read)
     }
 
     fn install_billing_header(
@@ -631,10 +694,60 @@ const M_E_WOULDBLOCK: i32 = -19;
 const M_E_TIMEOUT: i32 = -20;
 
 /// Native MC_netTestBillSocket (billing mode 2) uses this fixed development
-/// gateway. MC_netBillSocket (mode 1) does not: its BILL_GW_IP value comes from
-/// configurable handset/HAL state and must never silently fall back here.
+/// gateway. WIE's production MC_netBillSocket mode 1 is satisfied locally and
+/// never falls back to this development endpoint.
 const LGT_TEST_BILL_GATEWAY: &str = "wipigwdev.ez-i.co.kr:30000";
-const LGT_BILL_GATEWAY_INFORMATION_KEY: &str = "BILL_GW_IP";
+
+const LGT_LOCAL_PURCHASE_REQUEST_TYPE: u16 = 0x0068;
+const LGT_LOCAL_PURCHASE_RESPONSE_TYPE: u16 = 0x0069;
+const LGT_LOCAL_PURCHASE_RESPONSE_SIZE: usize = 7;
+
+/// Build the native-compatible LGT purchase-success application frame.
+///
+/// Red Gem's native protocol establishes:
+///
+///   frame +0x00 : 0xffff
+///   frame +0x02 : application payload length (u16, network order)
+///   frame +0x04 : message type (u16, network order)
+///   frame +0x06 : application payload
+///
+/// Request 0x68 is the purchase transaction and response 0x69 carries
+/// its carrier result.  Status zero is purchase success.  Returning the
+/// ordinary 0x69/status-zero frame lets the guest's own parser write its
+/// result enum zero; WIE never modifies guest billing state directly.
+fn lgt_local_purchase_success_response(
+    request: &[u8],
+) -> Option<[u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE]> {
+    if request.len() < 6 {
+        return None;
+    }
+
+    if request[0] != 0xff || request[1] != 0xff {
+        return None;
+    }
+
+    let declared_payload =
+        u16::from_be_bytes([request[2], request[3]]) as usize;
+    let message_type =
+        u16::from_be_bytes([request[4], request[5]]);
+
+    if declared_payload != request.len() - 6
+        || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE
+    {
+        return None;
+    }
+
+    Some([
+        0xff,
+        0xff,
+        0x00,
+        0x01,
+        (LGT_LOCAL_PURCHASE_RESPONSE_TYPE >> 8) as u8,
+        LGT_LOCAL_PURCHASE_RESPONSE_TYPE as u8,
+        0x00,
+    ])
+}
+
 
 const LGT_BILL_HEADER_SIZE: usize = 108;
 const LGT_BILL_READ_HEADER_SIZE: usize = 56;
@@ -961,23 +1074,80 @@ pub async fn socket_connect(
         }
     }
 
-    // Native billing sockets run WPBill_SetGW after callback/pending-state
-    // handling but before dsocket_connect.
-    let billing_gateway = match billing_mode {
-        0 => None,
-        1 => {
-            // MC_netBillSocket obtains this from handset/HAL configuration via
-            // whal_sys_get_information("BILL_GW_IP"). Absence is an error;
-            // mode 1 must never fall back to the mode-2 development gateway.
-            let Some(gateway) = context
-                .system()
-                .platform()
-                .system_information(LGT_BILL_GATEWAY_INFORMATION_KEY)
-            else {
-                return Ok(M_E_ERROR);
-            };
-            Some(gateway)
+    // WIE locally satisfies the legacy production LGT billing connection.
+    //
+    // The original handset redirected MC_netBillSocket through carrier
+    // gateway configuration that no longer exists. For mode 1 we keep
+    // the guest-visible native success contract without opening a real
+    // backend connection:
+    //
+    //   * preserve the callback/context already stored above;
+    //   * record the original game destination in the billing header;
+    //   * mark the connect pending;
+    //   * asynchronously deliver Connected(socket), whose callback result is 0.
+    //
+    // PATCH85B then handles only the proven purchase request 0x68 locally.
+    // Mode 2 remains the native fixed development-gateway path.
+    if billing_mode == 1 {
+        let aid = alloc::string::String::from(context.system().aid());
+        let current_time = context.system().platform().now().raw();
+
+        let billing_header = build_lgt_bill_header(
+            context.system().platform(),
+            &aid,
+            current_time,
+            address,
+            port as u16,
+        );
+
+        {
+            let mut state = state.lock();
+            state.install_billing_header(billing_header);
+            state.set_connect_pending(socket, true);
         }
+
+        struct DeferredLocalBillConnect {
+            socket: i32,
+        }
+
+        #[async_trait::async_trait]
+        impl MethodBody<WieError> for DeferredLocalBillConnect {
+            async fn call(
+                &self,
+                context: &mut dyn WIPICContext,
+                _: Box<[WIPICWord]>,
+            ) -> Result<WIPICResult> {
+                let callback = context
+                    .network_state()
+                    .lock()
+                    .take_callback_for_event(
+                        wie_backend::NetworkEvent::Connected(self.socket),
+                    );
+
+                if let Some((callback, args)) = callback {
+                    context.call_function(callback, &args).await?;
+                }
+
+                Ok(WIPICResult { results: Vec::new() })
+            }
+        }
+
+        if let Err(error) =
+            context.spawn(Box::new(DeferredLocalBillConnect { socket }))
+        {
+            let mut state = state.lock();
+            state.set_connect_pending(socket, false);
+            state.clear_connect_callback(socket);
+            return Err(error);
+        }
+
+        return Ok(0);
+    }
+
+    // Ordinary sockets use the original destination. Test billing sockets
+    // retain the native fixed LGT development gateway.
+    let billing_gateway: Option<String> = match billing_mode {
+        0 => None,
         2 => Some(LGT_TEST_BILL_GATEWAY.into()),
         _ => return Ok(M_E_ERROR),
     };
@@ -1178,6 +1348,21 @@ pub async fn socket_write(
     context.read_bytes(buffer, &mut data)?;
 
     if billing_mode != 0 {
+        if billing_mode == 1 {
+            if let Some(response) =
+                lgt_local_purchase_success_response(&data)
+            {
+                state
+                    .lock()
+                    .queue_local_billing_response(socket, response);
+
+                // Match a successful application-level socket write. The
+                // request is consumed locally, so no carrier/backend write
+                // occurs for this purchase transaction.
+                return Ok(length);
+            }
+        }
+
         // Before WPBill_SetHeader has ever run, native s_BillHeader is BSS
         // zero. Use the same zero state rather than rejecting the write.
         let header = state
@@ -1272,6 +1457,17 @@ pub async fn socket_read(
         .expect("socket metadata disappeared");
 
     let mut data = alloc::vec![0u8; length as usize];
+
+    if billing_mode == 1 {
+        let local_read = state
+            .lock()
+            .take_local_billing_response(socket, &mut data);
+
+        if let Some(read) = local_read {
+            context.write_bytes(buffer, &data[..read])?;
+            return Ok(read as i32);
+        }
+    }
 
     if billing_mode == 0 {
         let result = {
@@ -3554,26 +3750,149 @@ mod network_state_tests {
     }
 
     #[test]
-    fn bill_gateway_information_is_optional_platform_state() {
-        use wie_backend::Platform;
+    fn local_lgt_bill_connect_reuses_success_callback_contract() {
+        let mut state = NetworkState::default();
+        state.register_socket(21, 1, 1);
 
-        let absent = test_utils::TestPlatform::new();
+        state.set_connect_callback(21, 0x1234, 0x5678);
+        assert!(!state.connect_is_pending(21));
+
+        state.set_connect_pending(21, true);
+
         assert_eq!(
-            absent.system_information(LGT_BILL_GATEWAY_INFORMATION_KEY),
-            None
+            state.take_callback_for_event(
+                wie_backend::NetworkEvent::Connected(21)
+            ),
+            Some((0x1234, [21, 0, 0x5678]))
         );
 
-        let configured = test_utils::TestPlatform::new()
-            .with_system_information(
-                LGT_BILL_GATEWAY_INFORMATION_KEY,
-                "http://10.20.30.40:30001",
-            );
+        assert!(!state.connect_is_pending(21));
+        assert_eq!(
+            state.take_callback_for_event(
+                wie_backend::NetworkEvent::Connected(21)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn local_lgt_bill_connect_pending_recall_keeps_native_minus_seven_state() {
+        let mut state = NetworkState::default();
+        state.register_socket(22, 1, 1);
+
+        state.set_connect_callback(22, 0x1111, 0x2222);
+        state.set_connect_pending(22, true);
+
+        assert!(state.connect_is_pending(22));
+
+        // socket_connect stores a replacement callback before testing
+        // connect_pending, exactly like the native path.
+        state.set_connect_callback(22, 0x3333, 0x4444);
 
         assert_eq!(
-            configured
-                .system_information(LGT_BILL_GATEWAY_INFORMATION_KEY)
-                .as_deref(),
-            Some("http://10.20.30.40:30001")
+            state.take_callback_for_event(
+                wie_backend::NetworkEvent::Connected(22)
+            ),
+            Some((0x3333, [22, 0, 0x4444]))
+        );
+    }
+
+    #[test]
+    fn local_lgt_purchase_68_builds_69_status_zero_response() {
+        let request = [
+            0xff, 0xff,
+            0x00, 0x0d,
+            0x00, 0x68,
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+            0x37, 0x38, 0x39, 0x30, 0x31,
+            0x02,
+            0x03,
+        ];
+
+        assert_eq!(
+            lgt_local_purchase_success_response(&request),
+            Some([
+                0xff, 0xff,
+                0x00, 0x01,
+                0x00, 0x69,
+                0x00,
+            ])
+        );
+    }
+
+    #[test]
+    fn local_lgt_purchase_does_not_intercept_other_operations() {
+        let catalog = [
+            0xff, 0xff,
+            0x00, 0x01,
+            0x00, 0x66,
+            0x00,
+        ];
+
+        let gift_or_other = [
+            0xff, 0xff,
+            0x00, 0x01,
+            0x00, 0x6a,
+            0x00,
+        ];
+
+        assert_eq!(
+            lgt_local_purchase_success_response(&catalog),
+            None
+        );
+        assert_eq!(
+            lgt_local_purchase_success_response(&gift_or_other),
+            None
+        );
+    }
+
+    #[test]
+    fn local_lgt_purchase_rejects_malformed_length() {
+        let malformed = [
+            0xff, 0xff,
+            0x00, 0x02,
+            0x00, 0x68,
+            0x00,
+        ];
+
+        assert_eq!(
+            lgt_local_purchase_success_response(&malformed),
+            None
+        );
+    }
+
+    #[test]
+    fn local_lgt_purchase_response_queue_supports_partial_reads() {
+        let mut state = NetworkState::default();
+        state.register_socket(7, 1, 1);
+
+        state.queue_local_billing_response(
+            7,
+            [
+                0xff, 0xff,
+                0x00, 0x01,
+                0x00, 0x69,
+                0x00,
+            ],
+        );
+
+        let mut first = [0u8; 3];
+        assert_eq!(
+            state.take_local_billing_response(7, &mut first),
+            Some(3)
+        );
+        assert_eq!(first, [0xff, 0xff, 0x00]);
+
+        let mut second = [0u8; 8];
+        assert_eq!(
+            state.take_local_billing_response(7, &mut second),
+            Some(4)
+        );
+        assert_eq!(&second[..4], &[0x01, 0x00, 0x69, 0x00]);
+
+        assert_eq!(
+            state.take_local_billing_response(7, &mut second),
+            None
         );
     }
 

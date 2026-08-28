@@ -122,21 +122,16 @@ impl Shared {
 #[derive(Clone)]
 pub struct AndroidHandsetInformation {
     phone_model: String,
-    bill_gateway: Option<String>,
 }
 
 impl AndroidHandsetInformation {
-    pub fn new(phone_model: String, bill_gateway: Option<String>) -> Self {
-        Self {
-            phone_model,
-            bill_gateway,
-        }
+    pub fn new(phone_model: String) -> Self {
+        Self { phone_model }
     }
 
     fn get(&self, key: &str) -> Option<String> {
         match key {
             "PHONEMODEL" => Some(self.phone_model.clone()),
-            "BILL_GW_IP" => self.bill_gateway.clone(),
             _ => None,
         }
     }
@@ -290,16 +285,10 @@ mod handset_information_tests {
 
     #[test]
     fn android_handset_information_exposes_only_supplied_hal_values() {
-        let configured = AndroidHandsetInformation::new(
-            "SM-S948N".to_owned(),
-            Some("billing.example:30000".to_owned()),
-        );
+        let configured =
+            AndroidHandsetInformation::new("SM-S948N".to_owned());
 
         assert_eq!(configured.get("PHONEMODEL").as_deref(), Some("SM-S948N"));
-        assert_eq!(
-            configured.get("BILL_GW_IP").as_deref(),
-            Some("billing.example:30000")
-        );
 
         for unavailable in [
             "MDN",
@@ -311,10 +300,5 @@ mod handset_information_tests {
         ] {
             assert_eq!(configured.get(unavailable), None, "{unavailable}");
         }
-
-        let unconfigured =
-            AndroidHandsetInformation::new("SM-S948N".to_owned(), None);
-
-        assert_eq!(unconfigured.get("BILL_GW_IP"), None);
     }
 }
