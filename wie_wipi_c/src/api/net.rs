@@ -731,7 +731,13 @@ fn lgt_local_purchase_success_response(
     let message_type =
         u16::from_be_bytes([request[4], request[5]]);
 
-    if declared_length != request.len()
+    // Native LGT clients may expose only the current socket-write slice even
+    // though the application header declares the complete frame length.
+    // Red Gem builds a 19-byte 0x68 frame but calls MC_netSocketWrite with
+    // its first 10 bytes. Accept a header-complete prefix, while rejecting
+    // malformed slices that exceed the declared frame.
+    if declared_length < 6
+        || request.len() > declared_length
         || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE
     {
         return None;
@@ -2995,9 +3001,160 @@ fn http_validate_config(context: &mut dyn WIPICContext, handle: i32) -> core::re
 
 #[cfg(test)]
 mod network_state_tests {
-    use alloc::vec;
+    use alloc::{boxed::Box, vec};
+
+    use test_utils::TestPlatform;
+    use wie_backend::{
+        AudioSink, DatabaseRepository, DefaultTaskRunner, Filesystem, Instant, Network,
+        NetworkError, NetworkEvent, NetworkPoll, Platform, Screen, System,
+    };
+    use wie_util::ByteWrite;
+
+    use crate::context::test::TestContext;
 
     use super::*;
+
+    struct LocalBillingTestNetwork;
+
+    impl Network for LocalBillingTestNetwork {
+        fn socket(&self, family: i32, socket_type: i32) -> core::result::Result<i32, NetworkError> {
+            if family == 2 && socket_type == 1 {
+                Ok(31)
+            } else {
+                Err(NetworkError::Unsupported)
+            }
+        }
+
+        fn connect(
+            &self,
+            _socket: i32,
+            _address: u32,
+            _port: u16,
+        ) -> NetworkPoll<()> {
+            NetworkPoll::Ready(Err(NetworkError::Unsupported))
+        }
+
+        fn bind(
+            &self,
+            _socket: i32,
+            _address: u32,
+            _port: u16,
+        ) -> core::result::Result<(), NetworkError> {
+            Err(NetworkError::Unsupported)
+        }
+
+        fn read(
+            &self,
+            _socket: i32,
+            _buf: &mut [u8],
+        ) -> core::result::Result<usize, NetworkError> {
+            Err(NetworkError::Unsupported)
+        }
+
+        fn write(
+            &self,
+            _socket: i32,
+            _buf: &[u8],
+        ) -> core::result::Result<usize, NetworkError> {
+            Err(NetworkError::Unsupported)
+        }
+
+        fn send_to(
+            &self,
+            _socket: i32,
+            _buf: &[u8],
+            _address: u32,
+            _port: u16,
+        ) -> core::result::Result<usize, NetworkError> {
+            Err(NetworkError::Unsupported)
+        }
+
+        fn recv_from(
+            &self,
+            _socket: i32,
+            _buf: &mut [u8],
+        ) -> core::result::Result<(usize, u32, u16), NetworkError> {
+            Err(NetworkError::Unsupported)
+        }
+
+        fn close(&self, _socket: i32) -> core::result::Result<(), NetworkError> {
+            Ok(())
+        }
+
+        fn resolve_host(&self, _host: &str, _query_id: u32) {}
+
+        fn poll_event(&self) -> Option<NetworkEvent> {
+            None
+        }
+    }
+
+    struct LocalBillingTestPlatform {
+        base: TestPlatform,
+        network: LocalBillingTestNetwork,
+    }
+
+    impl LocalBillingTestPlatform {
+        fn new() -> Self {
+            Self {
+                base: TestPlatform::new(),
+                network: LocalBillingTestNetwork,
+            }
+        }
+    }
+
+    impl Platform for LocalBillingTestPlatform {
+        fn screen(&self) -> &dyn Screen {
+            self.base.screen()
+        }
+
+        fn now(&self) -> Instant {
+            self.base.now()
+        }
+
+        fn database_repository(&self) -> &dyn DatabaseRepository {
+            self.base.database_repository()
+        }
+
+        fn filesystem(&self) -> &dyn Filesystem {
+            self.base.filesystem()
+        }
+
+        fn audio_sink(&self) -> Box<dyn AudioSink> {
+            self.base.audio_sink()
+        }
+
+        fn network(&self) -> Option<&dyn Network> {
+            Some(&self.network)
+        }
+
+        fn system_information(&self, key: &str) -> Option<alloc::string::String> {
+            self.base.system_information(key)
+        }
+
+        fn open_url(&self, url: &str) -> bool {
+            self.base.open_url(url)
+        }
+
+        fn write_stdout(&self, buf: &[u8]) {
+            self.base.write_stdout(buf);
+        }
+
+        fn write_stderr(&self, buf: &[u8]) {
+            self.base.write_stderr(buf);
+        }
+
+        fn exit(&self) {
+            self.base.exit();
+        }
+
+        fn vibrate(&self, duration_ms: u64, intensity: u8) {
+            self.base.vibrate(duration_ms, intensity);
+        }
+
+        fn set_backlight_mode(&self, mode: u8) {
+            self.base.set_backlight_mode(mode);
+        }
+    }
 
     #[test]
     fn process_connect_lifecycle_matches_reference_states() {
@@ -3799,6 +3956,149 @@ mod network_state_tests {
         );
     }
 
+    #[futures_test::test]
+    async fn local_lgt_purchase_bill_socket_accepts_native_ten_byte_write_prefix() {
+        const REQUEST: u32 = 0x1000;
+
+        let system = System::new(
+            Box::new(LocalBillingTestPlatform::new()),
+            "test-pid",
+            "test-aid",
+            DefaultTaskRunner,
+        );
+        let mut context = TestContext::with_system(system);
+
+        let request_prefix = [
+            0xff, 0xff,
+            0x00, 0x13,
+            0x00, 0x68,
+            0x31, 0x32, 0x33, 0x34,
+        ];
+
+        context.write_bytes(REQUEST, &request_prefix).unwrap();
+
+        let state = context.network_state();
+        state.lock().process_state = ProcessNetworkState::Available;
+
+        let socket = bill_socket(&mut context, 2, 1).await.unwrap();
+        assert_eq!(socket, 31);
+        assert_eq!(state.lock().socket_type(socket), Some(1));
+        assert_eq!(state.lock().billing_mode(socket), Some(1));
+
+        assert_eq!(
+            socket_write(
+                &mut context,
+                socket,
+                REQUEST,
+                request_prefix.len() as i32,
+            )
+            .await
+            .unwrap(),
+            request_prefix.len() as i32
+        );
+
+        let mut response = [0u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE];
+        assert_eq!(
+            state
+                .lock()
+                .take_local_billing_response(socket, &mut response),
+            Some(LGT_LOCAL_PURCHASE_RESPONSE_SIZE)
+        );
+        assert_eq!(
+            response,
+            [
+                0xff, 0xff,
+                0x00, 0x07,
+                0x00, 0x69,
+                0x00,
+            ]
+        );
+    }
+
+    #[futures_test::test]
+    async fn local_lgt_purchase_bill_socket_to_write_real_path_returns_full_length_and_queues_success() {
+        const REQUEST: u32 = 0x1000;
+
+        let system = System::new(
+            Box::new(LocalBillingTestPlatform::new()),
+            "test-pid",
+            "test-aid",
+            DefaultTaskRunner,
+        );
+        let mut context = TestContext::with_system(system);
+
+        let request = [
+            0xff, 0xff,
+            0x00, 0x13,
+            0x00, 0x68,
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+            0x37, 0x38, 0x39, 0x30, 0x31,
+            0x02,
+            0x03,
+        ];
+
+        context.write_bytes(REQUEST, &request).unwrap();
+
+        let state = context.network_state();
+        state.lock().process_state = ProcessNetworkState::Available;
+
+        let socket = bill_socket(&mut context, 2, 1).await.unwrap();
+        assert_eq!(socket, 31);
+        assert_eq!(state.lock().socket_type(socket), Some(1));
+        assert_eq!(state.lock().billing_mode(socket), Some(1));
+
+        assert_eq!(
+            socket_write(
+                &mut context,
+                socket,
+                REQUEST,
+                request.len() as i32,
+            )
+            .await
+            .unwrap(),
+            request.len() as i32
+        );
+
+        let mut response = [0u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE];
+        assert_eq!(
+            state
+                .lock()
+                .take_local_billing_response(socket, &mut response),
+            Some(LGT_LOCAL_PURCHASE_RESPONSE_SIZE)
+        );
+        assert_eq!(
+            response,
+            [
+                0xff, 0xff,
+                0x00, 0x07,
+                0x00, 0x69,
+                0x00,
+            ]
+        );
+    }
+
+    #[test]
+    fn local_lgt_purchase_accepts_header_complete_native_write_prefix() {
+        // Red Gem declares a 19-byte 0x68 application frame, while its
+        // native write wrapper passes only the first 10 bytes.
+        let request_prefix = [
+            0xff, 0xff,
+            0x00, 0x13,
+            0x00, 0x68,
+            0x31, 0x32, 0x33, 0x34,
+        ];
+
+        assert_eq!(
+            lgt_local_purchase_success_response(&request_prefix),
+            Some([
+                0xff, 0xff,
+                0x00, 0x07,
+                0x00, 0x69,
+                0x00,
+            ])
+        );
+    }
+
     #[test]
     fn local_lgt_purchase_68_builds_69_status_zero_response() {
         let request = [
@@ -3844,6 +4144,21 @@ mod network_state_tests {
         );
         assert_eq!(
             lgt_local_purchase_success_response(&gift_or_other),
+            None
+        );
+    }
+
+    #[test]
+    fn local_lgt_purchase_rejects_write_longer_than_declared_frame() {
+        let malformed = [
+            0xff, 0xff,
+            0x00, 0x07,
+            0x00, 0x68,
+            0x00, 0x00,
+        ];
+
+        assert_eq!(
+            lgt_local_purchase_success_response(&malformed),
             None
         );
     }
