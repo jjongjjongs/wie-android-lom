@@ -294,18 +294,34 @@ impl JitEngine {
         true
     }
 
+    /// Copy the flat working registers into the interpreter CPU. In the
+    /// User/System bank this is a slice copy (r0..r15 at raw[0..16], CPSR at
+    /// raw[16]); other banks use the per-register path. Fast because it runs on
+    /// every interpreter fallback.
     fn store_back(&mut self, mode: Mode) {
-        self.cpu.reg_set(mode, reg::CPSR, self.ctx.cpsr);
-        for i in 0..16 {
-            self.cpu.reg_set(mode, i as u8, self.ctx.regs[i]);
+        if self.cpu.cur_bank() == 0 {
+            let dst = self.cpu.raw_regs_mut();
+            dst[0..16].copy_from_slice(&self.ctx.regs);
+            dst[16] = self.ctx.cpsr;
+        } else {
+            self.cpu.reg_set(mode, reg::CPSR, self.ctx.cpsr);
+            for i in 0..16 {
+                self.cpu.reg_set(mode, i as u8, self.ctx.regs[i]);
+            }
         }
     }
 
     fn load_regs(&mut self, mode: Mode) {
-        for i in 0..16 {
-            self.ctx.regs[i] = self.cpu.reg_get(mode, i as u8);
+        if self.cpu.cur_bank() == 0 {
+            let src = self.cpu.raw_regs();
+            self.ctx.regs.copy_from_slice(&src[0..16]);
+            self.ctx.cpsr = src[16];
+        } else {
+            for i in 0..16 {
+                self.ctx.regs[i] = self.cpu.reg_get(mode, i as u8);
+            }
+            self.ctx.cpsr = self.cpu.reg_get(mode, reg::CPSR);
         }
-        self.ctx.cpsr = self.cpu.reg_get(mode, reg::CPSR);
     }
 
     fn read_svc_result(&mut self) -> Result<EngineRunResult> {

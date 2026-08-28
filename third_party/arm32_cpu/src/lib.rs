@@ -230,6 +230,22 @@ impl Cpu {
         self.reg.get(mode.reg_bank(), reg)
     }
 
+    /// The currently selected register bank (0 = User/System).
+    pub fn cur_bank(&self) -> usize {
+        self.reg.cur_bank()
+    }
+
+    /// Raw register storage, for bulk state exchange. See [`reg::RegFile::raw`].
+    pub fn raw_regs(&self) -> &[u32] {
+        self.reg.raw()
+    }
+
+    /// Mutable raw register storage. Writing CPSR (index 16) here does not
+    /// re-derive the active bank, so callers must not change the mode bits.
+    pub fn raw_regs_mut(&mut self) -> &mut [u32] {
+        self.reg.raw_mut()
+    }
+
     /// Returns the current processor mode.
     pub fn mode(&self) -> Mode {
         self.reg.mode()
