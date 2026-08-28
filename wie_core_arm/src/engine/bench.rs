@@ -136,6 +136,36 @@ fn blit_correctness_fast() {
     assert_eq!(dst, expected, "FastCpuEngine blit produced wrong pixels");
 }
 
+#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[test]
+fn blit_correctness_jit() {
+    let pixels = 4096;
+    let (src, expected) = blit_fixture(pixels);
+    let (dst, _) = run_blit(super::JitEngine::new(), pixels, 1, &src);
+    assert_eq!(dst, expected, "JitEngine blit produced wrong pixels");
+}
+
+#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[test]
+#[ignore = "benchmark; run with --ignored --nocapture --release"]
+fn blit_throughput_jit() {
+    let pixels = 4096;
+    let frames: u32 = std::env::var("WIE_BENCH_FRAMES").ok().and_then(|s| s.parse().ok()).unwrap_or(3000);
+    let (src, _) = blit_fixture(pixels);
+    let reps: u32 = std::env::var("WIE_BENCH_REPS").ok().and_then(|s| s.parse().ok()).unwrap_or(7);
+
+    let mut best = f64::INFINITY;
+    let mut executed = 0u64;
+    for _ in 0..reps.max(1) {
+        let start = std::time::Instant::now();
+        let (_, e) = run_blit(super::JitEngine::new(), pixels, frames, &src);
+        best = best.min(start.elapsed().as_secs_f64());
+        executed = e;
+    }
+    let mips = executed as f64 / best / 1.0e6;
+    std::eprintln!("[bench] JitEngine       blit: {executed} insns, best of {reps} = {best:.3}s = {mips:.1} MIPS");
+}
+
 #[test]
 #[ignore = "benchmark; run with --ignored --nocapture --release"]
 fn blit_throughput_fast() {

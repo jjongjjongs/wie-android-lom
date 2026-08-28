@@ -43,7 +43,7 @@ const MAX_BLOCK_LEN: usize = 256;
 /// are indices into the flat `[u32; 16]` file. Straight-line variants advance
 /// PC by 2; the two branch variants are always a block's final op and set PC.
 #[derive(Clone, Copy)]
-enum FastOp {
+pub(crate) enum FastOp {
     /// Thumb `Shifted` (LSL/LSR/ASR immediate); sets NZC.
     Shift { op: u8, rd: u8, rs: u8, shift: u32 },
     /// `AddSub` with a register second operand; sets NZCV.
@@ -79,7 +79,7 @@ enum FastOp {
 }
 
 /// Whether a decoded op continues the block or ends it (a branch).
-enum Decoded {
+pub(crate) enum Decoded {
     Straight(FastOp),
     Terminator(FastOp),
 }
@@ -400,7 +400,7 @@ impl Ctx<'_> {
 
 /// Decode one Thumb instruction word at `pc` into a fast op, or `None` if it is
 /// outside the fast set (caller falls back to the interpreter for it).
-fn decode(inst: u16, pc: u32) -> Option<Decoded> {
+pub(crate) fn decode(inst: u16, pc: u32) -> Option<Decoded> {
     let i = inst as u32;
     let hi = inst >> 8;
     // Mirror arm32_cpu's decode groups, but only for the fast subset.

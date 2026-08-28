@@ -74,6 +74,25 @@ pub struct ArmCore {
     pub(crate) inner: Arc<Mutex<ArmCoreInner>>, // TODO can we change it to another lock like async-lock?
 }
 
+/// The non-debug execution engine, chosen at compile time: the machine-code JIT
+/// (`jit` feature, x86-64) if available, else the block-caching interpreter
+/// (`fast_cpu`), else the reference interpreter.
+// The trailing interpreter/fast-engine arms stay compiled (via `cfg!`, not
+// `#[cfg]`) even when the JIT is selected, so `FastCpuEngine`/`Arm32CpuEngine`
+// remain referenced and warning-free across every feature combination; they are
+// then unreachable in the JIT build, which the allow acknowledges.
+#[allow(unreachable_code)]
+fn default_engine() -> Box<dyn ArmEngine> {
+    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    return Box::new(crate::engine::JitEngine::new());
+
+    if cfg!(feature = "fast_cpu") {
+        Box::new(crate::engine::FastCpuEngine::new())
+    } else {
+        Box::new(Arm32CpuEngine::new())
+    }
+}
+
 impl ArmCore {
     pub fn new(enable_gdbserver: bool, profile: Option<ProfileCallback>) -> Result<Self> {
         let mut engine = if enable_gdbserver {
@@ -83,10 +102,8 @@ impl ArmCore {
             let engine = Box::new(Arm32CpuEngine::new());
 
             engine
-        } else if cfg!(feature = "fast_cpu") {
-            Box::new(crate::engine::FastCpuEngine::new()) as Box<dyn ArmEngine>
         } else {
-            Box::new(Arm32CpuEngine::new())
+            default_engine()
         };
 
         engine.mem_map(FUNCTIONS_BASE, FUNCTIONS_SIZE, MemoryPermission::ReadExecute);
@@ -749,12 +766,12 @@ mod tests {
 
     #[test]
     fn thread_wrapper_exposes_current_thread_only_while_polled() {
+        use alloc::sync::Arc;
         use core::{
             future::Future,
             pin::Pin,
             task::{Context, Poll},
         };
-        use alloc::sync::Arc;
         use futures_test::task::new_count_waker;
         use spin::Mutex;
 
