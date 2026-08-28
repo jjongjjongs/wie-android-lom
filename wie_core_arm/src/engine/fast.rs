@@ -89,6 +89,10 @@ pub(crate) enum FastOp {
     /// Thumb bit. A 32-bit instruction, so it advances PC by 4. Ends the trace.
     /// Produced only by the JIT frontend.
     BranchLink { exchange: bool, target: u32, ret: u32 },
+    /// `ldmia`/`stmia rb!, {rlist}` (`BlockXfer`). Multi-register transfer with
+    /// writeback to `rb`; `rlist` covers r0..r7 only (no PC), so it is
+    /// straight-line. Produced only by the JIT frontend.
+    BlockXfer { load: bool, rb: u8, rlist: u8 },
 }
 
 /// Whether a decoded op continues the block or ends it (a branch).
@@ -422,7 +426,8 @@ impl Ctx<'_> {
             // by this engine), so they never reach here.
             | FastOp::PushPop { .. }
             | FastOp::BranchExchange { .. }
-            | FastOp::BranchLink { .. } => unreachable!("branch in straight-line slot"),
+            | FastOp::BranchLink { .. }
+            | FastOp::BlockXfer { .. } => unreachable!("branch in straight-line slot"),
         }
     }
 }

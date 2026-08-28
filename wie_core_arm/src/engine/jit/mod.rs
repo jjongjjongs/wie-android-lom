@@ -69,6 +69,10 @@ pub(crate) struct JitCtx {
     /// dispatcher reads the delta back as the retired-instruction count.
     /// Offset 96.
     pub budget: i32,
+    /// Scratch word for compiled code needing a value to survive helper calls
+    /// (the base address of an ldm/stm, whose base register may be overwritten
+    /// mid-transfer). Offset 100.
+    pub scratch: u32,
 }
 
 impl JitCtx {
@@ -82,6 +86,7 @@ impl JitCtx {
             mem: core::ptr::null_mut(),
             code_pages: core::ptr::null(),
             budget: 0,
+            scratch: 0,
         }
     }
 }
@@ -307,6 +312,17 @@ impl JitEngine {
                 FastOp::PushPop {
                     load: i.get_bit(11) == 1,
                     extra: i.get_bit(8) == 1,
+                    rlist: i.extract(0, 8) as u8,
+                },
+                2,
+            ));
+        }
+        // LDMIA/STMIA (BlockXfer).
+        if i & 0xf000 == 0xc000 {
+            return Some((
+                FastOp::BlockXfer {
+                    load: i.get_bit(11) == 1,
+                    rb: i.extract(8, 3) as u8,
                     rlist: i.extract(0, 8) as u8,
                 },
                 2,
@@ -1029,6 +1045,59 @@ mod tests {
         regs[2] = (CODE + 8) | 1; // Thumb target
         regs[13] = DATA + 0x8000;
         assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_ldm_stm_roundtrip() {
+        // stmia r6!,{r0,r1,r2}; ldmia r7!,{r3,r4,r5}; b next (r6,r7 share a base).
+        let code = thumb(&[0xc607, 0xcf38, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0x1111_1111;
+        regs[1] = 0x2222_2222;
+        regs[2] = 0x3333_3333;
+        regs[6] = DATA + 0x100;
+        regs[7] = DATA + 0x100;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_stm_base_in_list() {
+        // stmia r0!,{r0,r1}: r0 is the lowest reg, so slot 0 stores the original
+        // base, not the written-back value.
+        let code = thumb(&[0xc003, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = DATA + 0x200;
+        regs[1] = 0x9999_9999;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_ldm_base_in_list() {
+        // Seed memory with stmia r5!,{r2,r3}, then ldmia r0!,{r0,r1} where r0 is
+        // both base and in the list: the loaded value must win over writeback.
+        let code = thumb(&[0xc50c, 0xc803, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = DATA + 0x300;
+        regs[5] = DATA + 0x300;
+        regs[2] = 0x0abc_0abc;
+        regs[3] = 0x0def_0def;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_stm_fault() {
+        // stmia r6!,{r0,r1} onto an unmapped base: writeback still happens and
+        // both engines fault at the same (last) address.
+        let code = thumb(&[0xc603, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0xdead_beef;
+        regs[1] = 0xfeed_face;
+        regs[6] = 0x0005_0000; // unmapped
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
     }
 
     #[test]

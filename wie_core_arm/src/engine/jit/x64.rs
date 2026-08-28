@@ -38,6 +38,7 @@ const PC: i32 = 15 * 4;
 const FAULTED: i32 = 72;
 const SMC: i32 = 76;
 const BUDGET: i32 = 96;
+const SCRATCH: i32 = 100;
 
 type Asm = dynasmrt::x64::Assembler;
 
@@ -61,7 +62,8 @@ fn supported(op: FastOp) -> bool {
         | FastOp::Branch { .. }
         | FastOp::PushPop { .. }
         | FastOp::BranchExchange { .. }
-        | FastOp::BranchLink { .. } => true,
+        | FastOp::BranchLink { .. }
+        | FastOp::BlockXfer { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x7 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
     }
@@ -391,6 +393,7 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
             }
         }
         FastOp::PushPop { load, extra, rlist } => emit_push_pop(a, load, extra, rlist, pc),
+        FastOp::BlockXfer { load, rb, rlist } => emit_block_xfer(a, load, rb, rlist, pc),
         FastOp::BranchExchange { link, rm } => emit_bx(a, link, rm, pc),
         FastOp::BranchLink { exchange, target, ret } => emit_bl(a, exchange, target, ret),
         FastOp::CondBranch { .. } | FastOp::Branch { .. } => {
@@ -483,6 +486,64 @@ fn emit_push_pop(a: &mut Asm, load: bool, extra: bool, rlist: u8, pc: u32) {
     }
     if pop_pc {
         dynasm!(a ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
+    }
+}
+
+/// Emit `ldmia`/`stmia rb!, {rlist}`, fully unrolled. The base is stashed in the
+/// context scratch word so it survives the helper calls even when `rb` is in the
+/// list and gets overwritten. Writeback happens first (matching the interpreter),
+/// so an LDM that reloads `rb` overrides it and an STM of `rb` other than at the
+/// lowest slot stores the written-back value. Fault/SMC is checked once at the
+/// end. No PC transfer (rlist is r0..r7), so it is straight-line.
+fn emit_block_xfer(a: &mut Asm, load: bool, rb: u8, rlist: u8, pc: u32) {
+    let regs: alloc::vec::Vec<u8> = (0..8u8).filter(|&r| rlist & (1 << r) != 0).collect();
+    let total = regs.len() as i32;
+    dynasm!(a
+        ; mov eax, [rbx + ro(rb)]
+        ; mov [rbx + SCRATCH], eax   // scratch = base
+        ; add eax, total * 4
+        ; mov [rbx + ro(rb)], eax    // writeback rb = base + total*4
+    );
+    for (i, &r) in regs.iter().enumerate() {
+        let off = i as i32 * 4;
+        if load {
+            dynasm!(a
+                ; mov rdi, rbx
+                ; mov esi, [rbx + SCRATCH]
+                ; add esi, off
+                ; mov rax, QWORD jit_load32 as *const () as i64
+                ; call rax
+                ; mov [rbx + ro(r)], eax
+            );
+        } else {
+            dynasm!(a ; mov rdi, rbx ; mov esi, [rbx + SCRATCH] ; add esi, off);
+            if r == rb && i == 0 {
+                dynasm!(a ; mov edx, [rbx + SCRATCH]); // lowest slot stores the original base
+            } else {
+                dynasm!(a ; mov edx, [rbx + ro(r)]);
+            }
+            dynasm!(a ; mov rax, QWORD jit_store32 as *const () as i64 ; call rax);
+        }
+    }
+    dynasm!(a
+        ; mov ecx, [rbx + FAULTED]
+        ; test ecx, ecx
+        ; jz >nofault
+        ; mov DWORD [rbx + PC], pc.wrapping_add(2) as i32
+        ; mov eax, exit::FAULT as i32
+        ; jmp ->epilogue
+        ; nofault:
+    );
+    if !load {
+        dynasm!(a
+            ; mov ecx, [rbx + SMC]
+            ; test ecx, ecx
+            ; jz >nosmc
+            ; mov DWORD [rbx + PC], pc.wrapping_add(2) as i32
+            ; mov eax, exit::SMC as i32
+            ; jmp ->epilogue
+            ; nosmc:
+        );
     }
 }
 

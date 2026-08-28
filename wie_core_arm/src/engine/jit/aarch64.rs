@@ -56,6 +56,7 @@ const PC: u32 = 15 * 4;
 const FAULTED: u32 = 72;
 const SMC: u32 = 76;
 const BUDGET: u32 = 96;
+const SCRATCH: u32 = 100;
 
 type Asm = dynasmrt::aarch64::Assembler;
 
@@ -77,7 +78,8 @@ fn supported(op: FastOp) -> bool {
         | FastOp::Branch { .. }
         | FastOp::PushPop { .. }
         | FastOp::BranchExchange { .. }
-        | FastOp::BranchLink { .. } => true,
+        | FastOp::BranchLink { .. }
+        | FastOp::BlockXfer { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x7 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
     }
@@ -389,6 +391,7 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
             }
         }
         FastOp::PushPop { load, extra, rlist } => emit_push_pop(a, load, extra, rlist, pc),
+        FastOp::BlockXfer { load, rb, rlist } => emit_block_xfer(a, load, rb, rlist, pc),
         FastOp::BranchExchange { link, rm } => emit_bx(a, link, rm, pc),
         FastOp::BranchLink { exchange, target, ret } => emit_bl(a, exchange, target, ret),
         FastOp::CondBranch { .. } | FastOp::Branch { .. } => {
@@ -459,6 +462,46 @@ fn emit_push_pop(a: &mut Asm, load: bool, extra: bool, rlist: u8, pc: u32) {
     }
     if pop_pc {
         a64!(a ; movz w0, #exit::CONTINUE ; b ->epilogue);
+    }
+}
+
+/// Emit `ldmia`/`stmia rb!, {rlist}`, fully unrolled. The base is stashed in the
+/// context scratch word so it survives helper calls even when `rb` is in the list
+/// and gets overwritten. Writeback happens first (matching the interpreter), so
+/// an LDM reloading `rb` overrides it and an STM of `rb` above the lowest slot
+/// stores the written-back value. Fault/SMC checked once at the end.
+fn emit_block_xfer(a: &mut Asm, load: bool, rb: u8, rlist: u8, pc: u32) {
+    let regs: alloc::vec::Vec<u8> = (0..8u8).filter(|&r| rlist & (1 << r) != 0).collect();
+    let total4 = regs.len() as u32 * 4;
+    a64!(a
+        ; ldr w0, [x19, #ro(rb)]
+        ; str w0, [x19, #SCRATCH]      // scratch = base
+        ; add w0, w0, #total4
+        ; str w0, [x19, #ro(rb)]        // writeback rb = base + total*4
+    );
+    for (i, &r) in regs.iter().enumerate() {
+        let off = i as u32 * 4;
+        if load {
+            a64!(a ; mov x0, x19 ; ldr w1, [x19, #SCRATCH] ; add w1, w1, #off);
+            emit_call(a, jit_load32 as *const () as u64);
+            a64!(a ; str w0, [x19, #ro(r)]);
+        } else {
+            a64!(a ; mov x0, x19 ; ldr w1, [x19, #SCRATCH] ; add w1, w1, #off);
+            if r == rb && i == 0 {
+                a64!(a ; ldr w2, [x19, #SCRATCH]); // lowest slot stores the original base
+            } else {
+                a64!(a ; ldr w2, [x19, #ro(r)]);
+            }
+            emit_call(a, jit_store32 as *const () as u64);
+        }
+    }
+    a64!(a ; ldr w9, [x19, #FAULTED] ; cbz w9, >nofault);
+    mov_imm32!(a, w10, pc.wrapping_add(2));
+    a64!(a ; str w10, [x19, #PC] ; movz w0, #exit::FAULT ; b ->epilogue ; nofault:);
+    if !load {
+        a64!(a ; ldr w9, [x19, #SMC] ; cbz w9, >nosmc);
+        mov_imm32!(a, w10, pc.wrapping_add(2));
+        a64!(a ; str w10, [x19, #PC] ; movz w0, #exit::SMC ; b ->epilogue ; nosmc:);
     }
 }
 
