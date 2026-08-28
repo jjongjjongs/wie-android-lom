@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Use the experimental block-caching Thumb engine (FastCpuEngine) instead of the
+# reference interpreter. Opt-in so it can be A/B tested on-device; correctness is
+# pinned by the differential tests in `engine::fast`.
+fast_cpu = []
+
 [dependencies]
 async-trait = { workspace = true }
 bytemuck = { workspace = true }

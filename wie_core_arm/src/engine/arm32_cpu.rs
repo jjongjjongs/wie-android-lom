@@ -131,7 +131,7 @@ impl ArmEngine for Arm32CpuEngine {
 }
 
 impl ArmRegister {
-    fn into_armv4t(self) -> u8 {
+    pub(crate) fn into_armv4t(self) -> u8 {
         match self {
             ArmRegister::R0 => 0,
             ArmRegister::R1 => 1,
@@ -158,22 +158,22 @@ const TOTAL_MEMORY: u64 = 0x100000000;
 const PAGE_SIZE: usize = 0x10000;
 const PAGE_MASK: u32 = (PAGE_SIZE - 1) as _;
 
-struct EmulatedMemory {
+pub(crate) struct EmulatedMemory {
     pages: [Option<Box<[u8; PAGE_SIZE]>>; (TOTAL_MEMORY / PAGE_SIZE as u64) as usize],
 }
 
 impl EmulatedMemory {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             pages: array::from_fn(|_| None),
         }
     }
 
-    fn as_arm32cpu_memory(&mut self) -> Arm32CpuMemory<'_> {
+    pub(crate) fn as_arm32cpu_memory(&mut self) -> Arm32CpuMemory<'_> {
         Arm32CpuMemory::new(self)
     }
 
-    fn map(&mut self, address: u32, size: usize) {
+    pub(crate) fn map(&mut self, address: u32, size: usize) {
         let page_start = address & !PAGE_MASK;
         let page_end = (address + size as u32 + PAGE_MASK) & !PAGE_MASK;
 
@@ -185,7 +185,7 @@ impl EmulatedMemory {
         }
     }
 
-    fn read_range(&self, address: u32, size: usize, result: &mut [u8]) -> Result<usize> {
+    pub(crate) fn read_range(&self, address: u32, size: usize, result: &mut [u8]) -> Result<usize> {
         let mut remaining_size = size;
         let mut current_address = address;
 
@@ -205,7 +205,7 @@ impl EmulatedMemory {
         Ok(size)
     }
 
-    fn write_range(&mut self, address: u32, data: &[u8]) -> Result<()> {
+    pub(crate) fn write_range(&mut self, address: u32, data: &[u8]) -> Result<()> {
         let mut current_address = address;
         let mut data_index = 0;
 
@@ -225,7 +225,73 @@ impl EmulatedMemory {
         Ok(())
     }
 
-    fn is_mapped(&self, address: u32, size: usize) -> bool {
+    /// Borrow the mapped 64 KiB page containing `addr`, or `None` if unmapped.
+    #[inline(always)]
+    fn page(&self, addr: u32) -> Option<&[u8; PAGE_SIZE]> {
+        self.pages[(addr >> 16) as usize].as_deref()
+    }
+
+    /// Borrow the mapped page mutably.
+    #[inline(always)]
+    fn page_mut(&mut self, addr: u32) -> Option<&mut [u8; PAGE_SIZE]> {
+        self.pages[(addr >> 16) as usize].as_deref_mut()
+    }
+
+    // Fault-signalling accessors used by the fast engine. They return `None`
+    // when the page is unmapped (mirroring `Arm32CpuMemory`'s memory-error
+    // path) rather than erroring, so the caller decides how to abort. Callers
+    // pass word/halfword addresses that do not cross a page boundary (word
+    // accesses are 4-aligned, halfword accesses even), matching how the ARM
+    // core aligns them, so a single-page read/write is always sufficient.
+    #[inline(always)]
+    pub(crate) fn load_u8(&self, addr: u32) -> Option<u8> {
+        Some(self.page(addr)?[(addr & PAGE_MASK) as usize])
+    }
+    #[inline(always)]
+    pub(crate) fn load_u16(&self, addr: u32) -> Option<u16> {
+        let p = self.page(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        Some((p[o] as u16) | ((p[o + 1] as u16) << 8))
+    }
+    #[inline(always)]
+    pub(crate) fn load_u32(&self, addr: u32) -> Option<u32> {
+        let p = self.page(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        Some((p[o] as u32) | ((p[o + 1] as u32) << 8) | ((p[o + 2] as u32) << 16) | ((p[o + 3] as u32) << 24))
+    }
+    #[inline(always)]
+    pub(crate) fn store_u8(&mut self, addr: u32, val: u8) -> Option<()> {
+        let p = self.page_mut(addr)?;
+        p[(addr & PAGE_MASK) as usize] = val;
+        Some(())
+    }
+    #[inline(always)]
+    pub(crate) fn store_u16(&mut self, addr: u32, val: u16) -> Option<()> {
+        let p = self.page_mut(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        p[o] = val as u8;
+        p[o + 1] = (val >> 8) as u8;
+        Some(())
+    }
+    #[inline(always)]
+    pub(crate) fn store_u32(&mut self, addr: u32, val: u32) -> Option<()> {
+        let p = self.page_mut(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        p[o] = val as u8;
+        p[o + 1] = (val >> 8) as u8;
+        p[o + 2] = (val >> 16) as u8;
+        p[o + 3] = (val >> 24) as u8;
+        Some(())
+    }
+
+    /// Read a halfword for block decoding without signalling a fault (`None` if
+    /// the page is unmapped, ending block construction there).
+    #[inline(always)]
+    pub(crate) fn peek_u16(&self, addr: u32) -> Option<u16> {
+        self.load_u16(addr)
+    }
+
+    pub(crate) fn is_mapped(&self, address: u32, size: usize) -> bool {
         let page_start = address & !PAGE_MASK;
         let page_end = (address + size as u32 + PAGE_MASK) & !PAGE_MASK;
 
@@ -243,7 +309,7 @@ impl EmulatedMemory {
     }
 }
 
-struct Arm32CpuMemory<'a> {
+pub(crate) struct Arm32CpuMemory<'a> {
     emulated_memory: &'a mut EmulatedMemory,
     memory_error: Option<u32>,
 }
@@ -257,7 +323,7 @@ impl<'a> Arm32CpuMemory<'a> {
     }
 
     #[inline(always)]
-    fn memory_error(&self) -> Option<u32> {
+    pub(crate) fn memory_error(&self) -> Option<u32> {
         self.memory_error
     }
 

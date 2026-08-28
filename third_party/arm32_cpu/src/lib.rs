@@ -46,7 +46,10 @@ mod example_mem;
 mod exception;
 mod mode;
 mod thumb;
-mod util;
+// Exposed so an out-of-crate execution engine can reuse the exact bit-field and
+// flag/shift primitives, keeping its instruction semantics identical to this
+// interpreter's.
+pub mod util;
 
 pub use crate::exception::Exception;
 pub use example_mem::ExampleMem;

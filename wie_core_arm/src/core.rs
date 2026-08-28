@@ -83,6 +83,8 @@ impl ArmCore {
             let engine = Box::new(Arm32CpuEngine::new());
 
             engine
+        } else if cfg!(feature = "fast_cpu") {
+            Box::new(crate::engine::FastCpuEngine::new()) as Box<dyn ArmEngine>
         } else {
             Box::new(Arm32CpuEngine::new())
         };

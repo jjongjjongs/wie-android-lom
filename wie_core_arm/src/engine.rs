@@ -3,6 +3,7 @@ mod arm32_cpu;
 mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 mod debugged_arm32_cpu;
+mod fast;
 
 use wie_util::{AsAny, Result};
 
@@ -11,6 +12,7 @@ pub use arm32_cpu::Arm32CpuEngine;
 pub use debugged_arm32_cpu::DebuggedArm32CpuEngine;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use debugged_arm32_cpu::{DebugBreakpointKind, DebugInner, DebugSignal, DebugStopReason};
+pub use fast::FastCpuEngine;
 
 pub enum EngineRunResult {
     End,
