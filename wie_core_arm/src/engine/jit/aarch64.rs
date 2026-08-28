@@ -2,11 +2,18 @@
 //!
 //! A faithful mirror of the x86-64 backend (`x64.rs`): same trace/linking/budget
 //! structure and the same instruction *selection* (via the shared `decode`
-//! frontend), only the *encoding* differs. It cannot be executed on the x86-64
-//! CI host, so it is deliberately kept simple — every conditional branch calls
-//! the interpreter's `cond_met` rather than inlining flag tests — and its
-//! correctness is validated by running the same differential tests
-//! (`engine::jit::tests`) on AArch64 hardware.
+//! frontend), only the *encoding* differs. It is deliberately kept simple —
+//! every conditional branch calls the interpreter's `cond_met` rather than
+//! inlining flag tests. Its correctness is pinned by the same differential
+//! tests (`engine::jit::tests`), which pass on AArch64 hardware and under
+//! `qemu-aarch64`:
+//!
+//! ```text
+//! CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+//! CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=qemu-aarch64-static \
+//! QEMU_LD_PREFIX=/usr/aarch64-linux-gnu \
+//! cargo test -p wie_core_arm --features jit --target aarch64-unknown-linux-gnu engine::jit
+//! ```
 //!
 //! Convention (AAPCS64): `x0` holds the context pointer on entry, saved into the
 //! callee-saved `x19` for the block; guest register `i` lives at `[x19, #i*4]`,
