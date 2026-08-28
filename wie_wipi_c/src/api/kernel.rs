@@ -65,6 +65,14 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "ANNUN_ALARM" => "0",
         "ANNUN_SECURITY" => "0",
         "CURRENTCH" => "0",
+        // 마이티드마을 (0002EBC9) has no offline certificate and gates start-up on
+        // an online billing handshake that cannot complete now that the ez-i
+        // servers are gone, so it spins retrying forever. Report airplane mode to
+        // that title so its own no-network branch runs instead of the billing
+        // path — this reports a device state, it does not fake a billing result,
+        // so in-game purchases still cannot complete. Other titles see "0". The
+        // aid is only read here, when a title actually queries AIRPLANE_MODE.
+        "AIRPLANE_MODE" if context.system().aid().eq_ignore_ascii_case("0002EBC9") => "1",
         "AIRPLANE_MODE" => "0",
         "ROAMING_AREA" => "0",
         "DS_LOCK" => "0",
