@@ -72,11 +72,11 @@ fn supported(op: FastOp) -> bool {
         | FastOp::SpXfer { .. }
         | FastOp::SingleXferR { .. }
         | FastOp::Shift { .. }
+        | FastOp::HwSgnXfer { .. }
         | FastOp::CondBranch { .. }
         | FastOp::Branch { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
-        FastOp::HwSgnXfer { .. } => false,
     }
 }
 
@@ -370,8 +370,18 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
             }
         }
         FastOp::Shift { op, rd, rs, shift } => emit_shift(a, op, rd, rs, shift),
-        FastOp::CondBranch { .. } | FastOp::Branch { .. } | FastOp::HwSgnXfer { .. } => {
-            unreachable!("handled by compile_block or unsupported")
+        FastOp::HwSgnXfer { s, h, ro: roff, rb, rd } => {
+            let hw_addr = move |a: &mut Asm| a64!(a ; ldr w1, [x19, #ro(rb)] ; ldr w9, [x19, #ro(roff)] ; add w1, w1, w9 ; and w1, w1, #0xffff_fffe);
+            let byte_addr = move |a: &mut Asm| a64!(a ; ldr w1, [x19, #ro(rb)] ; ldr w9, [x19, #ro(roff)] ; add w1, w1, w9);
+            match (s, h) {
+                (false, false) => emit_store(a, 16, rd, hw_addr, pc),      // strh
+                (false, true) => emit_load(a, 16, false, rd, hw_addr, pc), // ldrh
+                (true, false) => emit_load(a, 8, true, rd, byte_addr, pc), // ldrsb
+                (true, true) => emit_load(a, 16, true, rd, hw_addr, pc),   // ldrsh
+            }
+        }
+        FastOp::CondBranch { .. } | FastOp::Branch { .. } => {
+            unreachable!("handled by compile_block")
         }
     }
 }
