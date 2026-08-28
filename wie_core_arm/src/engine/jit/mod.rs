@@ -33,6 +33,10 @@ use crate::engine::{ArmEngine, ArmRegister, EngineRunResult, MemoryPermission};
 mod x64;
 #[cfg(target_arch = "x86_64")]
 use x64 as backend;
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+#[cfg(target_arch = "aarch64")]
+use aarch64 as backend;
 
 /// Longest straight-line run compiled into one block.
 const MAX_BLOCK_LEN: usize = 256;
