@@ -65,7 +65,7 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "ANNUN_ALARM" => "0",
         "ANNUN_SECURITY" => "0",
         "CURRENTCH" => "0",
-        // 마이티드마을 (0002EBC9) has no offline certificate and gates start-up on
+        // 엘피스 (0002EBC9) has no offline certificate and gates start-up on
         // an online billing handshake that cannot complete now that the ez-i
         // servers are gone, so it spins retrying forever. Report airplane mode to
         // that title so its own no-network branch runs instead of the billing
