@@ -1006,7 +1006,9 @@ public final class MainActivity extends Activity {
 
     /** Draws the emulated LCD, letterboxed into whatever space it is given. */
     private final class GameView extends View {
-        private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        // No FILTER_BITMAP_FLAG: nearest-neighbour scaling keeps the low-res LCD
+        // crisp (sharp pixels) instead of the blur bilinear filtering gives.
+        private final Paint paint = new Paint();
         private Bitmap bitmap;
         /** In landscape the screen is centered at its own aspect; see onMeasure. */
         boolean landscape;
