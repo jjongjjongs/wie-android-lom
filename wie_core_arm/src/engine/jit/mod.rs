@@ -113,7 +113,7 @@ struct Slot {
 
 /// Reasons the JIT declines an instruction and falls back to the interpreter,
 /// for the fallback profile. Order matches `FALLBACK_NAMES`.
-const FALLBACK_NAMES: [&str; 12] = [
+const FALLBACK_NAMES: [&str; 13] = [
     "shift",        // 0: LSL/LSR/ASR immediate
     "shift-by-reg", // 1: ALU LSL/LSR/ASR/ROR by register
     "adc",          // 2
@@ -125,8 +125,13 @@ const FALLBACK_NAMES: [&str; 12] = [
     "ldm/stm",      // 8
     "bl/b.w",       // 9: long / wide branches
     "svc",          // 10
-    "other",        // 11: ARM mode, undefined, hints, …
+    "other",        // 11: undefined, hints, …
+    "arm-mode",     // 12: guest running in ARM state (the JIT is Thumb-only)
 ];
+
+/// `FALLBACK_NAMES` index for ARM-state execution.
+const ARM_MODE: usize = 12;
+const NUM_FALLBACK: usize = FALLBACK_NAMES.len();
 
 /// Classify why the instruction at `inst` is not JIT-compilable, as an index
 /// into `FALLBACK_NAMES`.
@@ -172,7 +177,7 @@ pub struct JitEngine {
     code_pages: Box<[bool; 65536]>,
     /// Per-category count of interpreter fallbacks, and the running total, for
     /// the periodic fallback profile (see `note_fallback`).
-    fallbacks: [u64; 12],
+    fallbacks: [u64; NUM_FALLBACK],
     fallback_total: u64,
 }
 
@@ -190,20 +195,19 @@ impl JitEngine {
             cache: Box::new(core::array::from_fn(|_| Slot::default())),
             generation: 1,
             code_pages: Box::new([false; 65536]),
-            fallbacks: [0; 12],
+            fallbacks: [0; NUM_FALLBACK],
             fallback_total: 0,
         }
     }
 
-    /// Record an interpreter fallback for the instruction at `pc` and, at coarse
-    /// milestones, log the top reasons so on-device profiling shows which
-    /// instructions to teach the compiler next.
-    fn note_fallback(&mut self, pc: u32) {
-        let inst = self.mem.peek_u16(pc).unwrap_or(0);
-        self.fallbacks[fallback_category(inst)] += 1;
+    /// Record one interpreter fallback in `category` and, at coarse milestones,
+    /// log the top reasons so on-device profiling shows which instructions to
+    /// teach the compiler next.
+    fn record_fallback(&mut self, category: usize) {
+        self.fallbacks[category] += 1;
         self.fallback_total += 1;
         if self.fallback_total.is_power_of_two() && self.fallback_total >= 1 << 20 {
-            let mut idx: [usize; 12] = core::array::from_fn(|i| i);
+            let mut idx: [usize; NUM_FALLBACK] = core::array::from_fn(|i| i);
             idx.sort_unstable_by_key(|&i| core::cmp::Reverse(self.fallbacks[i]));
             let mut top = alloc::string::String::new();
             for &i in idx.iter().take(6) {
@@ -215,6 +219,13 @@ impl JitEngine {
             }
             tracing::info!("[jit] {} fallbacks; top: {}", self.fallback_total, top.trim_end());
         }
+    }
+
+    /// Classify and record a Thumb-mode fallback for the instruction at `pc`.
+    fn note_fallback(&mut self, pc: u32) {
+        let inst = self.mem.peek_u16(pc).unwrap_or(0);
+        let category = fallback_category(inst);
+        self.record_fallback(category);
     }
 
     fn flush_blocks(&mut self) {
@@ -445,6 +456,59 @@ impl ArmEngine for JitEngine {
             }
 
             let thumb = self.ctx.cpsr & (1 << 5) != 0;
+
+            if !thumb {
+                // ARM state: the JIT compiles Thumb only, so the interpreter runs
+                // the whole ARM stretch. Sync the working registers into the CPU
+                // once, step until control returns to Thumb (or a stop), then sync
+                // back once — instead of the generic fallback's per-instruction
+                // register copy, which dominated on ARM-heavy games.
+                self.store_back(mode);
+                let outcome: Option<Result<EngineRunResult>> = loop {
+                    let apc = self.cpu.reg_get(Mode::User, reg::PC);
+                    let acpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
+                    if apc == 0x08 && (acpsr & 0x1f) == 0x13 {
+                        // SVC vector reached; the CPU already holds the state.
+                        return self.read_svc_result();
+                    }
+                    if apc < 0x1000 {
+                        break Some(Err(WieError::InvalidMemoryAccess(apc)));
+                    }
+                    if apc == end {
+                        break Some(Ok(EngineRunResult::End));
+                    }
+                    if budget == 0 {
+                        break Some(Ok(EngineRunResult::CountExhausted));
+                    }
+                    if acpsr & (1 << 5) != 0 {
+                        break None; // back in Thumb; resume the JIT
+                    }
+                    self.record_fallback(ARM_MODE);
+                    let mut wrapper = self.mem.as_arm32cpu_memory();
+                    let ok = self.cpu.step(&mut wrapper);
+                    let mem_err = wrapper.memory_error();
+                    batch.0 += 1;
+                    budget = budget.saturating_sub(1);
+                    if !ok {
+                        let mut bytes = [0u8; 4];
+                        let _ = self.mem.read_range(apc, 4, &mut bytes);
+                        let opcode = u32::from_le_bytes(bytes);
+                        break Some(Err(WieError::FatalError(format!(
+                            "Undefined instruction at {apc:#x}: opcode {opcode:#010x}"
+                        ))));
+                    }
+                    if let Some(addr) = mem_err {
+                        break Some(Err(WieError::InvalidMemoryAccess(addr)));
+                    }
+                };
+                mode = self.cpu.mode();
+                self.load_regs(mode);
+                match outcome {
+                    Some(r) => break r,
+                    None => continue,
+                }
+            }
+
             // `end` mid-block: fall back to single-stepping so we stop exactly at
             // it. In normal control flow `end` is a return sentinel reached only
             // at block starts, so this is the rare path.
@@ -810,6 +874,77 @@ mod tests {
             v.extend_from_slice(&w.to_le_bytes());
         }
         v
+    }
+
+    /// Assemble ARM words into a little-endian byte program.
+    fn arm(words: &[u32]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(words.len() * 4);
+        for &w in words {
+            v.extend_from_slice(&w.to_le_bytes());
+        }
+        v
+    }
+
+    /// Like `setup`, but enter in ARM state (PC even, T bit clear).
+    fn setup_arm<E: ArmEngine>(mut e: E, code: &[u8], regs: &[u32; 15]) -> E {
+        e.mem_map(0, 0x10000, MemoryPermission::ReadExecute);
+        e.mem_map(DATA, DATA_SIZE, MemoryPermission::ReadWrite);
+        e.mem_write(CODE, code).unwrap();
+        for (i, &v) in regs.iter().enumerate() {
+            e.reg_write(reg_of(i), v);
+        }
+        e.reg_write(ArmRegister::PC, CODE);
+        e
+    }
+
+    fn assert_same_arm(code: &[u8], regs: &[u32; 15], end: u32) {
+        let (jo, jr, jm) = drive(setup_arm(JitEngine::new(), code, regs), end, 37);
+        let (so, sr, sm) = drive(setup_arm(Arm32CpuEngine::new(), code, regs), end, 37);
+        assert_eq!(so, jo, "outcome differs (interp {so:?} vs jit {jo:?})");
+        if sr != jr {
+            for i in 0..17 {
+                if sr[i] != jr[i] {
+                    panic!("reg[{i}] differs: interp {:#010x} vs jit {:#010x}", sr[i], jr[i]);
+                }
+            }
+        }
+        assert!(sm == jm, "data memory differs between engines");
+    }
+
+    #[test]
+    fn jit_arm_then_thumb() {
+        // ARM: mov r0,#0x42; add r1,r0,#1; bx r2 -> Thumb: movs r3,#0x55; b next.
+        // Exercises the ARM batch, the ARM->Thumb handoff into compiled code, and
+        // the final register sync.
+        let mut code = arm(&[0xe3a00042, 0xe2801001, 0xe12fff12, 0xe1a00000]);
+        code.extend_from_slice(&thumb(&[0x2355, B_NEXT]));
+        let mut regs = [0u32; 15];
+        regs[2] = (CODE + 0x10) | 1; // Thumb target for bx r2
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0x14);
+    }
+
+    #[test]
+    fn jit_arm_fault() {
+        // ARM ldr r0,[r5] with r5 unmapped: both engines must fault identically.
+        let code = arm(&[0xe5950000]);
+        let mut regs = [0u32; 15];
+        regs[5] = 0x0005_0000; // unmapped
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0x100);
+    }
+
+    #[test]
+    fn jit_arm_loop_to_end() {
+        // A short ARM loop that decrements r0 and branches back, then reaches the
+        // `end` breakpoint via fall-through. Exercises repeated ARM stepping and
+        // exact stop-at-end inside the batch.
+        // CODE+0: subs r0,r0,#1 (0xe2500001); CODE+4: bne CODE+0 (0x1afffffd).
+        let code = arm(&[0xe2500001, 0x1afffffd]);
+        let mut regs = [0u32; 15];
+        regs[0] = 5;
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 8);
     }
 
     // `0xe7ff` is `b .` to the following halfword: a trailing one gives a trace a
