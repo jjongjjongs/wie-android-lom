@@ -5,7 +5,7 @@ use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeMap, format, string::
 use jvm::runtime::{JavaIoInputStream, JavaLangClassLoader};
 
 use wie_backend::{Emulator, Event, Options, Platform, System, TaskRunner, extract_zip};
-use wie_core_arm::{Allocator, ArmCore, EXECUTED_INSTRUCTIONS};
+use wie_core_arm::{Allocator, ArmCore, EXECUTED_INSTRUCTIONS, PC_SAMPLES};
 use wie_jvm_support::{JvmSupport, RustJavaJvmImplementation};
 use wie_util::{Result, WieError};
 
@@ -253,6 +253,40 @@ fn apply_offline_auth_patch(aid: &str, binary_mod: &mut [u8]) {
     }
 }
 
+/// Log the hottest 64 KiB PC regions from the sampler as a share of samples.
+/// A firmware address (`0x6000_0000+`) points at a firmware routine worth
+/// re-implementing natively; a low game-clet address means the cost is the
+/// title's own code, which only a recompiler can speed up.
+fn report_hot_regions() {
+    use core::fmt::Write;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let mut top: [(usize, u32); 6] = [(0, 0); 6];
+    let mut total: u64 = 0;
+    for (index, slot) in PC_SAMPLES.iter().enumerate() {
+        let count = slot.load(Relaxed);
+        if count == 0 {
+            continue;
+        }
+        total += count as u64;
+        if count > top[5].1 {
+            top[5] = (index, count);
+            top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        }
+    }
+    if total == 0 {
+        return;
+    }
+
+    let mut line = String::from("[hot]");
+    for (index, count) in top.iter().filter(|(_, count)| *count > 0) {
+        let region = (*index as u32) << 16;
+        let pct = *count as f64 * 100.0 / total as f64;
+        let _ = write!(line, " {region:#010x}:{pct:.0}%");
+    }
+    tracing::info!("{line}");
+}
+
 impl Emulator for LgtEmulator {
     fn handle_event(&mut self, event: Event) {
         self.system.event_queue().push(event)
@@ -283,6 +317,7 @@ impl Emulator for LgtEmulator {
             let mips = executed as f64 / dt_ms as f64 / 1000.0;
             let tps = ticks as f64 * 1000.0 / dt_ms as f64;
             tracing::info!("[perf] {mips:.1} MIPS, {tps:.1} tick/s ({executed} insn / {ticks} ticks in {dt_ms} ms)");
+            report_hot_regions();
             self.perf_last_ms = now_ms;
             self.perf_last_instr = instr;
             self.perf_ticks = 0;

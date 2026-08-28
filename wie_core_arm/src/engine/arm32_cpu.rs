@@ -74,6 +74,12 @@ impl ArmEngine for Arm32CpuEngine {
                 return Ok(EngineRunResult::CountExhausted);
             }
 
+            // Statistical PC sample (every 64th executed instruction) into the
+            // 64 KiB-region histogram, for the hot-spot report.
+            if batch.0 & 0x3f == 0 {
+                crate::PC_SAMPLES[(pc >> 16) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
+            }
+
             let mut arm32cpu_memory = self.mem.as_arm32cpu_memory();
 
             if !(self.cpu.step(&mut arm32cpu_memory)) {
