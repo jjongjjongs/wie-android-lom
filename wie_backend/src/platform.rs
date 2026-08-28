@@ -100,6 +100,16 @@ pub trait Platform: Send + Sync {
         None
     }
 
+    /// Optional handset/HAL information value.
+    ///
+    /// Carrier runtimes expose configuration that is not part of the public
+    /// WIPI system-property API. For example, LGT WPBill_SetGW reads
+    /// `BILL_GW_IP` through whal_sys_get_information. Backends that do not
+    /// model such handset state return None.
+    fn system_information(&self, _key: &str) -> Option<alloc::string::String> {
+        None
+    }
+
     /// Places a telephone call through the host. Returns false when the host
     /// cannot dispatch the request.
     fn call_place(&self, _number: &str) -> bool {

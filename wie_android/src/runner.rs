@@ -12,7 +12,12 @@ use wie_ktf::KtfEmulator;
 use wie_lgt::LgtEmulator;
 use wie_skt::SktEmulator;
 
-use crate::platform::{AndroidPlatform, Frame, Shared};
+use crate::platform::{
+    AndroidHandsetInformation,
+    AndroidPlatform,
+    Frame,
+    Shared,
+};
 
 /// Feature phone LCD the WIPI/MIDP APIs are written against. Games query this
 /// through `getDisplayInfo`, so it has to stay fixed rather than follow the
@@ -84,11 +89,22 @@ pub fn with_runner<T>(f: impl FnOnce(&mut Runner) -> T) -> T {
 impl Runner {
     /// Loads `data` and spawns the emulator. Returns the error message to show
     /// in the player, or an empty string on success.
-    pub fn start(&mut self, data: Vec<u8>, runtime_dir: PathBuf) -> String {
+    pub fn start(
+        &mut self,
+        data: Vec<u8>,
+        runtime_dir: PathBuf,
+        handset_information: AndroidHandsetInformation,
+    ) -> String {
         self.stop();
 
         let shared = Shared::default();
-        let platform = Box::new(AndroidPlatform::new(runtime_dir, SCREEN_WIDTH, SCREEN_HEIGHT, shared.clone()));
+        let platform = Box::new(AndroidPlatform::new(
+            runtime_dir,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+            shared.clone(),
+            handset_information,
+        ));
 
         let options = Options {
             enable_gdbserver: false,

@@ -24,7 +24,11 @@ final class NativeBridge {
      * @param runtimeDir app-private directory for save data
      * @return empty on success, otherwise the message to show in the player
      */
-    static native String nativeStart(byte[] archive, String runtimeDir);
+    static native String nativeStart(
+            byte[] archive,
+            String runtimeDir,
+            String phoneModel,
+            String billGateway);
 
     /**
      * Runs the emulator for up to {@code budgetMs}.

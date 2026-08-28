@@ -27,7 +27,10 @@ use jni::{
     sys::{jbyteArray, jint, jshortArray, jstring},
 };
 
-use crate::runner::with_runner;
+use crate::{
+    platform::AndroidHandsetInformation,
+    runner::with_runner,
+};
 
 /// Upper bound on a single `nativeTick` call, whatever Java asks for. The tick
 /// thread also drives input and frame delivery, so letting it run away would
@@ -74,7 +77,7 @@ fn guard(f: impl FnOnce()) {
     }
 }
 
-/// `nativeStart(byte[] archive, String runtimeDir) -> String`
+/// `nativeStart(byte[] archive, String runtimeDir, String phoneModel, String billGateway) -> String`
 ///
 /// Loads `archive` and starts the emulator. Returns an empty string on
 /// success, otherwise the message to show in the player.
@@ -87,6 +90,8 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     _class: JClass,
     archive: JByteArray,
     runtime_dir: JString,
+    phone_model: JString,
+    bill_gateway: JString,
 ) -> jstring {
     logging::init();
     // The saved log covers one run of one game, so it starts over here.
@@ -102,9 +107,37 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
         Err(error) => return to_java_string(&env, &format!("저장 경로를 읽을 수 없습니다: {error}")),
     };
 
+    let phone_model: String = match env.get_string(&phone_model) {
+        Ok(value) => value.into(),
+        Err(error) => return to_java_string(&env, &format!("단말 모델을 읽을 수 없습니다: {error}")),
+    };
+
+    let bill_gateway: String = match env.get_string(&bill_gateway) {
+        Ok(value) => value.into(),
+        Err(error) => return to_java_string(&env, &format!("과금 게이트웨이를 읽을 수 없습니다: {error}")),
+    };
+
+    let bill_gateway = bill_gateway.trim();
+    let handset_information = AndroidHandsetInformation::new(
+        phone_model,
+        if bill_gateway.is_empty() {
+            None
+        } else {
+            Some(bill_gateway.to_owned())
+        },
+    );
+
     tracing::info!("nativeStart: {} bytes, runtime dir {runtime_dir}", data.len());
 
-    guard_string(&env, || with_runner(|runner| runner.start(data, PathBuf::from(runtime_dir))))
+    guard_string(&env, || {
+        with_runner(|runner| {
+            runner.start(
+                data,
+                PathBuf::from(runtime_dir),
+                handset_information,
+            )
+        })
+    })
 }
 
 /// `nativeTick(int budgetMs) -> String`

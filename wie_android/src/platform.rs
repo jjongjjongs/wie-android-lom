@@ -115,16 +115,50 @@ impl Shared {
     }
 }
 
+/// Immutable host handset/HAL information captured when a game starts.
+///
+/// This is intentionally separate from the public WIPI system-property API.
+/// Only values actually supplied by the Android host are represented.
+#[derive(Clone)]
+pub struct AndroidHandsetInformation {
+    phone_model: String,
+    bill_gateway: Option<String>,
+}
+
+impl AndroidHandsetInformation {
+    pub fn new(phone_model: String, bill_gateway: Option<String>) -> Self {
+        Self {
+            phone_model,
+            bill_gateway,
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<String> {
+        match key {
+            "PHONEMODEL" => Some(self.phone_model.clone()),
+            "BILL_GW_IP" => self.bill_gateway.clone(),
+            _ => None,
+        }
+    }
+}
+
 pub struct AndroidPlatform {
     screen: AndroidScreen,
     shared: Shared,
     filesystem: AndroidFilesystem,
     database_repository: AndroidDatabaseRepository,
     network: AndroidNetwork,
+    handset_information: AndroidHandsetInformation,
 }
 
 impl AndroidPlatform {
-    pub fn new(runtime_dir: PathBuf, width: u32, height: u32, shared: Shared) -> Self {
+    pub fn new(
+        runtime_dir: PathBuf,
+        width: u32,
+        height: u32,
+        shared: Shared,
+        handset_information: AndroidHandsetInformation,
+    ) -> Self {
         Self {
             screen: AndroidScreen {
                 width,
@@ -134,6 +168,7 @@ impl AndroidPlatform {
             filesystem: AndroidFilesystem::new(runtime_dir.join("fs")),
             database_repository: AndroidDatabaseRepository::new(runtime_dir.join("db")),
             network: AndroidNetwork::new(),
+            handset_information,
             shared,
         }
     }
@@ -164,6 +199,10 @@ impl Platform for AndroidPlatform {
 
     fn network(&self) -> Option<&dyn Network> {
         Some(&self.network)
+    }
+
+    fn system_information(&self, key: &str) -> Option<String> {
+        self.handset_information.get(key)
     }
 
     fn call_place(&self, number: &str) -> bool {
@@ -241,5 +280,41 @@ impl Screen for AndroidScreen {
 
     fn height(&self) -> u32 {
         self.height
+    }
+}
+
+
+#[cfg(test)]
+mod handset_information_tests {
+    use super::AndroidHandsetInformation;
+
+    #[test]
+    fn android_handset_information_exposes_only_supplied_hal_values() {
+        let configured = AndroidHandsetInformation::new(
+            "SM-S948N".to_owned(),
+            Some("billing.example:30000".to_owned()),
+        );
+
+        assert_eq!(configured.get("PHONEMODEL").as_deref(), Some("SM-S948N"));
+        assert_eq!(
+            configured.get("BILL_GW_IP").as_deref(),
+            Some("billing.example:30000")
+        );
+
+        for unavailable in [
+            "MDN",
+            "CURRENTCH",
+            "SID",
+            "NID",
+            "BASEID",
+            "BESTPN",
+        ] {
+            assert_eq!(configured.get(unavailable), None, "{unavailable}");
+        }
+
+        let unconfigured =
+            AndroidHandsetInformation::new("SM-S948N".to_owned(), None);
+
+        assert_eq!(unconfigured.get("BILL_GW_IP"), None);
     }
 }

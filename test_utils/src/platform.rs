@@ -26,6 +26,7 @@ pub struct TestPlatform {
     event_handler: Option<Box<dyn Fn(TestPlatformEvent) + Sync + Send>>,
     fs: Arc<MemoryFilesystem>,
     db: Arc<MemoryDatabaseRepository>,
+    system_information: HashMap<String, String>,
 }
 
 impl Default for TestPlatform {
@@ -41,6 +42,7 @@ impl TestPlatform {
             event_handler: None,
             fs: Arc::new(MemoryFilesystem::default()),
             db: Arc::new(MemoryDatabaseRepository::default()),
+            system_information: HashMap::new(),
         }
     }
 
@@ -53,7 +55,14 @@ impl TestPlatform {
             event_handler: Some(Box::new(event_handler)),
             fs: Arc::new(MemoryFilesystem::default()),
             db: Arc::new(MemoryDatabaseRepository::default()),
+            system_information: HashMap::new(),
         }
+    }
+
+    pub fn with_system_information(mut self, key: &str, value: &str) -> Self {
+        self.system_information
+            .insert(key.to_string(), value.to_string());
+        self
     }
 }
 
@@ -77,6 +86,10 @@ impl Platform for TestPlatform {
 
     fn audio_sink(&self) -> Box<dyn AudioSink> {
         Box::new(TestAudioSink)
+    }
+
+    fn system_information(&self, key: &str) -> Option<String> {
+        self.system_information.get(key).cloned()
     }
 
     fn open_url(&self, url: &str) -> bool {

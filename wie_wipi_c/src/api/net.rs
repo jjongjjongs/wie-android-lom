@@ -14,9 +14,22 @@ use wie_util::{Result, WieError, read_null_terminated_string_bytes};
 use crate::{WIPICResult, context::WIPICContext, method::MethodBody};
 
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct SocketCallbacks {
     socket_type: i32,
+    /// Native socket object +0x18.
+    ///
+    /// 0 = ordinary socket
+    /// 1 = MC_netBillSocket
+    /// 2 = MC_netTestBillSocket
+    billing_mode: u8,
+    /// Native socket object +0x4c..+0x83: 56-byte inbound billing header.
+    billing_read_header: [u8; LGT_BILL_READ_HEADER_SIZE],
+    /// Native socket object +0x1c.
+    ///
+    /// Set to one when a complete 56-byte billing response header has been
+    /// assembled. A later direct positive recv clears it.
+    billing_read_direct: bool,
     connect_callback: WIPICWord,
     connect_context: WIPICWord,
     connect_pending: bool,
@@ -24,6 +37,45 @@ struct SocketCallbacks {
     read_context: WIPICWord,
     write_callback: WIPICWord,
     write_context: WIPICWord,
+}
+
+impl Default for SocketCallbacks {
+    fn default() -> Self {
+        Self {
+            socket_type: 0,
+            billing_mode: 0,
+            billing_read_header: [0u8; LGT_BILL_READ_HEADER_SIZE],
+            billing_read_direct: false,
+            connect_callback: 0,
+            connect_context: 0,
+            connect_pending: false,
+            read_callback: 0,
+            read_context: 0,
+            write_callback: 0,
+            write_context: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BillingReadState {
+    /// Native unnamed global @ 0x004de3f0.
+    remaining_payload: usize,
+    /// Native s_HeaderOffset @ 0x004de3f4.
+    header_offset: usize,
+    /// Native s_RemainHeaderLen @ 0x00478804.
+    remaining_header: usize,
+}
+
+impl Default for BillingReadState {
+    fn default() -> Self {
+        Self {
+            remaining_payload: 0,
+            header_offset: 0,
+            // Native .data initial value is 56.
+            remaining_header: LGT_BILL_READ_HEADER_SIZE,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -88,6 +140,14 @@ pub struct NetworkState {
     process_context: WIPICWord,
     process_generation: u64,
     sockets: BTreeMap<i32, SocketCallbacks>,
+    /// Native global s_BillHeader @ 0x004de384.
+    ///
+    /// WPBill_SetHeader and WPBill_Write share this single 108-byte object
+    /// across every billing socket. None represents its initial zeroed BSS
+    /// state before SetHeader/Write has materialized it.
+    billing_header: Option<[u8; LGT_BILL_HEADER_SIZE]>,
+    /// WPBill_Read uses three globals shared by all billing sockets.
+    billing_read: BillingReadState,
     dispatcher_started: bool,
     dispatcher_generation: u64,
     /// In-flight `MC_netGetHostAddr` resolutions, keyed by query id, holding the
@@ -197,14 +257,53 @@ impl NetworkState {
         self.http_objects.remove(&handle)
     }
 
-    fn register_socket(&mut self, socket: i32, socket_type: i32) {
+    fn register_socket(
+        &mut self,
+        socket: i32,
+        socket_type: i32,
+        billing_mode: u8,
+    ) {
         let entry = self.sockets.entry(socket).or_default();
         entry.socket_type = socket_type;
+        entry.billing_mode = billing_mode;
     }
 
     fn socket_type(&self, socket: i32) -> Option<i32> {
         self.sockets.get(&socket).map(|entry| entry.socket_type)
     }
+
+    fn billing_mode(&self, socket: i32) -> Option<u8> {
+        self.sockets.get(&socket).map(|entry| entry.billing_mode)
+    }
+
+    fn install_billing_header(
+        &mut self,
+        header: [u8; LGT_BILL_HEADER_SIZE],
+    ) {
+        // Native WPBill_SetHeader writes the single global s_BillHeader.
+        self.billing_header = Some(header);
+
+        // It also resets WPBill_Read's three global counters:
+        //
+        //   *(0x004de3f0) = 0
+        //   s_HeaderOffset = 0
+        //   s_RemainHeaderLen = 56
+        self.billing_read = BillingReadState::default();
+    }
+
+    fn update_billing_header(
+        &mut self,
+        header: [u8; LGT_BILL_HEADER_SIZE],
+    ) {
+        // Native WPBill_Write mutates the same global s_BillHeader but does
+        // not reset any WPBill_Read state.
+        self.billing_header = Some(header);
+    }
+
+    fn billing_header(&self) -> Option<[u8; LGT_BILL_HEADER_SIZE]> {
+        self.billing_header
+    }
+
 
     fn remove_socket(&mut self, socket: i32) {
         self.sockets.remove(&socket);
@@ -486,12 +585,41 @@ pub async fn socket_close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32
 }
 
 
+/// Restored legacy `MC_netBillSocket` constructor.
+///
+/// The reference LGT library's public entry is carrier-disabled and returns
+/// `M_E_NOTCONN`, but the preserved native implementation immediately after
+/// that gate shows the original constructor semantics. WIE restores those
+/// semantics for legacy titles that depend on billing sockets.
+///
+/// Native socket object `+0x18` is set to 1 for `MC_netBillSocket`.
+/// Billing-aware connect/read/write behavior is implemented separately.
 pub async fn bill_socket(
-    _context: &mut dyn WIPICContext,
-    _family: i32,
-    _socket_type: i32,
+    context: &mut dyn WIPICContext,
+    family: i32,
+    socket_type: i32,
 ) -> Result<i32> {
-    Ok(M_E_NOTCONN)
+    // The preserved native body calls WPNet_IsAvailable before dsocket_open.
+    // Unlike ordinary MC_netSocket, a merely-existing process network object
+    // is therefore insufficient here.
+    if !context.network_state().lock().is_available() {
+        return Ok(M_E_NOTCONN);
+    }
+
+    let Some(network) = context.system().platform().network() else {
+        return Ok(M_E_NOTCONN);
+    };
+
+    Ok(match network.socket(family, socket_type) {
+        Ok(socket) => {
+            context
+                .network_state()
+                .lock()
+                .register_socket(socket, socket_type, 1);
+            socket
+        }
+        Err(error) => map_network_error(error),
+    })
 }
 
 const M_E_ERROR: i32 = -1;
@@ -502,6 +630,25 @@ const M_E_NOTSUP: i32 = -16;
 const M_E_WOULDBLOCK: i32 = -19;
 const M_E_TIMEOUT: i32 = -20;
 
+/// Native MC_netTestBillSocket (billing mode 2) uses this fixed development
+/// gateway. MC_netBillSocket (mode 1) does not: its BILL_GW_IP value comes from
+/// configurable handset/HAL state and must never silently fall back here.
+const LGT_TEST_BILL_GATEWAY: &str = "wipigwdev.ez-i.co.kr:30000";
+const LGT_BILL_GATEWAY_INFORMATION_KEY: &str = "BILL_GW_IP";
+
+const LGT_BILL_HEADER_SIZE: usize = 108;
+const LGT_BILL_READ_HEADER_SIZE: usize = 56;
+const LGT_BILL_READ_PAYLOAD_LENGTH_OFFSET: usize = 0x30;
+const LGT_BILL_READ_TAG_OFFSET: usize = 0x34;
+
+const LGT_BILL_INFO_PHONE_MODEL: &str = "PHONEMODEL";
+const LGT_BILL_INFO_MDN: &str = "MDN";
+const LGT_BILL_INFO_CURRENT_CH: &str = "CURRENTCH";
+const LGT_BILL_INFO_SID: &str = "SID";
+const LGT_BILL_INFO_NID: &str = "NID";
+const LGT_BILL_INFO_BASE_ID: &str = "BASEID";
+const LGT_BILL_INFO_BEST_PN: &str = "BESTPN";
+
 /// First opaque handle `MC_netHttpOpen` hands out. The value only has to be a
 /// stable positive id distinct from a socket fd; the game treats it as opaque.
 const HTTP_HANDLE_BASE: i32 = 0x4000_0000;
@@ -509,6 +656,219 @@ const HTTP_HANDLE_BASE: i32 = 0x4000_0000;
 /// Consecutive would-block yields the HTTP exchange tolerates on send or receive
 /// before abandoning a stalled socket, so a silent peer can never wedge the task.
 const HTTP_IDLE_POLL_LIMIT: u32 = 60_000;
+
+fn copy_lgt_bill_c_string(
+    header: &mut [u8; LGT_BILL_HEADER_SIZE],
+    offset: usize,
+    value: &[u8],
+) {
+    if offset >= header.len() {
+        return;
+    }
+
+    // WPBill_SetHeader uses strcpy. We reproduce the bytes that remain
+    // inside s_BillHeader; later native strcpy calls may overwrite an
+    // earlier long string, notably the DLET launch parameter at +0x04.
+    let available = header.len() - offset;
+    let copy_len = value.len().min(available.saturating_sub(1));
+
+    header[offset..offset + copy_len]
+        .copy_from_slice(&value[..copy_len]);
+
+    if offset + copy_len < header.len() {
+        header[offset + copy_len] = 0;
+    }
+}
+
+fn normalize_lgt_bill_mdn(mdn: &[u8]) -> Vec<u8> {
+    match mdn.len() {
+        10 => {
+            let mut result = Vec::with_capacity(12);
+            result.extend_from_slice(&mdn[..3]);
+            result.extend_from_slice(b"00");
+            result.extend_from_slice(&mdn[3..]);
+            result
+        }
+        11 => {
+            let mut result = Vec::with_capacity(12);
+            result.extend_from_slice(&mdn[..3]);
+            result.push(b'0');
+            result.extend_from_slice(&mdn[3..]);
+            result
+        }
+        _ => mdn.to_vec(),
+    }
+}
+
+fn build_lgt_bill_header(
+    platform: &dyn wie_backend::Platform,
+    aid: &str,
+    current_time: u64,
+    address: WIPICWord,
+    port: u16,
+) -> [u8; LGT_BILL_HEADER_SIZE] {
+    // Native: memset(s_BillHeader, 0, 108).
+    let mut header = [0u8; LGT_BILL_HEADER_SIZE];
+
+    // Android WipiPlayer builds mWipiParam as:
+    // /android/<AID>.jar:binary.mod
+    // That String is passed through startWipiN -> MH_pltStart ->
+    // wipi_exec_directly -> dlet_register -> dlet_get_name.
+    let dlet_name = alloc::format!("/android/{aid}.jar:binary.mod");
+
+    // Preserve native strcpy order exactly.
+    copy_lgt_bill_c_string(&mut header, 0x04, dlet_name.as_bytes());
+    copy_lgt_bill_c_string(&mut header, 0x0e, b"1.1.1");
+    copy_lgt_bill_c_string(&mut header, 0x18, b"1.54");
+
+    if let Some(value) = platform.system_information(LGT_BILL_INFO_PHONE_MODEL) {
+        copy_lgt_bill_c_string(&mut header, 0x22, value.as_bytes());
+    }
+
+    if let Some(value) = platform.system_information(LGT_BILL_INFO_MDN) {
+        let normalized = normalize_lgt_bill_mdn(value.as_bytes());
+        copy_lgt_bill_c_string(&mut header, 0x2c, &normalized);
+    }
+
+    if let Some(value) = platform.system_information(LGT_BILL_INFO_CURRENT_CH) {
+        copy_lgt_bill_c_string(&mut header, 0x3c, value.as_bytes());
+    }
+
+    if let Some(value) = platform.system_information(LGT_BILL_INFO_SID) {
+        copy_lgt_bill_c_string(&mut header, 0x3e, value.as_bytes());
+    }
+
+    if let Some(value) = platform.system_information(LGT_BILL_INFO_NID) {
+        copy_lgt_bill_c_string(&mut header, 0x43, value.as_bytes());
+    }
+
+    // Native BASEID first, BESTPN second into the same +0x48 destination.
+    if let Some(value) = platform.system_information(LGT_BILL_INFO_BASE_ID) {
+        copy_lgt_bill_c_string(&mut header, 0x48, value.as_bytes());
+    }
+
+    if let Some(value) = platform.system_information(LGT_BILL_INFO_BEST_PN) {
+        copy_lgt_bill_c_string(&mut header, 0x48, value.as_bytes());
+    }
+
+    // Original game destination, not rewritten billing gateway.
+    header[0x52..0x54].copy_from_slice(&port.to_le_bytes());
+    header[0x54..0x58].copy_from_slice(&address.to_le_bytes());
+
+    // MC_knlCurrentTime -> platform.now().raw() epoch milliseconds.
+    // Native MC_utilHtonl is a byte swap on ARM LE before STR.
+    let network_time = (current_time as u32).swap_bytes();
+    header[0x58..0x5c].copy_from_slice(&network_time.to_le_bytes());
+
+    header
+}
+
+fn lgt_bill_read_payload_length(
+    header: &[u8; LGT_BILL_READ_HEADER_SIZE],
+) -> u32 {
+    u32::from_be_bytes(
+        header[
+            LGT_BILL_READ_PAYLOAD_LENGTH_OFFSET
+                ..LGT_BILL_READ_PAYLOAD_LENGTH_OFFSET + 4
+        ]
+        .try_into()
+        .expect("billing payload length slice"),
+    )
+}
+
+fn lgt_bill_read_tag(
+    header: &[u8; LGT_BILL_READ_HEADER_SIZE],
+) -> [u8; 4] {
+    header[
+        LGT_BILL_READ_TAG_OFFSET
+            ..LGT_BILL_READ_TAG_OFFSET + 4
+    ]
+    .try_into()
+    .expect("billing tag slice")
+}
+
+fn lgt_bill_read_reject_tag(tag: [u8; 4]) -> bool {
+    // Native performs this exact sequential strncmp chain:
+    //
+    // KCBD -> KCSP -> KCNB -> KCEP -> KCEN ->
+    // UATO -> UATT -> UAFO -> UAFT -> UAFR
+    //
+    // Every comparison is against the same four bytes and every prior
+    // comparison must be equal to reach the next one. With normal strncmp
+    // semantics the ten distinct literals therefore cannot all match.
+    //
+    // Keep the actual predicate visible rather than inventing a carrier
+    // meaning for an unreachable branch.
+    [
+        *b"KCBD",
+        *b"KCSP",
+        *b"KCNB",
+        *b"KCEP",
+        *b"KCEN",
+        *b"UATO",
+        *b"UATT",
+        *b"UAFO",
+        *b"UAFT",
+        *b"UAFR",
+    ]
+    .into_iter()
+    .all(|candidate| tag == candidate)
+}
+
+fn build_lgt_bill_write_frame(
+    mut header: [u8; LGT_BILL_HEADER_SIZE],
+    payload: &[u8],
+) -> ([u8; LGT_BILL_HEADER_SIZE], Vec<u8>) {
+    // Native WPBill_Write:
+    //   total = payload_len + 108
+    //   s_BillHeader[0..4] = MC_utilHtonl(total)
+    //
+    // The converted 32-bit value is then stored by little-endian ARM STR,
+    // leaving big-endian length bytes in the wire header.
+    let total = (payload.len() as u32)
+        .wrapping_add(LGT_BILL_HEADER_SIZE as u32);
+    let network_total = total.swap_bytes();
+
+    header[0..4].copy_from_slice(&network_total.to_le_bytes());
+
+    let mut frame = Vec::with_capacity(LGT_BILL_HEADER_SIZE + payload.len());
+    frame.extend_from_slice(&header);
+    frame.extend_from_slice(payload);
+
+    (header, frame)
+}
+
+fn lgt_bill_write_public_result(written: usize) -> i32 {
+    // Native WPBill_Write returns zero when the lower send reaches no
+    // payload byte at all, otherwise it removes the 108-byte header count.
+    if written <= LGT_BILL_HEADER_SIZE {
+        0
+    } else {
+        (written - LGT_BILL_HEADER_SIZE) as i32
+    }
+}
+
+fn resolve_lgt_bill_gateway(
+    network: &dyn wie_backend::Network,
+    gateway: &str,
+) -> Option<(WIPICWord, u16)> {
+    // Native WPBill_SetGW accepts either host:port or http://host:port.
+    // parse_http_url already implements those authority semantics.
+    let (host, port, _) = parse_http_url(gateway);
+
+    if host.is_empty() {
+        return None;
+    }
+
+    let address = network.resolve_host_blocking(&host);
+    if address == 0xFFFF_FFFF {
+        return None;
+    }
+
+    // Native converts the decimal gateway port through MC_utilHtons before
+    // passing it to dsocket_connect.
+    Some((address, port.swap_bytes()))
+}
 
 fn map_network_error(error: wie_backend::NetworkError) -> i32 {
     use wie_backend::NetworkError;
@@ -547,7 +907,7 @@ pub async fn socket(context: &mut dyn WIPICContext, family: i32, socket_type: i3
             context
                 .network_state()
                 .lock()
-                .register_socket(socket, socket_type);
+                .register_socket(socket, socket_type, 0);
             socket
         }
         Err(error) => map_network_error(error),
@@ -575,6 +935,11 @@ pub async fn socket_connect(
         return Ok(M_E_BADFD);
     };
 
+    let billing_mode = state
+        .lock()
+        .billing_mode(socket)
+        .expect("socket metadata disappeared");
+
     if socket_type != 1 {
         return Ok(M_E_NOTSUP);
     }
@@ -596,17 +961,73 @@ pub async fn socket_connect(
         }
     }
 
+    // Native billing sockets run WPBill_SetGW after callback/pending-state
+    // handling but before dsocket_connect.
+    let billing_gateway = match billing_mode {
+        0 => None,
+        1 => {
+            // MC_netBillSocket obtains this from handset/HAL configuration via
+            // whal_sys_get_information("BILL_GW_IP"). Absence is an error;
+            // mode 1 must never fall back to the mode-2 development gateway.
+            let Some(gateway) = context
+                .system()
+                .platform()
+                .system_information(LGT_BILL_GATEWAY_INFORMATION_KEY)
+            else {
+                return Ok(M_E_ERROR);
+            };
+            Some(gateway)
+        }
+        2 => Some(LGT_TEST_BILL_GATEWAY.into()),
+        _ => return Ok(M_E_ERROR),
+    };
+
+    let (connect_address, connect_port) = if let Some(gateway) = billing_gateway {
+        let Some(network) = context.system().platform().network() else {
+            return Ok(M_E_NOTCONN);
+        };
+
+        let Some(destination) = resolve_lgt_bill_gateway(network, &gateway) else {
+            return Ok(M_E_ERROR);
+        };
+
+        destination
+    } else {
+        (address, port as u16)
+    };
+
     let result = {
         let network = context
             .system()
             .platform()
             .network()
             .expect("network backend disappeared");
-        network.connect(socket, address, port as u16)
+        network.connect(socket, connect_address, connect_port)
     };
 
     match result {
         wie_backend::NetworkPoll::Ready(Ok(())) => {
+            if billing_mode != 0 {
+                // Native calls WPBill_SetHeader only after lower connect
+                // succeeds or reports pending. Preserve the ORIGINAL game
+                // destination here; outbound header construction follows in
+                // a later billing-write patch.
+                let aid = alloc::string::String::from(context.system().aid());
+                let current_time = context.system().platform().now().raw();
+
+                let billing_header = build_lgt_bill_header(
+                    context.system().platform(),
+                    &aid,
+                    current_time,
+                    address,
+                    port as u16,
+                );
+
+                state
+                    .lock()
+                    .install_billing_header(billing_header);
+            }
+
             // Native synchronous success posts event 205 and sets socket
             // +0x20 to 2 until that event is processed.
             state.lock().set_connect_pending(socket, true);
@@ -651,6 +1072,25 @@ pub async fn socket_connect(
             Ok(map_network_error(error))
         }
         wie_backend::NetworkPoll::Pending => {
+            if billing_mode != 0 {
+                // Native also initializes WPBill_SetHeader state when
+                // dsocket_connect reports its pending result (-19).
+                let aid = alloc::string::String::from(context.system().aid());
+                let current_time = context.system().platform().now().raw();
+
+                let billing_header = build_lgt_bill_header(
+                    context.system().platform(),
+                    &aid,
+                    current_time,
+                    address,
+                    port as u16,
+                );
+
+                state
+                    .lock()
+                    .install_billing_header(billing_header);
+            }
+
             // Native maps the first dsocket_connect == -19 to public 0 and
             // records socket +0x20 = 2. A repeated call while that state is
             // pending returns -7.
@@ -678,27 +1118,45 @@ pub async fn socket_connect(
 /// 3. `find_socket_obj()` == null -> -2
 /// 4. socket type (`[sock+0x14]`) != 1 (stream) -> -16
 ///
-/// A billing socket (`[sock+0x18]` in {1,2}) is written through `WPBill_Write`
-/// instead of `dsocket_send`; WIE does not model billing sockets, so every
-/// socket takes the normal send path. The native returns the lower send result
-/// directly when it is >= 0 - so a partial write returns its own byte count -
-/// and maps the negative internal errors as: -2077 -> -2, -2022 -> -9,
-/// -2011/-4005 -> -19 (would-block/pending), -2107 -> -14, anything else -> -1.
+/// Ordinary stream sockets return the lower send result directly when it is
+/// nonnegative, so a partial write returns its own byte count. Negative lower
+/// errors map as: -2077 -> -2, -2022 -> -9, -2011/-4005 -> -19
+/// (would-block/pending), -2107 -> -14, anything else -> -1.
 /// `map_network_error` reproduces the same public codes from the backend error
-/// variants. The call mutates no socket field: the write callback / `Writable`
-/// event path is separate (`MC_netSetWriteCB`).
+/// variants.
+///
+/// ABI: r0 = socket, r1 = buffer, r2 = length. The native gates in this
+/// exact order:
+///
+/// 1. buffer == 0 || length < 0  -> -9
+/// 2. `WPNet_IsAvailable()` < 0   -> -14
+/// 3. `find_socket_obj()` == null -> -2
+/// 4. socket type != stream       -> -16
+///
+/// Ordinary sockets call the lower `dsocket_send` directly.
+///
+/// Billing modes 1/2 instead call `WPBill_Write`. That routine mutates the
+/// saved 108-byte billing header first, writing Htonl(payload_len + 108) at
+/// offset zero, allocates/copies `header || payload`, and performs one lower
+/// send of the combined frame. A negative lower result is mapped normally.
+/// A nonnegative result <= 108 becomes public 0; a result > 108 becomes
+/// `written - 108`.
+///
+/// Updating the saved header before the backend write is intentional:
+/// native `WPBill_Write` updates global `s_BillHeader[0]` before allocation
+/// and `dsocket_send`, so even a later send failure leaves the new length.
 pub async fn socket_write(
     context: &mut dyn WIPICContext,
     socket: i32,
     buffer: WIPICWord,
     length: i32,
 ) -> Result<i32> {
-
     if buffer == 0 || length < 0 {
         return Ok(M_E_INVALID);
     }
 
     let state = context.network_state();
+
     if !state.lock().is_available() {
         return Ok(M_E_NOTCONN);
     }
@@ -711,8 +1169,37 @@ pub async fn socket_write(
         return Ok(M_E_NOTSUP);
     }
 
+    let billing_mode = state
+        .lock()
+        .billing_mode(socket)
+        .expect("socket metadata disappeared");
+
     let mut data = alloc::vec![0u8; length as usize];
     context.read_bytes(buffer, &mut data)?;
+
+    if billing_mode != 0 {
+        // Before WPBill_SetHeader has ever run, native s_BillHeader is BSS
+        // zero. Use the same zero state rather than rejecting the write.
+        let header = state
+            .lock()
+            .billing_header()
+            .unwrap_or([0u8; LGT_BILL_HEADER_SIZE]);
+
+        let (header, frame) = build_lgt_bill_write_frame(header, &data);
+
+        // Native has already mutated s_BillHeader[0] at this point, even if
+        // the lower allocation/send subsequently fails.
+        state.lock().update_billing_header(header);
+
+        let Some(network) = context.system().platform().network() else {
+            return Ok(M_E_NOTCONN);
+        };
+
+        return Ok(match network.write(socket, &frame) {
+            Ok(written) => lgt_bill_write_public_result(written),
+            Err(error) => map_network_error(error),
+        });
+    }
 
     let Some(network) = context.system().platform().network() else {
         return Ok(M_E_NOTCONN);
@@ -724,30 +1211,49 @@ pub async fn socket_write(
     })
 }
 
+
 /// `MC_netSocketRead` (0x25d) @ native 0x1b3264.
 ///
 /// Structurally identical to `MC_netSocketWrite`, calling `dsocket_recv` in
 /// place of `dsocket_send`. ABI: r0 = socket, r1 = buffer, r2 = length, gated in
 /// the same order: buffer == 0 || length < 0 -> -9; `WPNet_IsAvailable()` < 0 ->
 /// -14; `find_socket_obj()` == null -> -2; socket type (`[sock+0x14]`) != 1
-/// (stream) -> -16. A billing socket (`[sock+0x18]` != 0) is read through
-/// `WPBill_Read`, which WIE does not model. The lower recv count is returned
-/// directly when it is >= 0 - so a partial read returns its own byte count and
-/// only that many bytes reach the guest buffer - and the negative internal
-/// errors map identically to write: -2077 -> -2, -2022 -> -9, -2011/-4005 -> -19
+/// (stream) -> -16. Ordinary stream sockets return the lower recv count
+/// directly when it is nonnegative, so a partial read returns its own byte
+/// count and only that many bytes reach the guest buffer. Negative lower errors
+/// map identically to write: -2077 -> -2, -2022 -> -9, -2011/-4005 -> -19
 /// (would-block/pending), -2107 -> -14, anything else -> -1.
+///
+/// The public validation/error mapping remains identical to ordinary stream
+/// sockets. Billing modes 1/2 dispatch through native `WPBill_Read`.
+///
+/// `WPBill_Read` has two kinds of state:
+///
+/// - three globals shared by every billing socket:
+///   remaining payload, header offset, remaining header length;
+/// - socket-local state:
+///   a 56-byte response header at object +0x4c and direct-read flag +0x1c.
+///
+/// A fresh billing response accumulates exactly 56 header bytes using at most
+/// three lower recv attempts in one public call. Header +0x30 contains the
+/// network-order payload length and +0x34 contains the four-byte response tag.
+/// Payload bytes are then delivered without the 56-byte header.
+///
+/// A partial payload is continued on later calls through the shared remaining
+/// payload counter. If socket +0x1c is already set while no payload remains,
+/// native bypasses header parsing and performs one direct recv.
 pub async fn socket_read(
     context: &mut dyn WIPICContext,
     socket: i32,
     buffer: WIPICWord,
     length: i32,
 ) -> Result<i32> {
-
     if buffer == 0 || length < 0 {
         return Ok(M_E_INVALID);
     }
 
     let state = context.network_state();
+
     if !state.lock().is_available() {
         return Ok(M_E_NOTCONN);
     }
@@ -760,24 +1266,226 @@ pub async fn socket_read(
         return Ok(M_E_NOTSUP);
     }
 
+    let billing_mode = state
+        .lock()
+        .billing_mode(socket)
+        .expect("socket metadata disappeared");
+
     let mut data = alloc::vec![0u8; length as usize];
 
-    let result = {
-        let Some(network) = context.system().platform().network() else {
-            return Ok(M_E_NOTCONN);
+    if billing_mode == 0 {
+        let result = {
+            let Some(network) = context.system().platform().network() else {
+                return Ok(M_E_NOTCONN);
+            };
+
+            network.read(socket, &mut data)
         };
 
-        network.read(socket, &mut data)
-    };
-
-    match result {
-        Ok(read) => {
-            context.write_bytes(buffer, &data[..read])?;
-            Ok(read as i32)
-        }
-        Err(error) => Ok(map_network_error(error)),
+        return match result {
+            Ok(read) => {
+                context.write_bytes(buffer, &data[..read])?;
+                Ok(read as i32)
+            }
+            Err(error) => Ok(map_network_error(error)),
+        };
     }
+
+    // Native first consumes payload left over from a previously parsed
+    // 56-byte billing header. No header parsing occurs while this counter is
+    // positive.
+    let remaining_payload = state.lock().billing_read.remaining_payload;
+
+    if remaining_payload > 0 {
+        let read_len = data.len().min(remaining_payload);
+
+        let result = {
+            let Some(network) = context.system().platform().network() else {
+                return Ok(M_E_NOTCONN);
+            };
+
+            network.read(socket, &mut data[..read_len])
+        };
+
+        return match result {
+            Ok(read) => {
+                if read > 0 {
+                    state.lock().billing_read.remaining_payload =
+                        remaining_payload.saturating_sub(read);
+                    context.write_bytes(buffer, &data[..read])?;
+                }
+
+                Ok(read as i32)
+            }
+            Err(error) => Ok(map_network_error(error)),
+        };
+    }
+
+    // Native socket object +0x1c direct-read path. A positive recv clears the
+    // flag. Zero or a negative lower result leaves it set.
+    let direct_read = state
+        .lock()
+        .sockets
+        .get(&socket)
+        .expect("socket metadata disappeared")
+        .billing_read_direct;
+
+    if direct_read {
+        let result = {
+            let Some(network) = context.system().platform().network() else {
+                return Ok(M_E_NOTCONN);
+            };
+
+            network.read(socket, &mut data)
+        };
+
+        return match result {
+            Ok(read) => {
+                if read > 0 {
+                    if let Some(entry) = state.lock().sockets.get_mut(&socket) {
+                        entry.billing_read_direct = false;
+                    }
+
+                    context.write_bytes(buffer, &data[..read])?;
+                }
+
+                Ok(read as i32)
+            }
+            Err(error) => Ok(map_network_error(error)),
+        };
+    }
+
+    // r6 starts at two. Together with the initial attempt this permits up to
+    // three dsocket_recv calls while assembling the 56-byte response header.
+    for attempt in 0..3 {
+        let (header_offset, remaining_header) = {
+            let state = state.lock();
+            (
+                state.billing_read.header_offset,
+                state.billing_read.remaining_header,
+            )
+        };
+
+        let mut chunk = alloc::vec![0u8; remaining_header];
+
+        let result = {
+            let Some(network) = context.system().platform().network() else {
+                return Ok(M_E_NOTCONN);
+            };
+
+            network.read(socket, &mut chunk)
+        };
+
+        let read = match result {
+            Ok(read) => read,
+            Err(error) => return Ok(map_network_error(error)),
+        };
+
+        let accumulated = header_offset.saturating_add(read);
+
+        if accumulated <= LGT_BILL_READ_HEADER_SIZE - 1 {
+            let mut state = state.lock();
+
+            if let Some(entry) = state.sockets.get_mut(&socket) {
+                entry.billing_read_header
+                    [header_offset..header_offset + read]
+                    .copy_from_slice(&chunk[..read]);
+            }
+
+            state.billing_read.header_offset = accumulated;
+            state.billing_read.remaining_header =
+                LGT_BILL_READ_HEADER_SIZE - accumulated;
+
+            if attempt == 2 {
+                return Ok(0);
+            }
+
+            continue;
+        }
+
+        // dsocket_recv is called with exactly remaining_header, therefore a
+        // conforming backend reaches this branch only at accumulated == 56.
+        if accumulated != LGT_BILL_READ_HEADER_SIZE {
+            if attempt == 2 {
+                return Ok(0);
+            }
+
+            continue;
+        }
+
+        let header = {
+            let mut state = state.lock();
+
+            let entry = state
+                .sockets
+                .get_mut(&socket)
+                .expect("socket metadata disappeared");
+
+            entry.billing_read_header
+                [header_offset..header_offset + read]
+                .copy_from_slice(&chunk[..read]);
+
+            entry.billing_read_direct = true;
+
+            let header = entry.billing_read_header;
+
+            // Native resets these globals immediately after a complete
+            // 56-byte header has been copied to socket object +0x4c.
+            state.billing_read = BillingReadState::default();
+
+            header
+        };
+
+        let tag = lgt_bill_read_tag(&header);
+
+        if lgt_bill_read_reject_tag(tag) {
+            // Native unreachable ten-tag equality chain returns -9.
+            return Ok(M_E_INVALID);
+        }
+
+        let payload_length = lgt_bill_read_payload_length(&header);
+
+        // Native uses signed ARM BLE after MC_utilNtohl. Zero and values with
+        // the high bit set therefore return zero here and leave +0x1c set.
+        if (payload_length as i32) <= 0 {
+            return Ok(0);
+        }
+
+        let requested =
+            data.len().min(payload_length as usize);
+
+        let result = {
+            let Some(network) = context.system().platform().network() else {
+                return Ok(M_E_NOTCONN);
+            };
+
+            network.read(socket, &mut data[..requested])
+        };
+
+        // Once the payload recv has been attempted, native clears socket
+        // object +0x1c regardless of success, zero, or lower error.
+        if let Some(entry) = state.lock().sockets.get_mut(&socket) {
+            entry.billing_read_direct = false;
+        }
+
+        return match result {
+            Ok(read) => {
+                if read > 0 {
+                    state.lock().billing_read.remaining_payload =
+                        (payload_length as usize).saturating_sub(read);
+
+                    context.write_bytes(buffer, &data[..read])?;
+                }
+
+                Ok(read as i32)
+            }
+            Err(error) => Ok(map_network_error(error)),
+        };
+    }
+
+    Ok(0)
 }
+
 
 /// `MC_netSocketBind` (0x25f) @ native 0x1b2ef0.
 ///
@@ -1244,7 +1952,7 @@ pub async fn http_open(context: &mut dyn WIPICContext, url_ptr: WIPICWord) -> Re
     let handle = {
         let state = context.network_state();
         let mut state = state.lock();
-        state.register_socket(socket, 1);
+        state.register_socket(socket, 1, 0);
         state.http_alloc(HttpObject {
             socket,
             host,
@@ -2167,7 +2875,7 @@ mod network_state_tests {
     #[test]
     fn socket_connect_callback_is_one_shot() {
         let mut state = NetworkState::default();
-        state.register_socket(7, 1);
+        state.register_socket(7, 1, 0);
         state.set_connect_callback(7, 0x1234, 0x5678);
         state.set_connect_pending(7, true);
 
@@ -2190,7 +2898,7 @@ mod network_state_tests {
     #[test]
     fn socket_connect_pending_recall_replaces_native_callback() {
         let mut state = NetworkState::default();
-        state.register_socket(8, 1);
+        state.register_socket(8, 1, 0);
 
         state.set_connect_callback(8, 0x1111, 0x2222);
         state.set_connect_pending(8, true);
@@ -2212,7 +2920,7 @@ mod network_state_tests {
     #[test]
     fn socket_connect_failure_callback_is_one_shot_error() {
         let mut state = NetworkState::default();
-        state.register_socket(9, 1);
+        state.register_socket(9, 1, 0);
         state.set_connect_callback(9, 0x4321, 0x8765);
         state.set_connect_pending(9, true);
 
@@ -2233,7 +2941,7 @@ mod network_state_tests {
     #[test]
     fn read_and_write_callbacks_remain_persistent() {
         let mut state = NetworkState::default();
-        state.register_socket(11, 1);
+        state.register_socket(11, 1, 0);
         state.set_read_callback(11, 0x1000, 0x2000);
         state.set_write_callback(11, 0x3000, 0x4000);
 
@@ -2304,8 +3012,8 @@ mod network_state_tests {
         let process_generation = state.begin_connect(0x1111, 0x2222).unwrap();
         assert!(state.finish_connect(process_generation).is_some());
 
-        state.register_socket(3, 1);
-        state.register_socket(4, 2);
+        state.register_socket(3, 1, 0);
+        state.register_socket(4, 2, 0);
         state.set_read_callback(3, 0x1000, 0x2000);
 
         let dispatcher_generation = state.start_dispatcher().unwrap();
@@ -2354,8 +3062,8 @@ mod network_state_tests {
     fn socket_metadata_tracks_type_and_removal() {
         let mut state = NetworkState::default();
 
-        state.register_socket(21, 1);
-        state.register_socket(22, 2);
+        state.register_socket(21, 1, 0);
+        state.register_socket(22, 2, 0);
 
         assert_eq!(state.socket_type(21), Some(1));
         assert_eq!(state.socket_type(22), Some(2));
@@ -2518,7 +3226,7 @@ mod network_state_tests {
         assert!(state.finish_connect(generation).is_some());
 
         // MC_netHttpOpen registers the object's stream socket in `sockets`.
-        state.register_socket(9, 1);
+        state.register_socket(9, 1, 0);
         let handle = state.http_alloc(HttpObject {
             socket: 9,
             ..Default::default()
@@ -2529,4 +3237,344 @@ mod network_state_tests {
         assert_eq!(sockets, vec![9]);
         assert!(state.http_get(handle).is_none());
     }
+    #[test]
+    fn socket_billing_mode_metadata_tracks_native_modes() {
+        let mut state = NetworkState::default();
+
+        state.register_socket(10, 1, 0);
+        state.register_socket(11, 1, 1);
+        state.register_socket(12, 1, 2);
+
+        assert_eq!(state.socket_type(10), Some(1));
+        assert_eq!(state.billing_mode(10), Some(0));
+        assert_eq!(state.billing_mode(11), Some(1));
+        assert_eq!(state.billing_mode(12), Some(2));
+
+        state.remove_socket(11);
+        assert_eq!(state.billing_mode(11), None);
+    }
+
+    #[test]
+    fn restored_bill_socket_metadata_is_stream_mode_one() {
+        let mut state = NetworkState::default();
+
+        // Successful restored MC_netBillSocket registration mirrors native:
+        // socket type remains the caller-provided stream type and +0x18 = 1.
+        state.register_socket(31, 1, 1);
+
+        assert_eq!(state.socket_type(31), Some(1));
+        assert_eq!(state.billing_mode(31), Some(1));
+
+        state.remove_socket(31);
+        assert_eq!(state.socket_type(31), None);
+        assert_eq!(state.billing_mode(31), None);
+    }
+
+    #[test]
+    fn billing_header_tracks_native_setheader_inputs() {
+        let mut state = NetworkState::default();
+
+        assert_eq!(state.billing_header(), None);
+
+        state.register_socket(41, 1, 1);
+
+        let mut header = [0u8; LGT_BILL_HEADER_SIZE];
+        header[0x52..0x54].copy_from_slice(&0x5566u16.to_le_bytes());
+        header[0x54..0x58].copy_from_slice(&0x1122_3344u32.to_le_bytes());
+
+        state.install_billing_header(header);
+
+        assert_eq!(state.billing_header(), Some(header));
+
+        // Native s_BillHeader is module-global, so removing a socket object
+        // does not destroy the header.
+        state.remove_socket(41);
+        assert_eq!(state.billing_header(), Some(header));
+    }
+
+
+    #[test]
+    fn test_bill_gateway_matches_native_mode_two_constant() {
+        let (host, port, path) = parse_http_url(LGT_TEST_BILL_GATEWAY);
+
+        assert_eq!(host, "wipigwdev.ez-i.co.kr");
+        assert_eq!(port, 30000);
+        assert_eq!(path, "/");
+
+        // WPBill_SetGW calls MC_utilHtons before dsocket_connect.
+        assert_eq!(port.swap_bytes(), 0x3075);
+    }
+
+    #[test]
+    fn bill_header_matches_native_setheader_final_bytes() {
+        let platform = test_utils::TestPlatform::new()
+            .with_system_information(LGT_BILL_INFO_PHONE_MODEL, "MODEL-X")
+            .with_system_information(LGT_BILL_INFO_MDN, "0101234567")
+            .with_system_information(LGT_BILL_INFO_CURRENT_CH, "7")
+            .with_system_information(LGT_BILL_INFO_SID, "1234")
+            .with_system_information(LGT_BILL_INFO_NID, "5678")
+            .with_system_information(LGT_BILL_INFO_BASE_ID, "BASE")
+            .with_system_information(LGT_BILL_INFO_BEST_PN, "BEST");
+
+        let header = build_lgt_bill_header(
+            &platform,
+            "000298AD",
+            0x11223344,
+            0x01020304,
+            0x3075,
+        );
+
+        assert_eq!(header.len(), 108);
+        assert_eq!(&header[0x00..0x04], &[0, 0, 0, 0]);
+
+        // Initial:
+        //   /android/000298AD.jar:binary.mod
+        //
+        // Native then strcpy()s fixed strings at +0x0e and +0x18.
+        assert_eq!(&header[0x04..0x0e], b"/android/0");
+        assert_eq!(&header[0x0e..0x14], b"1.1.1\0");
+        assert_eq!(&header[0x14..0x18], b"D.ja");
+        assert_eq!(&header[0x18..0x1d], b"1.54\0");
+        assert_eq!(&header[0x1d..0x22], b"ary.m");
+
+        assert_eq!(&header[0x22..0x2a], b"MODEL-X\0");
+
+        // 10-digit MDN:
+        // first 3 + "00" + remaining 7 = 12 bytes.
+        assert_eq!(&header[0x2c..0x39], b"010001234567\0");
+
+        assert_eq!(&header[0x3c..0x3e], b"7\0");
+        assert_eq!(&header[0x3e..0x43], b"1234\0");
+        assert_eq!(&header[0x43..0x48], b"5678\0");
+
+        // BESTPN overwrites BASEID.
+        assert_eq!(&header[0x48..0x4d], b"BEST\0");
+
+        // Original WIPI destination words.
+        assert_eq!(&header[0x52..0x54], &[0x75, 0x30]);
+        assert_eq!(
+            &header[0x54..0x58],
+            &[0x04, 0x03, 0x02, 0x01]
+        );
+
+        // Htonl(0x11223344) followed by little-endian ARM STR.
+        assert_eq!(
+            &header[0x58..0x5c],
+            &[0x11, 0x22, 0x33, 0x44]
+        );
+
+        assert_eq!(&header[0x5c..0x6c], &[0; 16]);
+    }
+
+    #[test]
+    fn bill_header_mdn_normalization_matches_native_lengths() {
+        assert_eq!(
+            normalize_lgt_bill_mdn(b"0101234567"),
+            b"010001234567"
+        );
+
+        assert_eq!(
+            normalize_lgt_bill_mdn(b"01012345678"),
+            b"010012345678"
+        );
+
+        assert_eq!(
+            normalize_lgt_bill_mdn(b"1234"),
+            b"1234"
+        );
+    }
+
+    #[test]
+    fn billing_header_is_shared_across_native_billing_sockets() {
+        let mut state = NetworkState::default();
+
+        state.register_socket(81, 1, 1);
+        state.register_socket(82, 1, 2);
+
+        let first = [0x11u8; LGT_BILL_HEADER_SIZE];
+        let second = [0x22u8; LGT_BILL_HEADER_SIZE];
+
+        state.install_billing_header(first);
+        assert_eq!(state.billing_header(), Some(first));
+
+        // A Write through any billing socket mutates the same native global.
+        state.update_billing_header(second);
+        assert_eq!(state.billing_header(), Some(second));
+
+        state.remove_socket(81);
+        state.remove_socket(82);
+
+        // Socket lifetime does not own s_BillHeader.
+        assert_eq!(state.billing_header(), Some(second));
+    }
+
+    #[test]
+    fn billing_write_header_update_preserves_native_read_state() {
+        let mut state = NetworkState::default();
+        state.register_socket(72, 1, 1);
+
+        state.billing_read.remaining_payload = 123;
+        state.billing_read.header_offset = 17;
+        state.billing_read.remaining_header = 39;
+
+        state.update_billing_header(
+            [0x5au8; LGT_BILL_HEADER_SIZE],
+        );
+
+        assert_eq!(state.billing_read.remaining_payload, 123);
+        assert_eq!(state.billing_read.header_offset, 17);
+        assert_eq!(state.billing_read.remaining_header, 39);
+
+        assert_eq!(
+            state.billing_header(),
+            Some([0x5au8; LGT_BILL_HEADER_SIZE])
+        );
+    }
+
+    #[test]
+    fn billing_read_state_matches_native_initial_and_setheader_reset() {
+        let initial = BillingReadState::default();
+
+        assert_eq!(initial.remaining_payload, 0);
+        assert_eq!(initial.header_offset, 0);
+        assert_eq!(
+            initial.remaining_header,
+            LGT_BILL_READ_HEADER_SIZE
+        );
+
+        let mut state = NetworkState::default();
+        state.register_socket(71, 1, 1);
+
+        state.billing_read.remaining_payload = 123;
+        state.billing_read.header_offset = 17;
+        state.billing_read.remaining_header = 39;
+
+        state.install_billing_header(
+            [0u8; LGT_BILL_HEADER_SIZE],
+        );
+
+        assert_eq!(state.billing_read.remaining_payload, 0);
+        assert_eq!(state.billing_read.header_offset, 0);
+        assert_eq!(
+            state.billing_read.remaining_header,
+            LGT_BILL_READ_HEADER_SIZE
+        );
+    }
+
+    #[test]
+    fn bill_read_header_layout_decodes_native_payload_length_and_tag() {
+        let mut header = [0u8; LGT_BILL_READ_HEADER_SIZE];
+
+        header[0x30..0x34]
+            .copy_from_slice(&0x1234_5678u32.to_be_bytes());
+        header[0x34..0x38].copy_from_slice(b"KCBD");
+
+        assert_eq!(
+            lgt_bill_read_payload_length(&header),
+            0x1234_5678
+        );
+        assert_eq!(lgt_bill_read_tag(&header), *b"KCBD");
+    }
+
+    #[test]
+    fn bill_read_native_tag_chain_has_no_reachable_literal() {
+        for tag in [
+            *b"KCBD",
+            *b"KCSP",
+            *b"KCNB",
+            *b"KCEP",
+            *b"KCEN",
+            *b"UATO",
+            *b"UATT",
+            *b"UAFO",
+            *b"UAFT",
+            *b"UAFR",
+        ] {
+            assert!(!lgt_bill_read_reject_tag(tag));
+        }
+    }
+
+    #[test]
+    fn bill_write_frame_matches_native_header_and_payload_layout() {
+        let mut header = [0xa5u8; LGT_BILL_HEADER_SIZE];
+
+        // SetHeader owns bytes +4 onward. Offset zero is replaced by Write.
+        header[0..4].fill(0);
+
+        let payload = b"ABC";
+        let (updated, frame) =
+            build_lgt_bill_write_frame(header, payload);
+
+        // 108 + 3 = 111 = 0x0000006f, in network byte order on wire.
+        assert_eq!(&updated[0..4], &[0x00, 0x00, 0x00, 0x6f]);
+
+        assert_eq!(frame.len(), 111);
+        assert_eq!(&frame[0..4], &[0x00, 0x00, 0x00, 0x6f]);
+        assert_eq!(
+            &frame[4..LGT_BILL_HEADER_SIZE],
+            &[0xa5; LGT_BILL_HEADER_SIZE - 4]
+        );
+        assert_eq!(&frame[LGT_BILL_HEADER_SIZE..], b"ABC");
+    }
+
+    #[test]
+    fn bill_write_public_result_matches_native_header_accounting() {
+        assert_eq!(lgt_bill_write_public_result(0), 0);
+        assert_eq!(lgt_bill_write_public_result(1), 0);
+        assert_eq!(
+            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE - 1),
+            0
+        );
+        assert_eq!(
+            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE),
+            0
+        );
+        assert_eq!(
+            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE + 1),
+            1
+        );
+        assert_eq!(
+            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE + 37),
+            37
+        );
+    }
+
+    #[test]
+    fn bill_write_frame_replaces_previous_length_each_call() {
+        let mut header = [0u8; LGT_BILL_HEADER_SIZE];
+        header[0..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+
+        let (first, _) =
+            build_lgt_bill_write_frame(header, b"12345");
+        assert_eq!(&first[0..4], &[0x00, 0x00, 0x00, 0x71]);
+
+        let (second, _) =
+            build_lgt_bill_write_frame(first, b"Z");
+        assert_eq!(&second[0..4], &[0x00, 0x00, 0x00, 0x6d]);
+    }
+
+    #[test]
+    fn bill_gateway_information_is_optional_platform_state() {
+        use wie_backend::Platform;
+
+        let absent = test_utils::TestPlatform::new();
+        assert_eq!(
+            absent.system_information(LGT_BILL_GATEWAY_INFORMATION_KEY),
+            None
+        );
+
+        let configured = test_utils::TestPlatform::new()
+            .with_system_information(
+                LGT_BILL_GATEWAY_INFORMATION_KEY,
+                "http://10.20.30.40:30001",
+            );
+
+        assert_eq!(
+            configured
+                .system_information(LGT_BILL_GATEWAY_INFORMATION_KEY)
+                .as_deref(),
+            Some("http://10.20.30.40:30001")
+        );
+    }
+
 }
