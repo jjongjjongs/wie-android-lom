@@ -21,12 +21,12 @@
 
 use alloc::{boxed::Box, format};
 
-use arm32_cpu::{Cpu, Mode, reg};
+use arm32_cpu::{Cpu, Mode, reg, util::bit::BitUtilExt};
 
 use wie_util::{Result, WieError};
 
 use super::arm32_cpu::EmulatedMemory;
-use super::fast::{Decoded, FastOp, decode};
+use super::fast::{Decoded, FastOp, decode, ends_trace};
 use crate::engine::{ArmEngine, ArmRegister, EngineRunResult, MemoryPermission};
 
 #[cfg(target_arch = "x86_64")]
@@ -255,13 +255,80 @@ impl JitEngine {
                         break;
                     }
                 }
-                None => break,
+                None => {
+                    // The shared frontend declined it; try the JIT-only
+                    // control-flow ops (push/pop, bx/blx, bl) before giving up.
+                    match self.decode_cf(inst, pc) {
+                        Some((op, len)) => {
+                            ops.push(op);
+                            pc = pc.wrapping_add(len);
+                            if ends_trace(&op) {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
             }
         }
         if ops.is_empty() {
             return None;
         }
         Some((ops, pc))
+    }
+
+    /// Decode the control-flow Thumb ops the shared frontend declines, into their
+    /// JIT-only `FastOp` variants, returning the op and its byte length (2, or 4
+    /// for the 32-bit long branch). `None` if still not compilable, so the caller
+    /// ends the trace and single-steps it in the interpreter.
+    fn decode_cf(&self, inst: u16, pc: u32) -> Option<(FastOp, u32)> {
+        let i = inst as u32;
+        // BX/BLX register (HiRegBx op 3): H1 (bit 7) is the link bit, the source
+        // register is (H2:Rs) = bit6<<3 | bits[5:3].
+        if i & 0xff00 == 0x4700 {
+            let link = i.get_bit(7) == 1;
+            let rm = ((i.get_bit(6) * 8) + i.extract(3, 3)) as u8;
+            return Some((FastOp::BranchExchange { link, rm }, 2));
+        }
+        // PUSH/POP.
+        if i & 0xf600 == 0xb400 {
+            return Some((
+                FastOp::PushPop {
+                    load: i.get_bit(11) == 1,
+                    extra: i.get_bit(8) == 1,
+                    rlist: i.extract(0, 8) as u8,
+                },
+                2,
+            ));
+        }
+        // Long branch (BL / BLX immediate). A 32-bit instruction: this is only
+        // the prefix halfword; the suffix selects the form. The Thumb-2 wide-
+        // branch (B.W) forms are left to the interpreter.
+        if i & 0xf800 == 0xf000 {
+            let inst2 = self.mem.peek_u16(pc.wrapping_add(2))? as u32;
+            let offset_hi = i.extract(0, 11);
+            let offset_lo = inst2.extract(0, 11);
+            let base = pc.wrapping_add(4).wrapping_add((offset_hi << 12).sign_extend(23));
+            let ret = pc.wrapping_add(4) | 1;
+            if inst2 & 0xf800 == 0xf800 {
+                // BL: stay in Thumb.
+                let target = base.wrapping_add(offset_lo << 1);
+                return Some((
+                    FastOp::BranchLink {
+                        exchange: false,
+                        target,
+                        ret,
+                    },
+                    4,
+                ));
+            } else if inst2 & 0xf801 == 0xe800 {
+                // BLX: switch to ARM (target word-aligned, Thumb bit cleared).
+                let target = base.wrapping_add(offset_lo << 1) & !3;
+                return Some((FastOp::BranchLink { exchange: true, target, ret }, 4));
+            }
+            return None;
+        }
+        None
     }
 
     /// Ensure a compiled block for `pc` occupies its cache slot. Returns `false`
@@ -734,6 +801,111 @@ mod tests {
             }
         }
         std::eprintln!("no divergence found");
+    }
+
+    /// Assemble Thumb halfwords into a little-endian byte program.
+    fn thumb(words: &[u16]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(words.len() * 2);
+        for &w in words {
+            v.extend_from_slice(&w.to_le_bytes());
+        }
+        v
+    }
+
+    // `0xe7ff` is `b .` to the following halfword: a trailing one gives a trace a
+    // clean block boundary exactly at `end`, so the ops before it are actually
+    // JIT-compiled rather than single-stepped by the end-in-block guard.
+    const B_NEXT: u16 = 0xe7ff;
+
+    #[test]
+    fn jit_push_pop_roundtrip() {
+        // push {r0,r1}; pop {r2,r3}; b next
+        let code = thumb(&[0xb403, 0xbc0c, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0x1111_2222;
+        regs[1] = 0x3333_4444;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_push_pop_many() {
+        // push {r0,r2,r4,r7,lr}; pop {r1,r3,r5,r6,pc}. The pop's pc lands on the
+        // movs below (set via lr), which then branches to end.
+        let code = thumb(&[
+            0xb495,                // push {r0,r2,r4,r7,lr}
+            0xbc00 | 0x100 | 0x6a, // pop {r1,r3,r5,r6,pc} = 0xbdea
+            0x0000,
+            0x0000, // padding at CODE+4, CODE+6
+            0x2055, // CODE+8: movs r0, #0x55
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        for (i, r) in regs.iter_mut().enumerate().take(13) {
+            *r = 0x1000_0000u32.wrapping_add((i as u32) * 0x11);
+        }
+        regs[14] = (CODE + 8) | 1; // lr -> the movs (Thumb)
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_pop_pc_return() {
+        // push {r0}; pop {pc} (jumps to r0); ...; movs r1; b next.
+        let code = thumb(&[
+            0xb401, // CODE+0: push {r0}
+            0xbd00, // CODE+2: pop {pc}
+            0x0000, 0x0000, 0x0000, // padding to CODE+8
+            0x2155, // CODE+8: movs r1, #0x55
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        regs[0] = (CODE + 8) | 1; // return address (Thumb)
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_bl_bx_call_return() {
+        // bl func; movs r1; b next  |  func: movs r0; bx lr
+        let code = thumb(&[
+            0xf000, 0xf806, // CODE+0: bl CODE+0x10
+            0x2133, // CODE+4: movs r1, #0x33
+            B_NEXT, // CODE+6 -> CODE+8 (end)
+            0x0000, 0x0000, 0x0000, 0x0000, // CODE+8..0xe padding
+            0x2042, // CODE+0x10: movs r0, #0x42
+            0x4770, // CODE+0x12: bx lr
+        ]);
+        let mut regs = [0u32; 15];
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 8);
+    }
+
+    #[test]
+    fn jit_bx_register() {
+        // bx r2 (jumps to r2); ...; movs r0; b next
+        let code = thumb(&[
+            0x4710, // CODE+0: bx r2
+            0x0000, 0x0000, 0x0000, // padding to CODE+8
+            0x2011, // CODE+8: movs r0, #0x11
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        regs[2] = (CODE + 8) | 1; // Thumb target
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_push_fault() {
+        // push {r0,r1} onto an unmapped stack: both engines must fault at the
+        // same address with the same post-instruction register state.
+        let code = thumb(&[0xb403, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0xaaaa_aaaa;
+        regs[1] = 0xbbbb_bbbb;
+        regs[13] = 0x0005_0000; // unmapped
+        assert_same(&code, &regs, CODE + code.len() as u32);
     }
 
     #[test]

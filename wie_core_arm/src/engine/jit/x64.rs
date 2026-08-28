@@ -12,7 +12,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 
 use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, ExecutableBuffer, dynasm};
 
-use crate::engine::fast::FastOp;
+use crate::engine::fast::{FastOp, ends_trace};
 
 use super::{JitCtx, exit, jit_alu_shift, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
 
@@ -58,7 +58,10 @@ fn supported(op: FastOp) -> bool {
         | FastOp::Shift { .. }
         | FastOp::HwSgnXfer { .. }
         | FastOp::CondBranch { .. }
-        | FastOp::Branch { .. } => true,
+        | FastOp::Branch { .. }
+        | FastOp::PushPop { .. }
+        | FastOp::BranchExchange { .. }
+        | FastOp::BranchLink { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x7 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
     }
@@ -79,7 +82,7 @@ pub(crate) fn compile_block(ops: &[FastOp], start_pc: u32) -> Option<(Code, usiz
             limit = i;
             break;
         }
-        if matches!(op, FastOp::Branch { .. }) {
+        if ends_trace(op) {
             limit = i + 1;
             break;
         }
@@ -215,6 +218,12 @@ pub(crate) fn compile_block(ops: &[FastOp], start_pc: u32) -> Option<(Code, usiz
                 } else {
                     dynasm!(a ; mov DWORD [rbx + PC], target as i32 ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
                 }
+                ended_unconditional = true;
+            }
+            // Control-flow ops that write a dynamic/far PC end the trace: emit
+            // them, then let the epilogue follow (they jump to it themselves).
+            t @ (FastOp::BranchExchange { .. } | FastOp::BranchLink { .. } | FastOp::PushPop { load: true, extra: true, .. }) => {
+                emit_op(&mut a, t, pc);
                 ended_unconditional = true;
             }
             other => {
@@ -381,10 +390,143 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
                 (true, true) => emit_load(a, 16, true, rd, hw_addr, pc),   // ldrsh
             }
         }
+        FastOp::PushPop { load, extra, rlist } => emit_push_pop(a, load, extra, rlist, pc),
+        FastOp::BranchExchange { link, rm } => emit_bx(a, link, rm, pc),
+        FastOp::BranchLink { exchange, target, ret } => emit_bl(a, exchange, target, ret),
         FastOp::CondBranch { .. } | FastOp::Branch { .. } => {
             unreachable!("handled by compile_block")
         }
     }
+}
+
+/// Emit `push`/`pop`. The register list and count are compile-time constants, so
+/// the transfer is fully unrolled. Every access runs (each helper records a
+/// fault but continues, matching the interpreter completing the instruction) and
+/// SP is updated unconditionally; the fault/SMC check is deferred to the end. A
+/// `pop {..,pc}` writes a dynamic PC and ends the trace with CONTINUE; the other
+/// forms fall through to the next op.
+fn emit_push_pop(a: &mut Asm, load: bool, extra: bool, rlist: u8, pc: u32) {
+    // Ascending register order; the extra register (LR for push, PC for pop) is
+    // r14/r15 and so comes last.
+    let mut regs: alloc::vec::Vec<u8> = (0..8u8).filter(|&r| rlist & (1 << r) != 0).collect();
+    if extra {
+        regs.push(if load { 15 } else { 14 });
+    }
+    let total = regs.len() as i32;
+    let pop_pc = load && extra;
+
+    if load {
+        // POP: addr = SP, load ascending, then SP += total*4.
+        for (i, &r) in regs.iter().enumerate() {
+            let off = i as i32 * 4;
+            dynasm!(a
+                ; mov rdi, rbx
+                ; mov esi, [rbx + ro(13)]
+                ; add esi, off
+                ; mov rax, QWORD jit_load32 as *const () as i64
+                ; call rax
+            );
+            if r == 15 {
+                // POP {..,pc}: T from bit 0, PC = val & !1.
+                dynasm!(a
+                    ; mov r8d, eax
+                    ; mov ecx, r8d
+                    ; and ecx, 1
+                    ; mov edx, [rbx + CPSR]
+                    ; and edx, !(1 << 5)
+                    ; mov r9d, ecx
+                    ; shl r9d, 5
+                    ; or edx, r9d
+                    ; mov [rbx + CPSR], edx
+                    ; and r8d, !1
+                    ; mov [rbx + PC], r8d
+                );
+            } else {
+                dynasm!(a ; mov [rbx + ro(r)], eax);
+            }
+        }
+        dynasm!(a ; add DWORD [rbx + ro(13)], total * 4);
+    } else {
+        // PUSH: addr = SP - total*4, store ascending, then SP = addr.
+        for (i, &r) in regs.iter().enumerate() {
+            let off = i as i32 * 4 - total * 4;
+            dynasm!(a
+                ; mov rdi, rbx
+                ; mov esi, [rbx + ro(13)]
+                ; add esi, off
+                ; mov edx, [rbx + ro(r)]
+                ; mov rax, QWORD jit_store32 as *const () as i64
+                ; call rax
+            );
+        }
+        dynasm!(a ; sub DWORD [rbx + ro(13)], total * 4);
+    }
+
+    // Deferred fault check. A pop-with-pc has already written the popped PC; the
+    // other forms report the instruction's own next PC.
+    dynasm!(a ; mov ecx, [rbx + FAULTED] ; test ecx, ecx ; jz >nofault);
+    if !pop_pc {
+        dynasm!(a ; mov DWORD [rbx + PC], pc.wrapping_add(2) as i32);
+    }
+    dynasm!(a ; mov eax, exit::FAULT as i32 ; jmp ->epilogue ; nofault:);
+    if !load {
+        // A push can hit a page holding compiled code (self-modifying code).
+        dynasm!(a
+            ; mov ecx, [rbx + SMC]
+            ; test ecx, ecx
+            ; jz >nosmc
+            ; mov DWORD [rbx + PC], pc.wrapping_add(2) as i32
+            ; mov eax, exit::SMC as i32
+            ; jmp ->epilogue
+            ; nosmc:
+        );
+    }
+    if pop_pc {
+        dynasm!(a ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
+    }
+}
+
+/// Emit `bx`/`blx` register: read rm (PC folded to a constant), switch ARM/Thumb
+/// from bit 0, optionally set LR, and end the trace.
+fn emit_bx(a: &mut Asm, link: bool, rm: u8, pc: u32) {
+    if rm == 15 {
+        dynasm!(a ; mov eax, pc.wrapping_add(4) as i32);
+    } else {
+        dynasm!(a ; mov eax, [rbx + ro(rm)]);
+    }
+    dynasm!(a
+        ; mov ecx, eax
+        ; and ecx, 1                 // new T bit
+        // PC = vals & (new_t ? !1 : !3) = vals & (0xFFFFFFFC | new_t<<1)
+        ; mov edx, ecx
+        ; shl edx, 1
+        ; or edx, -4
+        ; and eax, edx
+        ; mov [rbx + PC], eax
+        ; mov edx, [rbx + CPSR]
+        ; and edx, !(1 << 5)
+        ; mov r8d, ecx
+        ; shl r8d, 5
+        ; or edx, r8d
+        ; mov [rbx + CPSR], edx
+    );
+    if link {
+        dynasm!(a ; mov DWORD [rbx + ro(14)], (pc.wrapping_add(2) | 1) as i32);
+    }
+    dynasm!(a ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
+}
+
+/// Emit `bl`/`blx` immediate: set LR to the return address and PC to the
+/// pre-computed target; BLX also clears the Thumb bit. Ends the trace.
+fn emit_bl(a: &mut Asm, exchange: bool, target: u32, ret: u32) {
+    dynasm!(a
+        ; mov DWORD [rbx + ro(14)], ret as i32
+        ; mov DWORD [rbx + PC], target as i32
+    );
+    if exchange {
+        dynasm!(a ; and DWORD [rbx + CPSR], !(1 << 5));
+    }
+    dynasm!(a ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
 }
 
 /// Thumb `Shifted` (LSL/LSR/ASR by a 5-bit immediate). Updates N, Z and C
