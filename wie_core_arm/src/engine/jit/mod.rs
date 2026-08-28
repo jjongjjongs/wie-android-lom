@@ -60,6 +60,11 @@ pub(crate) struct JitCtx {
     pub mem: *mut EmulatedMemory,
     /// Per-64 KiB-region "has cached code" flags, for SMC detection. Offset 88.
     pub code_pages: *const bool,
+    /// Remaining instruction budget for this run. Compiled traces decrement it
+    /// per basic block and yield to the dispatcher when it reaches zero; the
+    /// dispatcher reads the delta back as the retired-instruction count.
+    /// Offset 96.
+    pub budget: i32,
 }
 
 impl JitCtx {
@@ -72,6 +77,7 @@ impl JitCtx {
             smc: 0,
             mem: core::ptr::null_mut(),
             code_pages: core::ptr::null(),
+            budget: 0,
         }
     }
 }
@@ -90,10 +96,8 @@ pub(crate) mod exit {
 /// A compiled block plus the metadata the dispatcher needs.
 struct CompiledBlock {
     code: backend::Code,
-    /// Guest PC just past the block (for the fall-through / end checks).
+    /// Guest PC just past the block (for the end-in-block check).
     end_pc: u32,
-    /// Number of guest instructions (for the executed-instruction meter).
-    len: u32,
 }
 
 #[derive(Default)]
@@ -160,7 +164,12 @@ impl JitEngine {
                 Some(Decoded::Terminator(op)) => {
                     ops.push(op);
                     pc = pc.wrapping_add(2);
-                    break;
+                    // A conditional branch has a fall-through path, so keep
+                    // decoding linearly (its target is linked inside the trace if
+                    // in range). An unconditional branch has no fall-through.
+                    if matches!(op, FastOp::Branch { .. }) {
+                        break;
+                    }
                 }
                 None => break,
             }
@@ -186,15 +195,18 @@ impl JitEngine {
             return false;
         };
         // `compiled_ops` may be shorter than `ops` if the compiler stopped early
-        // at an op it declined; recompute the real end PC and length.
-        let len = compiled_ops as u32;
-        let end_pc = if compiled_ops == ops.len() { end_pc } else { pc.wrapping_add(2 * len) };
+        // at an op it declined; recompute the real end PC.
+        let end_pc = if compiled_ops == ops.len() {
+            end_pc
+        } else {
+            pc.wrapping_add(2 * compiled_ops as u32)
+        };
         self.code_pages[(pc >> 16) as usize] = true;
         let cur_gen = self.generation;
         let slot = &mut self.cache[idx];
         slot.gen_tag = cur_gen;
         slot.pc = pc;
-        slot.block = Some(CompiledBlock { code, end_pc, len });
+        slot.block = Some(CompiledBlock { code, end_pc });
         true
     }
 
@@ -278,29 +290,21 @@ impl ArmEngine for JitEngine {
                 crate::PC_SAMPLES[(pc >> 16) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
                 self.ctx.faulted = 0;
                 self.ctx.smc = 0;
-                let (reason, len) = {
+                // The compiled trace decrements `budget` per basic block and
+                // yields when it reaches zero, so the delta is the retired count.
+                let start_budget = budget.min(i32::MAX as u64) as i32;
+                self.ctx.budget = start_budget;
+                let reason = {
                     let block = self.cache[Self::slot_index(pc)].block.as_ref().unwrap();
-                    let reason = backend::run_block(&block.code, &mut self.ctx);
-                    (reason, block.len)
+                    backend::run_block(&block.code, &mut self.ctx)
                 };
+                let retired = (start_budget - self.ctx.budget).max(0) as u64;
+                batch.0 += retired;
+                budget = budget.saturating_sub(retired);
                 match reason {
-                    exit::CONTINUE => {
-                        batch.0 += len as u64;
-                        budget = budget.saturating_sub(len as u64);
-                    }
-                    exit::FAULT => {
-                        // Retired instructions up to and including the faulting
-                        // one are reflected in regs[15]; count them for the meter.
-                        let retired = (self.ctx.regs[15].wrapping_sub(pc)) / 2;
-                        batch.0 += retired as u64;
-                        break Err(WieError::InvalidMemoryAccess(self.ctx.fault_addr));
-                    }
-                    exit::SMC => {
-                        let retired = (self.ctx.regs[15].wrapping_sub(pc)) / 2;
-                        batch.0 += retired as u64;
-                        budget = budget.saturating_sub(retired as u64);
-                        self.flush_blocks();
-                    }
+                    exit::CONTINUE => {}
+                    exit::FAULT => break Err(WieError::InvalidMemoryAccess(self.ctx.fault_addr)),
+                    exit::SMC => self.flush_blocks(),
                     other => break Err(WieError::FatalError(format!("bad JIT exit {other}"))),
                 }
             } else {

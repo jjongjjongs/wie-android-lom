@@ -59,8 +59,11 @@ const BLIT_CODE: [u8; 28] = [
     0xf2, 0xd1, 0xc0, 0x46,
 ];
 
-/// PC of the trailing `nop`, used as the engine's `end` breakpoint.
-const BLIT_END: u32 = CODE_ADDR + 0x1a;
+/// `end` breakpoint: the first zero-filled halfword just past the program. In a
+/// real dump the run's `end` (a return sentinel) is likewise reached at an
+/// instruction the JIT declines, so the trace compiler stops cleanly there
+/// rather than mid-trace.
+const BLIT_END: u32 = CODE_ADDR + 0x1c;
 
 /// Build a source buffer with a representative mix of opaque and transparent
 /// pixels (every fourth pixel transparent), returning it plus the expected

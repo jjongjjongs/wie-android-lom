@@ -8,7 +8,9 @@
 //! next guest PC. Guest state lives entirely in the context array (not host
 //! registers), so helper calls need only preserve `rbx`.
 
-use dynasmrt::{AssemblyOffset, DynasmApi, DynasmLabelApi, ExecutableBuffer, dynasm};
+use alloc::collections::{BTreeMap, BTreeSet};
+
+use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, ExecutableBuffer, dynasm};
 
 use crate::engine::fast::FastOp;
 
@@ -35,55 +37,202 @@ const CPSR: i32 = 64;
 const PC: i32 = 15 * 4;
 const FAULTED: i32 = 72;
 const SMC: i32 = 76;
+const BUDGET: i32 = 96;
 
 type Asm = dynasmrt::x64::Assembler;
 
-pub(crate) fn compile_block(ops: &[FastOp], pc: u32) -> Option<(Code, usize)> {
-    let mut a = Asm::new().ok()?;
-    let entry = a.offset();
-    dynasm!(a
-        ; .arch x64
-        ; push rbx
-        ; mov rbx, rdi
-    );
-
-    let mut cur = pc;
-    let mut compiled = 0usize;
-    let mut ended_with_branch = false;
-    for op in ops {
-        if !emit_op(&mut a, *op, cur) {
-            break;
-        }
-        compiled += 1;
-        cur = cur.wrapping_add(2);
-        if matches!(op, FastOp::CondBranch { .. } | FastOp::Branch { .. }) {
-            ended_with_branch = true;
-            break;
-        }
+/// Whether `emit_op` can compile this op (else the trace ends before it and the
+/// interpreter handles it). Kept in lockstep with `emit_op`.
+fn supported(op: FastOp) -> bool {
+    match op {
+        FastOp::AddSubImm { .. }
+        | FastOp::AddSubReg { .. }
+        | FastOp::ImmOp { .. }
+        | FastOp::PcLoad { .. }
+        | FastOp::LoadAddr { .. }
+        | FastOp::SpAdd { .. }
+        | FastOp::HwXferI { .. }
+        | FastOp::SingleXferI { .. }
+        | FastOp::SpXfer { .. }
+        | FastOp::SingleXferR { .. }
+        | FastOp::CondBranch { .. }
+        | FastOp::Branch { .. } => true,
+        FastOp::HiReg { op, .. } => op != 3,
+        FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9),
+        FastOp::Shift { .. } | FastOp::HwSgnXfer { .. } => false,
     }
-    if compiled == 0 {
-        return None;
-    }
-
-    // Fall-through end (block did not end in a branch): set PC past the last
-    // compiled instruction and return CONTINUE.
-    if !ended_with_branch {
-        dynasm!(a ; mov DWORD [rbx + PC], cur as i32 ; mov eax, exit::CONTINUE as i32);
-    }
-    // Shared epilogue.
-    dynasm!(a
-        ; ->epilogue:
-        ; pop rbx
-        ; ret
-    );
-
-    let buf = a.finalize().ok()?;
-    Some((Code { buf, entry }, compiled))
 }
 
-/// Emit one op. Returns false if the op is not supported (caller ends the block
-/// there and falls back to the interpreter for it). `pc` is the op's guest PC.
-fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
+/// Compile a decoded linear trace (which may contain conditional branches) into
+/// one native function, linking in-trace branch targets with internal jumps so
+/// hot loops stay in compiled code. Returns the code and how many ops were
+/// compiled (the caller ends the block there).
+pub(crate) fn compile_block(ops: &[FastOp], start_pc: u32) -> Option<(Code, usize)> {
+    let op_pc = |i: usize| start_pc.wrapping_add(2 * i as u32);
+
+    // How far the trace compiles: up to the first unsupported op, or through a
+    // terminating unconditional branch.
+    let mut limit = ops.len();
+    for (i, op) in ops.iter().enumerate() {
+        if !supported(*op) {
+            limit = i;
+            break;
+        }
+        if matches!(op, FastOp::Branch { .. }) {
+            limit = i + 1;
+            break;
+        }
+    }
+    if limit == 0 {
+        return None;
+    }
+    let end_pc = op_pc(limit);
+    let in_range = |t: u32| t >= start_pc && t < end_pc && (t.wrapping_sub(start_pc)) & 1 == 0;
+
+    let mut a = Asm::new().ok()?;
+
+    // A dynamic label for each in-range branch target.
+    let mut labels: BTreeMap<u32, DynamicLabel> = BTreeMap::new();
+    for op in &ops[..limit] {
+        let t = match op {
+            FastOp::CondBranch { target, .. } | FastOp::Branch { target } => *target,
+            _ => continue,
+        };
+        if in_range(t) {
+            labels.entry(t).or_insert_with(|| a.new_dynamic_label());
+        }
+    }
+
+    // Basic-block boundaries (for exact per-block budget accounting): the trace
+    // start, every branch target, and the instruction after every branch.
+    let mut boundaries: BTreeSet<u32> = BTreeSet::new();
+    boundaries.insert(start_pc);
+    for &t in labels.keys() {
+        boundaries.insert(t);
+    }
+    for (i, op) in ops[..limit].iter().enumerate() {
+        if matches!(op, FastOp::CondBranch { .. } | FastOp::Branch { .. }) {
+            let after = op_pc(i) + 2;
+            if after < end_pc {
+                boundaries.insert(after);
+            }
+        }
+    }
+    let seg_len = |b: u32| -> u32 {
+        let next = boundaries.range((b + 1)..).next().copied().unwrap_or(end_pc);
+        (next - b) / 2
+    };
+
+    let entry = a.offset();
+    dynasm!(a ; .arch x64 ; push rbx ; mov rbx, rdi);
+
+    let mut ended_unconditional = false;
+    for (i, op) in ops[..limit].iter().enumerate() {
+        let pc = op_pc(i);
+        if let Some(label) = labels.get(&pc) {
+            dynasm!(a ; => *label);
+        }
+        if boundaries.contains(&pc) {
+            let len = seg_len(pc) as i32;
+            // Yield to the dispatcher if the budget is spent; otherwise charge
+            // this block's instructions.
+            dynasm!(a
+                ; mov ecx, [rbx + BUDGET]
+                ; test ecx, ecx
+                ; jg >cont
+                ; mov DWORD [rbx + PC], pc as i32
+                ; mov eax, exit::CONTINUE as i32
+                ; jmp ->epilogue
+                ; cont:
+                ; sub DWORD [rbx + BUDGET], len
+            );
+        }
+        match *op {
+            FastOp::CondBranch { cond, target, next } => {
+                let _ = next;
+                // Single-flag conditions test a CPSR bit inline (mask, take-when-
+                // set); compound ones fall back to the interpreter's cond_met.
+                let single: Option<(u32, bool)> = match cond {
+                    0x0 => Some((1 << 30, true)),  // EQ: Z==1
+                    0x1 => Some((1 << 30, false)), // NE: Z==0
+                    0x2 => Some((1 << 29, true)),  // CS: C==1
+                    0x3 => Some((1 << 29, false)), // CC: C==0
+                    0x4 => Some((1 << 31, true)),  // MI: N==1
+                    0x5 => Some((1 << 31, false)), // PL: N==0
+                    0x6 => Some((1 << 28, true)),  // VS: V==1
+                    0x7 => Some((1 << 28, false)), // VC: V==0
+                    _ => None,
+                };
+                if let Some((mask, take_when_set)) = single {
+                    dynasm!(a ; test DWORD [rbx + CPSR], mask as i32);
+                    // After test, ZF==1 iff the bit is clear.
+                    if in_range(target) {
+                        let l = *labels.get(&target).unwrap();
+                        if take_when_set {
+                            dynasm!(a ; jnz => l);
+                        } else {
+                            dynasm!(a ; jz => l);
+                        }
+                    } else {
+                        // Jump over the taken-exit when the branch is not taken.
+                        if take_when_set {
+                            dynasm!(a ; jz >notaken);
+                        } else {
+                            dynasm!(a ; jnz >notaken);
+                        }
+                        dynasm!(a
+                            ; mov DWORD [rbx + PC], target as i32
+                            ; mov eax, exit::CONTINUE as i32
+                            ; jmp ->epilogue
+                            ; notaken:
+                        );
+                    }
+                } else {
+                    dynasm!(a
+                        ; mov edi, cond as i32
+                        ; mov esi, [rbx + CPSR]
+                        ; mov rax, QWORD jit_cond_met as *const () as i64
+                        ; call rax
+                        ; test eax, eax
+                    );
+                    if in_range(target) {
+                        dynasm!(a ; jnz => *labels.get(&target).unwrap());
+                    } else {
+                        dynasm!(a
+                            ; jz >notaken
+                            ; mov DWORD [rbx + PC], target as i32
+                            ; mov eax, exit::CONTINUE as i32
+                            ; jmp ->epilogue
+                            ; notaken:
+                        );
+                    }
+                }
+            }
+            FastOp::Branch { target } => {
+                if in_range(target) {
+                    dynasm!(a ; jmp => *labels.get(&target).unwrap());
+                } else {
+                    dynasm!(a ; mov DWORD [rbx + PC], target as i32 ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
+                }
+                ended_unconditional = true;
+            }
+            other => {
+                emit_op(&mut a, other, pc);
+            }
+        }
+    }
+
+    if !ended_unconditional {
+        dynasm!(a ; mov DWORD [rbx + PC], end_pc as i32 ; mov eax, exit::CONTINUE as i32);
+    }
+    dynasm!(a ; ->epilogue: ; pop rbx ; ret);
+
+    let buf = a.finalize().ok()?;
+    Some((Code { buf, entry }, limit))
+}
+
+/// Emit one straight-line op (branches are handled by `compile_block`).
+fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
     match op {
         FastOp::AddSubImm { sub, rd, rs, imm } => {
             dynasm!(a ; mov eax, [rbx + ro(rs)]);
@@ -94,7 +243,6 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
             }
             emit_flags_nzcv(a, !sub);
             dynasm!(a ; mov [rbx + ro(rd)], r8d);
-            true
         }
         FastOp::AddSubReg { sub, rd, rs, rn } => {
             dynasm!(a ; mov eax, [rbx + ro(rs)]);
@@ -105,34 +253,29 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
             }
             emit_flags_nzcv(a, !sub);
             dynasm!(a ; mov [rbx + ro(rd)], r8d);
-            true
         }
         FastOp::ImmOp { op, rd, imm } => match op {
             0 => {
                 // MOV: N,Z from imm; C,V preserved.
                 dynasm!(a ; mov eax, imm as i32 ; mov [rbx + ro(rd)], eax ; test eax, eax);
                 emit_flags_nz(a);
-                true
             }
             1 => {
                 // CMP: rd - imm, full NZCV, no writeback.
                 dynasm!(a ; mov eax, [rbx + ro(rd)] ; sub eax, imm as i32);
                 emit_flags_nzcv(a, false);
-                true
             }
             2 => {
                 dynasm!(a ; mov eax, [rbx + ro(rd)] ; add eax, imm as i32);
                 emit_flags_nzcv(a, true);
                 dynasm!(a ; mov [rbx + ro(rd)], r8d);
-                true
             }
             3 => {
                 dynasm!(a ; mov eax, [rbx + ro(rd)] ; sub eax, imm as i32);
                 emit_flags_nzcv(a, false);
                 dynasm!(a ; mov [rbx + ro(rd)], r8d);
-                true
             }
-            _ => false,
+            _ => unreachable!(),
         },
         FastOp::AluOp { op, rd, rs } => emit_alu(a, op, rd, rs),
         FastOp::HiReg { op, crd, crs } => {
@@ -149,28 +292,24 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
                     // ADD (no flags). crd != 15 guaranteed by decode.
                     load_crs(a);
                     dynasm!(a ; add [rbx + ro(crd)], eax);
-                    true
                 }
                 2 => {
                     // MOV (no flags).
                     load_crs(a);
                     dynasm!(a ; mov [rbx + ro(crd)], eax);
-                    true
                 }
                 1 => {
                     // CMP: crd - crs, full NZCV.
                     load_crs(a);
                     dynasm!(a ; mov ecx, [rbx + ro(crd)] ; sub ecx, eax ; mov eax, ecx);
                     emit_flags_nzcv(a, false);
-                    true
                 }
-                _ => false,
+                _ => unreachable!(),
             }
         }
         FastOp::PcLoad { rd, offset } => {
             let addr = pc.wrapping_add(4).wrapping_add(offset * 4) & !3;
             emit_load(a, 32, false, rd, |a| dynasm!(a ; mov esi, addr as i32), pc);
-            true
         }
         FastOp::LoadAddr { sp, rd, imm } => {
             if sp {
@@ -179,7 +318,6 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
                 let v = (pc.wrapping_add(4) & !2).wrapping_add(imm * 4);
                 dynasm!(a ; mov DWORD [rbx + ro(rd)], v as i32);
             }
-            true
         }
         FastOp::SpAdd { sub, imm } => {
             if sub {
@@ -187,7 +325,6 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
             } else {
                 dynasm!(a ; add DWORD [rbx + ro(13)], imm as i32);
             }
-            true
         }
         FastOp::HwXferI { load, rb, rd, offset } => {
             let off = (offset * 2) as i32;
@@ -197,7 +334,6 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
             } else {
                 emit_store(a, 16, rd, addr, pc);
             }
-            true
         }
         FastOp::SingleXferI { load, byte, rb, rd, offset } => {
             let scaled = if byte { offset } else { offset * 4 } as i32;
@@ -208,7 +344,6 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
             } else {
                 emit_store(a, size, rd, addr, pc);
             }
-            true
         }
         FastOp::SpXfer { load, rd, offset } => {
             let addr = move |a: &mut Asm| dynasm!(a ; mov esi, [rbx + ro(13)] ; add esi, offset as i32);
@@ -217,7 +352,6 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
             } else {
                 emit_store(a, 32, rd, addr, pc);
             }
-            true
         }
         FastOp::SingleXferR {
             load,
@@ -233,99 +367,64 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) -> bool {
             } else {
                 emit_store(a, size, rd, addr, pc);
             }
-            true
         }
-        FastOp::CondBranch { cond, target, next } => {
-            // cond_met(cond, cpsr) via a helper (exact interpreter semantics).
-            dynasm!(a
-                ; mov edi, cond as i32
-                ; mov esi, [rbx + CPSR]
-                ; mov rax, QWORD jit_cond_met as *const () as i64
-                ; call rax
-                ; test eax, eax
-                ; mov eax, target as i32       // if taken, PC = target
-                ; mov ecx, next as i32         // else PC = next
-                ; cmovz eax, ecx
-                ; mov [rbx + PC], eax
-                ; mov eax, exit::CONTINUE as i32
-                ; jmp ->epilogue
-            );
-            true
+        FastOp::CondBranch { .. } | FastOp::Branch { .. } | FastOp::Shift { .. } | FastOp::HwSgnXfer { .. } => {
+            unreachable!("handled by compile_block or unsupported")
         }
-        FastOp::Branch { target } => {
-            dynasm!(a
-                ; mov DWORD [rbx + PC], target as i32
-                ; mov eax, exit::CONTINUE as i32
-                ; jmp ->epilogue
-            );
-            true
-        }
-        // Not yet supported: shifts (shifter carry), signed/complex ALU,
-        // signed halfword transfers. End the block; the interpreter handles them.
-        FastOp::Shift { .. } | FastOp::HwSgnXfer { .. } => false,
     }
 }
 
 /// The 16 Thumb data-processing ALU ops. Supports the logical and simple
 /// arithmetic ones; declines carry-in / shift / multiply forms.
-fn emit_alu(a: &mut Asm, op: u8, rd: u8, rs: u8) -> bool {
+fn emit_alu(a: &mut Asm, op: u8, rd: u8, rs: u8) {
     match op {
         0x0 => {
             // AND (N,Z; C,V preserved)
             dynasm!(a ; mov eax, [rbx + ro(rd)] ; and eax, [rbx + ro(rs)] ; mov [rbx + ro(rd)], eax ; test eax, eax);
             emit_flags_nz(a);
-            true
         }
         0x1 => {
             // EOR
             dynasm!(a ; mov eax, [rbx + ro(rd)] ; xor eax, [rbx + ro(rs)] ; mov [rbx + ro(rd)], eax ; test eax, eax);
             emit_flags_nz(a);
-            true
         }
         0xC => {
             // ORR
             dynasm!(a ; mov eax, [rbx + ro(rd)] ; or eax, [rbx + ro(rs)] ; mov [rbx + ro(rd)], eax ; test eax, eax);
             emit_flags_nz(a);
-            true
         }
         0xE => {
             // BIC: rd & !rs
             dynasm!(a ; mov eax, [rbx + ro(rs)] ; not eax ; and eax, [rbx + ro(rd)] ; mov [rbx + ro(rd)], eax ; test eax, eax);
             emit_flags_nz(a);
-            true
         }
         0xF => {
             // MVN: !rs
             dynasm!(a ; mov eax, [rbx + ro(rs)] ; not eax ; mov [rbx + ro(rd)], eax ; test eax, eax);
             emit_flags_nz(a);
-            true
         }
         0x8 => {
             // TST: rd & rs, N,Z only, no writeback
             dynasm!(a ; mov eax, [rbx + ro(rd)] ; and eax, [rbx + ro(rs)] ; test eax, eax);
             emit_flags_nz(a);
-            true
         }
         0xA => {
             // CMP: rd - rs, full NZCV, no writeback
             dynasm!(a ; mov eax, [rbx + ro(rd)] ; sub eax, [rbx + ro(rs)]);
             emit_flags_nzcv(a, false);
-            true
         }
         0xB => {
             // CMN: rd + rs, full NZCV, no writeback
             dynasm!(a ; mov eax, [rbx + ro(rd)] ; add eax, [rbx + ro(rs)]);
             emit_flags_nzcv(a, true);
-            true
         }
         0x9 => {
             // NEG: 0 - rs, full NZCV, writeback
             dynasm!(a ; xor eax, eax ; sub eax, [rbx + ro(rs)]);
             emit_flags_nzcv(a, false);
             dynasm!(a ; mov [rbx + ro(rd)], r8d);
-            true
         }
-        _ => false, // ADC/SBC/MUL/shift-by-reg
+        _ => unreachable!(), // ADC/SBC/MUL/shift-by-reg
     }
 }
 
