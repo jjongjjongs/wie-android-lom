@@ -111,6 +111,58 @@ struct Slot {
     block: Option<CompiledBlock>,
 }
 
+/// Reasons the JIT declines an instruction and falls back to the interpreter,
+/// for the fallback profile. Order matches `FALLBACK_NAMES`.
+const FALLBACK_NAMES: [&str; 12] = [
+    "shift",        // 0: LSL/LSR/ASR immediate
+    "shift-by-reg", // 1: ALU LSL/LSR/ASR/ROR by register
+    "adc",          // 2
+    "sbc",          // 3
+    "mul",          // 4
+    "ldrsb/ldrsh",  // 5: signed halfword transfers
+    "bx/blx",       // 6
+    "push/pop",     // 7
+    "ldm/stm",      // 8
+    "bl/b.w",       // 9: long / wide branches
+    "svc",          // 10
+    "other",        // 11: ARM mode, undefined, hints, …
+];
+
+/// Classify why the instruction at `inst` is not JIT-compilable, as an index
+/// into `FALLBACK_NAMES`.
+fn fallback_category(inst: u16) -> usize {
+    match decode(inst, 0) {
+        Some(Decoded::Straight(op)) | Some(Decoded::Terminator(op)) => match op {
+            FastOp::Shift { .. } => 0,
+            FastOp::AluOp { op, .. } => match op {
+                0x2 | 0x3 | 0x4 | 0x7 => 1,
+                0x5 => 2,
+                0x6 => 3,
+                0xD => 4,
+                _ => 11,
+            },
+            FastOp::HwSgnXfer { .. } => 5,
+            _ => 11,
+        },
+        None => {
+            let i = inst as u32;
+            if i & 0xff00 == 0x4700 {
+                6 // BX/BLX
+            } else if i & 0xf600 == 0xb400 {
+                7 // PUSH/POP
+            } else if i & 0xf000 == 0xc000 {
+                8 // LDMIA/STMIA
+            } else if i & 0xf000 == 0xf000 || i & 0xf800 == 0xe800 {
+                9 // BL / BLX / B.W
+            } else if i & 0xff00 == 0xdf00 {
+                10 // SVC
+            } else {
+                11
+            }
+        }
+    }
+}
+
 pub struct JitEngine {
     cpu: Cpu,
     mem: Box<EmulatedMemory>,
@@ -118,6 +170,10 @@ pub struct JitEngine {
     cache: Box<[Slot; CACHE_SLOTS]>,
     generation: u32,
     code_pages: Box<[bool; 65536]>,
+    /// Per-category count of interpreter fallbacks, and the running total, for
+    /// the periodic fallback profile (see `note_fallback`).
+    fallbacks: [u64; 12],
+    fallback_total: u64,
 }
 
 // The raw pointers in `JitCtx` are refreshed at the start of every `run` and
@@ -134,6 +190,30 @@ impl JitEngine {
             cache: Box::new(core::array::from_fn(|_| Slot::default())),
             generation: 1,
             code_pages: Box::new([false; 65536]),
+            fallbacks: [0; 12],
+            fallback_total: 0,
+        }
+    }
+
+    /// Record an interpreter fallback for the instruction at `pc` and, at coarse
+    /// milestones, log the top reasons so on-device profiling shows which
+    /// instructions to teach the compiler next.
+    fn note_fallback(&mut self, pc: u32) {
+        let inst = self.mem.peek_u16(pc).unwrap_or(0);
+        self.fallbacks[fallback_category(inst)] += 1;
+        self.fallback_total += 1;
+        if self.fallback_total.is_power_of_two() && self.fallback_total >= 1 << 20 {
+            let mut idx: [usize; 12] = core::array::from_fn(|i| i);
+            idx.sort_unstable_by_key(|&i| core::cmp::Reverse(self.fallbacks[i]));
+            let mut top = alloc::string::String::new();
+            for &i in idx.iter().take(6) {
+                if self.fallbacks[i] == 0 {
+                    break;
+                }
+                use core::fmt::Write;
+                let _ = write!(top, "{}={} ", FALLBACK_NAMES[i], self.fallbacks[i]);
+            }
+            tracing::info!("[jit] {} fallbacks; top: {}", self.fallback_total, top.trim_end());
         }
     }
 
@@ -313,6 +393,7 @@ impl ArmEngine for JitEngine {
                 }
             } else {
                 // Fallback: one interpreter step on the real CPU.
+                self.note_fallback(pc);
                 self.store_back(mode);
                 let mut wrapper = self.mem.as_arm32cpu_memory();
                 let ok = self.cpu.step(&mut wrapper);

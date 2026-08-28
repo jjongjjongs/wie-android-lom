@@ -55,11 +55,12 @@ fn supported(op: FastOp) -> bool {
         | FastOp::SingleXferI { .. }
         | FastOp::SpXfer { .. }
         | FastOp::SingleXferR { .. }
+        | FastOp::Shift { .. }
         | FastOp::CondBranch { .. }
         | FastOp::Branch { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9),
-        FastOp::Shift { .. } | FastOp::HwSgnXfer { .. } => false,
+        FastOp::HwSgnXfer { .. } => false,
     }
 }
 
@@ -368,10 +369,68 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
                 emit_store(a, size, rd, addr, pc);
             }
         }
-        FastOp::CondBranch { .. } | FastOp::Branch { .. } | FastOp::Shift { .. } | FastOp::HwSgnXfer { .. } => {
+        FastOp::Shift { op, rd, rs, shift } => emit_shift(a, op, rd, rs, shift),
+        FastOp::CondBranch { .. } | FastOp::Branch { .. } | FastOp::HwSgnXfer { .. } => {
             unreachable!("handled by compile_block or unsupported")
         }
     }
+}
+
+/// Thumb `Shifted` (LSL/LSR/ASR by a 5-bit immediate). Updates N, Z and C
+/// (from the shifted-out bit), preserving V — mirroring `arg_shift`/`arg_shift0`.
+/// The shift amount is a compile-time constant, so each case is specialized.
+fn emit_shift(a: &mut Asm, op: u8, rd: u8, rs: u8, shift: u32) {
+    if shift == 0 {
+        match op {
+            0 => {
+                // LSL #0: value unchanged, C preserved -> only N,Z change.
+                dynasm!(a ; mov eax, [rbx + ro(rs)] ; mov [rbx + ro(rd)], eax ; test eax, eax);
+                emit_flags_nz(a);
+                return;
+            }
+            1 => {
+                // LSR #0 == LSR #32: result 0, C = bit 31.
+                dynasm!(a ; mov eax, [rbx + ro(rs)] ; mov ecx, eax ; shr ecx, 31 ; xor eax, eax);
+            }
+            2 => {
+                // ASR #0 == ASR #32: result = sign-extend, C = bit 31.
+                dynasm!(a ; mov eax, [rbx + ro(rs)] ; mov ecx, eax ; shr ecx, 31 ; sar eax, 31);
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        dynasm!(a ; mov eax, [rbx + ro(rs)] ; mov ecx, eax);
+        match op {
+            0 => dynasm!(a ; shr ecx, (32 - shift) as i8 ; and ecx, 1 ; shl eax, shift as i8),
+            1 => dynasm!(a ; shr ecx, (shift - 1) as i8 ; and ecx, 1 ; shr eax, shift as i8),
+            2 => dynasm!(a ; shr ecx, (shift - 1) as i8 ; and ecx, 1 ; sar eax, shift as i8),
+            _ => unreachable!(),
+        }
+    }
+    // res in eax, carry (0/1) in ecx.
+    dynasm!(a ; mov [rbx + ro(rd)], eax);
+    emit_flags_nzc(a);
+}
+
+/// Pack N, Z (from the result in `eax`) and C (0/1 in `ecx`) into CPSR,
+/// preserving V. The result must already be stored.
+fn emit_flags_nzc(a: &mut Asm) {
+    dynasm!(a
+        ; test eax, eax
+        ; setz r9b
+        ; sets r10b
+        ; movzx r9d, r9b
+        ; movzx r10d, r10b
+        ; shl r10d, 31
+        ; shl r9d, 30
+        ; shl ecx, 29
+        ; or r10d, r9d
+        ; or r10d, ecx
+        ; mov eax, [rbx + CPSR]
+        ; and eax, 0x1fff_ffff  // clear N,Z,C; keep V and mode
+        ; or eax, r10d
+        ; mov [rbx + CPSR], eax
+    );
 }
 
 /// The 16 Thumb data-processing ALU ops. Supports the logical and simple

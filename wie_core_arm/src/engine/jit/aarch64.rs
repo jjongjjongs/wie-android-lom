@@ -71,11 +71,12 @@ fn supported(op: FastOp) -> bool {
         | FastOp::SingleXferI { .. }
         | FastOp::SpXfer { .. }
         | FastOp::SingleXferR { .. }
+        | FastOp::Shift { .. }
         | FastOp::CondBranch { .. }
         | FastOp::Branch { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9),
-        FastOp::Shift { .. } | FastOp::HwSgnXfer { .. } => false,
+        FastOp::HwSgnXfer { .. } => false,
     }
 }
 
@@ -368,10 +369,71 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
                 emit_store(a, size, rd, addr, pc);
             }
         }
-        FastOp::CondBranch { .. } | FastOp::Branch { .. } | FastOp::Shift { .. } | FastOp::HwSgnXfer { .. } => {
+        FastOp::Shift { op, rd, rs, shift } => emit_shift(a, op, rd, rs, shift),
+        FastOp::CondBranch { .. } | FastOp::Branch { .. } | FastOp::HwSgnXfer { .. } => {
             unreachable!("handled by compile_block or unsupported")
         }
     }
+}
+
+/// Thumb `Shifted` (LSL/LSR/ASR by a 5-bit immediate). Updates N, Z and C,
+/// preserving V; the shift amount is a compile-time constant.
+fn emit_shift(a: &mut Asm, op: u8, rd: u8, rs: u8, shift: u32) {
+    if shift == 0 {
+        match op {
+            0 => {
+                // LSL #0: unchanged, C preserved -> only N,Z change.
+                a64!(a ; ldr w8, [x19, #ro(rs)] ; str w8, [x19, #ro(rd)]);
+                emit_flags_nz(a);
+                return;
+            }
+            1 => {
+                // LSR #32: result 0, C = bit 31.
+                a64!(a ; ldr w2, [x19, #ro(rs)] ; ubfx w1, w2, #31, #1 ; mov w0, wzr);
+            }
+            2 => {
+                // ASR #32: sign-extend, C = bit 31.
+                a64!(a ; ldr w2, [x19, #ro(rs)] ; ubfx w1, w2, #31, #1 ; asr w0, w2, #31);
+            }
+            _ => unreachable!(),
+        }
+    } else {
+        a64!(a ; ldr w2, [x19, #ro(rs)]);
+        match op {
+            0 => {
+                let lsb = 32 - shift;
+                a64!(a ; lsl w0, w2, #shift ; ubfx w1, w2, #lsb, #1);
+            }
+            1 => {
+                let lsb = shift - 1;
+                a64!(a ; lsr w0, w2, #shift ; ubfx w1, w2, #lsb, #1);
+            }
+            2 => {
+                let lsb = shift - 1;
+                a64!(a ; asr w0, w2, #shift ; ubfx w1, w2, #lsb, #1);
+            }
+            _ => unreachable!(),
+        }
+    }
+    // res in w0, carry (0/1) in w1.
+    a64!(a ; str w0, [x19, #ro(rd)]);
+    emit_flags_nzc(a);
+}
+
+/// Pack N, Z (from the result in `w0`) and C (0/1 in `w1`) into CPSR, preserving
+/// V. The result must already be stored.
+fn emit_flags_nzc(a: &mut Asm) {
+    a64!(a
+        ; tst w0, w0
+        ; cset w9, eq
+        ; cset w10, mi
+        ; ldr w13, [x19, #CPSR]
+        ; and w13, w13, #0x1fff_ffff
+        ; orr w13, w13, w10, lsl #31
+        ; orr w13, w13, w9, lsl #30
+        ; orr w13, w13, w1, lsl #29
+        ; str w13, [x19, #CPSR]
+    );
 }
 
 fn emit_alu(a: &mut Asm, op: u8, rd: u8, rs: u8) {
