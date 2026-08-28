@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Enable the machine-code JIT engine (see wie_core_arm).
+jit = ["wie_core_arm/jit"]
+
 [dependencies]
 async-recursion = { workspace = true }
 async-trait = { workspace = true }

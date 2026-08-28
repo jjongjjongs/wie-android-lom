@@ -93,6 +93,10 @@ tasks.register('cargoBuild', Exec) {
     def args = ['cargo', 'ndk', '-o', jniLibsDir.absolutePath]
     abis.each { args += ['-t', it] }
     args += ['build', "--${profile}", '-p', 'wie_android', '-p', 'wie_midi']
+    // Opt in to the machine-code JIT engine with `-PenableJit`.
+    if (project.hasProperty('enableJit')) {
+        args += ['--features', 'wie_android/jit']
+    }
 
     commandLine args
 

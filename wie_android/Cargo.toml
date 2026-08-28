@@ -7,6 +7,10 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Enable the machine-code JIT engine (see wie_core_arm).
+jit = ["wie_ktf/jit", "wie_lgt/jit"]
+
 [dependencies]
 async-trait = { workspace = true }
 md5 = { workspace = true, features = ["std"] }
