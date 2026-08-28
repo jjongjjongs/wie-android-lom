@@ -1,4 +1,6 @@
 mod arm32_cpu;
+#[cfg(test)]
+mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 mod debugged_arm32_cpu;
 
