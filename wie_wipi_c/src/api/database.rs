@@ -93,9 +93,7 @@ impl LgtDatabaseMetadata {
             return None;
         }
 
-        let word = |offset: usize| -> u32 {
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
-        };
+        let word = |offset: usize| -> u32 { u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) };
 
         if word(0) != LGT_METADATA_MAGIC || word(4) != LGT_METADATA_VERSION {
             return None;
@@ -237,16 +235,8 @@ pub async fn open_database(context: &mut dyn WIPICContext, ptr_name: WIPICWord, 
 /// reproduce the externally visible existence/create behaviour and then use
 /// the existing WIE database handle implementation. Native fixed-record
 /// metadata is persisted in the reserved LGT metadata record described below.
-pub async fn open_database_lgt(
-    context: &mut dyn WIPICContext,
-    ptr_name: WIPICWord,
-    record_size: i32,
-    create: i32,
-    access: i32,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_dbOpenDataBase({ptr_name:#x}, record_size={record_size}, create={create}, access={access})"
-    );
+pub async fn open_database_lgt(context: &mut dyn WIPICContext, ptr_name: WIPICWord, record_size: i32, create: i32, access: i32) -> Result<i32> {
+    tracing::debug!("MC_dbOpenDataBase({ptr_name:#x}, record_size={record_size}, create={create}, access={access})");
 
     if ptr_name == 0 {
         return Ok(-9);
@@ -276,11 +266,7 @@ pub async fn open_database_lgt(
     let packaged = read_packaged_database(context, &name).await?;
     let system = context.system();
     let pid = system.pid().to_owned();
-    let exists = system
-        .platform()
-        .database_repository()
-        .exists(&name, &pid)
-        .await;
+    let exists = system.platform().database_repository().exists(&name, &pid).await;
 
     if !exists && packaged.is_none() {
         if create == 0 {
@@ -291,11 +277,7 @@ pub async fn open_database_lgt(
             // Native MC_fsOpen mode 8 first opens read/write and, on ENOENT,
             // retries with O_RDWR | O_CREAT.  Opening the WIE repository is
             // the logical equivalent of materializing that backing store.
-            system
-                .platform()
-                .database_repository()
-                .open(&name, &pid)
-                .await;
+            system.platform().database_repository().open(&name, &pid).await;
         }
     }
 
@@ -304,11 +286,7 @@ pub async fn open_database_lgt(
     // 0. Once present, persisted metadata wins over a later caller-supplied
     // record_size, matching native reopen semantics.
     {
-        let mut repository_db = system
-            .platform()
-            .database_repository()
-            .open(&name, &pid)
-            .await;
+        let mut repository_db = system.platform().database_repository().open(&name, &pid).await;
 
         if load_lgt_metadata(repository_db.as_mut()).await.is_none() {
             let effective_record_size = if record_size > 0 {
@@ -339,11 +317,7 @@ pub async fn open_database_lgt(
                     .collect();
                 positive_ids.sort_unstable();
 
-                let next_record_id = positive_ids
-                    .last()
-                    .copied()
-                    .and_then(|id| id.checked_add(1))
-                    .unwrap_or(1);
+                let next_record_id = positive_ids.last().copied().and_then(|id| id.checked_add(1)).unwrap_or(1);
 
                 let mut metadata = LgtDatabaseMetadata::new(effective_record_size);
                 metadata.next_record_id = next_record_id;
@@ -390,10 +364,7 @@ pub async fn open_database_lgt(
 /// WIE repository keys are UTF-8 strings, so invalid UTF-8 is rejected with
 /// the established database-name adaptation (-22) after the native byte-length
 /// validation.
-pub async fn get_access_mode_lgt(
-    context: &mut dyn WIPICContext,
-    ptr_name: WIPICWord,
-) -> Result<i32> {
+pub async fn get_access_mode_lgt(context: &mut dyn WIPICContext, ptr_name: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_dbGetAccessMode({ptr_name:#x}) [LGT]");
 
     if ptr_name == 0 {
@@ -419,12 +390,7 @@ pub async fn get_access_mode_lgt(
     let system = context.system();
     let pid = system.pid().to_owned();
 
-    if system
-        .platform()
-        .database_repository()
-        .exists(&name, &pid)
-        .await
-    {
+    if system.platform().database_repository().exists(&name, &pid).await {
         Ok(1)
     } else {
         Ok(-12)
@@ -445,10 +411,7 @@ pub async fn get_access_mode_lgt(
 /// Preserve the native raw 32-bit return semantics with a bit-preserving
 /// `u32 -> i32` cast, including malformed/wrapped states such as
 /// `active_count == 0xffff_ffff` returning -1.
-pub async fn get_number_of_records_lgt(
-    context: &mut dyn WIPICContext,
-    db_id: i32,
-) -> Result<i32> {
+pub async fn get_number_of_records_lgt(context: &mut dyn WIPICContext, db_id: i32) -> Result<i32> {
     tracing::debug!("MC_dbGetNumberOfRecords({db_id:#x}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
@@ -488,10 +451,7 @@ pub async fn get_number_of_records_lgt(
 ///
 /// Preserve the native raw 32-bit return semantics with a bit-preserving
 /// `u32 -> i32` cast.
-pub async fn get_record_size_lgt(
-    context: &mut dyn WIPICContext,
-    db_id: i32,
-) -> Result<i32> {
+pub async fn get_record_size_lgt(context: &mut dyn WIPICContext, db_id: i32) -> Result<i32> {
     tracing::debug!("MC_dbGetRecordSize({db_id:#x}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
@@ -538,11 +498,7 @@ pub async fn get_record_size_lgt(
 ///
 /// Repository names are UTF-8 host strings. Their byte lengths are used for
 /// native capacity accounting because the WIPI-C output itself is byte-based.
-pub async fn list_databases_lgt(
-    context: &mut dyn WIPICContext,
-    output: WIPICWord,
-    capacity: i32,
-) -> Result<i32> {
+pub async fn list_databases_lgt(context: &mut dyn WIPICContext, output: WIPICWord, capacity: i32) -> Result<i32> {
     tracing::debug!("MC_dbListDataBases({output:#x}, {capacity}) [LGT]");
 
     if output == 0 || capacity <= 0 {
@@ -557,10 +513,7 @@ pub async fn list_databases_lgt(
     let mut cleared = 0usize;
     while cleared < capacity {
         let chunk_size = (capacity - cleared).min(zeroes.len());
-        context.write_bytes(
-            output.wrapping_add(cleared as u32),
-            &zeroes[..chunk_size],
-        )?;
+        context.write_bytes(output.wrapping_add(cleared as u32), &zeroes[..chunk_size])?;
         cleared += chunk_size;
     }
 
@@ -626,15 +579,8 @@ pub async fn list_databases_lgt(
 /// - short input is zero-padded to exactly the fixed record size;
 /// - success returns the allocated positive record id;
 /// - persistence failures collapse to -1.
-pub async fn insert_record_lgt(
-    context: &mut dyn WIPICContext,
-    db_id: i32,
-    buf_ptr: WIPICWord,
-    buf_len: i32,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_dbInsertRecord({db_id:#x}, {buf_ptr:#x}, {buf_len}) [LGT]"
-    );
+pub async fn insert_record_lgt(context: &mut dyn WIPICContext, db_id: i32, buf_ptr: WIPICWord, buf_len: i32) -> Result<i32> {
+    tracing::debug!("MC_dbInsertRecord({db_id:#x}, {buf_ptr:#x}, {buf_len}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
         return Ok(-2);
@@ -731,15 +677,8 @@ pub async fn insert_record_lgt(
 /// two are equal. Normally the earlier `capacity < active_count` guard makes
 /// that irrelevant, but preserving it matters for malformed/internally
 /// inconsistent metadata and for the record-id-zero underflow quirk.
-pub async fn list_records_lgt(
-    context: &mut dyn WIPICContext,
-    db_id: i32,
-    buf_ptr: WIPICWord,
-    capacity: i32,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_dbListRecords({db_id:#x}, {buf_ptr:#x}, {capacity}) [LGT]"
-    );
+pub async fn list_records_lgt(context: &mut dyn WIPICContext, db_id: i32, buf_ptr: WIPICWord, capacity: i32) -> Result<i32> {
+    tracing::debug!("MC_dbListRecords({db_id:#x}, {buf_ptr:#x}, {capacity}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
         return Ok(-2);
@@ -772,10 +711,7 @@ pub async fn list_records_lgt(
     let mut record_id: i32 = 1;
 
     while record_id < next_record_id {
-        let is_free = metadata
-            .free_ids
-            .iter()
-            .any(|&id| id == record_id as u32);
+        let is_free = metadata.free_ids.iter().any(|&id| id == record_id as u32);
 
         if !is_free {
             // Exact native quirk: BLT, not BLE. Therefore capacity == written
@@ -836,9 +772,7 @@ pub async fn sort_records_lgt(
     comparator: WIPICWord,
     filter: WIPICWord,
 ) -> Result<i32> {
-    tracing::debug!(
-        "MC_dbSortRecords({db_id:#x}, {buf_ptr:#x}, {capacity}, {comparator:#x}, {filter:#x}) [LGT]"
-    );
+    tracing::debug!("MC_dbSortRecords({db_id:#x}, {buf_ptr:#x}, {capacity}, {comparator:#x}, {filter:#x}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
         return Ok(-2);
@@ -875,11 +809,7 @@ pub async fn sort_records_lgt(
     if next_record_id > 1 {
         let mut record_id = 1i32;
         while record_id < next_record_id {
-            if !metadata
-                .free_ids
-                .iter()
-                .any(|&free_id| free_id == record_id as u32)
-            {
+            if !metadata.free_ids.iter().any(|&free_id| free_id == record_id as u32) {
                 record_ids.push(record_id as u32);
             }
             record_id = record_id.wrapping_add(1);
@@ -957,9 +887,7 @@ pub async fn sort_records_lgt(
                     ptr
                 };
 
-                let value = context
-                    .call_function(comparator, &[existing_ptr, candidate_ptr])
-                    .await? as i32;
+                let value = context.call_function(comparator, &[existing_ptr, candidate_ptr]).await? as i32;
 
                 if existing_ptr != 0 {
                     context.free_raw(existing_ptr, metadata.record_size)?;
@@ -1015,11 +943,7 @@ pub async fn sort_records_lgt(
 /// The native implementation also refreshes its internal modification timestamp.
 /// As with `MC_dbUpdateRecord`, that header field is not exposed by the audited DB
 /// exports, so the repository adaptation keeps the existing metadata format.
-pub async fn delete_record_lgt(
-    context: &mut dyn WIPICContext,
-    db_id: i32,
-    rec_id: i32,
-) -> Result<i32> {
+pub async fn delete_record_lgt(context: &mut dyn WIPICContext, db_id: i32, rec_id: i32) -> Result<i32> {
     tracing::debug!("MC_dbDeleteRecord({db_id:#x}, {rec_id}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
@@ -1080,16 +1004,8 @@ pub async fn delete_record_lgt(
 /// `.idx` header. No exported DB operation inspected so far exposes that field,
 /// so the WIE repository adaptation intentionally does not widen the existing
 /// persistent metadata format solely for this inert native bookkeeping field.
-pub async fn update_record_lgt(
-    context: &mut dyn WIPICContext,
-    db_id: i32,
-    rec_id: i32,
-    buf_ptr: WIPICWord,
-    buf_len: i32,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_dbUpdateRecord({db_id:#x}, {rec_id}, {buf_ptr:#x}, {buf_len}) [LGT]"
-    );
+pub async fn update_record_lgt(context: &mut dyn WIPICContext, db_id: i32, rec_id: i32, buf_ptr: WIPICWord, buf_len: i32) -> Result<i32> {
+    tracing::debug!("MC_dbUpdateRecord({db_id:#x}, {rec_id}, {buf_ptr:#x}, {buf_len}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
         return Ok(-2);
@@ -1144,16 +1060,8 @@ pub async fn update_record_lgt(
     Ok(0)
 }
 
-pub async fn select_record_lgt(
-    context: &mut dyn WIPICContext,
-    db_id: i32,
-    rec_id: i32,
-    buf_ptr: WIPICWord,
-    buf_len: i32,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_dbSelectRecord({db_id:#x}, {rec_id}, {buf_ptr:#x}, {buf_len}) [LGT]"
-    );
+pub async fn select_record_lgt(context: &mut dyn WIPICContext, db_id: i32, rec_id: i32, buf_ptr: WIPICWord, buf_len: i32) -> Result<i32> {
+    tracing::debug!("MC_dbSelectRecord({db_id:#x}, {rec_id}, {buf_ptr:#x}, {buf_len}) [LGT]");
 
     let Some(handle) = load_handle(context, db_id)? else {
         return Ok(-2);
@@ -1188,9 +1096,7 @@ pub async fn select_record_lgt(
     // Native has no explicit lower-bound test. For the ordinary zero/negative
     // ids, `(record_id - 1) * record_size` produces a negative SEEK_SET offset
     // and MC_fsSeek fails; preserve that externally visible result.
-    let byte_offset = rec_id
-        .wrapping_sub(1)
-        .wrapping_mul(metadata.record_size as i32);
+    let byte_offset = rec_id.wrapping_sub(1).wrapping_mul(metadata.record_size as i32);
     if byte_offset < 0 {
         return Ok(-1);
     }
@@ -1516,11 +1422,7 @@ pub async fn delete_record_ktf(context: &mut dyn WIPICContext, a0: i32, a1: i32)
 /// `.db` / `.idx` files, so repository deletion is the corresponding atomic
 /// operation. Open handles are deliberately not invalidated here: the native
 /// function performs no database-handle lookup before unlinking its files.
-pub async fn delete_database_lgt(
-    context: &mut dyn WIPICContext,
-    ptr_name: WIPICWord,
-    access: i32,
-) -> Result<i32> {
+pub async fn delete_database_lgt(context: &mut dyn WIPICContext, ptr_name: WIPICWord, access: i32) -> Result<i32> {
     tracing::debug!("MC_dbDeleteDataBase({ptr_name:#x}, access={access}) [LGT]");
 
     if ptr_name == 0 {
@@ -1540,21 +1442,11 @@ pub async fn delete_database_lgt(
     let system = context.system();
     let pid = system.pid().to_owned();
 
-    if !system
-        .platform()
-        .database_repository()
-        .exists(&name, &pid)
-        .await
-    {
+    if !system.platform().database_repository().exists(&name, &pid).await {
         return Ok(-1);
     }
 
-    if system
-        .platform()
-        .database_repository()
-        .delete(&name, &pid)
-        .await
-    {
+    if system.platform().database_repository().delete(&name, &pid).await {
         Ok(0)
     } else {
         Ok(-1)
@@ -1815,13 +1707,10 @@ mod tests {
     use crate::context::test::TestContext;
 
     use super::{
-        LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt,
-        exists_database, get_access_mode_lgt, get_number_of_records_lgt, get_record_size_lgt,
-        insert_record_lgt, list_databases_lgt, list_record_info, list_records_lgt, load_handle,
-        load_lgt_metadata, open_database,
-        open_database_lgt, open_db_for_handle,
-        select_record, select_record_lgt, sort_records_lgt, store_lgt_metadata, stream_read,
-        stream_write, update_record, update_record_lgt,
+        LgtDatabaseMetadata, close_database_lgt, delete_database, delete_database_lgt, delete_record_lgt, exists_database, get_access_mode_lgt,
+        get_number_of_records_lgt, get_record_size_lgt, insert_record_lgt, list_databases_lgt, list_record_info, list_records_lgt, load_handle,
+        load_lgt_metadata, open_database, open_database_lgt, open_db_for_handle, select_record, select_record_lgt, sort_records_lgt,
+        store_lgt_metadata, stream_read, stream_write, update_record, update_record_lgt,
     };
 
     #[futures_test::test]
@@ -1830,26 +1719,17 @@ mod tests {
 
         let mut context = database_test_context();
 
-        assert_eq!(
-            get_access_mode_lgt(&mut context, 0).await.unwrap(),
-            -9
-        );
+        assert_eq!(get_access_mode_lgt(&mut context, 0).await.unwrap(), -9);
 
         let long_name = alloc::vec![b'a'; 124];
         context.write_bytes(NAME, &long_name).unwrap();
         context.write_bytes(NAME + 124, &[0]).unwrap();
 
-        assert_eq!(
-            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
-            -9
-        );
+        assert_eq!(get_access_mode_lgt(&mut context, NAME).await.unwrap(), -9);
 
         context.write_bytes(NAME, b"missing\0").unwrap();
 
-        assert_eq!(
-            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
-            -12
-        );
+        assert_eq!(get_access_mode_lgt(&mut context, NAME).await.unwrap(), -12);
     }
 
     #[futures_test::test]
@@ -1862,25 +1742,14 @@ mod tests {
         // The WIE repository collapses native access namespaces 1/2/3.
         // Create through access 3 to make that adaptation explicit:
         // MC_dbGetAccessMode still returns native first-match selector 1.
-        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 3)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 3).await.unwrap();
         assert!(db_id > 0);
 
-        assert_eq!(
-            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
-            1
-        );
+        assert_eq!(get_access_mode_lgt(&mut context, NAME).await.unwrap(), 1);
 
-        assert_eq!(
-            close_database_lgt(&mut context, db_id).await.unwrap(),
-            0
-        );
+        assert_eq!(close_database_lgt(&mut context, db_id).await.unwrap(), 0);
 
-        assert_eq!(
-            get_access_mode_lgt(&mut context, NAME).await.unwrap(),
-            1
-        );
+        assert_eq!(get_access_mode_lgt(&mut context, NAME).await.unwrap(), 1);
     }
 
     #[futures_test::test]
@@ -1889,38 +1758,19 @@ mod tests {
 
         let mut context = database_test_context();
 
-        assert_eq!(
-            list_databases_lgt(&mut context, 0, 16).await.unwrap(),
-            -9
-        );
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, 0).await.unwrap(),
-            -9
-        );
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, -1).await.unwrap(),
-            -9
-        );
+        assert_eq!(list_databases_lgt(&mut context, 0, 16).await.unwrap(), -9);
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, 0).await.unwrap(), -9);
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, -1).await.unwrap(), -9);
 
         context.write_bytes(OUTPUT, &[0xcc; 2]).unwrap();
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, 1)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, 1).await.unwrap(), -18);
 
         let mut one = [0u8; 1];
         context.read_bytes(OUTPUT, &mut one).unwrap();
         assert_eq!(one, [0]);
 
         context.write_bytes(OUTPUT, &[0xcc; 2]).unwrap();
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, 2)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, 2).await.unwrap(), 0);
 
         let mut two = [0u8; 2];
         context.read_bytes(OUTPUT, &mut two).unwrap();
@@ -1935,32 +1785,20 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(NAME, b"a\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
         // Native charges strlen("a.db") + 1 plus one namespace terminator:
         // 5 + 1 = 6 bytes, although the emitted "a\0\0" occupies only 3.
         context.write_bytes(OUTPUT, &[0xcc; 5]).unwrap();
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, 5)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, 5).await.unwrap(), -18);
 
         let mut short = [0u8; 5];
         context.read_bytes(OUTPUT, &mut short).unwrap();
         assert_eq!(short, [0; 5]);
 
         context.write_bytes(OUTPUT, &[0xcc; 6]).unwrap();
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, 6)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, 6).await.unwrap(), 1);
 
         let mut exact = [0u8; 6];
         context.read_bytes(OUTPUT, &mut exact).unwrap();
@@ -1976,27 +1814,18 @@ mod tests {
         let mut context = database_test_context();
 
         context.write_bytes(NAME, b"long\0").unwrap();
-        let long_id = open_database_lgt(&mut context, NAME, 4, 1, 3)
-            .await
-            .unwrap();
+        let long_id = open_database_lgt(&mut context, NAME, 4, 1, 3).await.unwrap();
         assert!(long_id > 0);
 
         context.write_bytes(NAME, b"a\0").unwrap();
-        let a_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
-            .await
-            .unwrap();
+        let a_id = open_database_lgt(&mut context, NAME, 4, 1, 1).await.unwrap();
         assert!(a_id > 0);
 
         // WIE has one representable namespace, so access 3 above must not
         // duplicate "long". Required native-style capacity is:
         // 1 + (strlen("a") + 4) + (strlen("long") + 4) = 14.
         context.write_bytes(OUTPUT, &[0xcc; 14]).unwrap();
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, 14)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, 14).await.unwrap(), 2);
 
         let mut actual = [0u8; 14];
         context.read_bytes(OUTPUT, &mut actual).unwrap();
@@ -2012,15 +1841,11 @@ mod tests {
         let mut context = database_test_context();
 
         context.write_bytes(NAME, b"parent/child\0").unwrap();
-        let nested_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
-            .await
-            .unwrap();
+        let nested_id = open_database_lgt(&mut context, NAME, 4, 1, 1).await.unwrap();
         assert!(nested_id > 0);
 
         context.write_bytes(NAME, b"root\0").unwrap();
-        let root_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
-            .await
-            .unwrap();
+        let root_id = open_database_lgt(&mut context, NAME, 4, 1, 1).await.unwrap();
         assert!(root_id > 0);
 
         // Native MC_dbListDataBases scans "/" only. "parent/child.db"
@@ -2028,12 +1853,7 @@ mod tests {
         // "root.db" is charged as strlen("root.db") + 1, plus the
         // namespace terminator: 8 + 1 + 1 = 10.
         context.write_bytes(OUTPUT, &[0xcc; 10]).unwrap();
-        assert_eq!(
-            list_databases_lgt(&mut context, OUTPUT, 10)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(list_databases_lgt(&mut context, OUTPUT, 10).await.unwrap(), 1);
 
         let mut actual = [0u8; 10];
         context.read_bytes(OUTPUT, &mut actual).unwrap();
@@ -2048,42 +1868,23 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(NAME, b"records\0").unwrap();
 
-        assert_eq!(
-            get_record_size_lgt(&mut context, 0x1234).await.unwrap(),
-            -2
-        );
+        assert_eq!(get_record_size_lgt(&mut context, 0x1234).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, NAME, 12, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, NAME, 12, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
-        assert_eq!(
-            get_record_size_lgt(&mut context, db_id).await.unwrap(),
-            12
-        );
+        assert_eq!(get_record_size_lgt(&mut context, db_id).await.unwrap(), 12);
 
-        assert_eq!(
-            close_database_lgt(&mut context, db_id).await.unwrap(),
-            0
-        );
+        assert_eq!(close_database_lgt(&mut context, db_id).await.unwrap(), 0);
 
-        assert_eq!(
-            get_record_size_lgt(&mut context, db_id).await.unwrap(),
-            -2
-        );
+        assert_eq!(get_record_size_lgt(&mut context, db_id).await.unwrap(), -2);
 
         // Native reopen loads record size from the persisted `.idx` header;
         // the later caller-supplied value does not replace it.
-        let reopened = open_database_lgt(&mut context, NAME, 99, 0, 1)
-            .await
-            .unwrap();
+        let reopened = open_database_lgt(&mut context, NAME, 99, 0, 1).await.unwrap();
         assert!(reopened > 0);
 
-        assert_eq!(
-            get_record_size_lgt(&mut context, reopened).await.unwrap(),
-            12
-        );
+        assert_eq!(get_record_size_lgt(&mut context, reopened).await.unwrap(), 12);
     }
 
     #[futures_test::test]
@@ -2097,9 +1898,7 @@ mod tests {
         // creation path cannot directly create a negative/raw-high-bit value.
         // Mutate only the persisted LGT metadata to verify the getter's native
         // bit-preserving LDR semantics independently of open validation.
-        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
@@ -2108,10 +1907,7 @@ mod tests {
         metadata.record_size = 0xffff_ffff;
         assert!(store_lgt_metadata(repository_db.as_mut(), &metadata).await);
 
-        assert_eq!(
-            get_record_size_lgt(&mut context, db_id).await.unwrap(),
-            -1
-        );
+        assert_eq!(get_record_size_lgt(&mut context, db_id).await.unwrap(), -1);
     }
 
     #[futures_test::test]
@@ -2123,84 +1919,30 @@ mod tests {
         context.write_bytes(NAME, b"records\0").unwrap();
         context.write_bytes(DATA, &[1, 2, 3, 4]).unwrap();
 
-        assert_eq!(
-            get_number_of_records_lgt(&mut context, 0x1234)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(get_number_of_records_lgt(&mut context, 0x1234).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
-        assert_eq!(
-            get_number_of_records_lgt(&mut context, db_id)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_number_of_records_lgt(&mut context, db_id).await.unwrap(), 0);
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, DATA, 4)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, DATA, 4)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, DATA, 4).await.unwrap(), 1);
+        assert_eq!(insert_record_lgt(&mut context, db_id, DATA, 4).await.unwrap(), 2);
 
-        assert_eq!(
-            get_number_of_records_lgt(&mut context, db_id)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(get_number_of_records_lgt(&mut context, db_id).await.unwrap(), 2);
 
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 1)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 1).await.unwrap(), 0);
 
-        assert_eq!(
-            get_number_of_records_lgt(&mut context, db_id)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(get_number_of_records_lgt(&mut context, db_id).await.unwrap(), 1);
 
-        assert_eq!(
-            close_database_lgt(&mut context, db_id)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(close_database_lgt(&mut context, db_id).await.unwrap(), 0);
 
-        assert_eq!(
-            get_number_of_records_lgt(&mut context, db_id)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(get_number_of_records_lgt(&mut context, db_id).await.unwrap(), -2);
 
-        let reopened = open_database_lgt(&mut context, NAME, 99, 0, 1)
-            .await
-            .unwrap();
+        let reopened = open_database_lgt(&mut context, NAME, 99, 0, 1).await.unwrap();
         assert!(reopened > 0);
 
-        assert_eq!(
-            get_number_of_records_lgt(&mut context, reopened)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(get_number_of_records_lgt(&mut context, reopened).await.unwrap(), 1);
     }
 
     #[futures_test::test]
@@ -2210,27 +1952,15 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(NAME, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, NAME, 4, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
         // Native MC_dbDeleteRecord accepts id 0 while next_record_id > 0
         // and decrements the unsigned active-count field from 0 to
         // 0xffff_ffff. MC_dbGetNumberOfRecords simply LDRs that field.
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 0)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 0).await.unwrap(), 0);
 
-        assert_eq!(
-            get_number_of_records_lgt(&mut context, db_id)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(get_number_of_records_lgt(&mut context, db_id).await.unwrap(), -1);
     }
 
     #[futures_test::test]
@@ -2238,38 +1968,16 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, 0x1234, 0x2000, 4)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(insert_record_lgt(&mut context, 0x1234, 0x2000, 4).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0, 4)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2000, 0)
-                .await
-                .unwrap(),
-            -9
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0, 4).await.unwrap(), -9);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2000, 0).await.unwrap(), -9);
 
         context.write_bytes(0x2000, &[1, 2, 3, 4, 5]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2000, 5)
-                .await
-                .unwrap(),
-            -21
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2000, 5).await.unwrap(), -21);
     }
 
     #[futures_test::test]
@@ -2277,37 +1985,19 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 8, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 8, 1, 1).await.unwrap();
         context.write_bytes(0x2000, &[1, 2, 3]).unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2000, 3)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2000, 3).await.unwrap(), 1);
 
         context.write_bytes(0x2010, &[4, 5, 6, 7, 8, 9, 10, 11]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2010, 8)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2010, 8).await.unwrap(), 2);
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         let mut db = open_db_for_handle(&mut context, &handle).await.unwrap();
 
-        assert_eq!(
-            db.get(1).await.unwrap(),
-            vec![1, 2, 3, 0, 0, 0, 0, 0]
-        );
-        assert_eq!(
-            db.get(2).await.unwrap(),
-            vec![4, 5, 6, 7, 8, 9, 10, 11]
-        );
+        assert_eq!(db.get(1).await.unwrap(), vec![1, 2, 3, 0, 0, 0, 0, 0]);
+        assert_eq!(db.get(2).await.unwrap(), vec![4, 5, 6, 7, 8, 9, 10, 11]);
 
         let metadata = load_lgt_metadata(db.as_mut()).await.unwrap();
         assert_eq!(metadata.record_size, 8);
@@ -2321,9 +2011,7 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         {
@@ -2339,31 +2027,14 @@ mod tests {
 
         context.write_bytes(0x2000, &[9, 8, 7, 6]).unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2000, 4)
-                .await
-                .unwrap(),
-            5
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2000, 4)
-                .await
-                .unwrap(),
-            4
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2000, 4).await.unwrap(), 5);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2000, 4).await.unwrap(), 4);
 
         assert_eq!(close_database_lgt(&mut context, db_id).await.unwrap(), 0);
 
-        let reopened = open_database_lgt(&mut context, 0x1000, 99, 1, 1)
-            .await
-            .unwrap();
+        let reopened = open_database_lgt(&mut context, 0x1000, 99, 1, 1).await.unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, reopened, 0x2000, 4)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, reopened, 0x2000, 4).await.unwrap(), 2);
 
         let handle = load_handle(&mut context, reopened).unwrap().unwrap();
         let mut db = open_db_for_handle(&mut context, &handle).await.unwrap();
@@ -2380,58 +2051,21 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            list_records_lgt(&mut context, 0x1234, 0x3000, 4)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(list_records_lgt(&mut context, 0x1234, 0x3000, 4).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
-        assert_eq!(
-            list_records_lgt(&mut context, db_id, 0, 4)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            list_records_lgt(&mut context, db_id, 0x3000, 0)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            list_records_lgt(&mut context, db_id, 0x3000, -1)
-                .await
-                .unwrap(),
-            -9
-        );
+        assert_eq!(list_records_lgt(&mut context, db_id, 0, 4).await.unwrap(), -9);
+        assert_eq!(list_records_lgt(&mut context, db_id, 0x3000, 0).await.unwrap(), -9);
+        assert_eq!(list_records_lgt(&mut context, db_id, 0x3000, -1).await.unwrap(), -9);
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
         context.write_bytes(0x2110, &[5, 6, 7, 8]).unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2110, 4)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2110, 4).await.unwrap(), 2);
 
-        assert_eq!(
-            list_records_lgt(&mut context, db_id, 0x3000, 1)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(list_records_lgt(&mut context, db_id, 0x3000, 1).await.unwrap(), -18);
     }
 
     #[futures_test::test]
@@ -2439,14 +2073,11 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         {
-            let mut repository_db =
-                open_db_for_handle(&mut context, &handle).await.unwrap();
+            let mut repository_db = open_db_for_handle(&mut context, &handle).await.unwrap();
 
             let metadata = LgtDatabaseMetadata {
                 record_size: 4,
@@ -2464,28 +2095,14 @@ mod tests {
 
         context.write_bytes(0x3000, &[0xaa; 20]).unwrap();
 
-        assert_eq!(
-            list_records_lgt(&mut context, db_id, 0x3000, 3)
-                .await
-                .unwrap(),
-            3
-        );
+        assert_eq!(list_records_lgt(&mut context, db_id, 0x3000, 3).await.unwrap(), 3);
 
         let mut out = [0u8; 20];
         context.read_bytes(0x3000, &mut out).unwrap();
 
-        assert_eq!(
-            u32::from_le_bytes(out[0..4].try_into().unwrap()),
-            1
-        );
-        assert_eq!(
-            u32::from_le_bytes(out[4..8].try_into().unwrap()),
-            3
-        );
-        assert_eq!(
-            u32::from_le_bytes(out[8..12].try_into().unwrap()),
-            5
-        );
+        assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(out[8..12].try_into().unwrap()), 5);
         assert_eq!(&out[12..], &[0xaa; 8]);
     }
 
@@ -2494,14 +2111,11 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         {
-            let mut repository_db =
-                open_db_for_handle(&mut context, &handle).await.unwrap();
+            let mut repository_db = open_db_for_handle(&mut context, &handle).await.unwrap();
 
             // Malformed metadata isolates the native loop behavior:
             // active_count says one record, but ids 1 and 2 are both active.
@@ -2518,27 +2132,15 @@ mod tests {
 
         // Native precheck accepts capacity == active_count. Its loop then
         // allows stores while capacity == written, hence two ids are emitted.
-        assert_eq!(
-            list_records_lgt(&mut context, db_id, 0x3000, 1)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(list_records_lgt(&mut context, db_id, 0x3000, 1).await.unwrap(), 1);
 
         let mut out = [0u8; 12];
         context.read_bytes(0x3000, &mut out).unwrap();
-        assert_eq!(
-            u32::from_le_bytes(out[0..4].try_into().unwrap()),
-            1
-        );
-        assert_eq!(
-            u32::from_le_bytes(out[4..8].try_into().unwrap()),
-            2
-        );
+        assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 2);
 
         {
-            let mut repository_db =
-                open_db_for_handle(&mut context, &handle).await.unwrap();
+            let mut repository_db = open_db_for_handle(&mut context, &handle).await.unwrap();
 
             // DeleteRecord(0) can produce exactly this signed-visible count.
             let metadata = LgtDatabaseMetadata {
@@ -2550,12 +2152,7 @@ mod tests {
             assert!(store_lgt_metadata(repository_db.as_mut(), &metadata).await);
         }
 
-        assert_eq!(
-            list_records_lgt(&mut context, db_id, 0x3000, 1)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(list_records_lgt(&mut context, db_id, 0x3000, 1).await.unwrap(), -1);
     }
 
     #[futures_test::test]
@@ -2563,44 +2160,17 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            sort_records_lgt(&mut context, 0x1234, 0x3000, 4, 0, 0)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(sort_records_lgt(&mut context, 0x1234, 0x3000, 4, 0, 0).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
-        assert_eq!(
-            sort_records_lgt(&mut context, db_id, 0, 4, 0, 0)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            sort_records_lgt(&mut context, db_id, 0x3000, 0, 0, 0)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            sort_records_lgt(&mut context, db_id, 0x3000, -1, 0, 0)
-                .await
-                .unwrap(),
-            -9
-        );
+        assert_eq!(sort_records_lgt(&mut context, db_id, 0, 4, 0, 0).await.unwrap(), -9);
+        assert_eq!(sort_records_lgt(&mut context, db_id, 0x3000, 0, 0, 0).await.unwrap(), -9);
+        assert_eq!(sort_records_lgt(&mut context, db_id, 0x3000, -1, 0, 0).await.unwrap(), -9);
 
         // Native delegates to ListRecords with active_count == 0, receives -9,
         // and collapses that negative result to -1.
-        assert_eq!(
-            sort_records_lgt(&mut context, db_id, 0x3000, 4, 0, 0)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(sort_records_lgt(&mut context, db_id, 0x3000, 4, 0, 0).await.unwrap(), -1);
     }
 
     #[futures_test::test]
@@ -2608,52 +2178,21 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         context.write_bytes(0x2100, &[3, 0, 0, 0]).unwrap();
         context.write_bytes(0x2110, &[1, 0, 0, 0]).unwrap();
         context.write_bytes(0x2120, &[2, 0, 0, 0]).unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2110, 4)
-                .await
-                .unwrap(),
-            2
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2120, 4)
-                .await
-                .unwrap(),
-            3
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2110, 4).await.unwrap(), 2);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2120, 4).await.unwrap(), 3);
 
-        assert_eq!(
-            sort_records_lgt(&mut context, db_id, 0x3000, 3, 0, 0)
-                .await
-                .unwrap(),
-            3
-        );
+        assert_eq!(sort_records_lgt(&mut context, db_id, 0x3000, 3, 0, 0).await.unwrap(), 3);
 
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3000).unwrap(),
-            2
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3004).unwrap(),
-            3
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3008).unwrap(),
-            1
-        );
+        assert_eq!(read_generic::<u32, _>(&context, 0x3000).unwrap(), 2);
+        assert_eq!(read_generic::<u32, _>(&context, 0x3004).unwrap(), 3);
+        assert_eq!(read_generic::<u32, _>(&context, 0x3008).unwrap(), 1);
     }
 
     #[futures_test::test]
@@ -2661,9 +2200,7 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         for (ptr, bytes) in [
             (0x2100, [4, 0, 0, 0]),
@@ -2672,44 +2209,20 @@ mod tests {
             (0x2130, [1, 0, 0, 0]),
         ] {
             context.write_bytes(ptr, &bytes).unwrap();
-            insert_record_lgt(&mut context, db_id, ptr, 4)
-                .await
-                .unwrap();
+            insert_record_lgt(&mut context, db_id, ptr, 4).await.unwrap();
         }
 
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 2).await.unwrap(),
-            0
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 2).await.unwrap(), 0);
 
         // Three active records remain. Capacity two permits two accepted
         // insertions, then the third accepted candidate hits native <= check.
-        assert_eq!(
-            sort_records_lgt(&mut context, db_id, 0x3000, 2, 0, 0)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(sort_records_lgt(&mut context, db_id, 0x3000, 2, 0, 0).await.unwrap(), -18);
 
-        assert_eq!(
-            sort_records_lgt(&mut context, db_id, 0x3000, 3, 0, 0)
-                .await
-                .unwrap(),
-            3
-        );
+        assert_eq!(sort_records_lgt(&mut context, db_id, 0x3000, 3, 0, 0).await.unwrap(), 3);
 
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3000).unwrap(),
-            4
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3004).unwrap(),
-            3
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3008).unwrap(),
-            1
-        );
+        assert_eq!(read_generic::<u32, _>(&context, 0x3000).unwrap(), 4);
+        assert_eq!(read_generic::<u32, _>(&context, 0x3004).unwrap(), 3);
+        assert_eq!(read_generic::<u32, _>(&context, 0x3008).unwrap(), 1);
     }
 
     #[futures_test::test]
@@ -2717,37 +2230,15 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            delete_record_lgt(&mut context, 0x1234, 1)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(delete_record_lgt(&mut context, 0x1234, 1).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
 
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 2)
-                .await
-                .unwrap(),
-            -22
-        );
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, -1)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 2).await.unwrap(), -22);
+        assert_eq!(delete_record_lgt(&mut context, db_id, -1).await.unwrap(), -1);
     }
 
     #[futures_test::test]
@@ -2755,74 +2246,38 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
         context.write_bytes(0x2110, &[5, 6, 7, 8]).unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2110, 4)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2110, 4).await.unwrap(), 2);
 
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 2)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 2).await.unwrap(), 0);
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         {
-            let mut repository_db =
-                open_db_for_handle(&mut context, &handle).await.unwrap();
+            let mut repository_db = open_db_for_handle(&mut context, &handle).await.unwrap();
 
-            assert_eq!(
-                repository_db.get(2).await.unwrap(),
-                vec![5, 6, 7, 8]
-            );
+            assert_eq!(repository_db.get(2).await.unwrap(), vec![5, 6, 7, 8]);
 
-            let metadata =
-                load_lgt_metadata(repository_db.as_mut()).await.unwrap();
+            let metadata = load_lgt_metadata(repository_db.as_mut()).await.unwrap();
 
             assert_eq!(metadata.free_ids, vec![2]);
             assert_eq!(metadata.active_count, 1);
             assert_eq!(metadata.next_record_id, 3);
         }
 
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 2)
-                .await
-                .unwrap(),
-            -22
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 2).await.unwrap(), -22);
 
         context.write_bytes(0x2120, &[9, 9, 9, 9]).unwrap();
 
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2120, 4)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2120, 4).await.unwrap(), 2);
 
-        let repository_db =
-            open_db_for_handle(&mut context, &handle).await.unwrap();
+        let repository_db = open_db_for_handle(&mut context, &handle).await.unwrap();
 
-        assert_eq!(
-            repository_db.get(2).await.unwrap(),
-            vec![9, 9, 9, 9]
-        );
+        assert_eq!(repository_db.get(2).await.unwrap(), vec![9, 9, 9, 9]);
     }
 
     #[futures_test::test]
@@ -2830,34 +2285,20 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 0)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 0).await.unwrap(), 0);
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
-        let mut repository_db =
-            open_db_for_handle(&mut context, &handle).await.unwrap();
+        let mut repository_db = open_db_for_handle(&mut context, &handle).await.unwrap();
 
-        let metadata =
-            load_lgt_metadata(repository_db.as_mut()).await.unwrap();
+        let metadata = load_lgt_metadata(repository_db.as_mut()).await.unwrap();
 
         assert_eq!(metadata.free_ids, vec![0]);
         assert_eq!(metadata.active_count, u32::MAX);
         assert_eq!(metadata.next_record_id, 1);
 
-        assert_eq!(
-            delete_record_lgt(&mut context, db_id, 0)
-                .await
-                .unwrap(),
-            -22
-        );
+        assert_eq!(delete_record_lgt(&mut context, db_id, 0).await.unwrap(), -22);
     }
 
     #[futures_test::test]
@@ -2865,62 +2306,20 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            update_record_lgt(&mut context, 0x1234, 1, 0x2000, 4)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(update_record_lgt(&mut context, 0x1234, 1, 0x2000, 4).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, 1, 0, 4)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, 1, 0x2000, 0)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, 1, 0x2000, 5)
-                .await
-                .unwrap(),
-            -21
-        );
+        assert_eq!(update_record_lgt(&mut context, db_id, 1, 0, 4).await.unwrap(), -9);
+        assert_eq!(update_record_lgt(&mut context, db_id, 1, 0x2000, 0).await.unwrap(), -9);
+        assert_eq!(update_record_lgt(&mut context, db_id, 1, 0x2000, 5).await.unwrap(), -21);
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
 
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, 0, 0x2000, 4)
-                .await
-                .unwrap(),
-            -22
-        );
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, -1, 0x2000, 4)
-                .await
-                .unwrap(),
-            -22
-        );
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, 2, 0x2000, 4)
-                .await
-                .unwrap(),
-            -22
-        );
+        assert_eq!(update_record_lgt(&mut context, db_id, 0, 0x2000, 4).await.unwrap(), -22);
+        assert_eq!(update_record_lgt(&mut context, db_id, -1, 0x2000, 4).await.unwrap(), -22);
+        assert_eq!(update_record_lgt(&mut context, db_id, 2, 0x2000, 4).await.unwrap(), -22);
     }
 
     #[futures_test::test]
@@ -2928,27 +2327,13 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 6, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 6, 1, 1).await.unwrap();
 
-        context
-            .write_bytes(0x2100, &[1, 2, 3, 4, 5, 6])
-            .unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 6)
-                .await
-                .unwrap(),
-            1
-        );
+        context.write_bytes(0x2100, &[1, 2, 3, 4, 5, 6]).unwrap();
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 6).await.unwrap(), 1);
 
         context.write_bytes(0x2200, &[9, 8, 7]).unwrap();
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, 1, 0x2200, 3)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(update_record_lgt(&mut context, db_id, 1, 0x2200, 3).await.unwrap(), 0);
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         let db = open_db_for_handle(&mut context, &handle).await.unwrap();
@@ -2960,17 +2345,10 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         {
@@ -2982,12 +2360,7 @@ mod tests {
         }
 
         context.write_bytes(0x2200, &[9, 9, 9, 9]).unwrap();
-        assert_eq!(
-            update_record_lgt(&mut context, db_id, 1, 0x2200, 4)
-                .await
-                .unwrap(),
-            -9
-        );
+        assert_eq!(update_record_lgt(&mut context, db_id, 1, 0x2200, 4).await.unwrap(), -9);
 
         let db = open_db_for_handle(&mut context, &handle).await.unwrap();
         assert_eq!(db.get(1).await.unwrap(), vec![1, 2, 3, 4]);
@@ -2998,62 +2371,20 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            select_record_lgt(&mut context, 0x1234, 1, 0x2000, 4)
-                .await
-                .unwrap(),
-            -2
-        );
+        assert_eq!(select_record_lgt(&mut context, 0x1234, 1, 0x2000, 4).await.unwrap(), -2);
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 1, 0, 4)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 1, 0x2000, 0)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 1, 0x2000, 3)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(select_record_lgt(&mut context, db_id, 1, 0, 4).await.unwrap(), -9);
+        assert_eq!(select_record_lgt(&mut context, db_id, 1, 0x2000, 0).await.unwrap(), -9);
+        assert_eq!(select_record_lgt(&mut context, db_id, 1, 0x2000, 3).await.unwrap(), -18);
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
 
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 2, 0x2000, 4)
-                .await
-                .unwrap(),
-            -22
-        );
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 0, 0x2000, 4)
-                .await
-                .unwrap(),
-            -1
-        );
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, -1, 0x2000, 4)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(select_record_lgt(&mut context, db_id, 2, 0x2000, 4).await.unwrap(), -22);
+        assert_eq!(select_record_lgt(&mut context, db_id, 0, 0x2000, 4).await.unwrap(), -1);
+        assert_eq!(select_record_lgt(&mut context, db_id, -1, 0x2000, 4).await.unwrap(), -1);
     }
 
     #[futures_test::test]
@@ -3061,44 +2392,22 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
         context.write_bytes(0x2110, &[5, 6, 7, 8]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2110, 4)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2110, 4).await.unwrap(), 2);
 
         context.write_bytes(0x2200, &[0xcc; 12]).unwrap();
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 1, 0x2200, 4)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(select_record_lgt(&mut context, db_id, 1, 0x2200, 4).await.unwrap(), 0);
         let mut fixed = [0u8; 12];
         context.read_bytes(0x2200, &mut fixed).unwrap();
         assert_eq!(&fixed[..4], &[1, 2, 3, 4]);
         assert_eq!(&fixed[4..], &[0xcc; 8]);
 
         context.write_bytes(0x2200, &[0xcc; 12]).unwrap();
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 1, 0x2200, 10)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(select_record_lgt(&mut context, db_id, 1, 0x2200, 10).await.unwrap(), 0);
         let mut contiguous = [0u8; 12];
         context.read_bytes(0x2200, &mut contiguous).unwrap();
         assert_eq!(&contiguous[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
@@ -3110,24 +2419,12 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 4, 1, 1).await.unwrap();
 
         context.write_bytes(0x2100, &[1, 2, 3, 4]).unwrap();
         context.write_bytes(0x2110, &[9, 8, 7, 6]).unwrap();
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2100, 4)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            insert_record_lgt(&mut context, db_id, 0x2110, 4)
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2100, 4).await.unwrap(), 1);
+        assert_eq!(insert_record_lgt(&mut context, db_id, 0x2110, 4).await.unwrap(), 2);
 
         let handle = load_handle(&mut context, db_id).unwrap().unwrap();
         {
@@ -3138,20 +2435,10 @@ mod tests {
             assert!(store_lgt_metadata(db.as_mut(), &metadata).await);
         }
 
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 2, 0x2200, 4)
-                .await
-                .unwrap(),
-            -22
-        );
+        assert_eq!(select_record_lgt(&mut context, db_id, 2, 0x2200, 4).await.unwrap(), -22);
 
         context.write_bytes(0x2200, &[0xcc; 8]).unwrap();
-        assert_eq!(
-            select_record_lgt(&mut context, db_id, 1, 0x2200, 8)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(select_record_lgt(&mut context, db_id, 1, 0x2200, 8).await.unwrap(), 0);
 
         let mut data = [0u8; 8];
         context.read_bytes(0x2200, &mut data).unwrap();
@@ -3163,18 +2450,9 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            delete_database_lgt(&mut context, 0, 1).await.unwrap(),
-            -9
-        );
-        assert_eq!(
-            delete_database_lgt(&mut context, 0x1000, 0).await.unwrap(),
-            -9
-        );
-        assert_eq!(
-            delete_database_lgt(&mut context, 0x1000, 4).await.unwrap(),
-            -9
-        );
+        assert_eq!(delete_database_lgt(&mut context, 0, 1).await.unwrap(), -9);
+        assert_eq!(delete_database_lgt(&mut context, 0x1000, 0).await.unwrap(), -9);
+        assert_eq!(delete_database_lgt(&mut context, 0x1000, 4).await.unwrap(), -9);
     }
 
     #[futures_test::test]
@@ -3182,12 +2460,7 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            delete_database_lgt(&mut context, 0x1000, 1)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(delete_database_lgt(&mut context, 0x1000, 1).await.unwrap(), -1);
     }
 
     #[futures_test::test]
@@ -3195,37 +2468,19 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
-        assert_eq!(
-            delete_database_lgt(&mut context, 0x1000, 1)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            delete_database_lgt(&mut context, 0x1000, 1)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(delete_database_lgt(&mut context, 0x1000, 1).await.unwrap(), 0);
+        assert_eq!(delete_database_lgt(&mut context, 0x1000, 1).await.unwrap(), -1);
     }
 
     #[futures_test::test]
     async fn lgt_native_close_database_rejects_unknown_handle_with_minus_two() {
         let mut context = database_test_context();
 
-        assert_eq!(
-            close_database_lgt(&mut context, 0).await.unwrap(),
-            -2
-        );
-        assert_eq!(
-            close_database_lgt(&mut context, 0x1234).await.unwrap(),
-            -2
-        );
+        assert_eq!(close_database_lgt(&mut context, 0).await.unwrap(), -2);
+        assert_eq!(close_database_lgt(&mut context, 0x1234).await.unwrap(), -2);
     }
 
     #[futures_test::test]
@@ -3233,19 +2488,11 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1).await.unwrap();
         assert!(db_id > 0);
 
-        assert_eq!(
-            close_database_lgt(&mut context, db_id).await.unwrap(),
-            0
-        );
-        assert_eq!(
-            close_database_lgt(&mut context, db_id).await.unwrap(),
-            -2
-        );
+        assert_eq!(close_database_lgt(&mut context, db_id).await.unwrap(), 0);
+        assert_eq!(close_database_lgt(&mut context, db_id).await.unwrap(), -2);
     }
 
     #[futures_test::test]
@@ -3253,30 +2500,10 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            open_database_lgt(&mut context, 0, 32, 1, 1)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            open_database_lgt(&mut context, 0x1000, 0, 1, 1)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            open_database_lgt(&mut context, 0x1000, 32, 1, 0)
-                .await
-                .unwrap(),
-            -9
-        );
-        assert_eq!(
-            open_database_lgt(&mut context, 0x1000, 32, 1, 4)
-                .await
-                .unwrap(),
-            -9
-        );
+        assert_eq!(open_database_lgt(&mut context, 0, 32, 1, 1).await.unwrap(), -9);
+        assert_eq!(open_database_lgt(&mut context, 0x1000, 0, 1, 1).await.unwrap(), -9);
+        assert_eq!(open_database_lgt(&mut context, 0x1000, 32, 1, 0).await.unwrap(), -9);
+        assert_eq!(open_database_lgt(&mut context, 0x1000, 32, 1, 4).await.unwrap(), -9);
     }
 
     #[futures_test::test]
@@ -3284,12 +2511,7 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        assert_eq!(
-            open_database_lgt(&mut context, 0x1000, 32, 0, 1)
-                .await
-                .unwrap(),
-            -12
-        );
+        assert_eq!(open_database_lgt(&mut context, 0x1000, 32, 0, 1).await.unwrap(), -12);
     }
 
     #[futures_test::test]
@@ -3297,14 +2519,9 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1).await.unwrap();
         assert!(db_id > 0);
-        assert_eq!(
-            exists_database(&mut context, 0x1000, 1).await.unwrap(),
-            0
-        );
+        assert_eq!(exists_database(&mut context, 0x1000, 1).await.unwrap(), 0);
     }
 
     #[futures_test::test]
@@ -3312,27 +2529,13 @@ mod tests {
         let mut context = database_test_context();
         context.write_bytes(0x1000, b"records\0").unwrap();
 
-        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
-            .await
-            .unwrap();
+        let db_id = open_database_lgt(&mut context, 0x1000, 32, 1, 1).await.unwrap();
         context.write_bytes(0x2000, &[1, 2, 3, 4]).unwrap();
-        assert_eq!(
-            stream_write(&mut context, db_id, 0x2000, 4)
-                .await
-                .unwrap(),
-            4
-        );
+        assert_eq!(stream_write(&mut context, db_id, 0x2000, 4).await.unwrap(), 4);
 
-        let reopened = open_database_lgt(&mut context, 0x1000, 32, 1, 1)
-            .await
-            .unwrap();
+        let reopened = open_database_lgt(&mut context, 0x1000, 32, 1, 1).await.unwrap();
         assert!(reopened > 0);
-        assert_eq!(
-            stream_read(&mut context, reopened, 0x2100, 4)
-                .await
-                .unwrap(),
-            4
-        );
+        assert_eq!(stream_read(&mut context, reopened, 0x2100, 4).await.unwrap(), 4);
 
         let mut data = [0; 4];
         context.read_bytes(0x2100, &mut data).unwrap();

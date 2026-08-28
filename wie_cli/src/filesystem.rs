@@ -218,5 +218,4 @@ impl Filesystem for CliFilesystem {
                 .collect(),
         )
     }
-
 }

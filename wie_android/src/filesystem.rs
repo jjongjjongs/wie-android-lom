@@ -6,9 +6,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use wie_backend::{
-    Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemSetModeError, FilesystemRmDirError,
-};
+use wie_backend::{Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError, FilesystemSetModeError};
 
 /// Persistent filesystem rooted at the app-private directory Java passes to
 /// `nativeStart`, laid out as `<base>/<aid>/<path>`.
@@ -175,11 +173,7 @@ impl Filesystem for AndroidFilesystem {
         fs::remove_file(disk_path).is_ok()
     }
 
-    async fn mkdir(
-        &self,
-        aid: &str,
-        path: &str,
-    ) -> core::result::Result<(), FilesystemMkdirError> {
+    async fn mkdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemMkdirError> {
         let path = self.path_for(aid, path).ok_or(FilesystemMkdirError::Other)?;
 
         fs::create_dir(path).map_err(|error| match error.raw_os_error() {
@@ -190,52 +184,38 @@ impl Filesystem for AndroidFilesystem {
         })
     }
 
-    async fn rmdir(
-        &self,
-        aid: &str,
-        path: &str,
-    ) -> core::result::Result<(), FilesystemRmDirError> {
+    async fn rmdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemRmDirError> {
         let path = self.path_for(aid, path).ok_or(FilesystemRmDirError::Other)?;
 
         fs::remove_dir(path).map_err(|error| match error.raw_os_error() {
-            Some(2) => FilesystemRmDirError::NotFound,    // ENOENT
-            Some(39) => FilesystemRmDirError::NotEmpty,  // ENOTEMPTY
+            Some(2) => FilesystemRmDirError::NotFound,     // ENOENT
+            Some(39) => FilesystemRmDirError::NotEmpty,    // ENOTEMPTY
             Some(36) => FilesystemRmDirError::NameTooLong, // ENAMETOOLONG
             _ => FilesystemRmDirError::Other,
         })
     }
 
-    async fn rename(
-        &self,
-        aid: &str,
-        from: &str,
-        to: &str,
-    ) -> core::result::Result<(), FilesystemRenameError> {
+    async fn rename(&self, aid: &str, from: &str, to: &str) -> core::result::Result<(), FilesystemRenameError> {
         let from = self.path_for(aid, from).ok_or(FilesystemRenameError::Other)?;
         let to = self.path_for(aid, to).ok_or(FilesystemRenameError::Other)?;
 
         fs::rename(from, to).map_err(|error| match error.raw_os_error() {
             // Linux/Android errno values used by the native MH/AND_fileRename
             // translation table.
-            Some(2) => FilesystemRenameError::NotFound,              // ENOENT
-            Some(17) => FilesystemRenameError::AlreadyExists,        // EEXIST
+            Some(2) => FilesystemRenameError::NotFound,                          // ENOENT
+            Some(17) => FilesystemRenameError::AlreadyExists,                    // EEXIST
             Some(18) | Some(39) => FilesystemRenameError::CrossDeviceOrNotEmpty, // EXDEV / ENOTEMPTY
-            Some(36) => FilesystemRenameError::NameTooLong,          // ENAMETOOLONG
+            Some(36) => FilesystemRenameError::NameTooLong,                      // ENAMETOOLONG
             _ => FilesystemRenameError::Other,
         })
     }
 
-    async fn set_mode(
-        &self,
-        aid: &str,
-        path: &str,
-        mode: u32,
-    ) -> core::result::Result<(), FilesystemSetModeError> {
+    async fn set_mode(&self, aid: &str, path: &str, mode: u32) -> core::result::Result<(), FilesystemSetModeError> {
         let path = self.path_for(aid, path).ok_or(FilesystemSetModeError::Other)?;
 
         fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|error| {
             match error.raw_os_error() {
-                Some(2) => FilesystemSetModeError::NotFound,    // ENOENT
+                Some(2) => FilesystemSetModeError::NotFound,     // ENOENT
                 Some(36) => FilesystemSetModeError::NameTooLong, // ENAMETOOLONG
                 _ => FilesystemSetModeError::Other,
             }
@@ -328,7 +308,6 @@ impl Filesystem for AndroidFilesystem {
                 .collect(),
         )
     }
-
 }
 
 #[cfg(test)]

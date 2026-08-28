@@ -304,8 +304,6 @@ impl ClassTable {
     pub fn describe(&self, member: &JavaMember) -> String {
         format!("{}.{}{}", self.class_name(member.class_index), member.name, member.descriptor)
     }
-
-
 }
 
 /// Splits a JVM method descriptor into its parameter descriptors and return

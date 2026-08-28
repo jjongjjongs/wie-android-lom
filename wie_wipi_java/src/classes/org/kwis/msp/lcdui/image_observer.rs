@@ -16,17 +16,8 @@ impl ImageObserver {
             parent_class: None,
             interfaces: vec![],
             methods: vec![
-                JavaMethodProto::new(
-                    "<clinit>",
-                    "()V",
-                    Self::cl_init,
-                    MethodAccessFlags::STATIC,
-                ),
-                JavaMethodProto::new_abstract(
-                    "notify",
-                    "(Lorg/kwis/msp/lcdui/Image;I)V",
-                    MethodAccessFlags::ABSTRACT,
-                ),
+                JavaMethodProto::new("<clinit>", "()V", Self::cl_init, MethodAccessFlags::STATIC),
+                JavaMethodProto::new_abstract("notify", "(Lorg/kwis/msp/lcdui/Image;I)V", MethodAccessFlags::ABSTRACT),
             ],
             fields: vec![
                 JavaFieldProto::new("FRAME_END", "I", FieldAccessFlags::STATIC),
@@ -40,41 +31,13 @@ impl ImageObserver {
     }
 
     async fn cl_init(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<()> {
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/ImageObserver",
-            "FRAME_END",
-            "I",
-            0i32,
-        )
-        .await?;
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/ImageObserver",
-            "IMAGE_END",
-            "I",
-            1i32,
-        )
-        .await?;
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/ImageObserver",
-            "NOT_EXIST",
-            "I",
-            -1i32,
-        )
-        .await?;
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/ImageObserver",
-            "DECODE_ERROR",
-            "I",
-            -2i32,
-        )
-        .await?;
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/ImageObserver",
-            "OUT_OF_MEMORY",
-            "I",
-            -3i32,
-        )
-        .await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/ImageObserver", "FRAME_END", "I", 0i32).await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/ImageObserver", "IMAGE_END", "I", 1i32).await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/ImageObserver", "NOT_EXIST", "I", -1i32).await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/ImageObserver", "DECODE_ERROR", "I", -2i32)
+            .await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/ImageObserver", "OUT_OF_MEMORY", "I", -3i32)
+            .await?;
 
         Ok(())
     }

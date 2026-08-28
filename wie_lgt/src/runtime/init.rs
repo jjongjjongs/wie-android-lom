@@ -1,5 +1,11 @@
-use alloc::{collections::{BTreeMap, BTreeSet}, format, sync::Arc, vec, vec::Vec};
 use alloc::string::String;
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    format,
+    sync::Arc,
+    vec,
+    vec::Vec,
+};
 use core::mem::size_of;
 
 use elf::{ElfBytes, endian::AnyEndian};
@@ -11,8 +17,7 @@ use wipi_types::lgt::{InitParam1, InitParam2, InitStruct};
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId, ThreadId};
 use wie_util::{
-    ByteRead, ByteWrite, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic,
-    write_null_terminated_string_bytes,
+    ByteRead, ByteWrite, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes,
 };
 
 use crate::relocation::{
@@ -30,10 +35,8 @@ use super::{
         interface::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
-            bridge_class_chain,
-            java_load_classes, java_resolve_one, vm_run_main_class,
-            primitive_element_size,
-            vm_get_constant_string, vm_instantiate_array,
+            bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, vm_get_constant_string, vm_instantiate_array,
+            vm_run_main_class,
         },
         method_bridge::{self, ResolvedMember},
         platform_metadata::platform_class,
@@ -52,13 +55,7 @@ type JavaActivatedClasses = Arc<Mutex<BTreeMap<u32, u32>>>;
 /// native local-data node's `+0x0c` value and `+0x10` size fields.
 type DletProperties = Arc<Mutex<BTreeMap<u32, (u32, u32)>>>;
 
-fn dlet_set_process_local_property(
-    properties: &DletProperties,
-    applet: u32,
-    property: u32,
-    value: u32,
-    size: u32,
-) -> Result<u32> {
+fn dlet_set_process_local_property(properties: &DletProperties, applet: u32, property: u32, value: u32, size: u32) -> Result<u32> {
     // LoM uses the process-local form (applet == 0) with scalar properties
     // (size == 0). Native dprocess_set_local_data stores `value` directly in
     // the node and returns zero.
@@ -73,13 +70,7 @@ fn dlet_set_process_local_property(
     Ok(0)
 }
 
-fn dlet_get_process_local_property(
-    core: &mut ArmCore,
-    properties: &DletProperties,
-    applet: u32,
-    property: u32,
-    output: u32,
-) -> Result<u32> {
+fn dlet_get_process_local_property(core: &mut ArmCore, properties: &DletProperties, applet: u32, property: u32, output: u32) -> Result<u32> {
     // Native dlet_get_property(0, ...) resolves the current process. LoM only
     // uses that process-local form.
     if applet != 0 || output == 0 {
@@ -152,11 +143,7 @@ fn vm_exec_env_thread_id(core: &ArmCore) -> ThreadId {
     core.current_thread_id().unwrap_or(0)
 }
 
-fn vm_ensure_reschedule_deadline(
-    deadlines: &Mutex<BTreeMap<ThreadId, u64>>,
-    thread_id: ThreadId,
-    now: u64,
-) -> u64 {
+fn vm_ensure_reschedule_deadline(deadlines: &Mutex<BTreeMap<ThreadId, u64>>, thread_id: ThreadId, now: u64) -> u64 {
     let mut deadlines = deadlines.lock();
 
     *deadlines
@@ -434,11 +421,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             // Creating that exec-env initializes this thread's first deadline.
             let thread_id = vm_exec_env_thread_id(core);
             let now = context.system.platform().now().raw();
-            vm_ensure_reschedule_deadline(
-                &context.vm_reschedule_deadlines_ms,
-                thread_id,
-                now,
-            );
+            vm_ensure_reschedule_deadline(&context.vm_reschedule_deadlines_ms, thread_id, now);
 
             0u32.write(core, lr)
         }
@@ -452,11 +435,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 // Native slow path calls vm_get_exec_env for the current
                 // dthread. A first use creates only this thread's now+20 ms
                 // deadline before the comparison.
-                let deadline = vm_ensure_reschedule_deadline(
-                    &context.vm_reschedule_deadlines_ms,
-                    thread_id,
-                    now,
-                );
+                let deadline = vm_ensure_reschedule_deadline(&context.vm_reschedule_deadlines_ms, thread_id, now);
 
                 // Native vm_thread_reschedule returns without yielding while
                 // the current time is at or before the exec-env deadline.
@@ -465,16 +444,8 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
                     // Native refreshes only the current exec-env deadline from
                     // a new time sample after dthread_yield returns.
-                    let next_deadline = context
-                        .system
-                        .platform()
-                        .now()
-                        .raw()
-                        .saturating_add(VM_RESCHEDULE_INTERVAL_MS);
-                    context
-                        .vm_reschedule_deadlines_ms
-                        .lock()
-                        .insert(thread_id, next_deadline);
+                    let next_deadline = context.system.platform().now().raw().saturating_add(VM_RESCHEDULE_INTERVAL_MS);
+                    context.vm_reschedule_deadlines_ms.lock().insert(thread_id, next_deadline);
                 }
             }
 
@@ -529,9 +500,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let meta: u32 = read_generic(core, root + 8)?;
             write_generic(core, meta + 0x1a, 3u16)?;
 
-            tracing::debug!(
-                "LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3"
-            );
+            tracing::debug!("LGT vm_initialize_class_shared(root={root:#x}, meta={meta:#x}) -> state=3");
             root.write(core, lr)
         }
         InitSvcId::VmActivateClass => {
@@ -539,9 +508,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let table = core.read_param(1)?;
 
             if let Some(&activated) = context.java_activated_classes.lock().get(&root) {
-                tracing::debug!(
-                    "LGT vm_activate_class(root={root:#x}, table={table:#x}) -> cached={activated:#x}"
-                );
+                tracing::debug!("LGT vm_activate_class(root={root:#x}, table={table:#x}) -> cached={activated:#x}");
                 return activated.write(core, lr);
             }
 
@@ -591,9 +558,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 let _: u32 = core.run_function(callback, &[handle]).await?;
             }
 
-            tracing::debug!(
-                "LGT vm_initialize_class(handle={handle:#x}, data={activated_data:#x}, callback={callback:#x})"
-            );
+            tracing::debug!("LGT vm_initialize_class(handle={handle:#x}, data={activated_data:#x}, callback={callback:#x})");
             handle.write(core, lr)
         }
         InitSvcId::VmAastoreImpl | InitSvcId::VmAastoreImplFast => {
@@ -604,24 +569,14 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             // Native vm_aastore_impl checks null; the fast variant intentionally
             // omits this check and immediately dereferences array+8.
             if id.0 == InitSvcId::VmAastoreImpl as u32 && array == 0 {
-                return throw_vm_exception(
-                    core,
-                    context,
-                    "java/lang/NullPointerException",
-                )
-                .await;
+                return throw_vm_exception(core, context, "java/lang/NullPointerException").await;
             }
 
             let data: u32 = read_generic(core, array + 8)?;
             let length: u32 = read_generic(core, data)?;
 
             if index >= length {
-                return throw_vm_exception(
-                    core,
-                    context,
-                    "java/lang/ArrayIndexOutOfBoundsException",
-                )
-                .await;
+                return throw_vm_exception(core, context, "java/lang/ArrayIndexOutOfBoundsException").await;
             }
 
             if value != 0 {
@@ -630,12 +585,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 let source_class = object_class_root(core, value)?;
 
                 if !class_is_assignable_to(core, context, source_class, target_class).await? {
-                    return throw_vm_exception(
-                        core,
-                        context,
-                        "java/lang/ArrayStoreException",
-                    )
-                    .await;
+                    return throw_vm_exception(core, context, "java/lang/ArrayStoreException").await;
                 }
             }
 
@@ -646,9 +596,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let token = core.read_param(0)?;
             let instance = instantiate(core, context, token).await?;
 
-            tracing::debug!(
-                "LGT vm_instantiate({token:#x}, lr={lr:#x}) -> {instance:#x}"
-            );
+            tracing::debug!("LGT vm_instantiate({token:#x}, lr={lr:#x}) -> {instance:#x}");
             instance.write(core, lr)
         }
         // Native WIPI-Java and LGTE activation publish their already
@@ -689,15 +637,9 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     .collect();
 
                 context.app_classes.lock().retain(|class| !roots.contains(&class.root));
-            context
-                .heavy_linked_classes
-                .lock()
-                .retain(|root| !roots.contains(root));
+                context.heavy_linked_classes.lock().retain(|root| !roots.contains(root));
 
-                tracing::debug!(
-                    "vm_unregister_classes({index:#x}) -> removed {} application classes",
-                    roots.len()
-                );
+                tracing::debug!("vm_unregister_classes({index:#x}) -> removed {} application classes", roots.len());
             } else {
                 tracing::debug!("vm_unregister_classes({index:#x}) -> no registered class table");
             }
@@ -830,12 +772,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             // Native vm_instantiate_array treats the requested length as signed
             // and throws before attempting any allocation when it is negative.
             if (length as i32) < 0 {
-                return throw_vm_exception(
-                    core,
-                    context,
-                    "java/lang/NegativeArraySizeException",
-                )
-                .await;
+                return throw_vm_exception(core, context, "java/lang/NegativeArraySizeException").await;
             }
 
             vm_instantiate_array(&context.java_handles, &context.array_classes, class, length)
@@ -876,18 +813,10 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             }
 
             if dimension_count == 0 {
-                return Err(WieError::FatalError(
-                    "vm_instantiate_multi_array received zero dimensions".into(),
-                ));
+                return Err(WieError::FatalError("vm_instantiate_multi_array received zero dimensions".into()));
             }
 
-            let root = vm_instantiate_array(
-                &context.java_handles,
-                &context.array_classes,
-                class,
-                lengths[0],
-            )
-            .await?;
+            let root = vm_instantiate_array(&context.java_handles, &context.array_classes, class, lengths[0]).await?;
 
             let mut current_class = class;
             let mut parents = vec![root];
@@ -898,11 +827,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     .lock()
                     .get(&current_class)
                     .copied()
-                    .ok_or_else(|| {
-                        WieError::FatalError(format!(
-                            "vm_instantiate_multi_array class {current_class:#x} has no array metadata"
-                        ))
-                    })?;
+                    .ok_or_else(|| WieError::FatalError(format!("vm_instantiate_multi_array class {current_class:#x} has no array metadata")))?;
 
                 if info.dimensions <= 1 {
                     return Err(WieError::FatalError(format!(
@@ -910,13 +835,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     )));
                 }
 
-                let child_class = get_array_class(
-                    core,
-                    context,
-                    info.dimensions - 1,
-                    info.element_class,
-                    info.atype,
-                )?;
+                let child_class = get_array_class(core, context, info.dimensions - 1, info.element_class, info.atype)?;
 
                 let mut children = Vec::new();
                 for parent in parents {
@@ -924,13 +843,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     let parent_length: u32 = read_generic(core, data)?;
 
                     for index in 0..parent_length {
-                        let child = vm_instantiate_array(
-                            &context.java_handles,
-                            &context.array_classes,
-                            child_class,
-                            lengths[depth as usize],
-                        )
-                        .await?;
+                        let child = vm_instantiate_array(&context.java_handles, &context.array_classes, child_class, lengths[depth as usize]).await?;
 
                         write_generic(core, data + 4 + index * REFERENCE_SIZE, child)?;
                         children.push(child);
@@ -941,9 +854,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 parents = children;
             }
 
-            tracing::debug!(
-                "vm_instantiate_multi_array({class:#x}, {dimensions_ptr:#x}, {dimension_count}) -> {root:#x}"
-            );
+            tracing::debug!("vm_instantiate_multi_array({class:#x}, {dimensions_ptr:#x}, {dimension_count}) -> {root:#x}");
             root.write(core, lr)
         }
         // Native Java-interface 0x21 is vm_throw_exception(exception).
@@ -956,11 +867,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             {
                 let thread_id = vm_exec_env_thread_id(core);
                 let now = context.system.platform().now().raw();
-                vm_ensure_reschedule_deadline(
-                    &context.vm_reschedule_deadlines_ms,
-                    thread_id,
-                    now,
-                );
+                vm_ensure_reschedule_deadline(&context.vm_reschedule_deadlines_ms, thread_id, now);
             }
 
             if exception != 0 {
@@ -1007,12 +914,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
                 if let Err(error) = context
                     .jvm
-                    .put_field(
-                        &mut exception,
-                        "detailMessage",
-                        "Ljava/lang/String;",
-                        java_message,
-                    )
+                    .put_field(&mut exception, "detailMessage", "Ljava/lang/String;", java_message)
                     .await
                 {
                     return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
@@ -1021,9 +923,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             let exception = context.java_handles.address_of(exception)?;
 
-            tracing::debug!(
-                "vm_throw_null_pointer_exception({message:#x}) -> longjmp({exception:#x})"
-            );
+            tracing::debug!("vm_throw_null_pointer_exception({message:#x}) -> longjmp({exception:#x})");
             context.save_points.throw(core, exception)
         }
         // Native Java-interface 0x25 is
@@ -1050,12 +950,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
                 if let Err(error) = context
                     .jvm
-                    .put_field(
-                        &mut exception,
-                        "detailMessage",
-                        "Ljava/lang/String;",
-                        java_message,
-                    )
+                    .put_field(&mut exception, "detailMessage", "Ljava/lang/String;", java_message)
                     .await
                 {
                     return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
@@ -1064,9 +959,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             let exception = context.java_handles.address_of(exception)?;
 
-            tracing::debug!(
-                "vm_throw_arithmetic_exception({message:#x}) -> longjmp({exception:#x})"
-            );
+            tracing::debug!("vm_throw_arithmetic_exception({message:#x}) -> longjmp({exception:#x})");
             context.save_points.throw(core, exception)
         }
         // Native Java-interface 0x23 is
@@ -1105,12 +998,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
                 if let Err(error) = context
                     .jvm
-                    .put_field(
-                        &mut exception,
-                        "detailMessage",
-                        "Ljava/lang/String;",
-                        java_message,
-                    )
+                    .put_field(&mut exception, "detailMessage", "Ljava/lang/String;", java_message)
                     .await
                 {
                     return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
@@ -1119,9 +1007,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             let exception = context.java_handles.address_of(exception)?;
 
-            tracing::debug!(
-                "vm_throw_array_index_out_of_bounds_exception({message:#x}) -> longjmp({exception:#x})"
-            );
+            tracing::debug!("vm_throw_array_index_out_of_bounds_exception({message:#x}) -> longjmp({exception:#x})");
             context.save_points.throw(core, exception)
         }
         // Native Java-interface 0x26 is
@@ -1150,12 +1036,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
                 if let Err(error) = context
                     .jvm
-                    .put_field(
-                        &mut exception,
-                        "detailMessage",
-                        "Ljava/lang/String;",
-                        java_message,
-                    )
+                    .put_field(&mut exception, "detailMessage", "Ljava/lang/String;", java_message)
                     .await
                 {
                     return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
@@ -1164,18 +1045,14 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             let exception = context.java_handles.address_of(exception)?;
 
-            tracing::debug!(
-                "vm_throw_class_cast_exception({message:#x}) -> longjmp({exception:#x})"
-            );
+            tracing::debug!("vm_throw_class_cast_exception({message:#x}) -> longjmp({exception:#x})");
             context.save_points.throw(core, exception)
         }
         // Legacy table64 0x26 is the negative-array-size failure helper.
         // Cross-game static analysis finds 50 strict callers and every caller
         // supplies r0 == NULL, so preserve the observed legacy ABI without
         // attempting to decode a revision-specific message argument.
-        InitSvcId::LegacyVmThrowNegativeArraySizeException => {
-            throw_vm_exception(core, context, "java/lang/NegativeArraySizeException").await
-        }
+        InitSvcId::LegacyVmThrowNegativeArraySizeException => throw_vm_exception(core, context, "java/lang/NegativeArraySizeException").await,
         // Older LGT-generated code reaches table64 0x06 only after a resolved
         // dispatch slot has a null implementation pointer. Across multiple
         // binaries its incoming r0 is a live VM/object value, not a C-string
@@ -1223,12 +1100,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
                 if let Err(error) = context
                     .jvm
-                    .put_field(
-                        &mut exception,
-                        "detailMessage",
-                        "Ljava/lang/String;",
-                        java_message,
-                    )
+                    .put_field(&mut exception, "detailMessage", "Ljava/lang/String;", java_message)
                     .await
                 {
                     return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
@@ -1364,16 +1236,9 @@ async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext
 ///
 /// Native slot count of the immediate superclass used as the starting point
 /// when `vm_link_class_heavy` appends newly declared virtual methods.
-fn superclass_dispatch_slot_count(
-    core: &ArmCore,
-    context: &InitSvcContext,
-    root: u32,
-) -> Result<u32> {
+fn superclass_dispatch_slot_count(core: &ArmCore, context: &InitSvcContext, root: u32) -> Result<u32> {
     let classes = context.app_classes.lock();
-    let superclass = classes
-        .iter()
-        .find(|class| class.root == root)
-        .and_then(|class| class.superclass.clone());
+    let superclass = classes.iter().find(|class| class.root == root).and_then(|class| class.superclass.clone());
 
     let Some(superclass) = superclass else {
         return Ok(0);
@@ -1385,9 +1250,7 @@ fn superclass_dispatch_slot_count(
         return Ok(u32::from(slots));
     }
 
-    Ok(platform_class(&superclass)
-        .map(|class| class.dispatch.len() as u32)
-        .unwrap_or(0))
+    Ok(platform_class(&superclass).map(|class| class.dispatch.len() as u32).unwrap_or(0))
 }
 
 /// Ensures native heavy-link method slots have been assigned exactly once.
@@ -1395,11 +1258,7 @@ fn superclass_dispatch_slot_count(
 /// `vm_resolve_one` receives an already-linked class_shared root and immediately
 /// reads its method rows. Some applications resolve virtual imports before the
 /// class is activated, so slot linking cannot be deferred until vtable creation.
-fn ensure_heavy_method_slots_linked(
-    core: &mut ArmCore,
-    context: &InitSvcContext,
-    root: u32,
-) -> Result<()> {
+fn ensure_heavy_method_slots_linked(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Result<()> {
     if context.heavy_linked_classes.lock().contains(&root) {
         return Ok(());
     }
@@ -1439,21 +1298,12 @@ fn ensure_heavy_method_slots_linked(
     let mut class = snapshot[index].clone();
     let superclass_slots = superclass_dispatch_slot_count(core, context, root)?;
     let slots = assign_heavy_method_slots(core, &mut class, &snapshot, superclass_slots)?;
-    let slots_u16 = u16::try_from(slots).map_err(|_| {
-        WieError::FatalError(format!(
-            "Heavy-linked LGT class {} requires {slots} dispatch slots",
-            class.name
-        ))
-    })?;
+    let slots_u16 =
+        u16::try_from(slots).map_err(|_| WieError::FatalError(format!("Heavy-linked LGT class {} requires {slots} dispatch slots", class.name)))?;
 
     write_generic(core, metadata + CLASS_DISPATCH_SLOTS, slots_u16)?;
 
-    if let Some(cached) = context
-        .app_classes
-        .lock()
-        .iter_mut()
-        .find(|cached| cached.root == root)
-    {
+    if let Some(cached) = context.app_classes.lock().iter_mut().find(|cached| cached.root == root) {
         *cached = class;
     }
 
@@ -1469,11 +1319,7 @@ fn ensure_heavy_method_slots_linked(
 /// inherited/new final slots, updates metadata+0x26, allocates exactly that many
 /// dispatch slots, copies the superclass dispatch, then installs every method
 /// whose linked signed slot is non-negative.
-fn activate_heavy_dispatch_table(
-    core: &mut ArmCore,
-    context: &InitSvcContext,
-    root: u32,
-) -> Result<u32> {
+fn activate_heavy_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Result<u32> {
     ensure_heavy_method_slots_linked(core, context, root)?;
 
     let class = context
@@ -1482,11 +1328,7 @@ fn activate_heavy_dispatch_table(
         .iter()
         .find(|class| class.root == root)
         .cloned()
-        .ok_or_else(|| {
-            WieError::FatalError(format!(
-                "Heavy-linked LGT class at {root:#x} was never registered"
-            ))
-        })?;
+        .ok_or_else(|| WieError::FatalError(format!("Heavy-linked LGT class at {root:#x} was never registered")))?;
 
     let superclass_slots = superclass_dispatch_slot_count(core, context, root)?;
     let metadata: u32 = read_generic(core, root + 8)?;
@@ -1723,24 +1565,11 @@ fn platform_superclass_dispatch_table(context: &InitSvcContext, root: u32) -> u3
 /// first implementation of the same slot. Application superclass tables may
 /// themselves contain zero placeholders, so keep walking until an
 /// implementation or a platform class is reached.
-fn inherited_dispatch_entry(
-    core: &ArmCore,
-    context: &InitSvcContext,
-    root: u32,
-    slot: u32,
-    fallback: u32,
-) -> Result<u32> {
+fn inherited_dispatch_entry(core: &ArmCore, context: &InitSvcContext, root: u32, slot: u32, fallback: u32) -> Result<u32> {
     let app_classes = context.app_classes.lock();
     let imported_classes = context.imported_classes.lock();
 
-    inherited_dispatch_entry_from_tables(
-        core,
-        &app_classes,
-        imported_classes.as_ref(),
-        root,
-        slot,
-        fallback,
-    )
+    inherited_dispatch_entry_from_tables(core, &app_classes, imported_classes.as_ref(), root, slot, fallback)
 }
 
 fn inherited_dispatch_entry_from_tables(
@@ -1794,24 +1623,18 @@ fn inherited_dispatch_entry_from_tables(
 /// Native `vm_link_class_heavy` walks application superclasses first, comparing
 /// both strings, then continues into the platform hierarchy. Only positive
 /// signed 16-bit method slots participate in virtual dispatch.
-fn superclass_virtual_slot(
-    app_classes: &[AppClass],
-    superclass: Option<&str>,
-    name: &str,
-    descriptor: &str,
-) -> Option<u32> {
+fn superclass_virtual_slot(app_classes: &[AppClass], superclass: Option<&str>, name: &str, descriptor: &str) -> Option<u32> {
     let mut current = superclass.map(String::from);
 
     for _ in 0..MAX_SUPERCLASS_DEPTH {
         let class_name = current.take()?;
 
         if let Some(class) = app_classes.iter().find(|class| class.name == class_name) {
-            if let Some(member) = class.members.iter().find(|member| {
-                member.is_method()
-                    && member.name() == name
-                    && member.descriptor() == descriptor
-                    && (member.slot() as u16 as i16) > 0
-            }) {
+            if let Some(member) = class
+                .members
+                .iter()
+                .find(|member| member.is_method() && member.name() == name && member.descriptor() == descriptor && (member.slot() as u16 as i16) > 0)
+            {
                 return Some(member.slot());
             }
 
@@ -1833,12 +1656,7 @@ fn superclass_virtual_slot(
 /// reuses the superclass method's slot; otherwise the method is appended after
 /// the superclass's final dispatch slot. This is the rule used by native
 /// `vm_link_class_heavy`.
-fn assign_heavy_method_slots(
-    core: &mut ArmCore,
-    class: &mut AppClass,
-    app_classes: &[AppClass],
-    superclass_slots: u32,
-) -> Result<u32> {
+fn assign_heavy_method_slots(core: &mut ArmCore, class: &mut AppClass, app_classes: &[AppClass], superclass_slots: u32) -> Result<u32> {
     let superclass = class.superclass.clone();
     let mut next_slot = superclass_slots;
 
@@ -1847,13 +1665,7 @@ fn assign_heavy_method_slots(
             continue;
         }
 
-        let linked_slot = superclass_virtual_slot(
-            app_classes,
-            superclass.as_deref(),
-            member.name(),
-            member.descriptor(),
-        )
-        .unwrap_or_else(|| {
+        let linked_slot = superclass_virtual_slot(app_classes, superclass.as_deref(), member.name(), member.descriptor()).unwrap_or_else(|| {
             let slot = next_slot;
             next_slot += 1;
             slot
@@ -1890,12 +1702,7 @@ fn primitive_array_descriptor(atype: u32) -> Option<char> {
 }
 
 fn synthetic_platform_vtable(core: &mut ArmCore, context: &InitSvcContext, class_name: &str) -> Result<u32> {
-    if let Some((&root, _)) = context
-        .synthetic_classes
-        .lock()
-        .iter()
-        .find(|(_, name)| name.as_str() == class_name)
-    {
+    if let Some((&root, _)) = context.synthetic_classes.lock().iter().find(|(_, name)| name.as_str() == class_name) {
         let vtable = context
             .java_handles
             .dispatch_table(class_name)
@@ -2006,9 +1813,7 @@ fn class_identity_bridge_name(name: &str) -> Option<&str> {
 fn object_class_root(core: &ArmCore, object: u32) -> Result<u32> {
     let vtable: u32 = read_generic(core, object)?;
     if vtable == 0 {
-        return Err(WieError::FatalError(format!(
-            "guest object {object:#x} has no dispatch table"
-        )));
+        return Err(WieError::FatalError(format!("guest object {object:#x} has no dispatch table")));
     }
 
     read_generic(core, vtable)
@@ -2023,17 +1828,11 @@ fn array_component_class(array_classes: &ArrayClasses, array_class: u32) -> Resu
         .lock()
         .get(&array_class)
         .copied()
-        .ok_or_else(|| {
-            WieError::FatalError(format!(
-                "reference array class {array_class:#x} has no array metadata"
-            ))
-        })?;
+        .ok_or_else(|| WieError::FatalError(format!("reference array class {array_class:#x} has no array metadata")))?;
 
     if info.dimensions <= 1 {
         if info.element_class == 0 {
-            return Err(WieError::FatalError(format!(
-                "aastore used with primitive array class {array_class:#x}"
-            )));
+            return Err(WieError::FatalError(format!("aastore used with primitive array class {array_class:#x}")));
         }
         return Ok(info.element_class);
     }
@@ -2042,9 +1841,7 @@ fn array_component_class(array_classes: &ArrayClasses, array_class: u32) -> Resu
         .lock()
         .iter()
         .find(|(_, candidate)| {
-            candidate.dimensions == info.dimensions - 1
-                && candidate.element_class == info.element_class
-                && candidate.atype == info.atype
+            candidate.dimensions == info.dimensions - 1 && candidate.element_class == info.element_class && candidate.atype == info.atype
         })
         .map(|(class, _)| *class)
         .ok_or_else(|| {
@@ -2055,22 +1852,14 @@ fn array_component_class(array_classes: &ArrayClasses, array_class: u32) -> Resu
         })
 }
 
-async fn throw_vm_exception(
-    core: &mut ArmCore,
-    context: &mut InitSvcContext,
-    class_name: &str,
-) -> Result<()> {
+async fn throw_vm_exception(core: &mut ArmCore, context: &mut InitSvcContext, class_name: &str) -> Result<()> {
     let vtable = synthetic_platform_vtable(core, context, class_name)?;
     context.java_handles.set_dispatch_table(class_name, vtable);
 
     let exception = match context.jvm.instantiate_class(class_name).await {
         Ok(exception) => exception,
         Err(error) => {
-            return Err(wie_jvm_support::JvmSupport::to_wie_err(
-                &context.jvm,
-                error,
-            )
-            .await);
+            return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
         }
     };
     let exception = context.java_handles.address_of(exception)?;
@@ -2114,10 +1903,9 @@ async fn class_is_assignable_to(core: &ArmCore, context: &mut InitSvcContext, so
         .await;
     }
 
-    Ok(context.jvm.is_type_assignable(
-        &JavaType::from_class_name(&source),
-        &JavaType::from_class_name(&target),
-    ))
+    Ok(context
+        .jvm
+        .is_type_assignable(&JavaType::from_class_name(&source), &JavaType::from_class_name(&target)))
 }
 
 /// `vm_get_array_class(dimensions, element_class, atype)`.
@@ -2262,15 +2050,11 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
     let activated_data: u32 = read_generic(core, handle + 8)?;
     let vtable: u32 = read_generic(core, activated_data + 12)?;
 
-    let object = context
-        .java_handles
-        .allocate_instance_with_fields(vtable, instance_words)?;
+    let object = context.java_handles.allocate_instance_with_fields(vtable, instance_words)?;
 
     context.java_handles.bind(object, instance);
 
-    tracing::debug!(
-        "LGT new {class} at {object:#x}, dispatch table {vtable:#x}, {instance_words} instance words"
-    );
+    tracing::debug!("LGT new {class} at {object:#x}, dispatch table {vtable:#x}, {instance_words} instance words");
 
     Ok(object)
 }
@@ -2296,9 +2080,7 @@ async fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcCo
 
     drop(table);
 
-    let object = context
-        .java_handles
-        .allocate_instance_with_fields(vtable, instance_words)?;
+    let object = context.java_handles.allocate_instance_with_fields(vtable, instance_words)?;
 
     match context.jvm.instantiate_class(&name).await {
         Ok(instance) => {
@@ -2351,16 +2133,16 @@ async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, in
     // get_class additionally guarantees Java class initialization.
     if slot <= 1 {
         if slot == 0 {
-            let class = context.jvm.resolve_class(&class_name).await.map_err(|error| {
-                wie_util::WieError::FatalError(alloc::format!(
-                    "LGT get_class could not resolve {class_name}: {error:?}"
-                ))
-            })?;
-            context.jvm.ensure_initialized(&class).await.map_err(|error| {
-                wie_util::WieError::FatalError(alloc::format!(
-                    "LGT get_class could not initialize {class_name}: {error:?}"
-                ))
-            })?;
+            let class = context
+                .jvm
+                .resolve_class(&class_name)
+                .await
+                .map_err(|error| wie_util::WieError::FatalError(alloc::format!("LGT get_class could not resolve {class_name}: {error:?}")))?;
+            context
+                .jvm
+                .ensure_initialized(&class)
+                .await
+                .map_err(|error| wie_util::WieError::FatalError(alloc::format!("LGT get_class could not initialize {class_name}: {error:?}")))?;
         }
 
         return Ok(class_object);
@@ -2401,8 +2183,7 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
     // Resolve fixed native dispatch slots from the receiver's actual platform
     // class even when the application never imported that class or method.
     if let Some(receiver_class) = context.java_handles.get(this).map(|instance| instance.class_definition().name())
-        && let Some((method_name, method_descriptor)) =
-            platform_class(&receiver_class).and_then(|class| class.dispatch_method(slot))
+        && let Some((method_name, method_descriptor)) = platform_class(&receiver_class).and_then(|class| class.dispatch_method(slot))
     {
         let member = ResolvedMember {
             class_name: receiver_class.clone(),
@@ -2469,9 +2250,7 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
         return Ok(0);
     };
 
-    if let Some((method_name, method_descriptor)) =
-        platform_class(&class).and_then(|platform| platform.dispatch_method(slot))
-    {
+    if let Some((method_name, method_descriptor)) = platform_class(&class).and_then(|platform| platform.dispatch_method(slot)) {
         let member = ResolvedMember {
             class_name: class.clone(),
             name: method_name.into(),
@@ -3015,10 +2794,7 @@ mod vm_thread_reschedule_tests {
 
     use spin::Mutex;
 
-    use super::{
-        VM_RESCHEDULE_COUNT_THRESHOLD, vm_ensure_reschedule_deadline,
-        vm_thread_reschedule_due,
-    };
+    use super::{VM_RESCHEDULE_COUNT_THRESHOLD, vm_ensure_reschedule_deadline, vm_thread_reschedule_due};
 
     #[test]
     fn native_reschedule_countdown_checks_after_one_hundred_fast_calls() {
@@ -3077,14 +2853,8 @@ mod dlet_property_tests {
 
         write_generic(&mut core, output, 0xdead_beefu32).unwrap();
 
-        assert_eq!(
-            dlet_set_process_local_property(&properties, 0, 200, 0x1234_5678, 0).unwrap(),
-            0
-        );
-        assert_eq!(
-            dlet_get_process_local_property(&mut core, &properties, 0, 200, output).unwrap(),
-            0
-        );
+        assert_eq!(dlet_set_process_local_property(&properties, 0, 200, 0x1234_5678, 0).unwrap(), 0);
+        assert_eq!(dlet_get_process_local_property(&mut core, &properties, 0, 200, output).unwrap(), 0);
 
         let value: u32 = read_generic(&core, output).unwrap();
         assert_eq!(value, 0x1234_5678);
@@ -3113,14 +2883,8 @@ mod dlet_property_tests {
         let properties: DletProperties = Default::default();
         let output = Allocator::alloc(&mut core, 4).unwrap();
 
-        assert_eq!(
-            dlet_get_process_local_property(&mut core, &properties, 1, 200, output).unwrap(),
-            u32::MAX
-        );
-        assert_eq!(
-            dlet_get_process_local_property(&mut core, &properties, 0, 200, 0).unwrap(),
-            u32::MAX
-        );
+        assert_eq!(dlet_get_process_local_property(&mut core, &properties, 1, 200, output).unwrap(), u32::MAX);
+        assert_eq!(dlet_get_process_local_property(&mut core, &properties, 0, 200, 0).unwrap(), u32::MAX);
 
         assert!(dlet_set_process_local_property(&properties, 1, 200, 1, 0).is_err());
         assert!(dlet_set_process_local_property(&properties, 0, 200, 1, 4).is_err());
@@ -3137,8 +2901,7 @@ mod application_dispatch_tests {
     use wie_util::{ByteWrite, write_generic};
 
     use super::{
-        AppClass, ArrayClassInfo, ArrayClasses, REFERENCE_SIZE, VmMonitors,
-        assign_heavy_method_slots, inherited_dispatch_entry_from_tables,
+        AppClass, ArrayClassInfo, ArrayClasses, REFERENCE_SIZE, VmMonitors, assign_heavy_method_slots, inherited_dispatch_entry_from_tables,
         vm_monitor_exit_owned, vm_monitor_try_enter,
     };
 
@@ -3296,10 +3059,7 @@ mod application_dispatch_tests {
     #[test]
     fn heavy_slots_reuse_platform_override_and_append_new_method() {
         let mut class = app_class(0x1000, "f", Some("org/kwis/msp/lcdui/Card"));
-        class.members = vec![
-            virtual_method("keyNotify", "(II)Z"),
-            virtual_method("ownMethod", "()V"),
-        ];
+        class.members = vec![virtual_method("keyNotify", "(II)Z"), virtual_method("ownMethod", "()V")];
 
         let mut core = core();
         let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 25).unwrap();
@@ -3357,16 +3117,9 @@ mod application_dispatch_tests {
 
     #[test]
     fn lom_n_heavy_slots_match_native_linker_layout() {
-        let mut class = app_class(
-            0x2000,
-            "n",
-            Some("org/kwis/msp/lwc/TextBoxComponent"),
-        );
+        let mut class = app_class(0x2000, "n", Some("org/kwis/msp/lwc/TextBoxComponent"));
 
-        class.members = vec![
-            virtual_method("keyNotify", "(II)Z"),
-            virtual_method("a", "(Ljava/lang/String;)I"),
-        ];
+        class.members = vec![virtual_method("keyNotify", "(II)Z"), virtual_method("a", "(Ljava/lang/String;)I")];
 
         let mut core = core();
         let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 65).unwrap();
@@ -3380,9 +3133,7 @@ mod application_dispatch_tests {
             class
                 .members
                 .iter()
-                .find(|member| {
-                    member.name() == "keyNotify" && member.descriptor() == "(II)Z"
-                })
+                .find(|member| { member.name() == "keyNotify" && member.descriptor() == "(II)Z" })
                 .unwrap()
                 .slot(),
             32
@@ -3453,10 +3204,7 @@ mod application_dispatch_tests {
     #[test]
     fn heavy_slots_use_text_box_component_native_slot() {
         let mut class = app_class(0x2000, "n", Some("org/kwis/msp/lwc/TextBoxComponent"));
-        class.members = vec![
-            virtual_method("keyNotify", "(II)Z"),
-            virtual_method("a", "(Ljava/lang/String;)I"),
-        ];
+        class.members = vec![virtual_method("keyNotify", "(II)Z"), virtual_method("a", "(Ljava/lang/String;)I")];
 
         let mut core = core();
         let slots = assign_heavy_method_slots(&mut core, &mut class, &[], 65).unwrap();
@@ -3502,18 +3250,12 @@ mod slot12_class_identity_tests {
     #[test]
     fn bridge_name_keeps_plain_classes() {
         assert_eq!(class_identity_bridge_name("f"), Some("f"));
-        assert_eq!(
-            class_identity_bridge_name("java/lang/String"),
-            Some("java/lang/String")
-        );
+        assert_eq!(class_identity_bridge_name("java/lang/String"), Some("java/lang/String"));
     }
 
     #[test]
     fn bridge_name_extracts_reference_array_component() {
-        assert_eq!(
-            class_identity_bridge_name("[Ljava/lang/String;"),
-            Some("java/lang/String")
-        );
+        assert_eq!(class_identity_bridge_name("[Ljava/lang/String;"), Some("java/lang/String"));
         assert_eq!(class_identity_bridge_name("[[Lf;"), Some("f"));
     }
 

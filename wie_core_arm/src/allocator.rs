@@ -58,7 +58,6 @@ impl Allocator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use wie_util::Result;

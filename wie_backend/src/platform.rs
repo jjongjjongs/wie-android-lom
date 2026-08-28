@@ -28,45 +28,28 @@ pub enum NetworkEvent {
     Writable(i32),
     /// A `MC_netGetHostAddr` resolution finished. `address` is the resolved IPv4
     /// in the WIPI encoding, or `0xFFFF_FFFF` when the host could not be resolved.
-    HostResolved { query_id: u32, address: u32 },
+    HostResolved {
+        query_id: u32,
+        address: u32,
+    },
 }
 
 pub trait Network: Send + Sync {
     fn socket(&self, family: i32, socket_type: i32) -> Result<i32, NetworkError>;
 
-    fn connect(
-        &self,
-        socket: i32,
-        address: u32,
-        port: u16,
-    ) -> NetworkPoll<()>;
+    fn connect(&self, socket: i32, address: u32, port: u16) -> NetworkPoll<()>;
 
-    fn bind(
-        &self,
-        socket: i32,
-        address: u32,
-        port: u16,
-    ) -> Result<(), NetworkError>;
+    fn bind(&self, socket: i32, address: u32, port: u16) -> Result<(), NetworkError>;
 
     fn read(&self, socket: i32, buf: &mut [u8]) -> Result<usize, NetworkError>;
 
     fn write(&self, socket: i32, buf: &[u8]) -> Result<usize, NetworkError>;
 
-    fn send_to(
-        &self,
-        socket: i32,
-        buf: &[u8],
-        address: u32,
-        port: u16,
-    ) -> Result<usize, NetworkError>;
+    fn send_to(&self, socket: i32, buf: &[u8], address: u32, port: u16) -> Result<usize, NetworkError>;
 
     /// Receives a datagram, returning `(bytes, sender_address, sender_port)`
     /// where the address is in the same WIPI encoding `connect`/`send_to` take.
-    fn recv_from(
-        &self,
-        socket: i32,
-        buf: &mut [u8],
-    ) -> Result<(usize, u32, u16), NetworkError>;
+    fn recv_from(&self, socket: i32, buf: &mut [u8]) -> Result<(usize, u32, u16), NetworkError>;
 
     fn close(&self, socket: i32) -> Result<(), NetworkError>;
 
@@ -203,20 +186,12 @@ pub trait Filesystem: Send + Sync {
     /// Create exactly one directory.
     ///
     /// Missing parent directories are not created implicitly.
-    async fn mkdir(
-        &self,
-        aid: &str,
-        path: &str,
-    ) -> core::result::Result<(), FilesystemMkdirError>;
+    async fn mkdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemMkdirError>;
 
     /// Remove exactly one empty directory.
     ///
     /// This operation is non-recursive.
-    async fn rmdir(
-        &self,
-        aid: &str,
-        path: &str,
-    ) -> core::result::Result<(), FilesystemRmDirError>;
+    async fn rmdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemRmDirError>;
 
     /// Rename or move an existing filesystem object.
     ///
@@ -224,23 +199,13 @@ pub trait Filesystem: Send + Sync {
     /// - an existing regular-file destination may be replaced;
     /// - the source is removed on success;
     /// - no destination parent directories are created implicitly.
-    async fn rename(
-        &self,
-        aid: &str,
-        from: &str,
-        to: &str,
-    ) -> core::result::Result<(), FilesystemRenameError>;
+    async fn rename(&self, aid: &str, from: &str, to: &str) -> core::result::Result<(), FilesystemRenameError>;
 
     /// Replace the permission bits of one regular file.
     ///
     /// The LGT WIPI-C filesystem exposes only owner read/write combinations:
     /// 0400, 0200 and 0600.
-    async fn set_mode(
-        &self,
-        aid: &str,
-        path: &str,
-        mode: u32,
-    ) -> core::result::Result<(), FilesystemSetModeError>;
+    async fn set_mode(&self, aid: &str, path: &str, mode: u32) -> core::result::Result<(), FilesystemSetModeError>;
 
     /// Total byte capacity of the storage backing this application's filesystem.
     ///

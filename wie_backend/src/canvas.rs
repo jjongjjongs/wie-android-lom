@@ -849,7 +849,6 @@ impl Clip {
     }
 }
 
-
 pub struct AnimationFrame {
     pub image: Box<dyn Image>,
     pub delay_ms: u32,
@@ -874,12 +873,8 @@ pub fn decode_gif_animation(data: &[u8]) -> Result<Option<AnimatedImage>> {
         return Ok(None);
     }
 
-    let decoder =
-        GifDecoder::new(Cursor::new(data)).map_err(|x| WieError::FatalError(x.to_string()))?;
-    let frames = decoder
-        .into_frames()
-        .collect_frames()
-        .map_err(|x| WieError::FatalError(x.to_string()))?;
+    let decoder = GifDecoder::new(Cursor::new(data)).map_err(|x| WieError::FatalError(x.to_string()))?;
+    let frames = decoder.into_frames().collect_frames().map_err(|x| WieError::FatalError(x.to_string()))?;
 
     if frames.len() <= 1 {
         return Ok(None);
@@ -896,23 +891,14 @@ pub fn decode_gif_animation(data: &[u8]) -> Result<Option<AnimatedImage>> {
         let height = rgba.height();
 
         // Keep the same byte layout used by decode_image().
-        let data = rgba
-            .pixels()
-            .flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]])
-            .collect::<Vec<_>>();
+        let data = rgba.pixels().flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]]).collect::<Vec<_>>();
 
-        let image = Box::new(VecImageBuffer::<ArgbPixel>::from_raw(
-            width,
-            height,
-            pod_collect_to_vec(&data),
-        )) as Box<dyn Image>;
+        let image = Box::new(VecImageBuffer::<ArgbPixel>::from_raw(width, height, pod_collect_to_vec(&data))) as Box<dyn Image>;
 
         decoded_frames.push(AnimationFrame { image, delay_ms });
     }
 
-    Ok(Some(AnimatedImage {
-        frames: decoded_frames,
-    }))
+    Ok(Some(AnimatedImage { frames: decoded_frames }))
 }
 
 fn decode_ecnx(data: &[u8]) -> Result<Box<dyn Image>> {
@@ -927,10 +913,8 @@ fn decode_ecnx(data: &[u8]) -> Result<Box<dyn Image>> {
 
     let width = u16::from_le_bytes([data[6], data[7]]) as usize;
     let height = u16::from_le_bytes([data[8], data[9]]) as usize;
-    let transparent_index =
-        u32::from_le_bytes([data[0x0a], data[0x0b], data[0x0c], data[0x0d]]) as usize;
-    let index_len =
-        u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]) as usize;
+    let transparent_index = u32::from_le_bytes([data[0x0a], data[0x0b], data[0x0c], data[0x0d]]) as usize;
+    let index_len = u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]) as usize;
 
     let pixel_count = width
         .checked_mul(height)
@@ -992,11 +976,7 @@ fn decode_ecnx(data: &[u8]) -> Result<Box<dyn Image>> {
     for &index in &data[index_offset..index_end] {
         let index = index as usize;
 
-        let color = if index < palette.len() {
-            palette[index]
-        } else {
-            0
-        };
+        let color = if index < palette.len() { palette[index] } else { 0 };
 
         let r5 = ((color >> 11) & 0x1f) as u8;
         let g6 = ((color >> 5) & 0x3f) as u8;
@@ -1068,19 +1048,12 @@ mod tests {
 
     use super::{ArgbPixel, Canvas, Color, Rgb332Pixel, TextAlignment, VecImageBuffer};
 
-
     #[test]
     fn test_decode_gif_animation_frames_and_delay() -> Result<()> {
         extern crate std;
 
         use alloc::{string::ToString, vec::Vec};
-        use image::{
-            Delay,
-            Frame,
-            Rgba,
-            RgbaImage,
-            codecs::gif::GifEncoder,
-        };
+        use image::{Delay, Frame, Rgba, RgbaImage, codecs::gif::GifEncoder};
         use std::io::Cursor;
 
         use crate::canvas::decode_gif_animation;

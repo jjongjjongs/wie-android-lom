@@ -26,7 +26,7 @@ use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, Executab
 
 use crate::engine::fast::FastOp;
 
-use super::{JitCtx, exit, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
+use super::{JitCtx, exit, jit_alu_shift, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
 
 /// `dynasm!` selects the target architecture per invocation, defaulting to x64;
 /// this wrapper prepends `.arch aarch64` so every code-emitting helper assembles
@@ -76,7 +76,7 @@ fn supported(op: FastOp) -> bool {
         | FastOp::CondBranch { .. }
         | FastOp::Branch { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
-        FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
+        FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x7 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
     }
 }
 
@@ -488,6 +488,25 @@ fn emit_alu(a: &mut Asm, op: u8, rd: u8, rs: u8) {
         0xD => {
             // MUL: rd * rs (low 32 bits); N,Z from result, C forced to 0, V kept.
             a64!(a ; ldr w0, [x19, #ro(rd)] ; ldr w2, [x19, #ro(rs)] ; mul w0, w0, w2 ; str w0, [x19, #ro(rd)] ; mov w1, wzr);
+            emit_flags_nzc(a);
+        }
+        0x2 | 0x3 | 0x4 | 0x7 => {
+            // Shift-by-register (LSL/LSR/ASR/ROR): rd shifted by rs & 0xff. N,Z
+            // from the result, C from the shifted-out bit, V preserved. The
+            // interpreter's exact shift semantics are reused via `jit_alu_shift`.
+            let shift_type = (((op >> 1) & 2) | (op & 1)) as u32;
+            a64!(a
+                ; ldr w0, [x19, #ro(rd)]       // val
+                ; ldr w1, [x19, #ro(rs)]       // amount
+                ; movz w2, #shift_type          // shift type
+                ; ldr w3, [x19, #CPSR]
+                ; ubfx w3, w3, #29, #1          // carry-in
+            );
+            emit_call(a, jit_alu_shift as *const () as u64);
+            a64!(a
+                ; lsr x1, x0, #32              // carry (0/1)
+                ; str w0, [x19, #ro(rd)]       // res (low 32)
+            );
             emit_flags_nzc(a);
         }
         _ => unreachable!(),

@@ -1,5 +1,5 @@
-use alloc::vec::Vec;
 use alloc::vec;
+use alloc::vec::Vec;
 
 use jvm::{Array, ClassInstanceRef, JavaChar, Jvm, Result as JvmResult};
 
@@ -29,12 +29,7 @@ impl Graphics {
                     Self::init_with_midp_graphics,
                     Default::default(),
                 ),
-                JavaMethodProto::new(
-                    "<init>",
-                    "(Lorg/kwis/msp/lcdui/Image;)V",
-                    Self::init_with_image,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("<init>", "(Lorg/kwis/msp/lcdui/Image;)V", Self::init_with_image, Default::default()),
                 JavaMethodProto::new("getFont", "()Lorg/kwis/msp/lcdui/Font;", Self::get_font, Default::default()),
                 JavaMethodProto::new("copyArea", "(IIIIII)V", Self::copy_area, Default::default()),
                 JavaMethodProto::new("setColor", "(I)V", Self::set_color, Default::default()),
@@ -108,12 +103,8 @@ impl Graphics {
             )
             .await?;
 
-        let base_translate_x: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
-            .await?;
-        let base_translate_y: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
-            .await?;
+        let base_translate_x: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateX", "()I", ()).await?;
+        let base_translate_y: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateY", "()I", ()).await?;
 
         jvm.put_field(&mut this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;", midp_graphics)
             .await?;
@@ -134,12 +125,8 @@ impl Graphics {
     ) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::<init>({this:?})");
 
-        let base_translate_x: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
-            .await?;
-        let base_translate_y: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
-            .await?;
+        let base_translate_x: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateX", "()I", ()).await?;
+        let base_translate_y: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateY", "()I", ()).await?;
 
         jvm.put_field(&mut this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;", midp_graphics)
             .await?;
@@ -161,39 +148,21 @@ impl Graphics {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::<init>({this:?}, {image:?})");
 
         if image.is_null() {
-            return Err(jvm
-                .exception("java/lang/NullPointerException", "image is null")
-                .await);
+            return Err(jvm.exception("java/lang/NullPointerException", "image is null").await);
         }
 
         let midp_image = Image::midp_image(jvm, &image).await?;
         let midp_graphics: ClassInstanceRef<MidpGraphics> = jvm
-            .invoke_virtual(
-                &midp_image,
-                "getGraphics",
-                "()Ljavax/microedition/lcdui/Graphics;",
-                (),
-            )
+            .invoke_virtual(&midp_image, "getGraphics", "()Ljavax/microedition/lcdui/Graphics;", ())
             .await?;
 
-        let base_translate_x: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateX", "()I", ())
-            .await?;
-        let base_translate_y: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getTranslateY", "()I", ())
-            .await?;
+        let base_translate_x: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateX", "()I", ()).await?;
+        let base_translate_y: i32 = jvm.invoke_virtual(&midp_graphics, "getTranslateY", "()I", ()).await?;
 
-        jvm.put_field(
-            &mut this,
-            "midpGraphics",
-            "Ljavax/microedition/lcdui/Graphics;",
-            midp_graphics,
-        )
-        .await?;
-        jvm.put_field(&mut this, "baseTranslateX", "I", base_translate_x)
+        jvm.put_field(&mut this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;", midp_graphics)
             .await?;
-        jvm.put_field(&mut this, "baseTranslateY", "I", base_translate_y)
-            .await?;
+        jvm.put_field(&mut this, "baseTranslateX", "I", base_translate_x).await?;
+        jvm.put_field(&mut this, "baseTranslateY", "I", base_translate_y).await?;
         jvm.put_field(&mut this, "alpha", "I", 255).await?;
         jvm.put_field(&mut this, "strokeStyle", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
@@ -274,13 +243,8 @@ impl Graphics {
         // Native Graphics.setFont(null) substitutes Font.getDefaultFont()
         // before applying the font to the native graphics state.
         let font = if font.is_null() {
-            jvm.invoke_static(
-                "org/kwis/msp/lcdui/Font",
-                "getDefaultFont",
-                "()Lorg/kwis/msp/lcdui/Font;",
-                (),
-            )
-            .await?
+            jvm.invoke_static("org/kwis/msp/lcdui/Font", "getDefaultFont", "()Lorg/kwis/msp/lcdui/Font;", ())
+                .await?
         } else {
             font
         };
@@ -364,25 +328,16 @@ impl Graphics {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::fillPolygon({this:?}, {x_points:?}, {y_points:?})");
 
         if x_points.is_null() {
-            return Err(jvm
-                .exception("java/lang/NullPointerException", "x is null.")
-                .await);
+            return Err(jvm.exception("java/lang/NullPointerException", "x is null.").await);
         }
         if y_points.is_null() {
-            return Err(jvm
-                .exception("java/lang/NullPointerException", "y is null.")
-                .await);
+            return Err(jvm.exception("java/lang/NullPointerException", "y is null.").await);
         }
 
         let x_len = jvm.array_length(&x_points).await?;
         let y_len = jvm.array_length(&y_points).await?;
         if x_len != y_len {
-            return Err(jvm
-                .exception(
-                    "java/lang/IllegalArgumentException",
-                    "x.length != y.length",
-                )
-                .await);
+            return Err(jvm.exception("java/lang/IllegalArgumentException", "x.length != y.length").await);
         }
 
         if x_len == 0 {
@@ -392,30 +347,18 @@ impl Graphics {
         let xs: Vec<i32> = jvm.load_array(&x_points, 0, x_len).await?;
         let ys: Vec<i32> = jvm.load_array(&y_points, 0, y_len).await?;
 
-        let midp_graphics =
-            jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;")
-                .await?;
+        let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
         // Native dgraphics_fill_polygon() first draws the closed outline.
         for i in 1..x_len {
             let _: () = jvm
-                .invoke_virtual(
-                    &midp_graphics,
-                    "drawLine",
-                    "(IIII)V",
-                    (xs[i - 1], ys[i - 1], xs[i], ys[i]),
-                )
+                .invoke_virtual(&midp_graphics, "drawLine", "(IIII)V", (xs[i - 1], ys[i - 1], xs[i], ys[i]))
                 .await?;
         }
 
         let last = x_len - 1;
         let _: () = jvm
-            .invoke_virtual(
-                &midp_graphics,
-                "drawLine",
-                "(IIII)V",
-                (xs[last], ys[last], xs[0], ys[0]),
-            )
+            .invoke_virtual(&midp_graphics, "drawLine", "(IIII)V", (xs[last], ys[last], xs[0], ys[0]))
             .await?;
 
         if x_len < 3 {
@@ -475,12 +418,7 @@ impl Graphics {
 
                 if left <= right {
                     let _: () = jvm
-                        .invoke_virtual(
-                            &midp_graphics,
-                            "drawLine",
-                            "(IIII)V",
-                            (left, scan_y, right, scan_y),
-                        )
+                        .invoke_virtual(&midp_graphics, "drawLine", "(IIII)V", (left, scan_y, right, scan_y))
                         .await?;
                 }
             }
@@ -557,25 +495,16 @@ impl Graphics {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::drawPolygon({this:?}, {x_points:?}, {y_points:?})");
 
         if x_points.is_null() {
-            return Err(jvm
-                .exception("java/lang/NullPointerException", "x is null.")
-                .await);
+            return Err(jvm.exception("java/lang/NullPointerException", "x is null.").await);
         }
         if y_points.is_null() {
-            return Err(jvm
-                .exception("java/lang/NullPointerException", "y is null.")
-                .await);
+            return Err(jvm.exception("java/lang/NullPointerException", "y is null.").await);
         }
 
         let x_len = jvm.array_length(&x_points).await?;
         let y_len = jvm.array_length(&y_points).await?;
         if x_len != y_len {
-            return Err(jvm
-                .exception(
-                    "java/lang/IllegalArgumentException",
-                    "x.length != y.length",
-                )
-                .await);
+            return Err(jvm.exception("java/lang/IllegalArgumentException", "x.length != y.length").await);
         }
 
         // The native implementation ultimately performs:
@@ -591,29 +520,17 @@ impl Graphics {
         let xs: Vec<i32> = jvm.load_array(&x_points, 0, x_len).await?;
         let ys: Vec<i32> = jvm.load_array(&y_points, 0, y_len).await?;
 
-        let midp_graphics =
-            jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;")
-                .await?;
+        let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
         for i in 1..x_len {
             let _: () = jvm
-                .invoke_virtual(
-                    &midp_graphics,
-                    "drawLine",
-                    "(IIII)V",
-                    (xs[i - 1], ys[i - 1], xs[i], ys[i]),
-                )
+                .invoke_virtual(&midp_graphics, "drawLine", "(IIII)V", (xs[i - 1], ys[i - 1], xs[i], ys[i]))
                 .await?;
         }
 
         let last = x_len - 1;
         let _: () = jvm
-            .invoke_virtual(
-                &midp_graphics,
-                "drawLine",
-                "(IIII)V",
-                (xs[last], ys[last], xs[0], ys[0]),
-            )
+            .invoke_virtual(&midp_graphics, "drawLine", "(IIII)V", (xs[last], ys[last], xs[0], ys[0]))
             .await?;
 
         Ok(())
@@ -714,11 +631,9 @@ impl Graphics {
             return Err(jvm.exception("java/lang/NullPointerException", "image is null").await);
         }
 
-        let midp_graphics =
-            jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
+        let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
         let midp_image = Image::midp_image(jvm, &image).await?;
-        let transparent_color: i32 =
-            jvm.get_field(&image, "transparentColor", "I").await?;
+        let transparent_color: i32 = jvm.get_field(&image, "transparentColor", "I").await?;
 
         // -1 is the native "no transparent color" sentinel.
         // Keep the ordinary path unchanged when color-keying is disabled.
@@ -756,10 +671,7 @@ impl Graphics {
         };
 
         let key = transparent_color as u32;
-        let key565 =
-            ((key >> 8) & 0xf800) |
-            ((key >> 5) & 0x07e0) |
-            ((key >> 3) & 0x001f);
+        let key565 = ((key >> 8) & 0xf800) | ((key >> 5) & 0x07e0) | ((key >> 3) & 0x001f);
 
         let pixel_count = match (width as usize).checked_mul(height as usize) {
             Some(value) => value,
@@ -771,23 +683,11 @@ impl Graphics {
             for source_x in 0..width {
                 let pixel = backend_image.get_pixel(source_x, source_y);
 
-                let source565 =
-                    (((pixel.r as u32) << 8) & 0xf800) |
-                    (((pixel.g as u32) << 3) & 0x07e0) |
-                    (((pixel.b as u32) >> 3) & 0x001f);
+                let source565 = (((pixel.r as u32) << 8) & 0xf800) | (((pixel.g as u32) << 3) & 0x07e0) | (((pixel.b as u32) >> 3) & 0x001f);
 
-                let alpha = if source565 == key565 {
-                    0
-                } else {
-                    pixel.a as u32
-                };
+                let alpha = if source565 == key565 { 0 } else { pixel.a as u32 };
 
-                rgb.push(
-                    ((alpha << 24)
-                        | ((pixel.r as u32) << 16)
-                        | ((pixel.g as u32) << 8)
-                        | pixel.b as u32) as i32,
-                );
+                rgb.push(((alpha << 24) | ((pixel.r as u32) << 16) | ((pixel.g as u32) << 8) | pixel.b as u32) as i32);
             }
         }
 
@@ -800,16 +700,7 @@ impl Graphics {
                 &midp_graphics,
                 "drawRGB",
                 "([IIIIIIIZ)V",
-                (
-                    rgb_array,
-                    0,
-                    width,
-                    draw_x,
-                    draw_y,
-                    width,
-                    height,
-                    true,
-                ),
+                (rgb_array, 0, width, draw_x, draw_y, width, height, true),
             )
             .await?;
 
@@ -1002,9 +893,7 @@ impl Graphics {
     async fn get_pixel(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, x: i32, y: i32) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::getPixel({this:?}, {x}, {y})");
 
-        let mut midp_graphics: ClassInstanceRef<MidpGraphics> =
-            jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;")
-                .await?;
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
         let width: i32 = jvm.get_field(&midp_graphics, "width", "I").await?;
         let height: i32 = jvm.get_field(&midp_graphics, "height", "I").await?;
@@ -1030,11 +919,7 @@ impl Graphics {
 
         // Avoid an out-of-bounds backend access. Native Graphics objects
         // normally keep their translated origin inside the backing image.
-        if absolute_x < 0
-            || absolute_y < 0
-            || absolute_x as u32 >= backend_image.width()
-            || absolute_y as u32 >= backend_image.height()
-        {
+        if absolute_x < 0 || absolute_y < 0 || absolute_x as u32 >= backend_image.width() || absolute_y as u32 >= backend_image.height() {
             return Ok(-2022);
         }
 
@@ -1067,33 +952,21 @@ impl Graphics {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::getPixels({this:?}, {x}, {y}, {width}, {height}, {pixels:?}, {offset}, {bytes_per_line})");
 
         if pixels.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "pixels is null.")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/NullPointerException", "pixels is null.").await);
         }
 
         let array_length = jvm.array_length(&pixels).await? as i32;
         let required_length = height.wrapping_mul(bytes_per_line);
 
         if array_length < required_length {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
         if width <= 0 || height <= 0 {
             return Ok(());
         }
 
-        let mut midp_graphics: ClassInstanceRef<MidpGraphics> =
-            jvm.get_field(
-                &this,
-                "midpGraphics",
-                "Ljavax/microedition/lcdui/Graphics;",
-            )
-            .await?;
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
         let graphics_width: i32 = jvm.get_field(&midp_graphics, "width", "I").await?;
         let graphics_height: i32 = jvm.get_field(&midp_graphics, "height", "I").await?;
@@ -1109,10 +982,8 @@ impl Graphics {
             return Ok(());
         }
 
-        let base_translate_x: i32 =
-            jvm.get_field(&this, "baseTranslateX", "I").await?;
-        let base_translate_y: i32 =
-            jvm.get_field(&this, "baseTranslateY", "I").await?;
+        let base_translate_x: i32 = jvm.get_field(&this, "baseTranslateX", "I").await?;
+        let base_translate_y: i32 = jvm.get_field(&this, "baseTranslateY", "I").await?;
 
         let image = MidpGraphics::image(jvm, &mut midp_graphics).await?;
         let backend_image = MidpImage::image(jvm, &image).await?;
@@ -1120,10 +991,7 @@ impl Graphics {
         let row_stride = match width.checked_mul(2) {
             Some(value) if value >= 0 => value as usize,
             _ => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
@@ -1134,10 +1002,7 @@ impl Graphics {
         let destination_offset = match offset.checked_mul(4) {
             Some(value) if value >= 0 => value as usize,
             _ => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
@@ -1150,10 +1015,7 @@ impl Graphics {
         {
             Some(value) => value,
             None => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
@@ -1161,14 +1023,10 @@ impl Graphics {
             .checked_add(touched_bytes)
             .is_none_or(|end| end > array_length as usize)
         {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
-        let mut data: Vec<i8> =
-            jvm.load_array(&pixels, destination_offset, touched_bytes).await?;
+        let mut data: Vec<i8> = jvm.load_array(&pixels, destination_offset, touched_bytes).await?;
 
         for row in 0..copied_height {
             let source_y = base_translate_y + top + row as i32;
@@ -1177,11 +1035,7 @@ impl Graphics {
             for column in 0..copied_width {
                 let source_x = base_translate_x + left + column as i32;
 
-                if source_x < 0
-                    || source_y < 0
-                    || source_x as u32 >= backend_image.width()
-                    || source_y as u32 >= backend_image.height()
-                {
+                if source_x < 0 || source_y < 0 || source_x as u32 >= backend_image.width() || source_y as u32 >= backend_image.height() {
                     continue;
                 }
 
@@ -1218,20 +1072,14 @@ impl Graphics {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::setPixels({this:?}, {x}, {y}, {width}, {height}, {pixels:?}, {offset}, {bytes_per_line})");
 
         if pixels.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "pixels is null.")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/NullPointerException", "pixels is null.").await);
         }
 
         let array_length = jvm.array_length(&pixels).await? as i32;
         let required_length = height.wrapping_mul(bytes_per_line);
 
         if array_length < required_length {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
         if width <= 0 || height <= 0 {
@@ -1241,20 +1089,14 @@ impl Graphics {
         let pixel_count = match width.checked_mul(height) {
             Some(value) if value >= 0 => value as usize,
             _ => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
         let source_bytes = match pixel_count.checked_mul(2) {
             Some(value) => value,
             None => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
@@ -1263,29 +1105,18 @@ impl Graphics {
         let source_offset = match offset.checked_mul(4) {
             Some(value) if value >= 0 => value as usize,
             _ => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
         // The reference implementation does not perform this second bounds
         // check and may access outside the Java array. Preserve normal native
         // semantics while keeping the Rust implementation memory-safe.
-        if source_offset
-            .checked_add(source_bytes)
-            .is_none_or(|end| end > array_length as usize)
-        {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+        if source_offset.checked_add(source_bytes).is_none_or(|end| end > array_length as usize) {
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
-        let raw: Vec<i8> = jvm
-            .load_array(&pixels, source_offset, source_bytes)
-            .await?;
+        let raw: Vec<i8> = jvm.load_array(&pixels, source_offset, source_bytes).await?;
 
         let mut rgb = Vec::with_capacity(pixel_count);
 
@@ -1311,12 +1142,7 @@ impl Graphics {
         // MIDP drawRGB already applies the current translation, clipping and
         // XOR state, matching dgraphics_draw_raw_data().
         let _: () = jvm
-            .invoke_virtual(
-                &this,
-                "setRGBPixels",
-                "(IIII[III)V",
-                (x, y, width, height, rgb_array, 0, width),
-            )
+            .invoke_virtual(&this, "setRGBPixels", "(IIII[III)V", (x, y, width, height, rgb_array, 0, width))
             .await?;
 
         Ok(())
@@ -1333,31 +1159,17 @@ impl Graphics {
         let base_translate_x: i32 = jvm.get_field(&this, "baseTranslateX", "I").await?;
         let base_translate_y: i32 = jvm.get_field(&this, "baseTranslateY", "I").await?;
         let _: () = jvm
-            .invoke_virtual(
-                &midp_graphics,
-                "translate",
-                "(II)V",
-                (base_translate_x, base_translate_y),
-            )
+            .invoke_virtual(&midp_graphics, "translate", "(II)V", (base_translate_x, base_translate_y))
             .await?;
 
         // MIDP reset leaves its absolute clip origin at (0, 0).
         // Native dgraphics_reset restores absolute clip X/Y to the
         // immutable base origin. Re-establish that origin while
         // preserving MIDP reset's current clip width/height for now.
-        let clip_width: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getClipWidth", "()I", ())
-            .await?;
-        let clip_height: i32 = jvm
-            .invoke_virtual(&midp_graphics, "getClipHeight", "()I", ())
-            .await?;
+        let clip_width: i32 = jvm.invoke_virtual(&midp_graphics, "getClipWidth", "()I", ()).await?;
+        let clip_height: i32 = jvm.invoke_virtual(&midp_graphics, "getClipHeight", "()I", ()).await?;
         let _: () = jvm
-            .invoke_virtual(
-                &midp_graphics,
-                "setClip",
-                "(IIII)V",
-                (0, 0, clip_width, clip_height),
-            )
+            .invoke_virtual(&midp_graphics, "setClip", "(IIII)V", (0, 0, clip_width, clip_height))
             .await?;
 
         jvm.put_field(&mut this, "alpha", "I", 255).await?;
@@ -1367,20 +1179,10 @@ impl Graphics {
         // Native Graphics.reset() performs reset0(), then restores
         // Font.getDefaultFont() through this.setFont(defaultFont).
         let default_font: ClassInstanceRef<Font> = jvm
-            .invoke_static(
-                "org/kwis/msp/lcdui/Font",
-                "getDefaultFont",
-                "()Lorg/kwis/msp/lcdui/Font;",
-                (),
-            )
+            .invoke_static("org/kwis/msp/lcdui/Font", "getDefaultFont", "()Lorg/kwis/msp/lcdui/Font;", ())
             .await?;
         let _: () = jvm
-            .invoke_virtual(
-                &this,
-                "setFont",
-                "(Lorg/kwis/msp/lcdui/Font;)V",
-                (default_font,),
-            )
+            .invoke_virtual(&this, "setFont", "(Lorg/kwis/msp/lcdui/Font;)V", (default_font,))
             .await?;
 
         Ok(())
@@ -1407,9 +1209,7 @@ impl Graphics {
         width: i32,
         height: i32,
     ) -> JvmResult<ClassInstanceRef<Array<u8>>> {
-        tracing::debug!(
-            "org.kwis.msp.lcdui.Graphics::encodeImage({this:?}, {x}, {y}, {width}, {height})"
-        );
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::encodeImage({this:?}, {x}, {y}, {width}, {height})");
 
         // The native Java bridge allocates a 24-bpp BMP-sized byte array
         // from the originally requested dimensions before native clipping.
@@ -1429,11 +1229,10 @@ impl Graphics {
             None => return Ok(jvm.instantiate_array("B", 0).await?.into()),
         };
 
-        let requested_image_size =
-            match requested_row_stride.checked_mul(requested_height) {
-                Some(value) => value,
-                None => return Ok(jvm.instantiate_array("B", 0).await?.into()),
-            };
+        let requested_image_size = match requested_row_stride.checked_mul(requested_height) {
+            Some(value) => value,
+            None => return Ok(jvm.instantiate_array("B", 0).await?.into()),
+        };
 
         let allocated_size = match requested_image_size.checked_add(54) {
             Some(value) => value,
@@ -1442,18 +1241,10 @@ impl Graphics {
 
         let mut result = vec![0u8; allocated_size];
 
-        let mut midp_graphics: ClassInstanceRef<MidpGraphics> =
-            jvm.get_field(
-                &this,
-                "midpGraphics",
-                "Ljavax/microedition/lcdui/Graphics;",
-            )
-            .await?;
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
-        let graphics_width: i32 =
-            jvm.get_field(&midp_graphics, "width", "I").await?;
-        let graphics_height: i32 =
-            jvm.get_field(&midp_graphics, "height", "I").await?;
+        let graphics_width: i32 = jvm.get_field(&midp_graphics, "width", "I").await?;
+        let graphics_height: i32 = jvm.get_field(&midp_graphics, "height", "I").await?;
 
         // Native encode_image(flag=0) intersects against the Graphics'
         // logical region, not the current translated origin or clip.
@@ -1470,9 +1261,7 @@ impl Graphics {
         // simply returns that untouched allocation.
         if right <= left || bottom <= top {
             let mut data_array = jvm.instantiate_array("B", result.len()).await?;
-            jvm.array_raw_buffer_mut(&mut data_array)
-                .await?
-                .write(0, &result)?;
+            jvm.array_raw_buffer_mut(&mut data_array).await?.write(0, &result)?;
             return Ok(data_array.into());
         }
 
@@ -1513,11 +1302,7 @@ impl Graphics {
             for column in 0..encoded_width {
                 let source_x = left + column as i32;
 
-                if source_x < 0
-                    || source_y < 0
-                    || source_x as u32 >= backend_image.width()
-                    || source_y as u32 >= backend_image.height()
-                {
+                if source_x < 0 || source_y < 0 || source_x as u32 >= backend_image.width() || source_y as u32 >= backend_image.height() {
                     continue;
                 }
 
@@ -1537,9 +1322,7 @@ impl Graphics {
         }
 
         let mut data_array = jvm.instantiate_array("B", result.len()).await?;
-        jvm.array_raw_buffer_mut(&mut data_array)
-            .await?
-            .write(0, &result)?;
+        jvm.array_raw_buffer_mut(&mut data_array).await?.write(0, &result)?;
 
         Ok(data_array.into())
     }
@@ -1559,20 +1342,14 @@ impl Graphics {
         tracing::debug!("org.kwis.msp.lcdui.Graphics::getRGBPixels({this:?}, {x}, {y}, {width}, {height}, {pixels:?}, {offset}, {bpl})");
 
         if pixels.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "pixels is null.")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/NullPointerException", "pixels is null.").await);
         }
 
         let array_length = jvm.array_length(&pixels).await? as i32;
         let required_length = height.wrapping_mul(bpl);
 
         if array_length < required_length {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
         // Native get_rgb_data() returns M_E_OUTOFBOUND for negative x/y.
@@ -1581,18 +1358,10 @@ impl Graphics {
             return Ok(());
         }
 
-        let mut midp_graphics: ClassInstanceRef<MidpGraphics> =
-            jvm.get_field(
-                &this,
-                "midpGraphics",
-                "Ljavax/microedition/lcdui/Graphics;",
-            )
-            .await?;
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
-        let graphics_width: i32 =
-            jvm.get_field(&midp_graphics, "width", "I").await?;
-        let graphics_height: i32 =
-            jvm.get_field(&midp_graphics, "height", "I").await?;
+        let graphics_width: i32 = jvm.get_field(&midp_graphics, "width", "I").await?;
+        let graphics_height: i32 = jvm.get_field(&midp_graphics, "height", "I").await?;
 
         if x >= graphics_width || y >= graphics_height {
             return Ok(());
@@ -1614,10 +1383,7 @@ impl Graphics {
         let destination_offset = match usize::try_from(offset) {
             Ok(value) => value,
             Err(_) => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
@@ -1628,10 +1394,7 @@ impl Graphics {
         {
             Some(value) => value,
             None => {
-                return Err(
-                    jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
             }
         };
 
@@ -1642,20 +1405,13 @@ impl Graphics {
             .checked_add(touched_elements)
             .is_none_or(|end| end > array_length as usize)
         {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
-        let mut data: Vec<i32> =
-            jvm.load_array(&pixels, destination_offset, touched_elements)
-                .await?;
+        let mut data: Vec<i32> = jvm.load_array(&pixels, destination_offset, touched_elements).await?;
 
-        let base_translate_x: i32 =
-            jvm.get_field(&this, "baseTranslateX", "I").await?;
-        let base_translate_y: i32 =
-            jvm.get_field(&this, "baseTranslateY", "I").await?;
+        let base_translate_x: i32 = jvm.get_field(&this, "baseTranslateX", "I").await?;
+        let base_translate_y: i32 = jvm.get_field(&this, "baseTranslateY", "I").await?;
 
         let image = MidpGraphics::image(jvm, &mut midp_graphics).await?;
         let backend_image = MidpImage::image(jvm, &image).await?;
@@ -1667,11 +1423,7 @@ impl Graphics {
             for column in 0..copied_width {
                 let source_x = base_translate_x + x + column as i32;
 
-                if source_x < 0
-                    || source_y < 0
-                    || source_x as u32 >= backend_image.width()
-                    || source_y as u32 >= backend_image.height()
-                {
+                if source_x < 0 || source_y < 0 || source_x as u32 >= backend_image.width() || source_y as u32 >= backend_image.height() {
                     continue;
                 }
 
@@ -1683,8 +1435,7 @@ impl Graphics {
                 let g = (pixel.g & 0xfc) as i32;
                 let b = (pixel.b & 0xf8) as i32;
 
-                data[destination_row + column] =
-                    (r << 16) | (g << 8) | b;
+                data[destination_row + column] = (r << 16) | (g << 8) | b;
             }
         }
 
@@ -1703,7 +1454,10 @@ mod test {
     use wie_midp::classes::javax::microedition::lcdui::Image as MidpImage;
     use wie_util::Result;
 
-    use crate::{classes::org::kwis::msp::lcdui::{Font, Image}, get_protos};
+    use crate::{
+        classes::org::kwis::msp::lcdui::{Font, Image},
+        get_protos,
+    };
 
     use super::Graphics;
 
@@ -1773,20 +1527,10 @@ mod test {
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getGrayScale", "()I", ()).await?, 0x34);
 
             let custom_font: ClassInstanceRef<Font> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Font",
-                    "getFont",
-                    "(III)Lorg/kwis/msp/lcdui/Font;",
-                    (0, 1, 16),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Font", "getFont", "(III)Lorg/kwis/msp/lcdui/Font;", (0, 1, 16))
                 .await?;
             let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "setFont",
-                    "(Lorg/kwis/msp/lcdui/Font;)V",
-                    (custom_font,),
-                )
+                .invoke_virtual(&graphics, "setFont", "(Lorg/kwis/msp/lcdui/Font;)V", (custom_font,))
                 .await?;
 
             let _: () = jvm.invoke_virtual(&graphics, "setStrokeStyle", "(I)V", (1,)).await?;
@@ -1796,36 +1540,18 @@ mod test {
             assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getStrokeStyle", "()I", ()).await?, 0);
             assert!(!jvm.invoke_virtual::<_, bool>(&graphics, "isXORMode", "()Z", ()).await?);
 
-            let reset_font: ClassInstanceRef<Font> = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "getFont",
-                    "()Lorg/kwis/msp/lcdui/Font;",
-                    (),
-                )
-                .await?;
+            let reset_font: ClassInstanceRef<Font> = jvm.invoke_virtual(&graphics, "getFont", "()Lorg/kwis/msp/lcdui/Font;", ()).await?;
             let default_font: ClassInstanceRef<Font> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Font",
-                    "getDefaultFont",
-                    "()Lorg/kwis/msp/lcdui/Font;",
-                    (),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Font", "getDefaultFont", "()Lorg/kwis/msp/lcdui/Font;", ())
                 .await?;
 
-            let reset_face: i32 =
-                jvm.invoke_virtual(&reset_font, "getFace", "()I", ()).await?;
-            let reset_style: i32 =
-                jvm.invoke_virtual(&reset_font, "getStyle", "()I", ()).await?;
-            let reset_size: i32 =
-                jvm.invoke_virtual(&reset_font, "getSize", "()I", ()).await?;
+            let reset_face: i32 = jvm.invoke_virtual(&reset_font, "getFace", "()I", ()).await?;
+            let reset_style: i32 = jvm.invoke_virtual(&reset_font, "getStyle", "()I", ()).await?;
+            let reset_size: i32 = jvm.invoke_virtual(&reset_font, "getSize", "()I", ()).await?;
 
-            let default_face: i32 =
-                jvm.invoke_virtual(&default_font, "getFace", "()I", ()).await?;
-            let default_style: i32 =
-                jvm.invoke_virtual(&default_font, "getStyle", "()I", ()).await?;
-            let default_size: i32 =
-                jvm.invoke_virtual(&default_font, "getSize", "()I", ()).await?;
+            let default_face: i32 = jvm.invoke_virtual(&default_font, "getFace", "()I", ()).await?;
+            let default_style: i32 = jvm.invoke_virtual(&default_font, "getStyle", "()I", ()).await?;
+            let default_size: i32 = jvm.invoke_virtual(&default_font, "getSize", "()I", ()).await?;
 
             assert_eq!(reset_face, default_face);
             assert_eq!(reset_style, default_style);
@@ -1841,21 +1567,11 @@ mod test {
                 )
                 .await?;
 
-            let null_font: ClassInstanceRef<Font> = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "getFont",
-                    "()Lorg/kwis/msp/lcdui/Font;",
-                    (),
-                )
-                .await?;
+            let null_font: ClassInstanceRef<Font> = jvm.invoke_virtual(&graphics, "getFont", "()Lorg/kwis/msp/lcdui/Font;", ()).await?;
 
-            let null_face: i32 =
-                jvm.invoke_virtual(&null_font, "getFace", "()I", ()).await?;
-            let null_style: i32 =
-                jvm.invoke_virtual(&null_font, "getStyle", "()I", ()).await?;
-            let null_size: i32 =
-                jvm.invoke_virtual(&null_font, "getSize", "()I", ()).await?;
+            let null_face: i32 = jvm.invoke_virtual(&null_font, "getFace", "()I", ()).await?;
+            let null_style: i32 = jvm.invoke_virtual(&null_font, "getStyle", "()I", ()).await?;
+            let null_size: i32 = jvm.invoke_virtual(&null_font, "getSize", "()I", ()).await?;
 
             assert_eq!(null_face, default_face);
             assert_eq!(null_style, default_style);
@@ -1869,63 +1585,35 @@ mod test {
     fn test_get_pixel_rgb565_base_origin_and_bounds() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Image",
-                    "createImage",
-                    "(II)Lorg/kwis/msp/lcdui/Image;",
-                    (4, 4),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (4, 4))
                 .await?;
 
-            let graphics: ClassInstanceRef<Graphics> = jvm
-                .invoke_virtual(
-                    &image,
-                    "getGraphics",
-                    "()Lorg/kwis/msp/lcdui/Graphics;",
-                    (),
-                )
-                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
             // Draw a non-RGB565-exact color at absolute backing coordinate (2, 1).
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setColor", "(I)V", (0x12_34_56,))
-                .await?;
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setPixel", "(II)V", (2, 1))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (0x12_34_56,)).await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setPixel", "(II)V", (2, 1)).await?;
 
             // Native getPixel reads RGB565 and expands without bit replication:
             // 0x12 -> 0x10, 0x34 -> 0x34, 0x56 -> 0x50.
-            let pixel: i32 = jvm
-                .invoke_virtual(&graphics, "getPixel", "(II)I", (2, 1))
-                .await?;
+            let pixel: i32 = jvm.invoke_virtual(&graphics, "getPixel", "(II)I", (2, 1)).await?;
             assert_eq!(pixel, 0x10_34_50);
 
             // Native getPixel uses the Graphics base origin, so a later
             // translate() does not move the raw pixel lookup.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
-                .await?;
-            let translated: i32 = jvm
-                .invoke_virtual(&graphics, "getPixel", "(II)I", (2, 1))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (1, 0)).await?;
+            let translated: i32 = jvm.invoke_virtual(&graphics, "getPixel", "(II)I", (2, 1)).await?;
             assert_eq!(translated, 0x10_34_50);
 
             // Bounds are checked against the logical Graphics region before
             // translation, and native returns M_E_OUTOFBOUND (-2022).
-            let left: i32 = jvm
-                .invoke_virtual(&graphics, "getPixel", "(II)I", (-1, 0))
-                .await?;
+            let left: i32 = jvm.invoke_virtual(&graphics, "getPixel", "(II)I", (-1, 0)).await?;
             assert_eq!(left, -2022);
 
-            let right: i32 = jvm
-                .invoke_virtual(&graphics, "getPixel", "(II)I", (4, 0))
-                .await?;
+            let right: i32 = jvm.invoke_virtual(&graphics, "getPixel", "(II)I", (4, 0)).await?;
             assert_eq!(right, -2022);
 
-            let bottom: i32 = jvm
-                .invoke_virtual(&graphics, "getPixel", "(II)I", (0, 4))
-                .await?;
+            let bottom: i32 = jvm.invoke_virtual(&graphics, "getPixel", "(II)I", (0, 4)).await?;
             assert_eq!(bottom, -2022);
 
             Ok(())
@@ -1934,114 +1622,54 @@ mod test {
 
     #[test]
     fn test_wrapped_graphics_translate_is_relative_to_base_and_reset_restores_base() -> Result<()> {
-        run_jvm_test(
-            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
-            |jvm| async move {
-                let midp_image: ClassInstanceRef<MidpImage> = jvm
-                    .invoke_static(
-                        "javax/microedition/lcdui/Image",
-                        "createImage",
-                        "(II)Ljavax/microedition/lcdui/Image;",
-                        (12, 10),
-                    )
-                    .await?;
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let midp_image: ClassInstanceRef<MidpImage> = jvm
+                .invoke_static(
+                    "javax/microedition/lcdui/Image",
+                    "createImage",
+                    "(II)Ljavax/microedition/lcdui/Image;",
+                    (12, 10),
+                )
+                .await?;
 
-                let midp_graphics: ClassInstanceRef<wie_midp::classes::javax::microedition::lcdui::Graphics> = jvm
-                    .invoke_virtual(
-                        &midp_image,
-                        "getGraphics",
-                        "()Ljavax/microedition/lcdui/Graphics;",
-                        (),
-                    )
-                    .await?;
+            let midp_graphics: ClassInstanceRef<wie_midp::classes::javax::microedition::lcdui::Graphics> = jvm
+                .invoke_virtual(&midp_image, "getGraphics", "()Ljavax/microedition/lcdui/Graphics;", ())
+                .await?;
 
-                // Establish a non-zero WIPI base origin, then narrow only
-                // the current clip. Native Graphics reset restores the fixed
-                // logical Graphics size, not this current clip size.
-                let _: () = jvm
-                    .invoke_virtual(&midp_graphics, "translate", "(II)V", (3, 4))
-                    .await?;
-                let _: () = jvm
-                    .invoke_virtual(&midp_graphics, "setClip", "(IIII)V", (1, 2, 6, 3))
-                    .await?;
+            // Establish a non-zero WIPI base origin, then narrow only
+            // the current clip. Native Graphics reset restores the fixed
+            // logical Graphics size, not this current clip size.
+            let _: () = jvm.invoke_virtual(&midp_graphics, "translate", "(II)V", (3, 4)).await?;
+            let _: () = jvm.invoke_virtual(&midp_graphics, "setClip", "(IIII)V", (1, 2, 6, 3)).await?;
 
-                let graphics: ClassInstanceRef<Graphics> = jvm
-                    .new_class(
-                        "org/kwis/msp/lcdui/Graphics",
-                        "(Ljavax/microedition/lcdui/Graphics;)V",
-                        (midp_graphics,),
-                    )
-                    .await?
-                    .into();
+            let graphics: ClassInstanceRef<Graphics> = jvm
+                .new_class("org/kwis/msp/lcdui/Graphics", "(Ljavax/microedition/lcdui/Graphics;)V", (midp_graphics,))
+                .await?
+                .into();
 
-                // WIPI reports translation relative to its immutable base.
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ())
-                        .await?,
-                    0
-                );
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ())
-                        .await?,
-                    0
-                );
+            // WIPI reports translation relative to its immutable base.
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ()).await?, 0);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ()).await?, 0);
 
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "translate", "(II)V", (5, 6))
-                    .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (5, 6)).await?;
 
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ())
-                        .await?,
-                    5
-                );
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ())
-                        .await?,
-                    6
-                );
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ()).await?, 5);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ()).await?, 6);
 
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "setClip", "(IIII)V", (0, 0, 1, 1))
-                    .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setClip", "(IIII)V", (0, 0, 1, 1)).await?;
 
-                let _: () = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await?;
+            let _: () = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await?;
 
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ())
-                        .await?,
-                    0
-                );
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ())
-                        .await?,
-                    0
-                );
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateX", "()I", ()).await?, 0);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getTranslateY", "()I", ()).await?, 0);
 
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipX", "()I", ())
-                        .await?,
-                    0
-                );
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipY", "()I", ())
-                        .await?,
-                    0
-                );
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipWidth", "()I", ())
-                        .await?,
-                    12
-                );
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&graphics, "getClipHeight", "()I", ())
-                        .await?,
-                    10
-                );
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getClipX", "()I", ()).await?, 0);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getClipY", "()I", ()).await?, 0);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getClipWidth", "()I", ()).await?, 12);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&graphics, "getClipHeight", "()I", ()).await?, 10);
 
-                Ok(())
-            },
-        )
+            Ok(())
+        })
     }
 
     #[test]
@@ -2056,48 +1684,27 @@ mod test {
                 )
                 .await?;
 
-            let midp_graphics: ClassInstanceRef<
-                wie_midp::classes::javax::microedition::lcdui::Graphics,
-            > = jvm
-                .invoke_virtual(
-                    &midp_image,
-                    "getGraphics",
-                    "()Ljavax/microedition/lcdui/Graphics;",
-                    (),
-                )
+            let midp_graphics: ClassInstanceRef<wie_midp::classes::javax::microedition::lcdui::Graphics> = jvm
+                .invoke_virtual(&midp_image, "getGraphics", "()Ljavax/microedition/lcdui/Graphics;", ())
                 .await?;
 
-            let _: () = jvm
-                .invoke_virtual(&midp_graphics, "translate", "(II)V", (1, 1))
-                .await?;
+            let _: () = jvm.invoke_virtual(&midp_graphics, "translate", "(II)V", (1, 1)).await?;
 
             let graphics: ClassInstanceRef<Graphics> = jvm
-                .new_class(
-                    "org/kwis/msp/lcdui/Graphics",
-                    "(Ljavax/microedition/lcdui/Graphics;)V",
-                    (midp_graphics,),
-                )
+                .new_class("org/kwis/msp/lcdui/Graphics", "(Ljavax/microedition/lcdui/Graphics;)V", (midp_graphics,))
                 .await?
                 .into();
 
             // The wrapped MIDP Graphics already has base translation (1, 1),
             // so setPixel(1, 1) writes backing coordinate (2, 2).
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setColor", "(I)V", (0x20_40_60,))
-                .await?;
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setPixel", "(II)V", (1, 1))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (0x20_40_60,)).await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setPixel", "(II)V", (1, 1)).await?;
 
             // Add a current translation after wrapping. Native getPixel still
             // uses the base origin captured at construction.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (1, 0)).await?;
 
-            let pixel: i32 = jvm
-                .invoke_virtual(&graphics, "getPixel", "(II)I", (1, 1))
-                .await?;
+            let pixel: i32 = jvm.invoke_virtual(&graphics, "getPixel", "(II)I", (1, 1)).await?;
             assert_eq!(pixel, 0x20_40_60);
 
             Ok(())
@@ -2108,40 +1715,22 @@ mod test {
     fn test_get_pixels_rgb565_offset_base_origin_and_clipping() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Image",
-                    "createImage",
-                    "(II)Lorg/kwis/msp/lcdui/Image;",
-                    (4, 2),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (4, 2))
                 .await?;
 
-            let graphics: ClassInstanceRef<Graphics> = jvm
-                .invoke_virtual(
-                    &image,
-                    "getGraphics",
-                    "()Lorg/kwis/msp/lcdui/Graphics;",
-                    (),
-                )
-                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
             // RGB565-exact source pixels:
             // x=0 -> red   0xf800 -> [00, f8]
             // x=1 -> green 0x07e0 -> [e0, 07]
             // x=2 -> blue  0x001f -> [1f, 00]
             for (x, color) in [(0, 0xff0000), (1, 0x00ff00), (2, 0x0000ff)] {
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "setColor", "(I)V", (color,))
-                    .await?;
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "setPixel", "(II)V", (x, 0))
-                    .await?;
+                let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (color,)).await?;
+                let _: () = jvm.invoke_virtual(&graphics, "setPixel", "(II)V", (x, 0)).await?;
             }
 
             // Later translation must not affect raw getPixels source coordinates.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (1, 0)).await?;
 
             let mut pixels = jvm.instantiate_array("B", 24).await?;
             jvm.store_array(&mut pixels, 0, [0x55i8; 24]).await?;
@@ -2151,29 +1740,14 @@ mod test {
             // Native compacts the clipped source to the start of the destination row,
             // so six RGB565 bytes are written at indices 4..9.
             let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "getPixels",
-                    "(IIII[BII)V",
-                    (-1, 0, 4, 1, pixels.clone(), 1, 8),
-                )
+                .invoke_virtual(&graphics, "getPixels", "(IIII[BII)V", (-1, 0, 4, 1, pixels.clone(), 1, 8))
                 .await?;
 
             let out: alloc::vec::Vec<i8> = jvm.load_array(&pixels, 0, 24).await?;
 
             assert_eq!(&out[0..4], &[0x55i8; 4]);
 
-            assert_eq!(
-                &out[4..10],
-                &[
-                    0x00i8,
-                    0xf8u8 as i8,
-                    0xe0u8 as i8,
-                    0x07i8,
-                    0x1fi8,
-                    0x00i8,
-                ],
-            );
+            assert_eq!(&out[4..10], &[0x00i8, 0xf8u8 as i8, 0xe0u8 as i8, 0x07i8, 0x1fi8, 0x00i8,],);
 
             // The fourth requested pixel was clipped away, so native leaves its
             // destination bytes untouched instead of clearing them.
@@ -2189,32 +1763,16 @@ mod test {
     fn test_set_pixels_rgb565_offset_translation_and_clipping() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Image",
-                    "createImage",
-                    "(II)Lorg/kwis/msp/lcdui/Image;",
-                    (5, 2),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (5, 2))
                 .await?;
 
-            let graphics: ClassInstanceRef<Graphics> = jvm
-                .invoke_virtual(
-                    &image,
-                    "getGraphics",
-                    "()Lorg/kwis/msp/lcdui/Graphics;",
-                    (),
-                )
-                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
             // Current translation must affect setPixels destination.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (1, 0)).await?;
 
             // Absolute clip becomes x=2..3 after the current translation.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setClip", "(IIII)V", (1, 0, 2, 1))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setClip", "(IIII)V", (1, 0, 2, 1)).await?;
 
             let mut pixels = jvm.instantiate_array("B", 24).await?;
             jvm.store_array(&mut pixels, 0, [0x55i8; 24]).await?;
@@ -2224,52 +1782,19 @@ mod test {
             // red   = f800 -> 00 f8
             // green = 07e0 -> e0 07
             // blue  = 001f -> 1f 00
-            jvm.store_array(
-                &mut pixels,
-                4,
-                [
-                    0x00i8,
-                    0xf8u8 as i8,
-                    0xe0u8 as i8,
-                    0x07i8,
-                    0x1fi8,
-                    0x00i8,
-                ],
-            )
-            .await?;
+            jvm.store_array(&mut pixels, 4, [0x00i8, 0xf8u8 as i8, 0xe0u8 as i8, 0x07i8, 0x1fi8, 0x00i8])
+                .await?;
 
             let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "setPixels",
-                    "(IIII[BII)V",
-                    (0, 0, 3, 1, pixels, 1, 6),
-                )
+                .invoke_virtual(&graphics, "setPixels", "(IIII[BII)V", (0, 0, 3, 1, pixels, 1, 6))
                 .await?;
 
-            let mut midp_graphics: ClassInstanceRef<
-                wie_midp::classes::javax::microedition::lcdui::Graphics,
-            > = jvm
-                .get_field(
-                    &graphics,
-                    "midpGraphics",
-                    "Ljavax/microedition/lcdui/Graphics;",
-                )
-                .await?;
+            let mut midp_graphics: ClassInstanceRef<wie_midp::classes::javax::microedition::lcdui::Graphics> =
+                jvm.get_field(&graphics, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
-            let midp_image =
-                wie_midp::classes::javax::microedition::lcdui::Graphics::image(
-                    &jvm,
-                    &mut midp_graphics,
-                )
-                .await?;
+            let midp_image = wie_midp::classes::javax::microedition::lcdui::Graphics::image(&jvm, &mut midp_graphics).await?;
 
-            let backend_image =
-                wie_midp::classes::javax::microedition::lcdui::Image::image(
-                    &jvm,
-                    &midp_image,
-                )
-                .await?;
+            let backend_image = wie_midp::classes::javax::microedition::lcdui::Image::image(&jvm, &midp_image).await?;
 
             // setPixels destination before clipping is absolute x=1..3.
             // Clip keeps only x=2..3, corresponding to source green/blue.
@@ -2289,22 +1814,10 @@ mod test {
     fn test_encode_image_bmp_bottom_up_bgr_and_clipping() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Image",
-                    "createImage",
-                    "(II)Lorg/kwis/msp/lcdui/Image;",
-                    (3, 2),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (3, 2))
                 .await?;
 
-            let graphics: ClassInstanceRef<Graphics> = jvm
-                .invoke_virtual(
-                    &image,
-                    "getGraphics",
-                    "()Lorg/kwis/msp/lcdui/Graphics;",
-                    (),
-                )
-                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
             // Top row:
             // x0 red, x1 green, x2 blue
@@ -2318,34 +1831,19 @@ mod test {
                 (1, 1, 0x000000),
                 (2, 1, 0x123456),
             ] {
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "setColor", "(I)V", (color,))
-                    .await?;
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "setPixel", "(II)V", (x, y))
-                    .await?;
+                let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (color,)).await?;
+                let _: () = jvm.invoke_virtual(&graphics, "setPixel", "(II)V", (x, y)).await?;
             }
 
             // Native encodeImage(flag=0) ignores later translation.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "translate", "(II)V", (1, 1))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (1, 1)).await?;
 
             // Request width 3 starting at x=1. Graphics width is 3,
             // so encoded width becomes 2 while allocation still uses width 3.
-            let encoded: ClassInstanceRef<Array<i8>> = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "encodeImage",
-                    "(IIII)[B",
-                    (1, 0, 3, 2),
-                )
-                .await?;
+            let encoded: ClassInstanceRef<Array<i8>> = jvm.invoke_virtual(&graphics, "encodeImage", "(IIII)[B", (1, 0, 3, 2)).await?;
 
-            let bytes: alloc::vec::Vec<i8> =
-                jvm.load_array(&encoded, 0, jvm.array_length(&encoded).await?).await?;
-            let bytes: alloc::vec::Vec<u8> =
-                bytes.into_iter().map(|value| value as u8).collect();
+            let bytes: alloc::vec::Vec<i8> = jvm.load_array(&encoded, 0, jvm.array_length(&encoded).await?).await?;
+            let bytes: alloc::vec::Vec<u8> = bytes.into_iter().map(|value| value as u8).collect();
 
             // Original request: width=3 -> row stride 12, height=2.
             // Java bridge therefore allocates 54 + 12*2 = 78 bytes.
@@ -2374,18 +1872,12 @@ mod test {
             // Bottom source row x=1..2:
             // black -> 00 00 00
             // 0x123456 -> RGB565 truncation = 10 34 50, stored BGR = 50 34 10.
-            assert_eq!(
-                &bytes[54..62],
-                &[0x00, 0x00, 0x00, 0x50, 0x34, 0x10, 0x00, 0x00]
-            );
+            assert_eq!(&bytes[54..62], &[0x00, 0x00, 0x00, 0x50, 0x34, 0x10, 0x00, 0x00]);
 
             // Top source row x=1..2:
             // green -> 00 FC 00
             // blue  -> F8 00 00
-            assert_eq!(
-                &bytes[62..70],
-                &[0x00, 0xfc, 0x00, 0xf8, 0x00, 0x00, 0x00, 0x00]
-            );
+            assert_eq!(&bytes[62..70], &[0x00, 0xfc, 0x00, 0xf8, 0x00, 0x00, 0x00, 0x00]);
 
             // Allocation was based on requested width=3, but BMP itself is
             // only 70 bytes after clipping. Remaining bytes stay zero.
@@ -2399,41 +1891,19 @@ mod test {
     fn test_get_rgb_pixels_offset_base_origin_crop_and_negative_noop() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Image",
-                    "createImage",
-                    "(II)Lorg/kwis/msp/lcdui/Image;",
-                    (3, 1),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (3, 1))
                 .await?;
 
-            let graphics: ClassInstanceRef<Graphics> = jvm
-                .invoke_virtual(
-                    &image,
-                    "getGraphics",
-                    "()Lorg/kwis/msp/lcdui/Graphics;",
-                    (),
-                )
-                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
             // These colors exercise native RGB565 truncation/expansion.
-            for (x, color) in [
-                (0, 0x12_34_56),
-                (1, 0xff_00_00),
-                (2, 0x00_ff_00),
-            ] {
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "setColor", "(I)V", (color,))
-                    .await?;
-                let _: () = jvm
-                    .invoke_virtual(&graphics, "setPixel", "(II)V", (x, 0))
-                    .await?;
+            for (x, color) in [(0, 0x12_34_56), (1, 0xff_00_00), (2, 0x00_ff_00)] {
+                let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (color,)).await?;
+                let _: () = jvm.invoke_virtual(&graphics, "setPixel", "(II)V", (x, 0)).await?;
             }
 
             // Later translation must not affect raw getRGBPixels source coordinates.
-            let _: () = jvm
-                .invoke_virtual(&graphics, "translate", "(II)V", (1, 0))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (1, 0)).await?;
 
             let mut pixels = jvm.instantiate_array("I", 8).await?;
             jvm.store_array(&mut pixels, 0, [0x5555_5555i32; 8]).await?;
@@ -2441,12 +1911,7 @@ mod test {
             // Request width 3 starting at x=1. Only source x=1..2 exists,
             // so the third destination element must remain untouched.
             let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "getRGBPixels",
-                    "(IIII[III)V",
-                    (1, 0, 3, 1, pixels.clone(), 2, 3),
-                )
+                .invoke_virtual(&graphics, "getRGBPixels", "(IIII[III)V", (1, 0, 3, 1, pixels.clone(), 2, 3))
                 .await?;
 
             let out: alloc::vec::Vec<i32> = jvm.load_array(&pixels, 0, 8).await?;
@@ -2460,16 +1925,10 @@ mod test {
             // Negative x is rejected by native get_rgb_data(). The Java
             // bridge ignores the native error code, leaving the array intact.
             let _: () = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "getRGBPixels",
-                    "(IIII[III)V",
-                    (-1, 0, 1, 1, pixels.clone(), 0, 1),
-                )
+                .invoke_virtual(&graphics, "getRGBPixels", "(IIII[III)V", (-1, 0, 1, 1, pixels.clone(), 0, 1))
                 .await?;
 
-            let after_negative: alloc::vec::Vec<i32> =
-                jvm.load_array(&pixels, 0, 8).await?;
+            let after_negative: alloc::vec::Vec<i32> = jvm.load_array(&pixels, 0, 8).await?;
             assert_eq!(after_negative, out);
 
             Ok(())
@@ -2480,26 +1939,12 @@ mod test {
     fn test_fill_polygon_concave_with_horizontal_edges() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Image",
-                    "createImage",
-                    "(II)Lorg/kwis/msp/lcdui/Image;",
-                    (8, 8),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (8, 8))
                 .await?;
 
-            let graphics: ClassInstanceRef<Graphics> = jvm
-                .invoke_virtual(
-                    &image,
-                    "getGraphics",
-                    "()Lorg/kwis/msp/lcdui/Graphics;",
-                    (),
-                )
-                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setColor", "(I)V", (0x00ff00,))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (0x00ff00,)).await?;
 
             // Concave L shape:
             //
@@ -2512,17 +1957,13 @@ mod test {
             // (1,6)--(3,6)
             //
             // Includes horizontal top/inner/bottom edges.
-            let mut xs: ClassInstanceRef<Array<i32>> =
-                jvm.instantiate_array("I", 6).await?.into();
-            let mut ys: ClassInstanceRef<Array<i32>> =
-                jvm.instantiate_array("I", 6).await?.into();
+            let mut xs: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 6).await?.into();
+            let mut ys: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 6).await?.into();
 
             jvm.store_array(&mut xs, 0, [1i32, 6, 6, 3, 3, 1]).await?;
             jvm.store_array(&mut ys, 0, [1i32, 1, 3, 3, 6, 6]).await?;
 
-            let _: () = jvm
-                .invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs, ys))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs, ys)).await?;
 
             let midp_image = Image::midp_image(&jvm, &image).await?;
             let backend_image = MidpImage::image(&jvm, &midp_image).await?;
@@ -2556,35 +1997,19 @@ mod test {
     fn test_fill_polygon_triangle_and_validation() -> Result<()> {
         run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
             let image: ClassInstanceRef<Image> = jvm
-                .invoke_static(
-                    "org/kwis/msp/lcdui/Image",
-                    "createImage",
-                    "(II)Lorg/kwis/msp/lcdui/Image;",
-                    (7, 7),
-                )
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (7, 7))
                 .await?;
 
-            let graphics: ClassInstanceRef<Graphics> = jvm
-                .invoke_virtual(
-                    &image,
-                    "getGraphics",
-                    "()Lorg/kwis/msp/lcdui/Graphics;",
-                    (),
-                )
-                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setColor", "(I)V", (0xff0000,))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (0xff0000,)).await?;
 
             let mut xs: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 3).await?.into();
             let mut ys: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 3).await?.into();
             jvm.store_array(&mut xs, 0, [1i32, 5, 3]).await?;
             jvm.store_array(&mut ys, 0, [1i32, 1, 5]).await?;
 
-            let _: () = jvm
-                .invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs.clone(), ys.clone()))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs.clone(), ys.clone())).await?;
 
             let midp_image = Image::midp_image(&jvm, &image).await?;
             let backend_image = MidpImage::image(&jvm, &midp_image).await?;
@@ -2606,14 +2031,7 @@ mod test {
             // Native Graphics_fillPolygon0 throws IllegalArgumentException
             // when x.length != y.length.
             let short_y: ClassInstanceRef<Array<i32>> = jvm.instantiate_array("I", 2).await?.into();
-            let mismatch: jvm::Result<()> = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "fillPolygon",
-                    "([I[I)V",
-                    (xs.clone(), short_y),
-                )
-                .await;
+            let mismatch: jvm::Result<()> = jvm.invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs.clone(), short_y)).await;
 
             let Err(JavaError::JavaException(exception)) = mismatch else {
                 panic!("fillPolygon accepted mismatched coordinate arrays");
@@ -2624,14 +2042,7 @@ mod test {
             // x == null -> NullPointerException("x is null.")
             // y == null -> NullPointerException("y is null.")
             let null_x = ClassInstanceRef::<Array<i32>>::new(None);
-            let null_result: jvm::Result<()> = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "fillPolygon",
-                    "([I[I)V",
-                    (null_x, ys.clone()),
-                )
-                .await;
+            let null_result: jvm::Result<()> = jvm.invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (null_x, ys.clone())).await;
 
             let Err(JavaError::JavaException(exception)) = null_result else {
                 panic!("fillPolygon accepted null x array");
@@ -2639,14 +2050,7 @@ mod test {
             assert!(jvm.is_instance(&*exception, "java/lang/NullPointerException"));
 
             let null_y = ClassInstanceRef::<Array<i32>>::new(None);
-            let null_result: jvm::Result<()> = jvm
-                .invoke_virtual(
-                    &graphics,
-                    "fillPolygon",
-                    "([I[I)V",
-                    (xs, null_y),
-                )
-                .await;
+            let null_result: jvm::Result<()> = jvm.invoke_virtual(&graphics, "fillPolygon", "([I[I)V", (xs, null_y)).await;
 
             let Err(JavaError::JavaException(exception)) = null_result else {
                 panic!("fillPolygon accepted null y array");

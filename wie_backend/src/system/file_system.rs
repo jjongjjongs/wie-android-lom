@@ -72,7 +72,6 @@ fn normalize_guest_directory(path: &str) -> Option<String> {
     Some(out)
 }
 
-
 /// Unified filesystem view exposed by `System::filesystem()`.
 ///
 /// Wraps the persistent `Platform::filesystem()` backend and an in-memory
@@ -160,10 +159,7 @@ impl FilesystemOverlay {
         self.platform.filesystem().remove(&self.aid, &normalized).await
     }
 
-    pub async fn mkdir(
-        &self,
-        path: &str,
-    ) -> core::result::Result<(), crate::platform::FilesystemMkdirError> {
+    pub async fn mkdir(&self, path: &str) -> core::result::Result<(), crate::platform::FilesystemMkdirError> {
         use crate::platform::FilesystemMkdirError;
 
         let Some(normalized) = normalize_guest_path(path) else {
@@ -180,10 +176,7 @@ impl FilesystemOverlay {
         self.platform.filesystem().mkdir(&self.aid, &normalized).await
     }
 
-    pub async fn rmdir(
-        &self,
-        path: &str,
-    ) -> core::result::Result<(), crate::platform::FilesystemRmDirError> {
+    pub async fn rmdir(&self, path: &str) -> core::result::Result<(), crate::platform::FilesystemRmDirError> {
         use crate::platform::FilesystemRmDirError;
 
         let Some(normalized) = normalize_guest_path(path) else {
@@ -192,28 +185,14 @@ impl FilesystemOverlay {
 
         // A directory visible only through the packaged archive is read-only.
         // Do not turn that into a persistent-layer ENOENT.
-        if self
-            .platform
-            .filesystem()
-            .list(&self.aid, &normalized)
-            .await
-            .is_none()
-            && self.list(&normalized).await.is_some()
-        {
+        if self.platform.filesystem().list(&self.aid, &normalized).await.is_none() && self.list(&normalized).await.is_some() {
             return Err(FilesystemRmDirError::Other);
         }
 
-        self.platform
-            .filesystem()
-            .rmdir(&self.aid, &normalized)
-            .await
+        self.platform.filesystem().rmdir(&self.aid, &normalized).await
     }
 
-    pub async fn rename(
-        &self,
-        from: &str,
-        to: &str,
-    ) -> core::result::Result<(), crate::platform::FilesystemRenameError> {
+    pub async fn rename(&self, from: &str, to: &str) -> core::result::Result<(), crate::platform::FilesystemRenameError> {
         use crate::platform::FilesystemRenameError;
 
         let Some(from) = normalize_guest_path(from) else {
@@ -225,16 +204,12 @@ impl FilesystemOverlay {
 
         // Platform objects shadow virtual files. A source that exists only in
         // the archive is read-only and cannot be renamed.
-        if !self.platform.filesystem().exists(&self.aid, &from).await
-            && self.platform.filesystem().list(&self.aid, &from).await.is_none()
-        {
-            if self.virtual_files.lock().contains_key(&from)
-                || {
-                    let mut prefix = from.clone();
-                    prefix.push('/');
-                    self.virtual_files.lock().keys().any(|key| key.starts_with(&prefix))
-                }
-            {
+        if !self.platform.filesystem().exists(&self.aid, &from).await && self.platform.filesystem().list(&self.aid, &from).await.is_none() {
+            if self.virtual_files.lock().contains_key(&from) || {
+                let mut prefix = from.clone();
+                prefix.push('/');
+                self.virtual_files.lock().keys().any(|key| key.starts_with(&prefix))
+            } {
                 return Err(FilesystemRenameError::Other);
             }
         }
@@ -242,11 +217,7 @@ impl FilesystemOverlay {
         self.platform.filesystem().rename(&self.aid, &from, &to).await
     }
 
-    pub async fn set_mode(
-        &self,
-        path: &str,
-        mode: u32,
-    ) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+    pub async fn set_mode(&self, path: &str, mode: u32) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
         use crate::platform::FilesystemSetModeError;
 
         let Some(normalized) = normalize_guest_path(path) else {
@@ -255,16 +226,11 @@ impl FilesystemOverlay {
 
         // A packaged virtual file is visible through the overlay but has no
         // writable persistent object whose host permissions can be changed.
-        if !self.platform.filesystem().exists(&self.aid, &normalized).await
-            && self.virtual_files.lock().contains_key(&normalized)
-        {
+        if !self.platform.filesystem().exists(&self.aid, &normalized).await && self.virtual_files.lock().contains_key(&normalized) {
             return Err(FilesystemSetModeError::Other);
         }
 
-        self.platform
-            .filesystem()
-            .set_mode(&self.aid, &normalized, mode)
-            .await
+        self.platform.filesystem().set_mode(&self.aid, &normalized, mode).await
     }
 
     pub async fn total_space(&self) -> Option<u64> {
@@ -316,12 +282,7 @@ impl FilesystemOverlay {
         }
 
         if entries.is_empty() {
-            let virtual_dir_exists = normalized.is_empty()
-                || self
-                    .virtual_files
-                    .lock()
-                    .keys()
-                    .any(|key| key.starts_with(&prefix));
+            let virtual_dir_exists = normalized.is_empty() || self.virtual_files.lock().keys().any(|key| key.starts_with(&prefix));
 
             if !virtual_dir_exists && !platform_exists {
                 return None;
@@ -334,7 +295,6 @@ impl FilesystemOverlay {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{collections::BTreeSet, format};
     use alloc::{
         boxed::Box,
         string::{String, ToString},
@@ -342,6 +302,7 @@ mod tests {
         vec,
         vec::Vec,
     };
+    use alloc::{collections::BTreeSet, format};
 
     use hashbrown::HashMap;
     use spin::Mutex;
@@ -349,10 +310,7 @@ mod tests {
     use crate::{
         audio_sink::AudioSink,
         database::DatabaseRepository,
-        platform::{
-            Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError,
-            Platform,
-        },
+        platform::{Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError, Platform},
         screen::Screen,
         time::Instant,
     };
@@ -401,11 +359,7 @@ mod tests {
             self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
         }
 
-        async fn mkdir(
-            &self,
-            aid: &str,
-            path: &str,
-        ) -> core::result::Result<(), FilesystemMkdirError> {
+        async fn mkdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemMkdirError> {
             if path.is_empty() {
                 return Err(FilesystemMkdirError::AlreadyExists);
             }
@@ -413,9 +367,7 @@ mod tests {
             let mut directories = self.directories.lock();
             let key = (aid.to_string(), path.to_string());
 
-            if directories.contains(&key)
-                || self.files.lock().contains_key(&key)
-            {
+            if directories.contains(&key) || self.files.lock().contains_key(&key) {
                 return Err(FilesystemMkdirError::AlreadyExists);
             }
 
@@ -425,14 +377,15 @@ mod tests {
                 let mut prefix = parent.to_string();
                 prefix.push('/');
 
-                let parent_exists =
-                    directories.contains(&parent_key)
-                    || directories.iter().any(|(entry_aid, entry_path)| {
-                        entry_aid == aid && entry_path.starts_with(&prefix)
-                    })
-                    || self.files.lock().keys().any(|(entry_aid, entry_path)| {
-                        entry_aid == aid && entry_path.starts_with(&prefix)
-                    });
+                let parent_exists = directories.contains(&parent_key)
+                    || directories
+                        .iter()
+                        .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix))
+                    || self
+                        .files
+                        .lock()
+                        .keys()
+                        .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix));
 
                 if !parent_exists {
                     return Err(FilesystemMkdirError::NotFound);
@@ -443,11 +396,7 @@ mod tests {
             Ok(())
         }
 
-        async fn rmdir(
-            &self,
-            aid: &str,
-            path: &str,
-        ) -> core::result::Result<(), FilesystemRmDirError> {
+        async fn rmdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemRmDirError> {
             if path.is_empty() {
                 return Err(FilesystemRmDirError::Other);
             }
@@ -461,16 +410,17 @@ mod tests {
             let mut prefix = path.to_string();
             prefix.push('/');
 
-            let has_file_child = self.files.lock().keys().any(|(entry_aid, entry_path)| {
-                entry_aid == aid && entry_path.starts_with(&prefix)
-            });
+            let has_file_child = self
+                .files
+                .lock()
+                .keys()
+                .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix));
 
             let mut directories = self.directories.lock();
             let exists = directories.contains(&key);
-            let has_directory_child =
-                directories.iter().any(|(entry_aid, entry_path)| {
-                    entry_aid == aid && entry_path.starts_with(&prefix)
-                });
+            let has_directory_child = directories
+                .iter()
+                .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix));
 
             if has_file_child || has_directory_child {
                 return Err(FilesystemRmDirError::NotEmpty);
@@ -484,12 +434,7 @@ mod tests {
             Ok(())
         }
 
-        async fn rename(
-            &self,
-            aid: &str,
-            from: &str,
-            to: &str,
-        ) -> core::result::Result<(), FilesystemRenameError> {
+        async fn rename(&self, aid: &str, from: &str, to: &str) -> core::result::Result<(), FilesystemRenameError> {
             let mut files = self.files.lock();
             let Some(data) = files.remove(&(aid.to_string(), from.to_string())) else {
                 return Err(FilesystemRenameError::NotFound);
@@ -498,12 +443,7 @@ mod tests {
             Ok(())
         }
 
-        async fn set_mode(
-            &self,
-            aid: &str,
-            path: &str,
-            _mode: u32,
-        ) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+        async fn set_mode(&self, aid: &str, path: &str, _mode: u32) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
             if self.files.lock().contains_key(&(aid.to_string(), path.to_string())) {
                 Ok(())
             } else {
@@ -520,17 +460,12 @@ mod tests {
         }
 
         async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
-            let prefix = if path.is_empty() {
-                String::new()
-            } else {
-                format!("{path}/")
-            };
+            let prefix = if path.is_empty() { String::new() } else { format!("{path}/") };
             let files = self.files.lock();
             let directories = self.directories.lock();
             let mut entries = Vec::new();
             let mut seen = BTreeSet::new();
-            let mut directory_exists =
-                path.is_empty() || directories.contains(&(aid.to_string(), path.to_string()));
+            let mut directory_exists = path.is_empty() || directories.contains(&(aid.to_string(), path.to_string()));
 
             for ((entry_aid, entry_path), _) in files.iter() {
                 if entry_aid != aid {
@@ -673,7 +608,6 @@ mod tests {
         assert_eq!(fs.read("cfg.dat", 0, 4, &mut buf).await, Some(4));
         assert_eq!(buf, [1, 2, 3, 4]);
     }
-
 
     #[futures_test::test]
     async fn list_merges_platform_and_virtual_direct_children() {

@@ -7,11 +7,7 @@ use wie_util::{ByteRead, ByteWrite, Result};
 
 use crate::{
     WIPICMethodBody,
-    api::{
-        filesystem::SharedFilesystemState,
-        net::SharedNetworkState,
-        serial::SharedSerialState,
-    },
+    api::{filesystem::SharedFilesystemState, net::SharedNetworkState, serial::SharedSerialState},
     method::{ParamConverter, ResultConverter},
 };
 
@@ -196,9 +192,7 @@ pub mod test {
                 .iter()
                 .find(|&&(candidate, _)| candidate == address)
                 .map(|&(_, size)| size)
-                .ok_or_else(|| WieError::FatalError(format!(
-                    "Address {address:#x} is not a tracked raw allocation"
-                )))
+                .ok_or_else(|| WieError::FatalError(format!("Address {address:#x} is not a tracked raw allocation")))
         }
 
         fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord> {
@@ -256,9 +250,7 @@ pub mod test {
 
     impl ByteWrite for TestContext {
         fn write_bytes(&mut self, address: u32, data: &[u8]) -> wie_util::Result<()> {
-            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32)
-                .contains(&address)
-            {
+            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32).contains(&address) {
                 let start = (address - TEST_GLOBAL_DATA_BASE) as usize;
                 let end = start + data.len();
                 if end > TEST_GLOBAL_DATA_SIZE {
@@ -281,9 +273,7 @@ pub mod test {
 
     impl ByteRead for TestContext {
         fn read_bytes(&self, address: u32, result: &mut [u8]) -> wie_util::Result<usize> {
-            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32)
-                .contains(&address)
-            {
+            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32).contains(&address) {
                 let start = (address - TEST_GLOBAL_DATA_BASE) as usize;
                 let end = start + result.len();
                 if end > TEST_GLOBAL_DATA_SIZE {

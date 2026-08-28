@@ -480,6 +480,22 @@ pub(crate) extern "C" fn jit_cond_met(cond: u32, cpsr: u32) -> u32 {
     arm32_cpu::util::arm::cond_met(cond, cpsr) as u32
 }
 
+/// Register-amount shift for the Thumb ALU LSL/LSR/ASR/ROR-by-register ops
+/// (`AluOp` 0x2/0x3/0x4/0x7). Mirrors `engine::fast`'s `exec_straight` exactly: a
+/// zero shift (low 8 bits of the amount register) leaves the value and carry
+/// untouched, otherwise the interpreter's own `arg_shift` applies. Returns the
+/// result in the low 32 bits and the new carry (0/1) in bit 32, so a single
+/// return register carries both.
+pub(crate) extern "C" fn jit_alu_shift(val: u32, amount: u32, shift_type: u32, c_in: u32) -> u64 {
+    let shift = amount & 0xff;
+    let (res, new_c) = if shift == 0 {
+        (val, c_in)
+    } else {
+        arm32_cpu::util::arm::arg_shift(val, shift, shift_type)
+    };
+    (res as u64) | ((new_c as u64) << 32)
+}
+
 /// SAFETY: `ctx` points at a live `JitCtx` whose `mem`/`code_pages` are valid for
 /// the duration of the call (guaranteed by `run`).
 pub(crate) unsafe extern "C" fn jit_load8(ctx: *mut JitCtx, addr: u32) -> u32 {

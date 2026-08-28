@@ -17,74 +17,31 @@ impl ConstraintChecker {
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
             methods: vec![
-                JavaMethodProto::new(
-                    "<init>",
-                    "(Lorg/kwis/msp/lwc/TextComponent;)V",
-                    Self::init,
-                    Default::default(),
-                ),
-                JavaMethodProto::new(
-                    "setConstraint",
-                    "(I)V",
-                    Self::set_constraint,
-                    Default::default(),
-                ),
-                JavaMethodProto::new(
-                    "checkData",
-                    "([CII)Z",
-                    Self::check_data,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("<init>", "(Lorg/kwis/msp/lwc/TextComponent;)V", Self::init, Default::default()),
+                JavaMethodProto::new("setConstraint", "(I)V", Self::set_constraint, Default::default()),
+                JavaMethodProto::new("checkData", "([CII)Z", Self::check_data, Default::default()),
             ],
             fields: vec![
-                JavaFieldProto::new(
-                    "__wieTextComponent",
-                    "Lorg/kwis/msp/lwc/TextComponent;",
-                    Default::default(),
-                ),
+                JavaFieldProto::new("__wieTextComponent", "Lorg/kwis/msp/lwc/TextComponent;", Default::default()),
                 JavaFieldProto::new("__wieConstraint", "I", Default::default()),
             ],
             access_flags: Default::default(),
         }
     }
 
-    async fn init(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Self>,
-        owner: ClassInstanceRef<TextComponent>,
-    ) -> JvmResult<()> {
-        let _: () = jvm
-            .invoke_special(&this, "java/lang/Object", "<init>", "()V", ())
+    async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, owner: ClassInstanceRef<TextComponent>) -> JvmResult<()> {
+        let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
+
+        jvm.put_field(&mut this, "__wieTextComponent", "Lorg/kwis/msp/lwc/TextComponent;", owner)
             .await?;
 
-        jvm.put_field(
-            &mut this,
-            "__wieTextComponent",
-            "Lorg/kwis/msp/lwc/TextComponent;",
-            owner,
-        )
-        .await?;
-
-        jvm.put_field(&mut this, "__wieConstraint", "I", -1)
-            .await?;
+        jvm.put_field(&mut this, "__wieConstraint", "I", -1).await?;
 
         Ok(())
     }
 
-    async fn set_constraint(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Self>,
-        constraint: i32,
-    ) -> JvmResult<()> {
-        jvm.put_field(
-            &mut this,
-            "__wieConstraint",
-            "I",
-            constraint,
-        )
-        .await
+    async fn set_constraint(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, constraint: i32) -> JvmResult<()> {
+        jvm.put_field(&mut this, "__wieConstraint", "I", constraint).await
     }
 
     async fn check_data(
@@ -95,9 +52,7 @@ impl ConstraintChecker {
         offset: i32,
         length: i32,
     ) -> JvmResult<bool> {
-        let constraint: i32 = jvm
-            .get_field(&this, "__wieConstraint", "I")
-            .await?;
+        let constraint: i32 = jvm.get_field(&this, "__wieConstraint", "I").await?;
 
         if constraint != 1 && constraint != 2 && constraint != 5 {
             return Ok(true);
@@ -108,40 +63,22 @@ impl ConstraintChecker {
         }
 
         if data.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
         }
 
         if offset < 0 {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
-        let chars = jvm
-            .load_array::<JavaChar>(&data, offset as usize, length as usize)
-            .await?;
+        let chars = jvm.load_array::<JavaChar>(&data, offset as usize, length as usize).await?;
 
         for ch in chars {
             let ch = ch as u16;
 
             let valid = match constraint {
-                1 => {
-                    (ch >= b'0' as u16 && ch <= b'9' as u16)
-                        || ch == b' ' as u16
-                        || ch == b'-' as u16
-                }
+                1 => (ch >= b'0' as u16 && ch <= b'9' as u16) || ch == b' ' as u16 || ch == b'-' as u16,
                 2 => ch >= b'0' as u16 && ch <= b'9' as u16,
-                5 => {
-                    (ch >= b'0' as u16 && ch <= b'9' as u16)
-                        || ch == b' ' as u16
-                        || ch == b'-' as u16
-                        || ch == b'+' as u16
-                        || ch == b'#' as u16
-                }
+                5 => (ch >= b'0' as u16 && ch <= b'9' as u16) || ch == b' ' as u16 || ch == b'-' as u16 || ch == b'+' as u16 || ch == b'#' as u16,
                 _ => true,
             };
 

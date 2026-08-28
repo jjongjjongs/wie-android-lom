@@ -72,9 +72,7 @@ impl ListAllocator {
         let header: ListAllocationHeader = read_generic(core, base_address)?;
 
         if !header.in_use() || header.size() < size_of::<ListAllocationHeader>() as u32 + CANARY_SIZE {
-            return Err(WieError::FatalError(format!(
-                "Address {address:#x} is not an active list allocation"
-            )));
+            return Err(WieError::FatalError(format!("Address {address:#x} is not an active list allocation")));
         }
 
         Ok(header.size() - size_of::<ListAllocationHeader>() as u32 - CANARY_SIZE)

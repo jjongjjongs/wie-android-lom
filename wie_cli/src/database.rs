@@ -72,14 +72,8 @@ impl wie_backend::DatabaseRepository for DatabaseRepository {
     }
 
     async fn list(&self, app_id: &str) -> Vec<String> {
-        let sanitized_app_id: String = app_id
-            .chars()
-            .filter(|c| !matches!(c, '/' | '\\' | '\0'))
-            .collect();
-        let app_id = if sanitized_app_id.is_empty()
-            || sanitized_app_id == "."
-            || sanitized_app_id == ".."
-        {
+        let sanitized_app_id: String = app_id.chars().filter(|c| !matches!(c, '/' | '\\' | '\0')).collect();
+        let app_id = if sanitized_app_id.is_empty() || sanitized_app_id == "." || sanitized_app_id == ".." {
             "_"
         } else {
             &sanitized_app_id
@@ -103,13 +97,7 @@ impl wie_backend::DatabaseRepository for DatabaseRepository {
                 .into_iter()
                 .flatten()
                 .filter_map(|record| record.ok())
-                .any(|record| {
-                    record.path().is_file()
-                        && record
-                            .file_name()
-                            .to_str()
-                            .is_some_and(|name| name.parse::<RecordId>().is_ok())
-                });
+                .any(|record| record.path().is_file() && record.file_name().to_str().is_some_and(|name| name.parse::<RecordId>().is_ok()));
 
             if !has_record {
                 continue;

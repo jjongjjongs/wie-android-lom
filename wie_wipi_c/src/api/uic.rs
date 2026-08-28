@@ -19,11 +19,7 @@ fn uic_draw_marker(component_type: WIPICWord) -> WIPICWord {
     UIC_DRAW_MARKER_BASE + component_type
 }
 
-async fn uic_dispatch_draw(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    graphics_context: WIPICWord,
-) -> Result<()> {
+async fn uic_dispatch_draw(context: &mut dyn WIPICContext, component: WIPICWord, graphics_context: WIPICWord) -> Result<()> {
     let draw: WIPICWord = read_generic(context, component + 0x24)?;
     if (UIC_DRAW_MARKER_BASE + 1..=UIC_DRAW_MARKER_BASE + 5).contains(&draw) {
         // MC_uicCreate stores provider-private WPUic_Draw* function pointers here.
@@ -34,20 +30,13 @@ async fn uic_dispatch_draw(
     }
 
     if draw != 0 {
-        context
-            .call_function(draw, &[component, graphics_context])
-            .await?;
+        context.call_function(draw, &[component, graphics_context]).await?;
     }
 
     Ok(())
 }
 
-fn uic_schedule_component_timer(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    component_type: WIPICWord,
-    delay: u64,
-) -> Result<()> {
+fn uic_schedule_component_timer(context: &mut dyn WIPICContext, component: WIPICWord, component_type: WIPICWord, delay: u64) -> Result<()> {
     struct UicTimerCallback {
         component: WIPICWord,
         component_type: WIPICWord,
@@ -55,11 +44,7 @@ fn uic_schedule_component_timer(
 
     #[async_trait::async_trait]
     impl MethodBody<WieError> for UicTimerCallback {
-        async fn call(
-            &self,
-            context: &mut dyn WIPICContext,
-            _: Box<[WIPICWord]>,
-        ) -> Result<WIPICResult> {
+        async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
             match self.component_type {
                 2 => uic_datetime_timer_callback(context, self.component).await?,
                 3 => uic_text_timer_callback(context, self.component).await?,
@@ -76,14 +61,7 @@ fn uic_schedule_component_timer(
         _ => return Ok(()),
     };
     let due = context.system().platform().now() + delay;
-    context.set_timer(
-        timer,
-        due,
-        Box::new(UicTimerCallback {
-            component,
-            component_type,
-        }),
-    );
+    context.set_timer(timer, due, Box::new(UicTimerCallback { component, component_type }));
 
     Ok(())
 }
@@ -101,10 +79,7 @@ pub async fn create_application_context(_context: &mut dyn WIPICContext) -> Resu
 ///
 /// Native returns component class ids 1..=5 for the five exact class names
 /// and -1 for NULL or an unknown class name.
-pub async fn get_class(
-    context: &mut dyn WIPICContext,
-    psz: WIPICWord,
-) -> Result<WIPICIndirectPtr> {
+pub async fn get_class(context: &mut dyn WIPICContext, psz: WIPICWord) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_uicGetClass({psz:#x})");
 
     if psz == 0 {
@@ -130,11 +105,7 @@ pub async fn get_class(
 /// type-specific object, copies the default graphics-context fields into the
 /// common header, and then initializes the subtype state. Invalid classes
 /// return -1; allocation failure returns -17.
-pub async fn create(
-    context: &mut dyn WIPICContext,
-    pac: WIPICWord,
-    cls: WIPICWord,
-) -> Result<WIPICIndirectPtr> {
+pub async fn create(context: &mut dyn WIPICContext, pac: WIPICWord, cls: WIPICWord) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_uicCreate({pac:#x}, {cls:#x})");
 
     let size = match cls {
@@ -189,8 +160,7 @@ pub async fn create(
             write_generic(context, component + 0xa0, 0u32)?;
             write_generic(context, component + 0xa4, 0u32)?;
 
-            let fields =
-                uic_kst_tm_from_epoch_millis(context.system().platform().now().raw());
+            let fields = uic_kst_tm_from_epoch_millis(context.system().platform().now().raw());
             for (index, value) in fields.iter().enumerate() {
                 write_generic(context, component + 0x48 + (index as u32) * 4, *value)?;
             }
@@ -254,9 +224,7 @@ pub async fn destroy(context: &mut dyn WIPICContext, component: WIPICWord) -> Re
     let callback: WIPICWord = read_generic(context, component + 0x2c)?;
     if callback != 0 {
         let callback_context: WIPICWord = read_generic(context, component + 0x38)?;
-        context
-            .call_function(callback, &[component, 0, callback_context])
-            .await?;
+        context.call_function(callback, &[component, 0, callback_context]).await?;
     }
 
     match component_type {
@@ -344,14 +312,7 @@ fn uic_repaint_rect(
 /// requested offset is translated by the component origin and converted to an
 /// inclusive rectangle before tail-calling `MC_grpRepaint(1, left, top, right,
 /// bottom)`.
-pub async fn repaint(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> Result<()> {
+pub async fn repaint(context: &mut dyn WIPICContext, component: WIPICWord, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
     tracing::debug!("MC_uicRepaint({component:#x}, {x}, {y}, {width}, {height})");
 
     if component == 0 {
@@ -368,16 +329,7 @@ pub async fn repaint(
     let component_width: i32 = read_generic(context, component + 0x0c)?;
     let component_height: i32 = read_generic(context, component + 0x10)?;
 
-    let (left, top, right, bottom) = uic_repaint_rect(
-        component_x,
-        component_y,
-        component_width,
-        component_height,
-        x,
-        y,
-        width,
-        height,
-    );
+    let (left, top, right, bottom) = uic_repaint_rect(component_x, component_y, component_width, component_height, x, y, width, height);
 
     graphics::repaint(context, 1, left, top, right, bottom).await
 }
@@ -396,9 +348,7 @@ pub async fn configure(
     height: i32,
     flags: WIPICWord,
 ) -> Result<()> {
-    tracing::debug!(
-        "MC_uicConfigure({component:#x}, {x}, {y}, {width}, {height}, {flags:#x})"
-    );
+    tracing::debug!("MC_uicConfigure({component:#x}, {x}, {y}, {width}, {height}, {flags:#x})");
 
     if component == 0 {
         return Ok(());
@@ -435,9 +385,7 @@ pub async fn get_geometry(
     width: WIPICWord,
     height: WIPICWord,
 ) -> Result<()> {
-    tracing::debug!(
-        "MC_uicGetGeometry({component:#x}, {x:#x}, {y:#x}, {width:#x}, {height:#x})"
-    );
+    tracing::debug!("MC_uicGetGeometry({component:#x}, {x:#x}, {y:#x}, {width:#x}, {height:#x})");
 
     if component == 0 {
         return Ok(());
@@ -483,9 +431,7 @@ pub async fn set_callback(
     callback: WIPICWord,
     callback_context: WIPICWord,
 ) -> Result<WIPICWord> {
-    tracing::debug!(
-        "MC_uicSetCallback({component:#x}, {selector}, {callback:#x}, {callback_context:#x})"
-    );
+    tracing::debug!("MC_uicSetCallback({component:#x}, {selector}, {callback:#x}, {callback_context:#x})");
 
     if component == 0 {
         return Ok(0);
@@ -522,11 +468,7 @@ pub async fn set_callback(
 /// Native validates the component, returns the previous handler from +0x28,
 /// and stores the new handler there. NULL or invalid components return 0 and
 /// leave memory untouched.
-pub async fn set_event_handler(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    handler: WIPICWord,
-) -> Result<WIPICWord> {
+pub async fn set_event_handler(context: &mut dyn WIPICContext, component: WIPICWord, handler: WIPICWord) -> Result<WIPICWord> {
     tracing::debug!("MC_uicSetEventHandler({component:#x}, {handler:#x})");
 
     if component == 0 {
@@ -549,11 +491,7 @@ pub async fn set_event_handler(
 /// Native validates the component, returns the previous font value from +0x14,
 /// and stores the new value there. NULL or invalid components return 0 and
 /// leave memory untouched.
-pub async fn set_font(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    font: WIPICWord,
-) -> Result<WIPICWord> {
+pub async fn set_font(context: &mut dyn WIPICContext, component: WIPICWord, font: WIPICWord) -> Result<WIPICWord> {
     tracing::debug!("MC_uicSetFont({component:#x}, {font:#x})");
 
     if component == 0 {
@@ -575,10 +513,7 @@ pub async fn set_font(
 ///
 /// Native validates the component and returns the font value stored at +0x14.
 /// NULL or invalid components return 0.
-pub async fn get_font(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<WIPICWord> {
+pub async fn get_font(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<WIPICWord> {
     tracing::debug!("MC_uicGetFont({component:#x})");
 
     if component == 0 {
@@ -603,11 +538,7 @@ fn uic_color_to_rgb565(color: WIPICWord) -> WIPICWord {
 /// the active display's color-to-pixel operation, stores the resulting RGB565
 /// pixel at +0x18, and returns that pixel value. NULL or invalid components
 /// return 0 and leave memory untouched.
-pub async fn set_fg_color(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    color: WIPICWord,
-) -> Result<WIPICWord> {
+pub async fn set_fg_color(context: &mut dyn WIPICContext, component: WIPICWord, color: WIPICWord) -> Result<WIPICWord> {
     tracing::debug!("MC_uicSetFgColor({component:#x}, {color:#x})");
 
     if component == 0 {
@@ -631,11 +562,7 @@ pub async fn set_fg_color(
 /// the active display's color-to-pixel operation, stores the resulting RGB565
 /// pixel at +0x1c, and returns that pixel value. NULL or invalid components
 /// return 0 and leave memory untouched.
-pub async fn set_bg_color(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    color: WIPICWord,
-) -> Result<WIPICWord> {
+pub async fn set_bg_color(context: &mut dyn WIPICContext, component: WIPICWord, color: WIPICWord) -> Result<WIPICWord> {
     tracing::debug!("MC_uicSetBgColor({component:#x}, {color:#x})");
 
     if component == 0 {
@@ -665,11 +592,7 @@ pub async fn set_bg_color(
 /// WIE mirrors that using `raw_alloc_size`; growth allocates a replacement
 /// before releasing the old block. After copying `strlen+1` bytes, native
 /// also writes one extra NUL byte immediately after the requested region.
-pub async fn set_label(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    label: WIPICWord,
-) -> Result<WIPICWord> {
+pub async fn set_label(context: &mut dyn WIPICContext, component: WIPICWord, label: WIPICWord) -> Result<WIPICWord> {
     tracing::debug!("MC_uicSetLabel({component:#x}, {label:#x})");
 
     if component == 0 {
@@ -720,10 +643,7 @@ pub async fn set_label(
 /// pointer is returned unchanged. When +0x44 is NULL, native returns a
 /// provider-static empty string; WIE mirrors that stable pointer identity in
 /// reserved guest global-data memory.
-pub async fn get_label(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<WIPICIndirectPtr> {
+pub async fn get_label(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_uicGetLabel({component:#x})");
 
     if component == 0 {
@@ -750,11 +670,7 @@ pub async fn get_label(
 /// Valid non-Label components and alignment values outside unsigned 0..=2
 /// return -9 without modifying memory. For LabelComponent, the previous
 /// alignment at +0x48 is returned and the new value is stored there.
-pub async fn set_label_alignment(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    alignment: WIPICWord,
-) -> Result<i32> {
+pub async fn set_label_alignment(context: &mut dyn WIPICContext, component: WIPICWord, alignment: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicSetLabelAlignment({component:#x}, {alignment:#x})");
 
     if component == 0 {
@@ -786,11 +702,7 @@ pub async fn set_label_alignment(
 /// immediately regenerates the DateTime text at +0x74 through
 /// `WPUic_SetTimeStr`, and invokes the +0xa0 callback only when the rendered
 /// text actually changes.
-pub async fn set_time_mask(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    mask: WIPICWord,
-) -> Result<i32> {
+pub async fn set_time_mask(context: &mut dyn WIPICContext, component: WIPICWord, mask: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicSetTimeMask({component:#x}, {mask:#x})");
 
     if component == 0 {
@@ -823,9 +735,7 @@ pub async fn set_time_mask(
         let callback: WIPICWord = read_generic(context, component + 0xa0)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0xa4)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
@@ -843,11 +753,7 @@ pub async fn set_time_mask(
 /// therefore also regenerates the component text and invokes +0xa0 only when
 /// the rendered string changes. Its final return follows the same
 /// strcmp/callback contract as `MC_uicSetTime`.
-pub async fn get_time(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    tm: WIPICWord,
-) -> Result<i32> {
+pub async fn get_time(context: &mut dyn WIPICContext, component: WIPICWord, tm: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicGetTime({component:#x}, {tm:#x})");
 
     if component == 0 {
@@ -889,11 +795,7 @@ pub async fn get_time(
         let callback: WIPICWord = read_generic(context, component + 0xa0)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0xa4)?;
-            return Ok(
-                context
-                    .call_function(callback, &[component, 0, callback_context])
-                    .await? as i32,
-            );
+            return Ok(context.call_function(callback, &[component, 0, callback_context]).await? as i32);
         }
     }
 
@@ -913,11 +815,7 @@ pub async fn get_time(
 /// and new strings, invokes +0xa0(component, 0, +0xa4) only when they differ,
 /// and leaves that callback result in r0. Without a callback, WIE mirrors the
 /// native strcmp result as -1/0/1.
-pub async fn set_time(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    tm: WIPICWord,
-) -> Result<i32> {
+pub async fn set_time(context: &mut dyn WIPICContext, component: WIPICWord, tm: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicSetTime({component:#x}, {tm:#x})");
 
     if component == 0 {
@@ -960,11 +858,7 @@ pub async fn set_time(
         let callback: WIPICWord = read_generic(context, component + 0xa0)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0xa4)?;
-            return Ok(
-                context
-                    .call_function(callback, &[component, 0, callback_context])
-                    .await? as i32,
-            );
+            return Ok(context.call_function(callback, &[component, 0, callback_context]).await? as i32);
         }
     }
 
@@ -982,11 +876,7 @@ pub async fn set_time(
 /// Its 44-byte tm result is copied to +0x48 and then `WPUic_SetTimeStr` is
 /// called. The final return value therefore follows the same string/callback
 /// contract as `MC_uicSetTime`.
-pub async fn set_time_long(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    time: WIPICWord,
-) -> Result<i32> {
+pub async fn set_time_long(context: &mut dyn WIPICContext, component: WIPICWord, time: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicSetTimeLong({component:#x}, {time:#x})");
 
     if component == 0 {
@@ -1025,11 +915,7 @@ pub async fn set_time_long(
         let callback: WIPICWord = read_generic(context, component + 0xa0)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0xa4)?;
-            return Ok(
-                context
-                    .call_function(callback, &[component, 0, callback_context])
-                    .await? as i32,
-            );
+            return Ok(context.call_function(callback, &[component, 0, callback_context]).await? as i32);
         }
     }
 
@@ -1043,11 +929,7 @@ pub async fn set_time_long(
 /// Invalid/null components are ignored. The enable value is normalized to
 /// 0/1 and stored at +0x20. DateTime and Text components additionally
 /// start/stop their internal timers.
-pub async fn set_enable(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    enable: WIPICWord,
-) -> Result<()> {
+pub async fn set_enable(context: &mut dyn WIPICContext, component: WIPICWord, enable: WIPICWord) -> Result<()> {
     tracing::debug!("MC_uicSetEnable({component:#x}, {enable:#x})");
 
     if component == 0 {
@@ -1106,16 +988,8 @@ pub async fn set_enable(
 /// TextComponent layout used here:
 /// +0x44 text buffer pointer, +0x48 buffer capacity, +0x4c cursor,
 /// +0x5c change callback, +0x64 callback context.
-pub async fn insert_text(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: i32,
-    source: WIPICWord,
-    length: i32,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_uicInsertText({component:#x}, {position}, {source:#x}, {length})"
-    );
+pub async fn insert_text(context: &mut dyn WIPICContext, component: WIPICWord, position: i32, source: WIPICWord, length: i32) -> Result<i32> {
+    tracing::debug!("MC_uicInsertText({component:#x}, {position}, {source:#x}, {length})");
 
     if component == 0 {
         return Ok(0);
@@ -1153,11 +1027,7 @@ pub async fn insert_text(
         return Ok(-17);
     }
 
-    let insert_pos = if position < 0 {
-        0
-    } else {
-        (position as u32).min(old_len)
-    };
+    let insert_pos = if position < 0 { 0 } else { (position as u32).min(old_len) };
 
     let mut old = alloc::vec![0u8; old_len as usize];
     if old_len != 0 {
@@ -1172,10 +1042,7 @@ pub async fn insert_text(
     }
     context.write_bytes(text + insert_pos, &inserted)?;
     if insert_pos < old_len {
-        context.write_bytes(
-            text + insert_pos + insert_len,
-            &old[insert_pos as usize..],
-        )?;
+        context.write_bytes(text + insert_pos + insert_len, &old[insert_pos as usize..])?;
     }
     context.write_bytes(text + new_len, &[0])?;
 
@@ -1200,9 +1067,7 @@ pub async fn insert_text(
         let callback: WIPICWord = read_generic(context, component + 0x5c)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0x64)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
@@ -1214,12 +1079,7 @@ pub async fn insert_text(
 /// Native accepts `length == -1` (delete to end) or a positive length.
 /// If a positive deletion reaches or passes the end, it is also treated
 /// as delete-to-end. Invalid/null components and invalid ranges are no-ops.
-pub async fn delete_text(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: i32,
-    length: i32,
-) -> Result<()> {
+pub async fn delete_text(context: &mut dyn WIPICContext, component: WIPICWord, position: i32, length: i32) -> Result<()> {
     tracing::debug!("MC_uicDeleteText({component:#x}, {position}, {length})");
 
     if component == 0 || length < -1 || length == 0 {
@@ -1299,9 +1159,7 @@ pub async fn delete_text(
         let callback: WIPICWord = read_generic(context, component + 0x5c)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0x64)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
@@ -1313,10 +1171,7 @@ pub async fn delete_text(
 /// Native validates the component first. NULL/invalid components return 0,
 /// valid non-Text components return -9, and valid Text components return the
 /// 32-bit max-text-size/capacity field stored at +0x48 unchanged.
-pub async fn get_max_text_size(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<i32> {
+pub async fn get_max_text_size(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicGetMaxTextSize({component:#x})");
 
     if component == 0 {
@@ -1343,10 +1198,7 @@ pub async fn get_max_text_size(
 /// A NULL text pointer returns 0. Otherwise native tail-calls `strlen` and
 /// returns the current text length, excluding the terminating NUL. The +0x48
 /// capacity and +0x4c cursor fields are not consulted.
-pub async fn get_text_size(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<i32> {
+pub async fn get_text_size(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicGetTextSize({component:#x})");
 
     if component == 0 {
@@ -1393,16 +1245,8 @@ pub async fn get_text_size(
 /// On success it copies the complete suffix `source[position..source_len]`,
 /// appends NUL, then tail-calls `strlen(output)`. Therefore the successful
 /// return value is the suffix length.
-pub async fn get_text(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: i32,
-    output: WIPICWord,
-    buflen: i32,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_uicGetText({component:#x}, {position}, {output:#x}, {buflen})"
-    );
+pub async fn get_text(context: &mut dyn WIPICContext, component: WIPICWord, position: i32, output: WIPICWord, buflen: i32) -> Result<i32> {
+    tracing::debug!("MC_uicGetText({component:#x}, {position}, {output:#x}, {buflen})");
 
     if component == 0 {
         return Ok(0);
@@ -1460,11 +1304,7 @@ pub async fn get_text(
 /// The WIE allocator has no realloc primitive, so changed-size reallocations
 /// are reproduced as allocate/copy/free using the old +0x48 capacity as the
 /// exact allocation size required by `free_raw`.
-pub async fn set_max_text_size(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    size: i32,
-) -> Result<i32> {
+pub async fn set_max_text_size(context: &mut dyn WIPICContext, component: WIPICWord, size: i32) -> Result<i32> {
     tracing::debug!("MC_uicSetMaxTextSize({component:#x}, {size})");
 
     if component == 0 || size < 0 {
@@ -1547,10 +1387,7 @@ fn uic_class_name(component_type: WIPICWord) -> Option<(WIPICWord, &'static [u8]
 /// NUL-terminated class-name pointers. Invalid/NULL components return NULL.
 /// WIE mirrors the native table's stable pointer identity in reserved guest
 /// global-data memory, preserving the native relative spacing between strings.
-pub async fn get_class_name(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<WIPICIndirectPtr> {
+pub async fn get_class_name(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_uicGetClassName({component:#x})");
 
     if component == 0 {
@@ -1572,11 +1409,7 @@ pub async fn get_class_name(
 /// compares the supplied NUL-terminated string with the exact provider class
 /// name for component types 1..=5. It returns 1 only for an exact `strcmp`
 /// match and 0 otherwise.
-pub async fn is_instance(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    psz: WIPICWord,
-) -> Result<i32> {
+pub async fn is_instance(context: &mut dyn WIPICContext, component: WIPICWord, psz: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicIsInstance({component:#x}, {psz:#x})");
 
     if component == 0 || psz == 0 {
@@ -1607,11 +1440,7 @@ pub async fn is_instance(
 /// Native stores LGT-internal WPUic_Draw* addresses at +0x24. Components created
 /// by generic WIE store internal markers instead so those provider addresses are
 /// never mistaken for application ARM callbacks.
-pub async fn paint(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    graphics_context: WIPICWord,
-) -> Result<()> {
+pub async fn paint(context: &mut dyn WIPICContext, component: WIPICWord, graphics_context: WIPICWord) -> Result<()> {
     tracing::debug!("MC_uicPaint({component:#x}, {graphics_context:#x})");
 
     if component == 0 {
@@ -1634,14 +1463,11 @@ pub async fn paint(
     let callback: WIPICWord = read_generic(context, component + 0x30)?;
     if callback != 0 {
         let callback_context: WIPICWord = read_generic(context, component + 0x3c)?;
-        context
-            .call_function(callback, &[component, 0, callback_context])
-            .await?;
+        context.call_function(callback, &[component, 0, callback_context]).await?;
     }
 
     Ok(())
 }
-
 
 fn uic_read_c_string(context: &dyn WIPICContext, address: WIPICWord) -> Result<alloc::vec::Vec<u8>> {
     let mut result = alloc::vec::Vec::new();
@@ -1673,12 +1499,7 @@ fn uic_text_line_step(context: &dyn WIPICContext, component: WIPICWord) -> Resul
     Ok((width - 7) / 6)
 }
 
-fn uic_text_vertical_position(
-    text_len: i32,
-    cursor: i32,
-    step: i32,
-    direction: i32,
-) -> Option<i32> {
+fn uic_text_vertical_position(text_len: i32, cursor: i32, step: i32, direction: i32) -> Option<i32> {
     if step <= 0 || text_len <= step {
         return None;
     }
@@ -1687,11 +1508,7 @@ fn uic_text_vertical_position(
         0 => {
             if step < cursor {
                 let next = cursor - step;
-                if next >= 0 {
-                    Some(next)
-                } else {
-                    None
-                }
+                if next >= 0 { Some(next) } else { None }
             } else {
                 None
             }
@@ -1701,11 +1518,7 @@ fn uic_text_vertical_position(
                 return None;
             }
             let next = cursor + step;
-            if text_len >= next {
-                Some(next)
-            } else {
-                None
-            }
+            if text_len >= next { Some(next) } else { None }
         }
         _ => None,
     }
@@ -1716,11 +1529,7 @@ fn uic_skip_time_separator(text: &[u8], cursor: usize, forward: bool) -> usize {
         return cursor;
     }
 
-    if forward {
-        cursor.saturating_add(1)
-    } else {
-        cursor.saturating_sub(1)
-    }
+    if forward { cursor.saturating_add(1) } else { cursor.saturating_sub(1) }
 }
 
 fn uic_get_active_item_pos(selected: i32, count: i32, scroll: i32) -> Option<(i32, i32)> {
@@ -1742,11 +1551,7 @@ async fn uic_repaint_component(context: &mut dyn WIPICContext, component: WIPICW
     repaint(context, component, 0, 0, -1, -1).await
 }
 
-async fn uic_selection_changed(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    old_selected: i32,
-) -> Result<()> {
+async fn uic_selection_changed(context: &mut dyn WIPICContext, component: WIPICWord, old_selected: i32) -> Result<()> {
     let selected: i32 = read_generic(context, component + 0x48)?;
     if selected == old_selected {
         return Ok(());
@@ -1755,19 +1560,13 @@ async fn uic_selection_changed(
     let callback: WIPICWord = read_generic(context, component + 0x54)?;
     if callback != 0 {
         let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
-        context
-            .call_function(callback, &[component, selected as u32, callback_context])
-            .await?;
+        context.call_function(callback, &[component, selected as u32, callback_context]).await?;
     }
 
     Ok(())
 }
 
-async fn uic_handle_menu(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    key: i32,
-) -> Result<u32> {
+async fn uic_handle_menu(context: &mut dyn WIPICContext, component: WIPICWord, key: i32) -> Result<u32> {
     let count: i32 = read_generic(context, component + 0x44)?;
     if count <= 0 {
         return Ok(0);
@@ -1787,11 +1586,7 @@ async fn uic_handle_menu(
             Ok(1)
         }
         -2 => {
-            let selected = if old_selected == -1 {
-                0
-            } else {
-                (old_selected + 1).rem_euclid(count)
-            };
+            let selected = if old_selected == -1 { 0 } else { (old_selected + 1).rem_euclid(count) };
             write_generic(context, component + 0x48, selected)?;
             uic_selection_changed(context, component, old_selected).await?;
             Ok(1)
@@ -1801,10 +1596,7 @@ async fn uic_handle_menu(
             if callback != 0 {
                 let callback_context: WIPICWord = read_generic(context, component + 0x40)?;
                 context
-                    .call_function(
-                        callback,
-                        &[component, old_selected as u32, callback_context],
-                    )
+                    .call_function(callback, &[component, old_selected as u32, callback_context])
                     .await?;
             }
             uic_selection_changed(context, component, old_selected).await?;
@@ -1814,11 +1606,7 @@ async fn uic_handle_menu(
     }
 }
 
-async fn uic_handle_list(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    key: i32,
-) -> Result<u32> {
+async fn uic_handle_list(context: &mut dyn WIPICContext, component: WIPICWord, key: i32) -> Result<u32> {
     let count: i32 = read_generic(context, component + 0x44)?;
     if count <= 0 {
         return Ok(0);
@@ -1831,10 +1619,7 @@ async fn uic_handle_list(
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0x40)?;
             context
-                .call_function(
-                    callback,
-                    &[component, old_selected as u32, callback_context],
-                )
+                .call_function(callback, &[component, old_selected as u32, callback_context])
                 .await?;
         }
         uic_selection_changed(context, component, old_selected).await?;
@@ -1858,9 +1643,7 @@ async fn uic_handle_list(
                 let selected = old_selected - 1;
                 write_generic(context, component + 0x48, selected)?;
 
-                if let Some((new_top, _new_bottom)) =
-                    uic_get_active_item_pos(selected, count, scroll)
-                {
+                if let Some((new_top, _new_bottom)) = uic_get_active_item_pos(selected, count, scroll) {
                     if scroll > new_top {
                         let span = bottom.saturating_add(1).saturating_sub(new_top);
                         scroll = if span <= height {
@@ -1876,11 +1659,7 @@ async fn uic_handle_list(
             write_generic(context, component + 0x4c, 0i32)?;
         } else {
             let candidate = scroll.saturating_sub(height);
-            scroll = if candidate < top {
-                top
-            } else {
-                (candidate / 17) * 17
-            };
+            scroll = if candidate < top { top } else { (candidate / 17) * 17 };
             write_generic(context, component + 0x4c, scroll)?;
         }
     } else {
@@ -1890,9 +1669,7 @@ async fn uic_handle_list(
                 let selected = old_selected + 1;
                 write_generic(context, component + 0x48, selected)?;
 
-                if let Some((new_top, new_bottom)) =
-                    uic_get_active_item_pos(selected, count, scroll)
-                {
+                if let Some((new_top, new_bottom)) = uic_get_active_item_pos(selected, count, scroll) {
                     if scroll.saturating_add(height.saturating_sub(1)) < new_bottom {
                         let span = new_bottom.saturating_add(1).saturating_sub(new_top);
                         scroll = if span <= height {
@@ -1936,24 +1713,16 @@ fn uic_days_since_1900_03_01(year: i32, month: i32, day: i32) -> i64 {
     }
 
     let y0 = y - 1900;
-    365 * y0
-        + y0.div_euclid(4)
-        - y0.div_euclid(100)
-        + y0.div_euclid(400)
-        + ((153 * (m - 3) + 2) / 5)
-        + (day as i64 - 1)
+    365 * y0 + y0.div_euclid(4) - y0.div_euclid(100) + y0.div_euclid(400) + ((153 * (m - 3) + 2) / 5) + (day as i64 - 1)
 }
 
 fn uic_civil_from_days(days: i64) -> (i32, i32, i32) {
     let days = days + 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
     let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096)
-            / 365;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let mut year = year_of_era + era * 400;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_param = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_param + 2) / 5 + 1;
     let month = month_param + if month_param < 10 { 3 } else { -9 };
@@ -1974,27 +1743,14 @@ fn uic_kst_tm_from_epoch_seconds(epoch_seconds: i64) -> [i32; 9] {
     let yday = uic_days_before_month(year, month) + day - 1;
     let wday = (days + 4).rem_euclid(7) as i32;
 
-    [
-        second,
-        minute,
-        hour,
-        day,
-        month - 1,
-        year - 1900,
-        wday,
-        yday,
-        0,
-    ]
+    [second, minute, hour, day, month - 1, year - 1900, wday, yday, 0]
 }
 
 fn uic_kst_tm_from_epoch_millis(epoch_millis: u64) -> [i32; 9] {
     uic_kst_tm_from_epoch_seconds((epoch_millis / 1000) as i64)
 }
 
-async fn uic_datetime_timer_callback(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<()> {
+async fn uic_datetime_timer_callback(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
     let blink: u32 = read_generic(context, component + 0x9c)?;
     write_generic(context, component + 0x9c, u32::from(blink == 0))?;
 
@@ -2013,8 +1769,7 @@ async fn uic_datetime_timer_callback(
     // callback, repaints the component, and re-arms the 1000 ms timer.
     // Generic WIE has no persistent native stack graphics context, so use
     // the component's normal paint path with an allocated temporary context.
-    let gctx_size =
-        core::mem::size_of::<wipi_types::wipic::WIPICGraphicsContext>() as u32;
+    let gctx_size = core::mem::size_of::<wipi_types::wipic::WIPICGraphicsContext>() as u32;
     let gctx = context.alloc_raw(gctx_size)?;
     graphics::init_context(context, gctx).await?;
 
@@ -2023,9 +1778,7 @@ async fn uic_datetime_timer_callback(
     let callback: WIPICWord = read_generic(context, component + 0x30)?;
     if callback != 0 {
         let callback_context: WIPICWord = read_generic(context, component + 0x3c)?;
-        context
-            .call_function(callback, &[component, 0, callback_context])
-            .await?;
+        context.call_function(callback, &[component, 0, callback_context]).await?;
     }
 
     context.free_raw(gctx, gctx_size)?;
@@ -2042,15 +1795,11 @@ async fn uic_datetime_timer_callback(
     Ok(())
 }
 
-async fn uic_text_timer_callback(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<()> {
+async fn uic_text_timer_callback(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
     let blink: u32 = read_generic(context, component + 0x58)?;
     write_generic(context, component + 0x58, u32::from(blink == 0))?;
 
-    let gctx_size =
-        core::mem::size_of::<wipi_types::wipic::WIPICGraphicsContext>() as u32;
+    let gctx_size = core::mem::size_of::<wipi_types::wipic::WIPICGraphicsContext>() as u32;
     let gctx = context.alloc_raw(gctx_size)?;
     graphics::init_context(context, gctx).await?;
 
@@ -2059,9 +1808,7 @@ async fn uic_text_timer_callback(
     let callback: WIPICWord = read_generic(context, component + 0x30)?;
     if callback != 0 {
         let callback_context: WIPICWord = read_generic(context, component + 0x3c)?;
-        context
-            .call_function(callback, &[component, 0, callback_context])
-            .await?;
+        context.call_function(callback, &[component, 0, callback_context]).await?;
     }
 
     context.free_raw(gctx, gctx_size)?;
@@ -2078,10 +1825,7 @@ async fn uic_text_timer_callback(
     Ok(())
 }
 
-async fn uic_datetime_finish_edit(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<u32> {
+async fn uic_datetime_finish_edit(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<u32> {
     write_generic(context, component + 0x9c, 0u32)?;
     kernel::unset_timer(context, component + 0x98).await?;
     uic_datetime_timer_callback(context, component).await?;
@@ -2097,9 +1841,7 @@ fn uic_format_datetime(mask: u32, fields: &[i32; 9]) -> alloc::vec::Vec<u8> {
     let year = fields[5] + 1900;
 
     let text = if mask == 3 {
-        alloc::format!(
-            "{year:04}/{mon:02}/{mday:02} {hour:02}:{min:02}:{sec:02}"
-        )
+        alloc::format!("{year:04}/{mon:02}/{mday:02} {hour:02}:{min:02}:{sec:02}")
     } else if mask == 1 {
         alloc::format!("{hour:02}:{min:02}:{sec:02}")
     } else {
@@ -2113,12 +1855,7 @@ fn uic_parse_datetime(text: &[u8]) -> Option<(i32, i32, i32, i32, i32, i32)> {
     if text.len() < 19 {
         return None;
     }
-    if text[4] != b'/'
-        || text[7] != b'/'
-        || text[10] != b' '
-        || text[13] != b':'
-        || text[16] != b':'
-    {
+    if text[4] != b'/' || text[7] != b'/' || text[10] != b' ' || text[13] != b':' || text[16] != b':' {
         return None;
     }
 
@@ -2135,26 +1872,12 @@ fn uic_parse_datetime(text: &[u8]) -> Option<(i32, i32, i32, i32, i32, i32)> {
         return None;
     }
 
-    let year = ((text[0] - b'0') as i32) * 1000
-        + ((text[1] - b'0') as i32) * 100
-        + ((text[2] - b'0') as i32) * 10
-        + ((text[3] - b'0') as i32);
+    let year = ((text[0] - b'0') as i32) * 1000 + ((text[1] - b'0') as i32) * 100 + ((text[2] - b'0') as i32) * 10 + ((text[3] - b'0') as i32);
 
-    Some((
-        year,
-        d(5, 6)?,
-        d(8, 9)?,
-        d(11, 12)?,
-        d(14, 15)?,
-        d(17, 18)?,
-    ))
+    Some((year, d(5, 6)?, d(8, 9)?, d(11, 12)?, d(14, 15)?, d(17, 18)?))
 }
 
-async fn uic_handle_datetime(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    key: i32,
-) -> Result<u32> {
+async fn uic_handle_datetime(context: &mut dyn WIPICContext, component: WIPICWord, key: i32) -> Result<u32> {
     let text_ptr = component + 0x74;
     let mut text = uic_read_c_string(context, text_ptr)?;
     let mut cursor: u32 = read_generic(context, component + 0x94)?;
@@ -2163,9 +1886,7 @@ async fn uic_handle_datetime(
         -3 => {
             if cursor > 0 {
                 cursor -= 1;
-                if (cursor as usize) < text.len()
-                    && matches!(text[cursor as usize], b':' | b'/' | b'\n')
-                {
+                if (cursor as usize) < text.len() && matches!(text[cursor as usize], b':' | b'/' | b'\n') {
                     cursor = cursor.saturating_sub(1);
                 }
                 write_generic(context, component + 0x94, cursor)?;
@@ -2175,9 +1896,7 @@ async fn uic_handle_datetime(
         -4 => {
             if cursor < text.len().saturating_sub(1) as u32 {
                 cursor += 1;
-                if (cursor as usize) < text.len()
-                    && matches!(text[cursor as usize], b':' | b'/' | b'\n')
-                {
+                if (cursor as usize) < text.len() && matches!(text[cursor as usize], b':' | b'/' | b'\n') {
                     cursor += 1;
                 }
                 write_generic(context, component + 0x94, cursor)?;
@@ -2191,9 +1910,7 @@ async fn uic_handle_datetime(
             }
             if cursor < text.len().saturating_sub(1) as u32 {
                 cursor += 1;
-                if (cursor as usize) < text.len()
-                    && matches!(text[cursor as usize], b':' | b'/' | b'\n')
-                {
+                if (cursor as usize) < text.len() && matches!(text[cursor as usize], b':' | b'/' | b'\n') {
                     cursor += 1;
                 }
                 write_generic(context, component + 0x94, cursor)?;
@@ -2217,9 +1934,7 @@ async fn uic_handle_datetime(
 
     let mask: u32 = read_generic(context, component + 0x44)?;
     if mask & 2 != 0 {
-        let valid = if let Some((year, month, day, hour, minute, second)) =
-            uic_parse_datetime(&text)
-        {
+        let valid = if let Some((year, month, day, hour, minute, second)) = uic_parse_datetime(&text) {
             (1901..=2999).contains(&year)
                 && (1..=12).contains(&month)
                 && (1..=31).contains(&day)
@@ -2232,9 +1947,7 @@ async fn uic_handle_datetime(
 
         if !valid {
             context.write_bytes(text_ptr + cursor, &[old])?;
-        } else if let Some((year, month, day, hour, minute, second)) =
-            uic_parse_datetime(&text)
-        {
+        } else if let Some((year, month, day, hour, minute, second)) = uic_parse_datetime(&text) {
             let days_in_month = match month {
                 2 if uic_is_leap_year(year) => 29,
                 2 => 28,
@@ -2260,28 +1973,15 @@ async fn uic_handle_datetime(
                 write_generic(context, component + 0x60, tm_wday)?;
                 write_generic(context, component + 0x64, tm_yday)?;
 
-                let fields = [
-                    second,
-                    minute,
-                    hour,
-                    day,
-                    tm_mon,
-                    tm_year,
-                    tm_wday,
-                    tm_yday,
-                    0,
-                ];
+                let fields = [second, minute, hour, day, tm_mon, tm_year, tm_wday, tm_yday, 0];
                 let formatted = uic_format_datetime(mask, &fields);
                 context.write_bytes(text_ptr, &formatted)?;
                 context.write_bytes(text_ptr + formatted.len() as u32, &[0])?;
 
                 let callback: WIPICWord = read_generic(context, component + 0xa0)?;
                 if callback != 0 {
-                    let callback_context: WIPICWord =
-                        read_generic(context, component + 0xa4)?;
-                    context
-                        .call_function(callback, &[component, 0, callback_context])
-                        .await?;
+                    let callback_context: WIPICWord = read_generic(context, component + 0xa4)?;
+                    context.call_function(callback, &[component, 0, callback_context]).await?;
                 }
             }
         }
@@ -2299,26 +1999,16 @@ async fn uic_handle_datetime(
     uic_datetime_finish_edit(context, component).await
 }
 
-async fn uic_text_changed_callback(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<()> {
+async fn uic_text_changed_callback(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
     let callback: WIPICWord = read_generic(context, component + 0x5c)?;
     if callback != 0 {
         let callback_context: WIPICWord = read_generic(context, component + 0x64)?;
-        context
-            .call_function(callback, &[component, 0, callback_context])
-            .await?;
+        context.call_function(callback, &[component, 0, callback_context]).await?;
     }
     Ok(())
 }
 
-fn uic_text_delete_raw(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: usize,
-    length: usize,
-) -> Result<()> {
+fn uic_text_delete_raw(context: &mut dyn WIPICContext, component: WIPICWord, position: usize, length: usize) -> Result<()> {
     let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
     if text_ptr == 0 {
         return Ok(());
@@ -2337,12 +2027,7 @@ fn uic_text_delete_raw(
     Ok(())
 }
 
-fn uic_text_insert_raw(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: usize,
-    bytes: &[u8],
-) -> Result<()> {
+fn uic_text_insert_raw(context: &mut dyn WIPICContext, component: WIPICWord, position: usize, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
@@ -2362,20 +2047,11 @@ fn uic_text_insert_raw(
     text.splice(position..position, bytes.iter().copied());
     context.write_bytes(text_ptr, &text)?;
     context.write_bytes(text_ptr + text.len() as u32, &[0])?;
-    write_generic(
-        context,
-        component + 0x4c,
-        (position + bytes.len()) as u32,
-    )?;
+    write_generic(context, component + 0x4c, (position + bytes.len()) as u32)?;
     Ok(())
 }
 
-async fn uic_text_delete_internal(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: usize,
-    length: usize,
-) -> Result<()> {
+async fn uic_text_delete_internal(context: &mut dyn WIPICContext, component: WIPICWord, position: usize, length: usize) -> Result<()> {
     let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
     if text_ptr == 0 {
         return Ok(());
@@ -2392,12 +2068,7 @@ async fn uic_text_delete_internal(
     Ok(())
 }
 
-async fn uic_text_insert_internal(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: usize,
-    bytes: &[u8],
-) -> Result<()> {
+async fn uic_text_insert_internal(context: &mut dyn WIPICContext, component: WIPICWord, position: usize, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
@@ -2418,11 +2089,7 @@ async fn uic_text_insert_internal(
     Ok(())
 }
 
-async fn uic_text_insert_output(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    output: &[u8],
-) -> Result<()> {
+async fn uic_text_insert_output(context: &mut dyn WIPICContext, component: WIPICWord, output: &[u8]) -> Result<()> {
     if output.is_empty() {
         return Ok(());
     }
@@ -2431,11 +2098,7 @@ async fn uic_text_insert_output(
     uic_text_insert_internal(context, component, cursor as usize, output).await
 }
 
-async fn uic_text_remove_composition_internal(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    composition_size: usize,
-) -> Result<()> {
+async fn uic_text_remove_composition_internal(context: &mut dyn WIPICContext, component: WIPICWord, composition_size: usize) -> Result<()> {
     if composition_size == 0 {
         return Ok(());
     }
@@ -2457,17 +2120,11 @@ async fn uic_text_apply_ime_output(
     uic_text_insert_output(context, component, output0).await?;
     uic_text_insert_output(context, component, output1).await?;
 
-    context
-        .system()
-        .set_input_composition_size(output1.len());
+    context.system().set_input_composition_size(output1.len());
     Ok(())
 }
 
-async fn uic_text_process_default_input(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    key: i8,
-) -> Result<()> {
+async fn uic_text_process_default_input(context: &mut dyn WIPICContext, component: WIPICWord, key: i8) -> Result<()> {
     let old_composition_size = context.system().input_composition_size();
     let output = context.system().handle_input_method(key, 2);
 
@@ -2481,14 +2138,9 @@ async fn uic_text_process_default_input(
     // not alter the displayed composition. It flushes the IME with key 157
     // and clears s_CompoSize, effectively committing the existing bytes
     // in place.
-    let growth = output
-        .output0_len
-        .saturating_add(output.output1_len) as isize
-        - old_composition_size as isize;
+    let growth = output.output0_len.saturating_add(output.output1_len) as isize - old_composition_size as isize;
 
-    if growth > 0
-        && capacity as usize <= text_len.saturating_add(growth as usize)
-    {
+    if growth > 0 && capacity as usize <= text_len.saturating_add(growth as usize) {
         let _ = context.system().handle_input_method(-99, 2);
         context.system().set_input_composition_size(0);
         return Ok(());
@@ -2504,10 +2156,7 @@ async fn uic_text_process_default_input(
     .await
 }
 
-async fn uic_text_flush_removed_composition(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<()> {
+async fn uic_text_flush_removed_composition(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
     let old_composition_size = context.system().input_composition_size();
     if old_composition_size == 0 {
         context.system().set_input_composition_size(0);
@@ -2521,29 +2170,14 @@ async fn uic_text_flush_removed_composition(
     // returned committed text. Provider output1 is normally zero after
     // this flush but preserve the complete output contract.
     let output = context.system().handle_input_method(-99, 2);
-    uic_text_insert_output(
-        context,
-        component,
-        &output.output0[..output.output0_len],
-    )
-    .await?;
-    uic_text_insert_output(
-        context,
-        component,
-        &output.output1[..output.output1_len],
-    )
-    .await?;
+    uic_text_insert_output(context, component, &output.output0[..output.output0_len]).await?;
+    uic_text_insert_output(context, component, &output.output1[..output.output1_len]).await?;
 
-    context
-        .system()
-        .set_input_composition_size(output.output1_len);
+    context.system().set_input_composition_size(output.output1_len);
     Ok(())
 }
 
-async fn uic_text_clear(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<()> {
+async fn uic_text_clear(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<()> {
     let composition_size = context.system().input_composition_size();
     let cursor: u32 = read_generic(context, component + 0x4c)?;
 
@@ -2551,32 +2185,14 @@ async fn uic_text_clear(
         // Native intentionally uses public MC_uicDeleteText here rather
         // than WPUic_DeleteText, so preserve its callback behavior.
         let position = (cursor as usize).saturating_sub(composition_size);
-        delete_text(
-            context,
-            component,
-            position as i32,
-            composition_size as i32,
-        )
-        .await?;
+        delete_text(context, component, position as i32, composition_size as i32).await?;
 
         let output = context.system().handle_input_method(-16, 2);
 
-        uic_text_insert_output(
-            context,
-            component,
-            &output.output0[..output.output0_len],
-        )
-        .await?;
-        uic_text_insert_output(
-            context,
-            component,
-            &output.output1[..output.output1_len],
-        )
-        .await?;
+        uic_text_insert_output(context, component, &output.output0[..output.output0_len]).await?;
+        uic_text_insert_output(context, component, &output.output1[..output.output1_len]).await?;
 
-        context
-            .system()
-            .set_input_composition_size(output.output1_len);
+        context.system().set_input_composition_size(output.output1_len);
         return Ok(());
     }
 
@@ -2598,11 +2214,7 @@ async fn uic_text_clear(
     Ok(())
 }
 
-async fn uic_handle_text(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    key: i32,
-) -> Result<u32> {
+async fn uic_handle_text(context: &mut dyn WIPICContext, component: WIPICWord, key: i32) -> Result<u32> {
     let text_ptr: WIPICWord = read_generic(context, component + 0x44)?;
     if text_ptr == 0 {
         return Ok(0);
@@ -2634,11 +2246,7 @@ async fn uic_handle_text(
                 let text = uic_read_c_string(context, text_ptr)?;
                 let previous = (cursor - 1) as usize;
                 let width = if text[previous] & 0x80 != 0 { 2 } else { 1 };
-                write_generic(
-                    context,
-                    component + 0x4c,
-                    cursor.saturating_sub(width),
-                )?;
+                write_generic(context, component + 0x4c, cursor.saturating_sub(width))?;
             }
 
             context.system().set_input_composition_size(0);
@@ -2655,11 +2263,7 @@ async fn uic_handle_text(
                 uic_text_insert_internal(context, component, text.len(), b" ").await?;
             } else if (cursor as usize) < text.len() {
                 cursor += uic_signed_byte_width(text[cursor as usize]);
-                write_generic(
-                    context,
-                    component + 0x4c,
-                    cursor.min(text.len() as u32),
-                )?;
+                write_generic(context, component + 0x4c, cursor.min(text.len() as u32))?;
             }
 
             context.system().set_input_composition_size(0);
@@ -2669,9 +2273,7 @@ async fn uic_handle_text(
             let text = uic_read_c_string(context, text_ptr)?;
             let step = uic_text_line_step(context, component)?;
 
-            if let Some(next) =
-                uic_text_vertical_position(text.len() as i32, cursor as i32, step, 0)
-            {
+            if let Some(next) = uic_text_vertical_position(text.len() as i32, cursor as i32, step, 0) {
                 write_generic(context, component + 0x4c, next as u32)?;
             }
 
@@ -2684,21 +2286,14 @@ async fn uic_handle_text(
             let text = uic_read_c_string(context, text_ptr)?;
             let step = uic_text_line_step(context, component)?;
 
-            if let Some(next) =
-                uic_text_vertical_position(text.len() as i32, cursor as i32, step, 1)
-            {
+            if let Some(next) = uic_text_vertical_position(text.len() as i32, cursor as i32, step, 1) {
                 write_generic(context, component + 0x4c, next as u32)?;
             }
 
             context.system().set_input_composition_size(0);
         }
         _ => {
-            uic_text_process_default_input(
-                context,
-                component,
-                key as u8 as i8,
-            )
-            .await?;
+            uic_text_process_default_input(context, component, key as u8 as i8).await?;
         }
     }
 
@@ -2706,21 +2301,15 @@ async fn uic_handle_text(
     if old != current {
         let callback: WIPICWord = read_generic(context, component + 0x5c)?;
         if callback != 0 {
-            let callback_context: WIPICWord =
-                read_generic(context, component + 0x64)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            let callback_context: WIPICWord = read_generic(context, component + 0x64)?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
     let callback: WIPICWord = read_generic(context, component + 0x60)?;
     if callback != 0 {
-        let callback_context: WIPICWord =
-            read_generic(context, component + 0x68)?;
-        context
-            .call_function(callback, &[component, 0, callback_context])
-            .await?;
+        let callback_context: WIPICWord = read_generic(context, component + 0x68)?;
+        context.call_function(callback, &[component, 0, callback_context]).await?;
     }
 
     Ok(1)
@@ -2732,16 +2321,8 @@ async fn uic_handle_text(
 /// handler return value of 1 consumes the event immediately. Built-in UIC
 /// processing runs only for WIPI key events 502 (press) and 504 (release).
 /// Recognized built-in changes repaint the component before returning 1.
-pub async fn handle_event(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    event: WIPICWord,
-    key: i32,
-    extra: WIPICWord,
-) -> Result<u32> {
-    tracing::debug!(
-        "MC_uicHandleEvent({component:#x}, {event}, {key}, {extra:#x})"
-    );
+pub async fn handle_event(context: &mut dyn WIPICContext, component: WIPICWord, event: WIPICWord, key: i32, extra: WIPICWord) -> Result<u32> {
+    tracing::debug!("MC_uicHandleEvent({component:#x}, {event}, {key}, {extra:#x})");
 
     if component == 0 {
         return Ok(0);
@@ -2760,12 +2341,7 @@ pub async fn handle_event(
     let mut result = 0;
     let handler: WIPICWord = read_generic(context, component + 0x28)?;
     if handler != 0 {
-        result = context
-            .call_function(
-                handler,
-                &[component, event, key as u32, extra],
-            )
-            .await?;
+        result = context.call_function(handler, &[component, event, key as u32, extra]).await?;
         if result == 1 {
             return Ok(1);
         }
@@ -2816,15 +2392,8 @@ pub async fn handle_event(
 /// then replacing +0x50. Allocation failure returns 0 and does not increment
 /// the count. On success the return value is the old count, i.e. the new item's
 /// zero-based index.
-pub async fn add_menu_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    label: WIPICWord,
-    image: WIPICWord,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_uicAddMenuItem({component:#x}, {label:#x}, {image:#x})"
-    );
+pub async fn add_menu_item(context: &mut dyn WIPICContext, component: WIPICWord, label: WIPICWord, image: WIPICWord) -> Result<i32> {
+    tracing::debug!("MC_uicAddMenuItem({component:#x}, {label:#x}, {image:#x})");
 
     if component == 0 {
         return Ok(0);
@@ -2908,15 +2477,8 @@ pub async fn add_menu_item(
 ///
 /// Allocation failure returns 0 without incrementing +0x44. Successful addition
 /// returns the previous count, which is the new item's zero-based index.
-pub async fn add_list_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    label: WIPICWord,
-    image: WIPICWord,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_uicAddListItem({component:#x}, {label:#x}, {image:#x})"
-    );
+pub async fn add_list_item(context: &mut dyn WIPICContext, component: WIPICWord, label: WIPICWord, image: WIPICWord) -> Result<i32> {
+    tracing::debug!("MC_uicAddListItem({component:#x}, {label:#x}, {image:#x})");
 
     if component == 0 {
         return Ok(0);
@@ -3006,11 +2568,7 @@ pub async fn add_list_item(
 /// If the removed index exactly equals the active index and +0x54 is nonzero,
 /// native calls `callback(component, 0, +0x58 context)`. The callback result is
 /// discarded. Successful removal returns 1.
-pub async fn remove_list_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    index: WIPICWord,
-) -> Result<i32> {
+pub async fn remove_list_item(context: &mut dyn WIPICContext, component: WIPICWord, index: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicRemoveListItem({component:#x}, {index})");
 
     if component == 0 {
@@ -3063,9 +2621,7 @@ pub async fn remove_list_item(
         let callback: WIPICWord = read_generic(context, component + 0x54)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
@@ -3094,11 +2650,7 @@ pub async fn remove_list_item(
 /// the active index and +0x54 is nonzero, it invokes
 /// `callback(component, 0, +0x58 context)`. The callback result is discarded and
 /// successful removal returns 1.
-pub async fn remove_menu_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    index: WIPICWord,
-) -> Result<i32> {
+pub async fn remove_menu_item(context: &mut dyn WIPICContext, component: WIPICWord, index: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicRemoveMenuItem({component:#x}, {index})");
 
     if component == 0 {
@@ -3151,9 +2703,7 @@ pub async fn remove_menu_item(
         let callback: WIPICWord = read_generic(context, component + 0x54)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
@@ -3177,11 +2727,7 @@ pub async fn remove_menu_item(
 /// On success native returns the previous +0x48 value. It stores the new value and,
 /// only when the value changed and +0x54 is nonzero, invokes
 /// `callback(component, 0, +0x58 context)`. The callback result is discarded.
-pub async fn set_active_list_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    selected: i32,
-) -> Result<i32> {
+pub async fn set_active_list_item(context: &mut dyn WIPICContext, component: WIPICWord, selected: i32) -> Result<i32> {
     tracing::debug!("MC_uicSetActiveListItem({component:#x}, {selected})");
 
     if component == 0 {
@@ -3211,9 +2757,7 @@ pub async fn set_active_list_item(
         let callback: WIPICWord = read_generic(context, component + 0x54)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
@@ -3235,11 +2779,7 @@ pub async fn set_active_list_item(
 /// On success native returns the previous +0x48 value. After storing the new value it
 /// invokes `callback(component, 0, +0x58 context)` only when the active value changed
 /// and +0x54 is nonzero. The callback return value is discarded.
-pub async fn set_active_menu_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    selected: i32,
-) -> Result<i32> {
+pub async fn set_active_menu_item(context: &mut dyn WIPICContext, component: WIPICWord, selected: i32) -> Result<i32> {
     tracing::debug!("MC_uicSetActiveMenuItem({component:#x}, {selected})");
 
     if component == 0 {
@@ -3269,9 +2809,7 @@ pub async fn set_active_menu_item(
         let callback: WIPICWord = read_generic(context, component + 0x54)?;
         if callback != 0 {
             let callback_context: WIPICWord = read_generic(context, component + 0x58)?;
-            context
-                .call_function(callback, &[component, 0, callback_context])
-                .await?;
+            context.call_function(callback, &[component, 0, callback_context]).await?;
         }
     }
 
@@ -3285,10 +2823,7 @@ pub async fn set_active_menu_item(
 /// `WPUic_CheckValidComp` failure is converted from 0 to -1. A valid component of
 /// any type other than List returns -9. For a valid List component, native simply
 /// returns the signed 32-bit active-item value stored at +0x48 unchanged.
-pub async fn get_active_list_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<i32> {
+pub async fn get_active_list_item(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicGetActiveListItem({component:#x})");
 
     if component == 0 {
@@ -3325,11 +2860,7 @@ pub async fn get_active_list_item(
 /// The string length is evaluated before a negative position is rejected for
 /// either supported subtype. Success returns the requested position itself;
 /// failure returns -1.
-pub async fn set_cursor_pos(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-    position: i32,
-) -> Result<i32> {
+pub async fn set_cursor_pos(context: &mut dyn WIPICContext, component: WIPICWord, position: i32) -> Result<i32> {
     tracing::debug!("LGTC_uicSetCursorPos({component:#x}, {position})");
 
     if component == 0 {
@@ -3379,10 +2910,7 @@ pub async fn set_cursor_pos(
 /// component native returns the signed 32-bit cursor value at +0x4c unchanged.
 /// For a valid DateTime component it returns the signed 32-bit cursor value at
 /// +0x94 unchanged. Every other valid component type returns -1.
-pub async fn get_cursor_pos(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<i32> {
+pub async fn get_cursor_pos(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<i32> {
     tracing::debug!("LGTC_uicGetCursorPos({component:#x})");
 
     if component == 0 {
@@ -3408,10 +2936,7 @@ pub async fn get_cursor_pos(
 /// `WPUic_CheckValidComp` failure is converted from 0 to -1. A valid component of
 /// any type other than Menu returns -9. For a valid Menu component, native simply
 /// returns the signed 32-bit active-item value stored at +0x48 unchanged.
-pub async fn get_active_menu_item(
-    context: &mut dyn WIPICContext,
-    component: WIPICWord,
-) -> Result<i32> {
+pub async fn get_active_menu_item(context: &mut dyn WIPICContext, component: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_uicGetActiveMenuItem({component:#x})");
 
     if component == 0 {
@@ -3455,9 +2980,7 @@ pub async fn get_list_item(
     buflen: i32,
     image: WIPICWord,
 ) -> Result<i32> {
-    tracing::debug!(
-        "MC_uicGetListItem({component:#x}, {index}, {label:#x}, {buflen}, {image:#x})"
-    );
+    tracing::debug!("MC_uicGetListItem({component:#x}, {index}, {label:#x}, {buflen}, {image:#x})");
 
     if component == 0 {
         return Ok(0);
@@ -3477,8 +3000,7 @@ pub async fn get_list_item(
     }
 
     let table: WIPICWord = read_generic(context, component + 0x50)?;
-    let item: WIPICWord =
-        read_generic(context, table.wrapping_add((index as u32).wrapping_mul(4)))?;
+    let item: WIPICWord = read_generic(context, table.wrapping_add((index as u32).wrapping_mul(4)))?;
 
     let label_bytes = uic_read_c_string(context, item + 4)?;
     let required = (label_bytes.len() as i32).wrapping_add(1);
@@ -3520,9 +3042,7 @@ pub async fn get_menu_item(
     buflen: i32,
     image: WIPICWord,
 ) -> Result<i32> {
-    tracing::debug!(
-        "MC_uicGetMenuItem({component:#x}, {index}, {label:#x}, {buflen}, {image:#x})"
-    );
+    tracing::debug!("MC_uicGetMenuItem({component:#x}, {index}, {label:#x}, {buflen}, {image:#x})");
 
     if component == 0 {
         return Ok(0);
@@ -3542,8 +3062,7 @@ pub async fn get_menu_item(
     }
 
     let table: WIPICWord = read_generic(context, component + 0x50)?;
-    let item: WIPICWord =
-        read_generic(context, table.wrapping_add((index as u32).wrapping_mul(4)))?;
+    let item: WIPICWord = read_generic(context, table.wrapping_add((index as u32).wrapping_mul(4)))?;
 
     let label_bytes = uic_read_c_string(context, item + 4)?;
     let required = (label_bytes.len() as i32).wrapping_add(1);
@@ -3564,7 +3083,6 @@ pub async fn get_menu_item(
     Ok(1)
 }
 
-
 #[cfg(test)]
 mod tests {
     use wie_util::{ByteRead, ByteWrite, read_generic, write_generic};
@@ -3572,20 +3090,12 @@ mod tests {
     use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
-        UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, configure, create,
-        delete_text,
-        add_list_item, add_menu_item, destroy, get_class, get_class_name, get_font, get_geometry, get_label,
-        get_active_list_item, get_active_menu_item, get_cursor_pos, get_list_item, get_menu_item, get_time, insert_text, is_instance,
-        remove_list_item, remove_menu_item,
-        repaint, set_active_list_item, set_active_menu_item, set_bg_color, set_callback,
-        set_cursor_pos,
-        set_enable,
-        set_event_handler,
-        get_max_text_size, get_text, get_text_size, set_fg_color, set_font, set_label,
-        set_label_alignment, set_max_text_size,
-        set_time, set_time_long, set_time_mask, uic_color_to_rgb565, uic_read_c_string,
-        uic_repaint_rect,
-        uic_skip_time_separator,
+        UIC_DRAW_MARKER_BASE, UIC_EMPTY_LABEL, UIC_TIMER_MARKER_TEXT, add_list_item, add_menu_item, configure, create, delete_text, destroy,
+        get_active_list_item, get_active_menu_item, get_class, get_class_name, get_cursor_pos, get_font, get_geometry, get_label, get_list_item,
+        get_max_text_size, get_menu_item, get_text, get_text_size, get_time, insert_text, is_instance, remove_list_item, remove_menu_item, repaint,
+        set_active_list_item, set_active_menu_item, set_bg_color, set_callback, set_cursor_pos, set_enable, set_event_handler, set_fg_color,
+        set_font, set_label, set_label_alignment, set_max_text_size, set_time, set_time_long, set_time_mask, uic_color_to_rgb565, uic_read_c_string,
+        uic_repaint_rect, uic_skip_time_separator,
     };
 
     const COMPONENT: u32 = 0x1000;
@@ -3725,14 +3235,8 @@ mod tests {
             assert_eq!(read_generic::<u32, _>(&context, component + 0x10).unwrap(), 0x7fff);
             assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 0);
             assert_eq!(read_generic::<u32, _>(&context, component + 0x18).unwrap(), 0);
-            assert_eq!(
-                read_generic::<u32, _>(&context, component + 0x1c).unwrap(),
-                0x00ff_ffff
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, component + 0x24).unwrap(),
-                UIC_DRAW_MARKER_BASE + class
-            );
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x1c).unwrap(), 0x00ff_ffff);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x24).unwrap(), UIC_DRAW_MARKER_BASE + class);
             for offset in [0x20u32, 0x28, 0x2c, 0x30, 0x34, 0x38, 0x3c, 0x40] {
                 assert_eq!(read_generic::<u32, _>(&context, component + offset).unwrap(), 0);
             }
@@ -3742,34 +3246,18 @@ mod tests {
                     assert_eq!(read_generic::<u32, _>(&context, component + 0x44).unwrap(), 0);
                     assert_eq!(read_generic::<i32, _>(&context, component + 0x48).unwrap(), -1);
                     for offset in [0x4cu32, 0x50, 0x54, 0x58] {
-                        assert_eq!(
-                            read_generic::<u32, _>(&context, component + offset).unwrap(),
-                            0
-                        );
+                        assert_eq!(read_generic::<u32, _>(&context, component + offset).unwrap(), 0);
                     }
                 }
                 3 => {
-                    let text_ptr =
-                        read_generic::<u32, _>(&context, component + 0x44).unwrap();
+                    let text_ptr = read_generic::<u32, _>(&context, component + 0x44).unwrap();
                     assert_ne!(text_ptr, 0);
                     assert_eq!(read_generic::<u8, _>(&context, text_ptr).unwrap(), 0);
-                    assert_eq!(
-                        read_generic::<u32, _>(&context, component + 0x48).unwrap(),
-                        256
-                    );
-                    assert_eq!(
-                        read_generic::<u32, _>(&context, component + 0x54).unwrap(),
-                        UIC_TIMER_MARKER_TEXT
-                    );
-                    assert_eq!(
-                        read_generic::<u32, _>(&context, component + 0x58).unwrap(),
-                        1
-                    );
+                    assert_eq!(read_generic::<u32, _>(&context, component + 0x48).unwrap(), 256);
+                    assert_eq!(read_generic::<u32, _>(&context, component + 0x54).unwrap(), UIC_TIMER_MARKER_TEXT);
+                    assert_eq!(read_generic::<u32, _>(&context, component + 0x58).unwrap(), 1);
                     for offset in [0x4cu32, 0x50, 0x5c, 0x60, 0x64, 0x68] {
-                        assert_eq!(
-                            read_generic::<u32, _>(&context, component + offset).unwrap(),
-                            0
-                        );
+                        assert_eq!(read_generic::<u32, _>(&context, component + offset).unwrap(), 0);
                     }
                 }
                 4 => {
@@ -3778,7 +3266,6 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-
         }
     }
 
@@ -3801,20 +3288,11 @@ mod tests {
         assert_eq!(read_generic::<u32, _>(&context, component + 0x10).unwrap(), 0x7fff);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 0);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x18).unwrap(), 0);
-        assert_eq!(
-            read_generic::<u32, _>(&context, component + 0x1c).unwrap(),
-            0x00ff_ffff
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, component + 0x24).unwrap(),
-            UIC_DRAW_MARKER_BASE + 2
-        );
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x1c).unwrap(), 0x00ff_ffff);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x24).unwrap(), UIC_DRAW_MARKER_BASE + 2);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x44).unwrap(), 3);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x94).unwrap(), 0);
-        assert_eq!(
-            read_generic::<u32, _>(&context, component + 0x98).unwrap(),
-            super::UIC_TIMER_MARKER_TIME
-        );
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x98).unwrap(), super::UIC_TIMER_MARKER_TIME);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x9c).unwrap(), 1);
         assert_eq!(read_generic::<u32, _>(&context, component + 0xa0).unwrap(), 0);
         assert_eq!(read_generic::<u32, _>(&context, component + 0xa4).unwrap(), 0);
@@ -3872,14 +3350,8 @@ mod tests {
 
     #[test]
     fn lgt_uic_repaint_rect_matches_native_translation_and_inclusive_edges() {
-        assert_eq!(
-            uic_repaint_rect(10, 20, 100, 50, 3, 4, 7, 9),
-            (13, 24, 19, 32)
-        );
-        assert_eq!(
-            uic_repaint_rect(10, 20, 100, 50, 0, 0, -1, -1),
-            (10, 20, 109, 69)
-        );
+        assert_eq!(uic_repaint_rect(10, 20, 100, 50, 3, 4, 7, 9), (13, 24, 19, 32));
+        assert_eq!(uic_repaint_rect(10, 20, 100, 50, 0, 0, -1, -1), (10, 20, 109, 69));
     }
 
     #[futures_test::test]
@@ -3949,16 +3421,10 @@ mod tests {
         let mut context = TestContext::new();
         init_text_component(&mut context, b"abcdef\0", 0x1234_5678, 5);
 
-        assert_eq!(
-            get_max_text_size(&mut context, COMPONENT).await.unwrap(),
-            0x1234_5678
-        );
+        assert_eq!(get_max_text_size(&mut context, COMPONENT).await.unwrap(), 0x1234_5678);
 
         write_generic(&mut context, COMPONENT + 0x48, 0xffff_fffeu32).unwrap();
-        assert_eq!(
-            get_max_text_size(&mut context, COMPONENT).await.unwrap(),
-            -2
-        );
+        assert_eq!(get_max_text_size(&mut context, COMPONENT).await.unwrap(), -2);
     }
 
     #[futures_test::test]
@@ -3971,28 +3437,16 @@ mod tests {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x1122_3344u32).unwrap();
 
-            assert_eq!(
-                get_max_text_size(&mut context, COMPONENT).await.unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
-                0x1122_3344
-            );
+            assert_eq!(get_max_text_size(&mut context, COMPONENT).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(), 0x1122_3344);
         }
 
         for component_type in [1u32, 2, 4, 5] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x5566_7788u32).unwrap();
 
-            assert_eq!(
-                get_max_text_size(&mut context, COMPONENT).await.unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
-                0x5566_7788
-            );
+            assert_eq!(get_max_text_size(&mut context, COMPONENT).await.unwrap(), -9);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(), 0x5566_7788);
         }
     }
 
@@ -4021,10 +3475,7 @@ mod tests {
             write_generic(&mut context, COMPONENT + 0x44, 0x2000u32).unwrap();
             context.write_bytes(0x2000, b"ignored\0").unwrap();
 
-            assert_eq!(
-                get_text_size(&mut context, COMPONENT).await.unwrap(),
-                0
-            );
+            assert_eq!(get_text_size(&mut context, COMPONENT).await.unwrap(), 0);
         }
 
         for component_type in [1u32, 2, 4, 5] {
@@ -4032,10 +3483,7 @@ mod tests {
             write_generic(&mut context, COMPONENT + 0x44, 0x2000u32).unwrap();
             context.write_bytes(0x2000, b"ignored\0").unwrap();
 
-            assert_eq!(
-                get_text_size(&mut context, COMPONENT).await.unwrap(),
-                -9
-            );
+            assert_eq!(get_text_size(&mut context, COMPONENT).await.unwrap(), -9);
         }
 
         init_component(&mut context, 3);
@@ -4043,18 +3491,9 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x48, 0x5566_7788u32).unwrap();
         write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344u32).unwrap();
 
-        assert_eq!(
-            get_text_size(&mut context, COMPONENT).await.unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
-            0x5566_7788
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x4c).unwrap(),
-            0x1122_3344
-        );
+        assert_eq!(get_text_size(&mut context, COMPONENT).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(), 0x5566_7788);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x4c).unwrap(), 0x1122_3344);
     }
 
     #[futures_test::test]
@@ -4064,12 +3503,7 @@ mod tests {
 
         context.write_bytes(0x3000, &[0xcc; 16]).unwrap();
 
-        assert_eq!(
-            get_text(&mut context, COMPONENT, 2, 0x3000, 5)
-                .await
-                .unwrap(),
-            4
-        );
+        assert_eq!(get_text(&mut context, COMPONENT, 2, 0x3000, 5).await.unwrap(), 4);
 
         let mut actual = [0u8; 8];
         context.read_bytes(0x3000, &mut actual).unwrap();
@@ -4077,12 +3511,7 @@ mod tests {
 
         context.write_bytes(0x3000, &[0xcc; 16]).unwrap();
 
-        assert_eq!(
-            get_text(&mut context, COMPONENT, -123, 0x3000, 7)
-                .await
-                .unwrap(),
-            6
-        );
+        assert_eq!(get_text(&mut context, COMPONENT, -123, 0x3000, 7).await.unwrap(), 6);
 
         context.read_bytes(0x3000, &mut actual).unwrap();
         assert_eq!(&actual[..7], b"abcdef\0");
@@ -4097,33 +3526,18 @@ mod tests {
 
         // position 2 leaves four bytes. Native requires position + buflen
         // to be strictly greater than strlen, so buflen == 4 fails.
-        assert_eq!(
-            get_text(&mut context, COMPONENT, 2, 0x3000, 4)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_text(&mut context, COMPONENT, 2, 0x3000, 4).await.unwrap(), 0);
 
         let mut unchanged = [0u8; 16];
         context.read_bytes(0x3000, &mut unchanged).unwrap();
         assert_eq!(unchanged, [0xcc; 16]);
 
-        assert_eq!(
-            get_text(&mut context, COMPONENT, 7, 0x3000, 16)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_text(&mut context, COMPONENT, 7, 0x3000, 16).await.unwrap(), 0);
 
         // position == strlen passes the first comparison, copies zero bytes,
         // writes a NUL, and returns strlen(output) == 0.
         context.write_bytes(0x3000, &[0xcc; 16]).unwrap();
-        assert_eq!(
-            get_text(&mut context, COMPONENT, 6, 0x3000, 1)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_text(&mut context, COMPONENT, 6, 0x3000, 1).await.unwrap(), 0);
         assert_eq!(read_generic::<u8, _>(&context, 0x3000).unwrap(), 0);
     }
 
@@ -4131,60 +3545,27 @@ mod tests {
     async fn lgt_uic_get_text_matches_native_validation_order() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            get_text(&mut context, 0, 0, 0x3000, 16).await.unwrap(),
-            0
-        );
+        assert_eq!(get_text(&mut context, 0, 0, 0x3000, 16).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
-            assert_eq!(
-                get_text(&mut context, COMPONENT, 0, 0x3000, 16)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(get_text(&mut context, COMPONENT, 0, 0x3000, 16).await.unwrap(), 0);
         }
 
         // Output/buffer validation occurs before the Text type check.
         for component_type in [1u32, 2, 4, 5] {
             init_component(&mut context, component_type);
 
-            assert_eq!(
-                get_text(&mut context, COMPONENT, 0, 0, 16)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                get_text(&mut context, COMPONENT, 0, 0x3000, 0)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                get_text(&mut context, COMPONENT, 0, 0x3000, -1)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(get_text(&mut context, COMPONENT, 0, 0, 16).await.unwrap(), 0);
+            assert_eq!(get_text(&mut context, COMPONENT, 0, 0x3000, 0).await.unwrap(), 0);
+            assert_eq!(get_text(&mut context, COMPONENT, 0, 0x3000, -1).await.unwrap(), 0);
 
-            assert_eq!(
-                get_text(&mut context, COMPONENT, 0, 0x3000, 16)
-                    .await
-                    .unwrap(),
-                -9
-            );
+            assert_eq!(get_text(&mut context, COMPONENT, 0, 0x3000, 16).await.unwrap(), -9);
         }
 
         init_component(&mut context, 3);
         write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
-        assert_eq!(
-            get_text(&mut context, COMPONENT, 0, 0x3000, 16)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_text(&mut context, COMPONENT, 0, 0x3000, 16).await.unwrap(), 0);
     }
 
     #[futures_test::test]
@@ -4192,10 +3573,7 @@ mod tests {
         let mut context = TestContext::new();
         init_text_component(&mut context, b"abcdef\0", 16, 5);
 
-        assert_eq!(
-            set_max_text_size(&mut context, COMPONENT, 5).await.unwrap(),
-            16
-        );
+        assert_eq!(set_max_text_size(&mut context, COMPONENT, 5).await.unwrap(), 16);
         assert_eq!(read_i32(&context, 0x48), 5);
 
         let text_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
@@ -4203,10 +3581,7 @@ mod tests {
         context.read_bytes(text_ptr, &mut bytes).unwrap();
         assert_eq!(&bytes, b"abcd\0");
 
-        assert_eq!(
-            set_max_text_size(&mut context, COMPONENT, 12).await.unwrap(),
-            5
-        );
+        assert_eq!(set_max_text_size(&mut context, COMPONENT, 12).await.unwrap(), 5);
         assert_eq!(read_i32(&context, 0x48), 12);
 
         let text_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
@@ -4220,33 +3595,18 @@ mod tests {
         init_text_component(&mut context, b"abcdef\0", 16, 5);
 
         let old_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
-        assert_eq!(
-            set_max_text_size(&mut context, COMPONENT, 16).await.unwrap(),
-            16
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            old_ptr
-        );
+        assert_eq!(set_max_text_size(&mut context, COMPONENT, 16).await.unwrap(), 16);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), old_ptr);
         let last: u8 = read_generic(&context, old_ptr + 15).unwrap();
         assert_eq!(last, 0);
 
-        assert_eq!(
-            set_max_text_size(&mut context, COMPONENT, -1).await.unwrap(),
-            0
-        );
+        assert_eq!(set_max_text_size(&mut context, COMPONENT, -1).await.unwrap(), 0);
 
         write_generic(&mut context, COMPONENT, 4u32).unwrap();
-        assert_eq!(
-            set_max_text_size(&mut context, COMPONENT, 8).await.unwrap(),
-            -9
-        );
+        assert_eq!(set_max_text_size(&mut context, COMPONENT, 8).await.unwrap(), -9);
 
         write_generic(&mut context, COMPONENT, 6u32).unwrap();
-        assert_eq!(
-            set_max_text_size(&mut context, COMPONENT, 8).await.unwrap(),
-            0
-        );
+        assert_eq!(set_max_text_size(&mut context, COMPONENT, 8).await.unwrap(), 0);
 
         assert_eq!(set_max_text_size(&mut context, 0, 8).await.unwrap(), 0);
     }
@@ -4258,18 +3618,12 @@ mod tests {
 
         let old_ptr: u32 = read_generic(&context, COMPONENT + 0x44).unwrap();
 
-        assert_eq!(
-            set_max_text_size(&mut context, COMPONENT, 0).await.unwrap(),
-            -17
-        );
+        assert_eq!(set_max_text_size(&mut context, COMPONENT, 0).await.unwrap(), -17);
 
         // Native realloc(ptr, 0) frees the allocation but MC_uicSetMaxTextSize
         // leaves both component fields untouched after the NULL return.
         assert_eq!(read_i32(&context, 0x48), 16);
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            old_ptr
-        );
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), old_ptr);
     }
 
     #[futures_test::test]
@@ -4307,9 +3661,7 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x4c, 4i32).unwrap();
 
         for (position, length) in [(-1, 1), (7, 1), (0, 0), (0, -2)] {
-            delete_text(&mut context, COMPONENT, position, length)
-                .await
-                .unwrap();
+            delete_text(&mut context, COMPONENT, position, length).await.unwrap();
             assert_eq!(read_text(&context, 16), b"abcdef");
             assert_eq!(read_i32(&context, 0x4c), 4);
         }
@@ -4396,38 +3748,17 @@ mod tests {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x1c, 0xdead_beefu32).unwrap();
 
-            assert_eq!(
-                set_bg_color(&mut context, COMPONENT, 0x0012_3456)
-                    .await
-                    .unwrap(),
-                0x11aa
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x1c).unwrap(),
-                0x11aa
-            );
+            assert_eq!(set_bg_color(&mut context, COMPONENT, 0x0012_3456).await.unwrap(), 0x11aa);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x1c).unwrap(), 0x11aa);
         }
 
         let mut context = TestContext::new();
-        assert_eq!(
-            set_bg_color(&mut context, 0, 0x00ff_0000)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(set_bg_color(&mut context, 0, 0x00ff_0000).await.unwrap(), 0);
 
         init_component(&mut context, 6);
         write_generic(&mut context, COMPONENT + 0x1c, 0xaabb_ccddu32).unwrap();
-        assert_eq!(
-            set_bg_color(&mut context, COMPONENT, 0x00ff_0000)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x1c).unwrap(),
-            0xaabb_ccdd
-        );
+        assert_eq!(set_bg_color(&mut context, COMPONENT, 0x00ff_0000).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x1c).unwrap(), 0xaabb_ccdd);
     }
 
     #[futures_test::test]
@@ -4443,27 +3774,18 @@ mod tests {
         init_component(&mut context, 1);
         write_generic(&mut context, COMPONENT + 0x44, 0xdead_beefu32).unwrap();
         assert_eq!(set_label(&mut context, COMPONENT, 0).await.unwrap(), 1);
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            0xdead_beef
-        );
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0xdead_beef);
 
         context.write_bytes(0x3000, b"menu\0").unwrap();
         assert_eq!(set_label(&mut context, COMPONENT, 0x3000).await.unwrap(), 1);
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            0xdead_beef
-        );
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0xdead_beef);
 
         init_component(&mut context, 4);
         write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
         context.write_bytes(0x3000, b"Label\0").unwrap();
         let result = set_label(&mut context, COMPONENT, 0x3000).await.unwrap();
         assert_ne!(result, 0);
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            result
-        );
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), result);
 
         let mut copied = [0u8; 7];
         context.read_bytes(result, &mut copied).unwrap();
@@ -4484,16 +3806,11 @@ mod tests {
         let smaller = set_label(&mut context, COMPONENT, 0x3040).await.unwrap();
         assert_eq!(smaller, first);
 
-        context
-            .write_bytes(0x3080, b"abcdefghijklmnop\0")
-            .unwrap();
+        context.write_bytes(0x3080, b"abcdefghijklmnop\0").unwrap();
         let larger = set_label(&mut context, COMPONENT, 0x3080).await.unwrap();
         assert_ne!(larger, 0);
         assert_ne!(larger, first);
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            larger
-        );
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), larger);
 
         let mut copied = [0u8; 18];
         context.read_bytes(larger, &mut copied).unwrap();
@@ -4520,10 +3837,7 @@ mod tests {
         context.write_bytes(0x3000, b"native label\0").unwrap();
         write_generic(&mut context, COMPONENT + 0x44, 0x3000u32).unwrap();
 
-        assert_eq!(
-            get_label(&mut context, COMPONENT).await.unwrap().0,
-            0x3000
-        );
+        assert_eq!(get_label(&mut context, COMPONENT).await.unwrap().0, 0x3000);
     }
 
     #[futures_test::test]
@@ -4553,16 +3867,8 @@ mod tests {
             init_component(&mut context, 4);
             write_generic(&mut context, COMPONENT + 0x48, expected_old).unwrap();
 
-            assert_eq!(
-                set_label_alignment(&mut context, COMPONENT, new_alignment)
-                    .await
-                    .unwrap(),
-                expected_old
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
-                new_alignment
-            );
+            assert_eq!(set_label_alignment(&mut context, COMPONENT, new_alignment).await.unwrap(), expected_old);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(), new_alignment);
         }
     }
 
@@ -4570,54 +3876,27 @@ mod tests {
     async fn lgt_uic_set_label_alignment_matches_native_validation_and_range_errors() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            set_label_alignment(&mut context, 0, 1).await.unwrap(),
-            0
-        );
+        assert_eq!(set_label_alignment(&mut context, 0, 1).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x1122_3344u32).unwrap();
-            assert_eq!(
-                set_label_alignment(&mut context, COMPONENT, 1)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
-                0x1122_3344
-            );
+            assert_eq!(set_label_alignment(&mut context, COMPONENT, 1).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(), 0x1122_3344);
         }
 
         for component_type in [1u32, 2, 3, 5] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x5566_7788u32).unwrap();
-            assert_eq!(
-                set_label_alignment(&mut context, COMPONENT, 1)
-                    .await
-                    .unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
-                0x5566_7788
-            );
+            assert_eq!(set_label_alignment(&mut context, COMPONENT, 1).await.unwrap(), -9);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(), 0x5566_7788);
         }
 
         init_component(&mut context, 4);
         for alignment in [3u32, u32::MAX] {
             write_generic(&mut context, COMPONENT + 0x48, 2u32).unwrap();
-            assert_eq!(
-                set_label_alignment(&mut context, COMPONENT, alignment)
-                    .await
-                    .unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(),
-                2
-            );
+            assert_eq!(set_label_alignment(&mut context, COMPONENT, alignment).await.unwrap(), -9);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x48).unwrap(), 2);
         }
     }
 
@@ -4630,37 +3909,22 @@ mod tests {
             write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
 
             let fields = [
-                5i32,   // sec
-                4,      // min
-                3,      // hour
-                2,      // mday
-                0,      // mon: January
-                124,    // year: 2024
-                2,
-                1,
-                0,
+                5i32, // sec
+                4,    // min
+                3,    // hour
+                2,    // mday
+                0,    // mon: January
+                124,  // year: 2024
+                2, 1, 0,
             ];
             for (index, value) in fields.iter().enumerate() {
-                write_generic(
-                    &mut context,
-                    COMPONENT + 0x48 + index as u32 * 4,
-                    *value,
-                )
-                .unwrap();
+                write_generic(&mut context, COMPONENT + 0x48 + index as u32 * 4, *value).unwrap();
             }
 
-            context
-                .write_bytes(COMPONENT + 0x74, b"2024/01/02 03:04:05\0")
-                .unwrap();
+            context.write_bytes(COMPONENT + 0x74, b"2024/01/02 03:04:05\0").unwrap();
 
-            assert_eq!(
-                set_time_mask(&mut context, COMPONENT, mask).await.unwrap(),
-                3
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                mask
-            );
+            assert_eq!(set_time_mask(&mut context, COMPONENT, mask).await.unwrap(), 3);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), mask);
 
             let rendered = uic_read_c_string(&context, COMPONENT + 0x74).unwrap();
             assert_eq!(rendered, b"2024/01/02");
@@ -4677,42 +3941,24 @@ mod tests {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 0x1122_3344u32).unwrap();
 
-            assert_eq!(
-                set_time_mask(&mut context, COMPONENT, 0).await.unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                0x1122_3344
-            );
+            assert_eq!(set_time_mask(&mut context, COMPONENT, 0).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0x1122_3344);
         }
 
         for component_type in [1u32, 3, 4, 5] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 0x5566_7788u32).unwrap();
 
-            assert_eq!(
-                set_time_mask(&mut context, COMPONENT, 0).await.unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                0x5566_7788
-            );
+            assert_eq!(set_time_mask(&mut context, COMPONENT, 0).await.unwrap(), -9);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0x5566_7788);
         }
 
         init_component(&mut context, 2);
         for mask in [1u32, 2, 3, 5, u32::MAX] {
             write_generic(&mut context, COMPONENT + 0x44, 0x1234_5678u32).unwrap();
 
-            assert_eq!(
-                set_time_mask(&mut context, COMPONENT, mask).await.unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                0x1234_5678
-            );
+            assert_eq!(set_time_mask(&mut context, COMPONENT, mask).await.unwrap(), -9);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0x1234_5678);
         }
     }
 
@@ -4723,93 +3969,45 @@ mod tests {
 
         context.write_bytes(0x3000, b"First list item\0").unwrap();
 
-        assert_eq!(
-            add_list_item(&mut context, COMPONENT, 0x3000, 0x1122_3344)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            1
-        );
+        assert_eq!(add_list_item(&mut context, COMPONENT, 0x3000, 0x1122_3344).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 1);
 
-        let first_table: u32 =
-            read_generic(&context, COMPONENT + 0x50).unwrap();
+        let first_table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
         assert_ne!(first_table, 0);
 
         let first_item: u32 = read_generic(&context, first_table).unwrap();
         assert_ne!(first_item, 0);
-        assert_eq!(
-            read_generic::<u32, _>(&context, first_item).unwrap(),
-            0x1122_3344
-        );
-        assert_eq!(
-            uic_read_c_string(&context, first_item + 4).unwrap(),
-            b"First list item"
-        );
+        assert_eq!(read_generic::<u32, _>(&context, first_item).unwrap(), 0x1122_3344);
+        assert_eq!(uic_read_c_string(&context, first_item + 4).unwrap(), b"First list item");
 
-        assert_eq!(
-            add_list_item(&mut context, COMPONENT, 0, 0xaabb_ccdd)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            2
-        );
+        assert_eq!(add_list_item(&mut context, COMPONENT, 0, 0xaabb_ccdd).await.unwrap(), 1);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 2);
 
-        let second_table: u32 =
-            read_generic(&context, COMPONENT + 0x50).unwrap();
+        let second_table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
         assert_ne!(second_table, 0);
 
-        assert_eq!(
-            read_generic::<u32, _>(&context, second_table).unwrap(),
-            first_item
-        );
+        assert_eq!(read_generic::<u32, _>(&context, second_table).unwrap(), first_item);
 
-        let second_item: u32 =
-            read_generic(&context, second_table + 4).unwrap();
+        let second_item: u32 = read_generic(&context, second_table + 4).unwrap();
         assert_ne!(second_item, 0);
-        assert_eq!(
-            read_generic::<u32, _>(&context, second_item).unwrap(),
-            0xaabb_ccdd
-        );
-        assert_eq!(
-            uic_read_c_string(&context, second_item + 4).unwrap(),
-            b""
-        );
+        assert_eq!(read_generic::<u32, _>(&context, second_item).unwrap(), 0xaabb_ccdd);
+        assert_eq!(uic_read_c_string(&context, second_item + 4).unwrap(), b"");
     }
 
     #[futures_test::test]
     async fn lgt_uic_add_list_item_matches_native_validation_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            add_list_item(&mut context, 0, 0, 0).await.unwrap(),
-            0
-        );
+        assert_eq!(add_list_item(&mut context, 0, 0, 0).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 0x1234u32).unwrap();
             write_generic(&mut context, COMPONENT + 0x50, 0x5678u32).unwrap();
 
-            assert_eq!(
-                add_list_item(&mut context, COMPONENT, 0, 0)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                0x1234
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(),
-                0x5678
-            );
+            assert_eq!(add_list_item(&mut context, COMPONENT, 0, 0).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0x1234);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(), 0x5678);
         }
 
         for component_type in [1u32, 2, 3, 4] {
@@ -4817,20 +4015,9 @@ mod tests {
             write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
             write_generic(&mut context, COMPONENT + 0x50, 0u32).unwrap();
 
-            assert_eq!(
-                add_list_item(&mut context, COMPONENT, 0, 0)
-                    .await
-                    .unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(),
-                0
-            );
+            assert_eq!(add_list_item(&mut context, COMPONENT, 0, 0).await.unwrap(), -9);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(), 0);
         }
     }
 
@@ -4841,61 +4028,29 @@ mod tests {
 
         context.write_bytes(0x3000, b"First item\0").unwrap();
 
-        assert_eq!(
-            add_menu_item(&mut context, COMPONENT, 0x3000, 0x1122_3344)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            1
-        );
+        assert_eq!(add_menu_item(&mut context, COMPONENT, 0x3000, 0x1122_3344).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 1);
 
-        let first_table: u32 =
-            read_generic(&context, COMPONENT + 0x50).unwrap();
+        let first_table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
         assert_ne!(first_table, 0);
         let first_item: u32 = read_generic(&context, first_table).unwrap();
         assert_ne!(first_item, 0);
-        assert_eq!(
-            read_generic::<u32, _>(&context, first_item).unwrap(),
-            0x1122_3344
-        );
-        assert_eq!(
-            uic_read_c_string(&context, first_item + 4).unwrap(),
-            b"First item"
-        );
+        assert_eq!(read_generic::<u32, _>(&context, first_item).unwrap(), 0x1122_3344);
+        assert_eq!(uic_read_c_string(&context, first_item + 4).unwrap(), b"First item");
 
-        assert_eq!(
-            add_menu_item(&mut context, COMPONENT, 0, 0xaabb_ccdd)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            2
-        );
+        assert_eq!(add_menu_item(&mut context, COMPONENT, 0, 0xaabb_ccdd).await.unwrap(), 1);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 2);
 
-        let second_table: u32 =
-            read_generic(&context, COMPONENT + 0x50).unwrap();
+        let second_table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
         assert_ne!(second_table, 0);
 
-        let preserved_first: u32 =
-            read_generic(&context, second_table).unwrap();
+        let preserved_first: u32 = read_generic(&context, second_table).unwrap();
         assert_eq!(preserved_first, first_item);
 
-        let second_item: u32 =
-            read_generic(&context, second_table + 4).unwrap();
+        let second_item: u32 = read_generic(&context, second_table + 4).unwrap();
         assert_ne!(second_item, 0);
-        assert_eq!(
-            read_generic::<u32, _>(&context, second_item).unwrap(),
-            0xaabb_ccdd
-        );
-        assert_eq!(
-            uic_read_c_string(&context, second_item + 4).unwrap(),
-            b""
-        );
+        assert_eq!(read_generic::<u32, _>(&context, second_item).unwrap(), 0xaabb_ccdd);
+        assert_eq!(uic_read_c_string(&context, second_item + 4).unwrap(), b"");
     }
 
     #[futures_test::test]
@@ -4904,86 +4059,39 @@ mod tests {
         init_component(&mut context, 5);
 
         context.write_bytes(0x3000, b"List label\0").unwrap();
-        assert_eq!(
-            add_list_item(&mut context, COMPONENT, 0x3000, 0x1122_3344)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(add_list_item(&mut context, COMPONENT, 0x3000, 0x1122_3344).await.unwrap(), 0);
 
         context.write_bytes(0x3100, &[0xaa; 32]).unwrap();
         write_generic(&mut context, 0x3200, 0xdead_beefu32).unwrap();
 
-        assert_eq!(
-            get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            uic_read_c_string(&context, 0x3100).unwrap(),
-            b"List label"
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3200).unwrap(),
-            0x1122_3344
-        );
+        assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200).await.unwrap(), 1);
+        assert_eq!(uic_read_c_string(&context, 0x3100).unwrap(), b"List label");
+        assert_eq!(read_generic::<u32, _>(&context, 0x3200).unwrap(), 0x1122_3344);
 
         context.write_bytes(0x3100, &[0xbb; 32]).unwrap();
         write_generic(&mut context, 0x3200, 0u32).unwrap();
 
-        assert_eq!(
-            get_list_item(&mut context, COMPONENT, 0, 0, 32, 0x3200)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3200).unwrap(),
-            0x1122_3344
-        );
+        assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0, 32, 0x3200).await.unwrap(), 1);
+        assert_eq!(read_generic::<u32, _>(&context, 0x3200).unwrap(), 0x1122_3344);
 
-        assert_eq!(
-            get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            uic_read_c_string(&context, 0x3100).unwrap(),
-            b"List label"
-        );
+        assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0).await.unwrap(), 1);
+        assert_eq!(uic_read_c_string(&context, 0x3100).unwrap(), b"List label");
     }
 
     #[futures_test::test]
     async fn lgt_uic_get_list_item_matches_native_validation_range_and_buffer_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            get_list_item(&mut context, 0, 0, 0x3100, 32, 0x3200)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_list_item(&mut context, 0, 0, 0x3100, 32, 0x3200).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
-            assert_eq!(
-                get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200).await.unwrap(), 0);
         }
 
         for component_type in [1u32, 2, 3, 4] {
             init_component(&mut context, component_type);
-            assert_eq!(
-                get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
-                    .await
-                    .unwrap(),
-                -9
-            );
+            assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200).await.unwrap(), -9);
         }
 
         init_component(&mut context, 5);
@@ -4994,50 +4102,22 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
 
         context.write_bytes(0x3000, b"abcd\0").unwrap();
-        assert_eq!(
-            add_list_item(&mut context, COMPONENT, 0x3000, 0xaabb_ccdd)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(add_list_item(&mut context, COMPONENT, 0x3000, 0xaabb_ccdd).await.unwrap(), 0);
 
         context.write_bytes(0x3100, &[0xcc; 16]).unwrap();
         write_generic(&mut context, 0x3200, 0x5566_7788u32).unwrap();
 
-        assert_eq!(
-            get_list_item(&mut context, COMPONENT, 1, 0x3100, 16, 0x3200)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_list_item(&mut context, COMPONENT, 1, 0x3100, 16, 0x3200).await.unwrap(), 0);
 
-        assert_eq!(
-            get_list_item(&mut context, COMPONENT, 0, 0, 4, 0)
-                .await
-                .unwrap(),
-            -18
-        );
-        assert_eq!(
-            get_list_item(&mut context, COMPONENT, 0, 0x3100, 4, 0x3200)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0, 4, 0).await.unwrap(), -18);
+        assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0x3100, 4, 0x3200).await.unwrap(), -18);
 
         let mut unchanged = [0u8; 16];
         context.read_bytes(0x3100, &mut unchanged).unwrap();
         assert_eq!(unchanged, [0xcc; 16]);
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3200).unwrap(),
-            0x5566_7788
-        );
+        assert_eq!(read_generic::<u32, _>(&context, 0x3200).unwrap(), 0x5566_7788);
 
-        assert_eq!(
-            get_list_item(&mut context, COMPONENT, 0, 0x3100, 5, 0x3200)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(get_list_item(&mut context, COMPONENT, 0, 0x3100, 5, 0x3200).await.unwrap(), 1);
     }
 
     #[futures_test::test]
@@ -5046,55 +4126,23 @@ mod tests {
         init_component(&mut context, 1);
 
         context.write_bytes(0x3000, b"Menu label\0").unwrap();
-        assert_eq!(
-            add_menu_item(&mut context, COMPONENT, 0x3000, 0x1122_3344)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(add_menu_item(&mut context, COMPONENT, 0x3000, 0x1122_3344).await.unwrap(), 0);
 
         context.write_bytes(0x3100, &[0xaa; 32]).unwrap();
         write_generic(&mut context, 0x3200, 0xdead_beefu32).unwrap();
 
-        assert_eq!(
-            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            uic_read_c_string(&context, 0x3100).unwrap(),
-            b"Menu label"
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3200).unwrap(),
-            0x1122_3344
-        );
+        assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200).await.unwrap(), 1);
+        assert_eq!(uic_read_c_string(&context, 0x3100).unwrap(), b"Menu label");
+        assert_eq!(read_generic::<u32, _>(&context, 0x3200).unwrap(), 0x1122_3344);
 
         context.write_bytes(0x3100, &[0xbb; 32]).unwrap();
         write_generic(&mut context, 0x3200, 0u32).unwrap();
 
-        assert_eq!(
-            get_menu_item(&mut context, COMPONENT, 0, 0, 32, 0x3200)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3200).unwrap(),
-            0x1122_3344
-        );
+        assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0, 32, 0x3200).await.unwrap(), 1);
+        assert_eq!(read_generic::<u32, _>(&context, 0x3200).unwrap(), 0x1122_3344);
 
-        assert_eq!(
-            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            uic_read_c_string(&context, 0x3100).unwrap(),
-            b"Menu label"
-        );
+        assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0).await.unwrap(), 1);
+        assert_eq!(uic_read_c_string(&context, 0x3100).unwrap(), b"Menu label");
     }
 
     #[futures_test::test]
@@ -5109,9 +4157,7 @@ mod tests {
         ] {
             context.write_bytes(address, label).unwrap();
             assert_eq!(
-                add_list_item(&mut context, COMPONENT, address, image)
-                    .await
-                    .unwrap(),
+                add_list_item(&mut context, COMPONENT, address, image).await.unwrap(),
                 read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap() as i32 - 1
             );
         }
@@ -5126,79 +4172,39 @@ mod tests {
         assert_ne!(first, second);
         assert_ne!(second, third);
 
-        assert_eq!(
-            remove_list_item(&mut context, COMPONENT, 1).await.unwrap(),
-            1
-        );
+        assert_eq!(remove_list_item(&mut context, COMPONENT, 1).await.unwrap(), 1);
 
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            2
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            2
-        );
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 2);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 2);
 
-        assert_eq!(
-            read_generic::<u32, _>(&context, table).unwrap(),
-            first
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, table + 4).unwrap(),
-            third
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, table + 8).unwrap(),
-            third
-        );
+        assert_eq!(read_generic::<u32, _>(&context, table).unwrap(), first);
+        assert_eq!(read_generic::<u32, _>(&context, table + 4).unwrap(), third);
+        assert_eq!(read_generic::<u32, _>(&context, table + 8).unwrap(), third);
 
-        assert_eq!(
-            uic_read_c_string(&context, third + 4).unwrap(),
-            b"two"
-        );
+        assert_eq!(uic_read_c_string(&context, third + 4).unwrap(), b"two");
     }
 
     #[futures_test::test]
     async fn lgt_uic_remove_list_item_matches_native_validation_and_range_rule() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            remove_list_item(&mut context, 0, 0).await.unwrap(),
-            0
-        );
+        assert_eq!(remove_list_item(&mut context, 0, 0).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
             write_generic(&mut context, COMPONENT + 0x50, 0x5678u32).unwrap();
 
-            assert_eq!(
-                remove_list_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                3
-            );
+            assert_eq!(remove_list_item(&mut context, COMPONENT, 0).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 3);
         }
 
         for component_type in [1u32, 2, 3, 4] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
 
-            assert_eq!(
-                remove_list_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                3
-            );
+            assert_eq!(remove_list_item(&mut context, COMPONENT, 0).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 3);
         }
 
         init_component(&mut context, 5);
@@ -5209,30 +4215,14 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
 
         context.write_bytes(0x3000, b"only\0").unwrap();
-        assert_eq!(
-            add_list_item(&mut context, COMPONENT, 0x3000, 0)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(add_list_item(&mut context, COMPONENT, 0x3000, 0).await.unwrap(), 0);
 
         let table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
         let only: u32 = read_generic(&context, table).unwrap();
 
-        assert_eq!(
-            remove_list_item(&mut context, COMPONENT, 2)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, table).unwrap(),
-            only
-        );
+        assert_eq!(remove_list_item(&mut context, COMPONENT, 2).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 1);
+        assert_eq!(read_generic::<u32, _>(&context, table).unwrap(), only);
     }
 
     #[futures_test::test]
@@ -5247,9 +4237,7 @@ mod tests {
         ] {
             context.write_bytes(address, label).unwrap();
             assert_eq!(
-                add_menu_item(&mut context, COMPONENT, address, image)
-                    .await
-                    .unwrap(),
+                add_menu_item(&mut context, COMPONENT, address, image).await.unwrap(),
                 read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap() as i32 - 1
             );
         }
@@ -5264,75 +4252,38 @@ mod tests {
         assert_ne!(first, second);
         assert_ne!(second, third);
 
-        assert_eq!(
-            remove_menu_item(&mut context, COMPONENT, 1).await.unwrap(),
-            1
-        );
+        assert_eq!(remove_menu_item(&mut context, COMPONENT, 1).await.unwrap(), 1);
 
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            2
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            2
-        );
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 2);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 2);
 
-        assert_eq!(
-            read_generic::<u32, _>(&context, table).unwrap(),
-            first
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, table + 4).unwrap(),
-            third
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, table + 8).unwrap(),
-            third
-        );
+        assert_eq!(read_generic::<u32, _>(&context, table).unwrap(), first);
+        assert_eq!(read_generic::<u32, _>(&context, table + 4).unwrap(), third);
+        assert_eq!(read_generic::<u32, _>(&context, table + 8).unwrap(), third);
 
-        assert_eq!(
-            uic_read_c_string(&context, third + 4).unwrap(),
-            b"two"
-        );
+        assert_eq!(uic_read_c_string(&context, third + 4).unwrap(), b"two");
     }
 
     #[futures_test::test]
     async fn lgt_uic_remove_menu_item_matches_native_validation_and_range_rule() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            remove_menu_item(&mut context, 0, 0).await.unwrap(),
-            0
-        );
+        assert_eq!(remove_menu_item(&mut context, 0, 0).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
             write_generic(&mut context, COMPONENT + 0x50, 0x5678u32).unwrap();
 
-            assert_eq!(
-                remove_menu_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                3
-            );
+            assert_eq!(remove_menu_item(&mut context, COMPONENT, 0).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 3);
         }
 
         for component_type in [2u32, 3, 4, 5] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
 
-            assert_eq!(
-                remove_menu_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(remove_menu_item(&mut context, COMPONENT, 0).await.unwrap(), 0);
         }
 
         init_component(&mut context, 1);
@@ -5343,63 +4294,34 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
 
         context.write_bytes(0x3000, b"only\0").unwrap();
-        assert_eq!(
-            add_menu_item(&mut context, COMPONENT, 0x3000, 0)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(add_menu_item(&mut context, COMPONENT, 0x3000, 0).await.unwrap(), 0);
 
         let table: u32 = read_generic(&context, COMPONENT + 0x50).unwrap();
         let only: u32 = read_generic(&context, table).unwrap();
 
-        assert_eq!(
-            remove_menu_item(&mut context, COMPONENT, 2)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, table).unwrap(),
-            only
-        );
+        assert_eq!(remove_menu_item(&mut context, COMPONENT, 2).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 1);
+        assert_eq!(read_generic::<u32, _>(&context, table).unwrap(), only);
     }
 
     #[futures_test::test]
     async fn lgt_uic_get_active_list_item_matches_native_validation_and_type_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            get_active_list_item(&mut context, 0).await.unwrap(),
-            -1
-        );
+        assert_eq!(get_active_list_item(&mut context, 0).await.unwrap(), -1);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x1234_5678i32).unwrap();
 
-            assert_eq!(
-                get_active_list_item(&mut context, COMPONENT)
-                    .await
-                    .unwrap(),
-                -1
-            );
+            assert_eq!(get_active_list_item(&mut context, COMPONENT).await.unwrap(), -1);
         }
 
         for component_type in [1u32, 2, 3, 4] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 7i32).unwrap();
 
-            assert_eq!(
-                get_active_list_item(&mut context, COMPONENT)
-                    .await
-                    .unwrap(),
-                -9
-            );
+            assert_eq!(get_active_list_item(&mut context, COMPONENT).await.unwrap(), -9);
         }
     }
 
@@ -5411,12 +4333,7 @@ mod tests {
         for expected in [-1i32, 0, 2, -2, i32::MIN, i32::MAX] {
             write_generic(&mut context, COMPONENT + 0x48, expected).unwrap();
 
-            assert_eq!(
-                get_active_list_item(&mut context, COMPONENT)
-                    .await
-                    .unwrap(),
-                expected
-            );
+            assert_eq!(get_active_list_item(&mut context, COMPONENT).await.unwrap(), expected);
         }
     }
 
@@ -5431,10 +4348,7 @@ mod tests {
             write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344i32).unwrap();
             write_generic(&mut context, COMPONENT + 0x94, 0x5566_7788i32).unwrap();
 
-            assert_eq!(
-                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
-                -1
-            );
+            assert_eq!(get_cursor_pos(&mut context, COMPONENT).await.unwrap(), -1);
         }
 
         for component_type in [1u32, 4, 5] {
@@ -5442,10 +4356,7 @@ mod tests {
             write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344i32).unwrap();
             write_generic(&mut context, COMPONENT + 0x94, 0x5566_7788i32).unwrap();
 
-            assert_eq!(
-                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
-                -1
-            );
+            assert_eq!(get_cursor_pos(&mut context, COMPONENT).await.unwrap(), -1);
         }
     }
 
@@ -5456,19 +4367,13 @@ mod tests {
         init_component(&mut context, 3);
         for expected in [-1i32, 0, 1, -2, i32::MIN, i32::MAX] {
             write_generic(&mut context, COMPONENT + 0x4c, expected).unwrap();
-            assert_eq!(
-                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
-                expected
-            );
+            assert_eq!(get_cursor_pos(&mut context, COMPONENT).await.unwrap(), expected);
         }
 
         init_component(&mut context, 2);
         for expected in [-1i32, 0, 1, -2, i32::MIN, i32::MAX] {
             write_generic(&mut context, COMPONENT + 0x94, expected).unwrap();
-            assert_eq!(
-                get_cursor_pos(&mut context, COMPONENT).await.unwrap(),
-                expected
-            );
+            assert_eq!(get_cursor_pos(&mut context, COMPONENT).await.unwrap(), expected);
         }
     }
 
@@ -5480,48 +4385,27 @@ mod tests {
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
-            assert_eq!(
-                set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
-                -1
-            );
+            assert_eq!(set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(), -1);
         }
 
         for component_type in [1u32, 4, 5] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x4c, 0x1122_3344i32).unwrap();
 
-            assert_eq!(
-                set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
-                -1
-            );
-            assert_eq!(
-                read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
-                0x1122_3344
-            );
+            assert_eq!(set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(), -1);
+            assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(), 0x1122_3344);
         }
 
         init_text_component(&mut context, b"abcdef\0", 32, 4);
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 0).await.unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
-            4
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 0).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(), 4);
 
         init_component(&mut context, 2);
         context.write_bytes(COMPONENT + 0x74, b"12:34\0").unwrap();
         write_generic(&mut context, COMPONENT + 0x94, 3i32).unwrap();
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 0).await.unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
-            3
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 0).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(), 3);
     }
 
     #[futures_test::test]
@@ -5529,41 +4413,17 @@ mod tests {
         let mut context = TestContext::new();
         init_text_component(&mut context, b"abcdef\0", 32, 2);
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
-            1
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(), 1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(), 1);
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 6).await.unwrap(),
-            6
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
-            6
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 6).await.unwrap(), 6);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(), 6);
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 7).await.unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
-            6
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 7).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(), 6);
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, -1).await.unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(),
-            6
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, -1).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x4c).unwrap(), 6);
     }
 
     #[futures_test::test]
@@ -5573,74 +4433,37 @@ mod tests {
         context.write_bytes(COMPONENT + 0x74, b"12:34:56\0").unwrap();
         write_generic(&mut context, COMPONENT + 0x94, 2i32).unwrap();
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
-            1
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 1).await.unwrap(), 1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(), 1);
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 8).await.unwrap(),
-            8
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
-            8
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 8).await.unwrap(), 8);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(), 8);
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, 9).await.unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
-            8
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, 9).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(), 8);
 
-        assert_eq!(
-            set_cursor_pos(&mut context, COMPONENT, -2).await.unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(),
-            8
-        );
+        assert_eq!(set_cursor_pos(&mut context, COMPONENT, -2).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x94).unwrap(), 8);
     }
 
     #[futures_test::test]
     async fn lgt_uic_get_active_menu_item_matches_native_validation_and_type_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            get_active_menu_item(&mut context, 0).await.unwrap(),
-            -1
-        );
+        assert_eq!(get_active_menu_item(&mut context, 0).await.unwrap(), -1);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x1234_5678i32).unwrap();
 
-            assert_eq!(
-                get_active_menu_item(&mut context, COMPONENT)
-                    .await
-                    .unwrap(),
-                -1
-            );
+            assert_eq!(get_active_menu_item(&mut context, COMPONENT).await.unwrap(), -1);
         }
 
         for component_type in [2u32, 3, 4, 5] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 7i32).unwrap();
 
-            assert_eq!(
-                get_active_menu_item(&mut context, COMPONENT)
-                    .await
-                    .unwrap(),
-                -9
-            );
+            assert_eq!(get_active_menu_item(&mut context, COMPONENT).await.unwrap(), -9);
         }
     }
 
@@ -5652,12 +4475,7 @@ mod tests {
         for expected in [-1i32, 0, 2, -2, i32::MIN, i32::MAX] {
             write_generic(&mut context, COMPONENT + 0x48, expected).unwrap();
 
-            assert_eq!(
-                get_active_menu_item(&mut context, COMPONENT)
-                    .await
-                    .unwrap(),
-                expected
-            );
+            assert_eq!(get_active_menu_item(&mut context, COMPONENT).await.unwrap(), expected);
         }
     }
 
@@ -5665,41 +4483,22 @@ mod tests {
     async fn lgt_uic_set_active_list_item_matches_native_validation_and_type_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            set_active_list_item(&mut context, 0, 0).await.unwrap(),
-            -1
-        );
+        assert_eq!(set_active_list_item(&mut context, 0, 0).await.unwrap(), -1);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x1234i32).unwrap();
 
-            assert_eq!(
-                set_active_list_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                -1
-            );
-            assert_eq!(
-                read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-                0x1234
-            );
+            assert_eq!(set_active_list_item(&mut context, COMPONENT, 0).await.unwrap(), -1);
+            assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 0x1234);
         }
 
         for component_type in [1u32, 2, 3, 4] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 7i32).unwrap();
 
-            assert_eq!(
-                set_active_list_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-                7
-            );
+            assert_eq!(set_active_list_item(&mut context, COMPONENT, 0).await.unwrap(), -9);
+            assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 7);
         }
     }
 
@@ -5713,112 +4512,45 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x54, 0u32).unwrap();
         write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
 
-        assert_eq!(
-            set_active_list_item(&mut context, COMPONENT, 1)
-                .await
-                .unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            1
-        );
+        assert_eq!(set_active_list_item(&mut context, COMPONENT, 1).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 1);
 
-        assert_eq!(
-            set_active_list_item(&mut context, COMPONENT, 1)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            1
-        );
+        assert_eq!(set_active_list_item(&mut context, COMPONENT, 1).await.unwrap(), 1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 1);
 
-        assert_eq!(
-            set_active_list_item(&mut context, COMPONENT, -1)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            -1
-        );
+        assert_eq!(set_active_list_item(&mut context, COMPONENT, -1).await.unwrap(), 1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), -1);
 
-        assert_eq!(
-            set_active_list_item(&mut context, COMPONENT, 3)
-                .await
-                .unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            -1
-        );
+        assert_eq!(set_active_list_item(&mut context, COMPONENT, 3).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), -1);
 
-        assert_eq!(
-            set_active_list_item(&mut context, COMPONENT, -2)
-                .await
-                .unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            -2
-        );
+        assert_eq!(set_active_list_item(&mut context, COMPONENT, -2).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), -2);
 
-        assert_eq!(
-            set_active_list_item(&mut context, COMPONENT, i32::MIN)
-                .await
-                .unwrap(),
-            -2
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            i32::MIN
-        );
+        assert_eq!(set_active_list_item(&mut context, COMPONENT, i32::MIN).await.unwrap(), -2);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), i32::MIN);
     }
 
     #[futures_test::test]
     async fn lgt_uic_set_active_menu_item_matches_native_validation_and_type_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            set_active_menu_item(&mut context, 0, 0).await.unwrap(),
-            -1
-        );
+        assert_eq!(set_active_menu_item(&mut context, 0, 0).await.unwrap(), -1);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 0x1234i32).unwrap();
 
-            assert_eq!(
-                set_active_menu_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                -1
-            );
-            assert_eq!(
-                read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-                0x1234
-            );
+            assert_eq!(set_active_menu_item(&mut context, COMPONENT, 0).await.unwrap(), -1);
+            assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 0x1234);
         }
 
         for component_type in [2u32, 3, 4, 5] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x48, 7i32).unwrap();
 
-            assert_eq!(
-                set_active_menu_item(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-                7
-            );
+            assert_eq!(set_active_menu_item(&mut context, COMPONENT, 0).await.unwrap(), -9);
+            assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 7);
         }
     }
 
@@ -5832,168 +4564,71 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x54, 0u32).unwrap();
         write_generic(&mut context, COMPONENT + 0x58, 0u32).unwrap();
 
-        assert_eq!(
-            set_active_menu_item(&mut context, COMPONENT, 1)
-                .await
-                .unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            1
-        );
+        assert_eq!(set_active_menu_item(&mut context, COMPONENT, 1).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 1);
 
-        assert_eq!(
-            set_active_menu_item(&mut context, COMPONENT, 1)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            1
-        );
+        assert_eq!(set_active_menu_item(&mut context, COMPONENT, 1).await.unwrap(), 1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), 1);
 
-        assert_eq!(
-            set_active_menu_item(&mut context, COMPONENT, -1)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            -1
-        );
+        assert_eq!(set_active_menu_item(&mut context, COMPONENT, -1).await.unwrap(), 1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), -1);
 
-        assert_eq!(
-            set_active_menu_item(&mut context, COMPONENT, 3)
-                .await
-                .unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            -1
-        );
+        assert_eq!(set_active_menu_item(&mut context, COMPONENT, 3).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), -1);
 
-        assert_eq!(
-            set_active_menu_item(&mut context, COMPONENT, -2)
-                .await
-                .unwrap(),
-            -1
-        );
-        assert_eq!(
-            read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(),
-            -2
-        );
+        assert_eq!(set_active_menu_item(&mut context, COMPONENT, -2).await.unwrap(), -1);
+        assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48).unwrap(), -2);
     }
 
     #[futures_test::test]
     async fn lgt_uic_get_menu_item_matches_native_validation_range_and_buffer_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            get_menu_item(&mut context, 0, 0, 0x3100, 32, 0x3200)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(get_menu_item(&mut context, 0, 0, 0x3100, 32, 0x3200).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
-            assert_eq!(
-                get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200).await.unwrap(), 0);
         }
 
         for component_type in [2u32, 3, 4, 5] {
             init_component(&mut context, component_type);
-            assert_eq!(
-                get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200)
-                    .await
-                    .unwrap(),
-                -9
-            );
+            assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0x3100, 32, 0x3200).await.unwrap(), -9);
         }
 
         init_component(&mut context, 1);
         context.write_bytes(0x3000, b"abcd\0").unwrap();
-        assert_eq!(
-            add_menu_item(&mut context, COMPONENT, 0x3000, 0xaabb_ccdd)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(add_menu_item(&mut context, COMPONENT, 0x3000, 0xaabb_ccdd).await.unwrap(), 0);
 
         context.write_bytes(0x3100, &[0xcc; 16]).unwrap();
         write_generic(&mut context, 0x3200, 0x5566_7788u32).unwrap();
 
-        assert_eq!(
-            get_menu_item(&mut context, COMPONENT, 1, 0x3100, 16, 0x3200)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            get_menu_item(&mut context, COMPONENT, 0, 0, 4, 0)
-                .await
-                .unwrap(),
-            -18
-        );
-        assert_eq!(
-            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 4, 0x3200)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(get_menu_item(&mut context, COMPONENT, 1, 0x3100, 16, 0x3200).await.unwrap(), 0);
+        assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0, 4, 0).await.unwrap(), -18);
+        assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0x3100, 4, 0x3200).await.unwrap(), -18);
 
         let mut unchanged = [0u8; 16];
         context.read_bytes(0x3100, &mut unchanged).unwrap();
         assert_eq!(unchanged, [0xcc; 16]);
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3200).unwrap(),
-            0x5566_7788
-        );
+        assert_eq!(read_generic::<u32, _>(&context, 0x3200).unwrap(), 0x5566_7788);
 
-        assert_eq!(
-            get_menu_item(&mut context, COMPONENT, 0, 0x3100, 5, 0x3200)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(get_menu_item(&mut context, COMPONENT, 0, 0x3100, 5, 0x3200).await.unwrap(), 1);
     }
 
     #[futures_test::test]
     async fn lgt_uic_add_menu_item_matches_native_validation_contract() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            add_menu_item(&mut context, 0, 0, 0).await.unwrap(),
-            0
-        );
+        assert_eq!(add_menu_item(&mut context, 0, 0, 0).await.unwrap(), 0);
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x44, 0x1234u32).unwrap();
             write_generic(&mut context, COMPONENT + 0x50, 0x5678u32).unwrap();
 
-            assert_eq!(
-                add_menu_item(&mut context, COMPONENT, 0, 0)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                0x1234
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(),
-                0x5678
-            );
+            assert_eq!(add_menu_item(&mut context, COMPONENT, 0, 0).await.unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0x1234);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(), 0x5678);
         }
 
         for component_type in [2u32, 3, 4, 5] {
@@ -6001,20 +4636,9 @@ mod tests {
             write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
             write_generic(&mut context, COMPONENT + 0x50, 0u32).unwrap();
 
-            assert_eq!(
-                add_menu_item(&mut context, COMPONENT, 0, 0)
-                    .await
-                    .unwrap(),
-                -9
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(),
-                0
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(),
-                0
-            );
+            assert_eq!(add_menu_item(&mut context, COMPONENT, 0, 0).await.unwrap(), -9);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x44).unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x50).unwrap(), 0);
         }
     }
 
@@ -6025,49 +4649,21 @@ mod tests {
 
         write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
 
-        let fields = [
-            5i32,
-            4,
-            3,
-            2,
-            0,
-            124,
-            2,
-            1,
-            0,
-            0x1122_3344u32 as i32,
-            0x5566_7788u32 as i32,
-        ];
+        let fields = [5i32, 4, 3, 2, 0, 124, 2, 1, 0, 0x1122_3344u32 as i32, 0x5566_7788u32 as i32];
         for (index, value) in fields.iter().enumerate() {
-            write_generic(
-                &mut context,
-                COMPONENT + 0x48 + index as u32 * 4,
-                *value,
-            )
-            .unwrap();
+            write_generic(&mut context, COMPONENT + 0x48 + index as u32 * 4, *value).unwrap();
         }
 
-        context
-            .write_bytes(COMPONENT + 0x74, b"old datetime\0")
-            .unwrap();
+        context.write_bytes(COMPONENT + 0x74, b"old datetime\0").unwrap();
         context.write_bytes(0x3000, &[0xaa; 44]).unwrap();
 
-        assert_ne!(
-            get_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
-            0
-        );
+        assert_ne!(get_time(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
 
         for (index, expected) in fields.iter().enumerate() {
-            assert_eq!(
-                read_generic::<i32, _>(&context, 0x3000 + index as u32 * 4).unwrap(),
-                *expected
-            );
+            assert_eq!(read_generic::<i32, _>(&context, 0x3000 + index as u32 * 4).unwrap(), *expected);
         }
 
-        assert_eq!(
-            uic_read_c_string(&context, COMPONENT + 0x74).unwrap(),
-            b"2024/01/02"
-        );
+        assert_eq!(uic_read_c_string(&context, COMPONENT + 0x74).unwrap(), b"2024/01/02");
     }
 
     #[futures_test::test]
@@ -6079,22 +4675,12 @@ mod tests {
 
         let fields = [5i32, 4, 3, 2, 0, 124, 2, 1, 0, 0, 0];
         for (index, value) in fields.iter().enumerate() {
-            write_generic(
-                &mut context,
-                COMPONENT + 0x48 + index as u32 * 4,
-                *value,
-            )
-            .unwrap();
+            write_generic(&mut context, COMPONENT + 0x48 + index as u32 * 4, *value).unwrap();
         }
 
-        context
-            .write_bytes(COMPONENT + 0x74, b"2024/01/02\0")
-            .unwrap();
+        context.write_bytes(COMPONENT + 0x74, b"2024/01/02\0").unwrap();
 
-        assert_eq!(
-            get_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
-            0
-        );
+        assert_eq!(get_time(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
     }
 
     #[futures_test::test]
@@ -6107,10 +4693,7 @@ mod tests {
             init_component(&mut context, component_type);
             context.write_bytes(0x3000, &[0xaa; 44]).unwrap();
 
-            assert_eq!(
-                get_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
-                0
-            );
+            assert_eq!(get_time(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
 
             let mut unchanged = [0u8; 44];
             context.read_bytes(0x3000, &mut unchanged).unwrap();
@@ -6119,20 +4702,14 @@ mod tests {
 
         for component_type in 1u32..=5 {
             init_component(&mut context, component_type);
-            assert_eq!(
-                get_time(&mut context, COMPONENT, 0).await.unwrap(),
-                1
-            );
+            assert_eq!(get_time(&mut context, COMPONENT, 0).await.unwrap(), 1);
         }
 
         for component_type in [1u32, 3, 4, 5] {
             init_component(&mut context, component_type);
             context.write_bytes(0x3000, &[0xbb; 44]).unwrap();
 
-            assert_eq!(
-                get_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
-                1
-            );
+            assert_eq!(get_time(&mut context, COMPONENT, 0x3000).await.unwrap(), 1);
 
             let mut unchanged = [0u8; 44];
             context.read_bytes(0x3000, &mut unchanged).unwrap();
@@ -6146,20 +4723,18 @@ mod tests {
         init_component(&mut context, 2);
 
         write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
-        context
-            .write_bytes(COMPONENT + 0x74, b"old datetime\0")
-            .unwrap();
+        context.write_bytes(COMPONENT + 0x74, b"old datetime\0").unwrap();
 
         let fields = [
-            5i32,   // sec
-            4,      // min
-            3,      // hour
-            2,      // mday
-            0,      // mon
-            124,    // year
-            2,      // wday
-            1,      // yday
-            0,      // isdst
+            5i32, // sec
+            4,    // min
+            3,    // hour
+            2,    // mday
+            0,    // mon
+            124,  // year
+            2,    // wday
+            1,    // yday
+            0,    // isdst
             0x1122_3344u32 as i32,
             0x5566_7788u32 as i32,
         ];
@@ -6172,20 +4747,10 @@ mod tests {
         assert_ne!(result, 0);
 
         for (index, expected) in fields.iter().enumerate() {
-            assert_eq!(
-                read_generic::<i32, _>(
-                    &context,
-                    COMPONENT + 0x48 + index as u32 * 4
-                )
-                .unwrap(),
-                *expected
-            );
+            assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48 + index as u32 * 4).unwrap(), *expected);
         }
 
-        assert_eq!(
-            uic_read_c_string(&context, COMPONENT + 0x74).unwrap(),
-            b"2024/01/02"
-        );
+        assert_eq!(uic_read_c_string(&context, COMPONENT + 0x74).unwrap(), b"2024/01/02");
     }
 
     #[futures_test::test]
@@ -6194,19 +4759,14 @@ mod tests {
         init_component(&mut context, 2);
 
         write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
-        context
-            .write_bytes(COMPONENT + 0x74, b"2024/01/02\0")
-            .unwrap();
+        context.write_bytes(COMPONENT + 0x74, b"2024/01/02\0").unwrap();
 
         let fields = [5i32, 4, 3, 2, 0, 124, 2, 1, 0, 0, 0];
         for (index, value) in fields.iter().enumerate() {
             write_generic(&mut context, 0x3000 + index as u32 * 4, *value).unwrap();
         }
 
-        assert_eq!(
-            set_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
-            0
-        );
+        assert_eq!(set_time(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
     }
 
     #[futures_test::test]
@@ -6217,56 +4777,35 @@ mod tests {
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
-            context
-                .write_bytes(COMPONENT + 0x48, &[0xaa; 44])
-                .unwrap();
+            context.write_bytes(COMPONENT + 0x48, &[0xaa; 44]).unwrap();
 
-            assert_eq!(
-                set_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
-                0
-            );
+            assert_eq!(set_time(&mut context, COMPONENT, 0x3000).await.unwrap(), 0);
 
             let mut unchanged = [0u8; 44];
-            context
-                .read_bytes(COMPONENT + 0x48, &mut unchanged)
-                .unwrap();
+            context.read_bytes(COMPONENT + 0x48, &mut unchanged).unwrap();
             assert_eq!(unchanged, [0xaa; 44]);
         }
 
         for component_type in 1u32..=5 {
             init_component(&mut context, component_type);
-            context
-                .write_bytes(COMPONENT + 0x48, &[0xbb; 44])
-                .unwrap();
+            context.write_bytes(COMPONENT + 0x48, &[0xbb; 44]).unwrap();
 
-            assert_eq!(
-                set_time(&mut context, COMPONENT, 0).await.unwrap(),
-                1
-            );
+            assert_eq!(set_time(&mut context, COMPONENT, 0).await.unwrap(), 1);
 
             let mut unchanged = [0u8; 44];
-            context
-                .read_bytes(COMPONENT + 0x48, &mut unchanged)
-                .unwrap();
+            context.read_bytes(COMPONENT + 0x48, &mut unchanged).unwrap();
             assert_eq!(unchanged, [0xbb; 44]);
         }
 
         for component_type in [1u32, 3, 4, 5] {
             init_component(&mut context, component_type);
-            context
-                .write_bytes(COMPONENT + 0x48, &[0xcc; 44])
-                .unwrap();
+            context.write_bytes(COMPONENT + 0x48, &[0xcc; 44]).unwrap();
             context.write_bytes(0x3000, &[0x11; 44]).unwrap();
 
-            assert_eq!(
-                set_time(&mut context, COMPONENT, 0x3000).await.unwrap(),
-                1
-            );
+            assert_eq!(set_time(&mut context, COMPONENT, 0x3000).await.unwrap(), 1);
 
             let mut unchanged = [0u8; 44];
-            context
-                .read_bytes(COMPONENT + 0x48, &mut unchanged)
-                .unwrap();
+            context.read_bytes(COMPONENT + 0x48, &mut unchanged).unwrap();
             assert_eq!(unchanged, [0xcc; 44]);
         }
     }
@@ -6274,50 +4813,23 @@ mod tests {
     #[futures_test::test]
     async fn lgt_uic_set_time_long_converts_signed_epoch_seconds_to_native_kst_tm() {
         for (time, expected) in [
-            (
-                0u32,
-                [0i32, 0, 9, 1, 0, 70, 4, 0, 0],
-            ),
-            (
-                u32::MAX,
-                [59i32, 59, 8, 1, 0, 70, 4, 0, 0],
-            ),
-            (
-                0x7fff_ffffu32,
-                [7i32, 14, 12, 19, 0, 138, 2, 18, 0],
-            ),
+            (0u32, [0i32, 0, 9, 1, 0, 70, 4, 0, 0]),
+            (u32::MAX, [59i32, 59, 8, 1, 0, 70, 4, 0, 0]),
+            (0x7fff_ffffu32, [7i32, 14, 12, 19, 0, 138, 2, 18, 0]),
         ] {
             let mut context = TestContext::new();
             init_component(&mut context, 2);
             write_generic(&mut context, COMPONENT + 0x44, 0u32).unwrap();
-            context
-                .write_bytes(COMPONENT + 0x74, b"old datetime\0")
-                .unwrap();
+            context.write_bytes(COMPONENT + 0x74, b"old datetime\0").unwrap();
 
-            assert_ne!(
-                set_time_long(&mut context, COMPONENT, time).await.unwrap(),
-                0
-            );
+            assert_ne!(set_time_long(&mut context, COMPONENT, time).await.unwrap(), 0);
 
             for (index, value) in expected.iter().enumerate() {
-                assert_eq!(
-                    read_generic::<i32, _>(
-                        &context,
-                        COMPONENT + 0x48 + index as u32 * 4
-                    )
-                    .unwrap(),
-                    *value
-                );
+                assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x48 + index as u32 * 4).unwrap(), *value);
             }
 
-            assert_eq!(
-                read_generic::<i32, _>(&context, COMPONENT + 0x6c).unwrap(),
-                32_400
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x70).unwrap(),
-                0
-            );
+            assert_eq!(read_generic::<i32, _>(&context, COMPONENT + 0x6c).unwrap(), 32_400);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x70).unwrap(), 0);
         }
     }
 
@@ -6329,14 +4841,8 @@ mod tests {
         write_generic(&mut context, COMPONENT + 0x44, 3u32).unwrap();
         context.write_bytes(COMPONENT + 0x74, b"old\0").unwrap();
 
-        assert_ne!(
-            set_time_long(&mut context, COMPONENT, 0).await.unwrap(),
-            0
-        );
-        assert_eq!(
-            uic_read_c_string(&context, COMPONENT + 0x74).unwrap(),
-            b"1970/01/01 09:00:00"
-        );
+        assert_ne!(set_time_long(&mut context, COMPONENT, 0).await.unwrap(), 0);
+        assert_eq!(uic_read_c_string(&context, COMPONENT + 0x74).unwrap(), b"1970/01/01 09:00:00");
     }
 
     #[futures_test::test]
@@ -6347,39 +4853,23 @@ mod tests {
 
         for component_type in [0u32, 6] {
             init_component(&mut context, component_type);
-            context
-                .write_bytes(COMPONENT + 0x48, &[0xaa; 44])
-                .unwrap();
+            context.write_bytes(COMPONENT + 0x48, &[0xaa; 44]).unwrap();
 
-            assert_eq!(
-                set_time_long(&mut context, COMPONENT, 0).await.unwrap(),
-                0
-            );
+            assert_eq!(set_time_long(&mut context, COMPONENT, 0).await.unwrap(), 0);
 
             let mut unchanged = [0u8; 44];
-            context
-                .read_bytes(COMPONENT + 0x48, &mut unchanged)
-                .unwrap();
+            context.read_bytes(COMPONENT + 0x48, &mut unchanged).unwrap();
             assert_eq!(unchanged, [0xaa; 44]);
         }
 
         for component_type in [1u32, 3, 4, 5] {
             init_component(&mut context, component_type);
-            context
-                .write_bytes(COMPONENT + 0x48, &[0xbb; 44])
-                .unwrap();
+            context.write_bytes(COMPONENT + 0x48, &[0xbb; 44]).unwrap();
 
-            assert_eq!(
-                set_time_long(&mut context, COMPONENT, u32::MAX)
-                    .await
-                    .unwrap(),
-                1
-            );
+            assert_eq!(set_time_long(&mut context, COMPONENT, u32::MAX).await.unwrap(), 1);
 
             let mut unchanged = [0u8; 44];
-            context
-                .read_bytes(COMPONENT + 0x48, &mut unchanged)
-                .unwrap();
+            context.read_bytes(COMPONENT + 0x48, &mut unchanged).unwrap();
             assert_eq!(unchanged, [0xbb; 44]);
         }
     }
@@ -6406,38 +4896,17 @@ mod tests {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x18, 0xdead_beefu32).unwrap();
 
-            assert_eq!(
-                set_fg_color(&mut context, COMPONENT, 0x0012_3456)
-                    .await
-                    .unwrap(),
-                0x11aa
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x18).unwrap(),
-                0x11aa
-            );
+            assert_eq!(set_fg_color(&mut context, COMPONENT, 0x0012_3456).await.unwrap(), 0x11aa);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x18).unwrap(), 0x11aa);
         }
 
         let mut context = TestContext::new();
-        assert_eq!(
-            set_fg_color(&mut context, 0, 0x00ff_0000)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(set_fg_color(&mut context, 0, 0x00ff_0000).await.unwrap(), 0);
 
         init_component(&mut context, 6);
         write_generic(&mut context, COMPONENT + 0x18, 0xaabb_ccddu32).unwrap();
-        assert_eq!(
-            set_fg_color(&mut context, COMPONENT, 0x00ff_0000)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x18).unwrap(),
-            0xaabb_ccdd
-        );
+        assert_eq!(set_fg_color(&mut context, COMPONENT, 0x00ff_0000).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x18).unwrap(), 0xaabb_ccdd);
     }
 
     #[futures_test::test]
@@ -6445,13 +4914,9 @@ mod tests {
         for component_type in 1u32..=5 {
             let mut context = TestContext::new();
             init_component(&mut context, component_type);
-            write_generic(&mut context, COMPONENT + 0x14, 0x1234_0000u32 + component_type)
-                .unwrap();
+            write_generic(&mut context, COMPONENT + 0x14, 0x1234_0000u32 + component_type).unwrap();
 
-            assert_eq!(
-                get_font(&mut context, COMPONENT).await.unwrap(),
-                0x1234_0000u32 + component_type
-            );
+            assert_eq!(get_font(&mut context, COMPONENT).await.unwrap(), 0x1234_0000u32 + component_type);
         }
     }
 
@@ -6476,25 +4941,11 @@ mod tests {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x14, 0x1234_5678u32).unwrap();
 
-            assert_eq!(
-                set_font(&mut context, COMPONENT, 0x8765_4321)
-                    .await
-                    .unwrap(),
-                0x1234_5678
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(),
-                0x8765_4321
-            );
+            assert_eq!(set_font(&mut context, COMPONENT, 0x8765_4321).await.unwrap(), 0x1234_5678);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(), 0x8765_4321);
 
-            assert_eq!(
-                set_font(&mut context, COMPONENT, 0).await.unwrap(),
-                0x8765_4321
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(),
-                0
-            );
+            assert_eq!(set_font(&mut context, COMPONENT, 0).await.unwrap(), 0x8765_4321);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(), 0);
         }
     }
 
@@ -6507,16 +4958,8 @@ mod tests {
         init_component(&mut context, 6);
         write_generic(&mut context, COMPONENT + 0x14, 0xaabb_ccddu32).unwrap();
 
-        assert_eq!(
-            set_font(&mut context, COMPONENT, 0x1111_2222)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(),
-            0xaabb_ccdd
-        );
+        assert_eq!(set_font(&mut context, COMPONENT, 0x1111_2222).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x14).unwrap(), 0xaabb_ccdd);
     }
 
     #[futures_test::test]
@@ -6526,27 +4969,11 @@ mod tests {
             init_component(&mut context, component_type);
             write_generic(&mut context, COMPONENT + 0x28, 0x1234_5678u32).unwrap();
 
-            assert_eq!(
-                set_event_handler(&mut context, COMPONENT, 0x8765_4321)
-                    .await
-                    .unwrap(),
-                0x1234_5678
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x28).unwrap(),
-                0x8765_4321
-            );
+            assert_eq!(set_event_handler(&mut context, COMPONENT, 0x8765_4321).await.unwrap(), 0x1234_5678);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x28).unwrap(), 0x8765_4321);
 
-            assert_eq!(
-                set_event_handler(&mut context, COMPONENT, 0)
-                    .await
-                    .unwrap(),
-                0x8765_4321
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + 0x28).unwrap(),
-                0
-            );
+            assert_eq!(set_event_handler(&mut context, COMPONENT, 0).await.unwrap(), 0x8765_4321);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x28).unwrap(), 0);
         }
     }
 
@@ -6554,26 +4981,13 @@ mod tests {
     async fn lgt_uic_set_event_handler_returns_zero_for_invalid_components() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            set_event_handler(&mut context, 0, 0x1111_2222)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(set_event_handler(&mut context, 0, 0x1111_2222).await.unwrap(), 0);
 
         init_component(&mut context, 6);
         write_generic(&mut context, COMPONENT + 0x28, 0xaabb_ccddu32).unwrap();
 
-        assert_eq!(
-            set_event_handler(&mut context, COMPONENT, 0x1111_2222)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x28).unwrap(),
-            0xaabb_ccdd
-        );
+        assert_eq!(set_event_handler(&mut context, COMPONENT, 0x1111_2222).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x28).unwrap(), 0xaabb_ccdd);
     }
 
     #[futures_test::test]
@@ -6581,11 +4995,7 @@ mod tests {
         let mut context = TestContext::new();
         init_component(&mut context, 4);
 
-        for (selector, callback_offset, context_offset) in [
-            (1u32, 0x2cu32, 0x38u32),
-            (2u32, 0x30u32, 0x3cu32),
-            (3u32, 0x34u32, 0x40u32),
-        ] {
+        for (selector, callback_offset, context_offset) in [(1u32, 0x2cu32, 0x38u32), (2u32, 0x30u32, 0x3cu32), (3u32, 0x34u32, 0x40u32)] {
             let old = 0x1100_0000u32 + selector;
             let new = 0x2200_0000u32 + selector;
             let user = 0x3300_0000u32 + selector;
@@ -6593,20 +5003,9 @@ mod tests {
             write_generic(&mut context, COMPONENT + callback_offset, old).unwrap();
             write_generic(&mut context, COMPONENT + context_offset, 0xdead_beefu32).unwrap();
 
-            assert_eq!(
-                set_callback(&mut context, COMPONENT, selector, new, user)
-                    .await
-                    .unwrap(),
-                old
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + callback_offset).unwrap(),
-                new
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + context_offset).unwrap(),
-                user
-            );
+            assert_eq!(set_callback(&mut context, COMPONENT, selector, new, user).await.unwrap(), old);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + callback_offset).unwrap(), new);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + context_offset).unwrap(), user);
         }
     }
 
@@ -6625,25 +5024,11 @@ mod tests {
             write_generic(&mut context, COMPONENT + callback_offset, 0x1234_5678u32).unwrap();
 
             assert_eq!(
-                set_callback(
-                    &mut context,
-                    COMPONENT,
-                    selector,
-                    0x8765_4321,
-                    0x1357_2468,
-                )
-                .await
-                .unwrap(),
+                set_callback(&mut context, COMPONENT, selector, 0x8765_4321, 0x1357_2468,).await.unwrap(),
                 0x1234_5678
             );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + callback_offset).unwrap(),
-                0x8765_4321
-            );
-            assert_eq!(
-                read_generic::<u32, _>(&context, COMPONENT + context_offset).unwrap(),
-                0x1357_2468
-            );
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + callback_offset).unwrap(), 0x8765_4321);
+            assert_eq!(read_generic::<u32, _>(&context, COMPONENT + context_offset).unwrap(), 0x1357_2468);
         }
     }
 
@@ -6651,52 +5036,19 @@ mod tests {
     async fn lgt_uic_set_callback_rejects_invalid_selector_and_subtype_pairs() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            set_callback(&mut context, 0, 1, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(set_callback(&mut context, 0, 1, 0x1111, 0x2222).await.unwrap(), 0);
 
         init_component(&mut context, 4);
         write_generic(&mut context, COMPONENT + 0x2c, 0xaaaa_bbbbu32).unwrap();
 
-        assert_eq!(
-            set_callback(&mut context, COMPONENT, 0, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            set_callback(&mut context, COMPONENT, 6, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            set_callback(&mut context, COMPONENT, 4, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            set_callback(&mut context, COMPONENT, 5, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            read_generic::<u32, _>(&context, COMPONENT + 0x2c).unwrap(),
-            0xaaaa_bbbb
-        );
+        assert_eq!(set_callback(&mut context, COMPONENT, 0, 0x1111, 0x2222).await.unwrap(), 0);
+        assert_eq!(set_callback(&mut context, COMPONENT, 6, 0x1111, 0x2222).await.unwrap(), 0);
+        assert_eq!(set_callback(&mut context, COMPONENT, 4, 0x1111, 0x2222).await.unwrap(), 0);
+        assert_eq!(set_callback(&mut context, COMPONENT, 5, 0x1111, 0x2222).await.unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, COMPONENT + 0x2c).unwrap(), 0xaaaa_bbbb);
 
         write_generic(&mut context, COMPONENT, 6u32).unwrap();
-        assert_eq!(
-            set_callback(&mut context, COMPONENT, 1, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(set_callback(&mut context, COMPONENT, 1, 0x1111, 0x2222).await.unwrap(), 0);
     }
 
     #[futures_test::test]
@@ -6713,35 +5065,14 @@ mod tests {
             write_generic(&mut context, address, 0x1357_2468u32).unwrap();
         }
 
-        get_geometry(
-            &mut context,
-            COMPONENT,
-            0x3000,
-            0,
-            0x3008,
-            0x300c,
-        )
-        .await
-        .unwrap();
+        get_geometry(&mut context, COMPONENT, 0x3000, 0, 0x3008, 0x300c).await.unwrap();
 
         assert_eq!(read_generic::<i32, _>(&context, 0x3000).unwrap(), -11);
-        assert_eq!(
-            read_generic::<u32, _>(&context, 0x3004).unwrap(),
-            0x1357_2468
-        );
+        assert_eq!(read_generic::<u32, _>(&context, 0x3004).unwrap(), 0x1357_2468);
         assert_eq!(read_generic::<i32, _>(&context, 0x3008).unwrap(), 333);
         assert_eq!(read_generic::<i32, _>(&context, 0x300c).unwrap(), 444);
 
-        get_geometry(
-            &mut context,
-            COMPONENT,
-            0,
-            0x3004,
-            0,
-            0,
-        )
-        .await
-        .unwrap();
+        get_geometry(&mut context, COMPONENT, 0, 0x3004, 0, 0).await.unwrap();
         assert_eq!(read_generic::<i32, _>(&context, 0x3004).unwrap(), 22);
     }
 
@@ -6753,34 +5084,17 @@ mod tests {
             write_generic(&mut context, address, 0x2468_1357u32).unwrap();
         }
 
-        get_geometry(&mut context, 0, 0x3000, 0x3004, 0x3008, 0x300c)
-            .await
-            .unwrap();
+        get_geometry(&mut context, 0, 0x3000, 0x3004, 0x3008, 0x300c).await.unwrap();
 
         for address in [0x3000u32, 0x3004, 0x3008, 0x300c] {
-            assert_eq!(
-                read_generic::<u32, _>(&context, address).unwrap(),
-                0x2468_1357
-            );
+            assert_eq!(read_generic::<u32, _>(&context, address).unwrap(), 0x2468_1357);
         }
 
         init_component(&mut context, 6);
-        get_geometry(
-            &mut context,
-            COMPONENT,
-            0x3000,
-            0x3004,
-            0x3008,
-            0x300c,
-        )
-        .await
-        .unwrap();
+        get_geometry(&mut context, COMPONENT, 0x3000, 0x3004, 0x3008, 0x300c).await.unwrap();
 
         for address in [0x3000u32, 0x3004, 0x3008, 0x300c] {
-            assert_eq!(
-                read_generic::<u32, _>(&context, address).unwrap(),
-                0x2468_1357
-            );
+            assert_eq!(read_generic::<u32, _>(&context, address).unwrap(), 0x2468_1357);
         }
     }
 
@@ -6789,25 +5103,19 @@ mod tests {
         let mut context = TestContext::new();
         init_component(&mut context, 1);
 
-        configure(&mut context, COMPONENT, -11, -22, 33, 44, 1)
-            .await
-            .unwrap();
+        configure(&mut context, COMPONENT, -11, -22, 33, 44, 1).await.unwrap();
         assert_eq!(read_i32(&context, 0x04), -11);
         assert_eq!(read_i32(&context, 0x08), -22);
         assert_eq!(read_i32(&context, 0x0c), 30);
         assert_eq!(read_i32(&context, 0x10), 40);
 
-        configure(&mut context, COMPONENT, 111, 222, 55, 66, 2)
-            .await
-            .unwrap();
+        configure(&mut context, COMPONENT, 111, 222, 55, 66, 2).await.unwrap();
         assert_eq!(read_i32(&context, 0x04), -11);
         assert_eq!(read_i32(&context, 0x08), -22);
         assert_eq!(read_i32(&context, 0x0c), 55);
         assert_eq!(read_i32(&context, 0x10), 66);
 
-        configure(&mut context, COMPONENT, 7, 8, 9, 10, 3)
-            .await
-            .unwrap();
+        configure(&mut context, COMPONENT, 7, 8, 9, 10, 3).await.unwrap();
         assert_eq!(read_i32(&context, 0x04), 7);
         assert_eq!(read_i32(&context, 0x08), 8);
         assert_eq!(read_i32(&context, 0x0c), 9);
@@ -6819,29 +5127,21 @@ mod tests {
         let mut context = TestContext::new();
         init_component(&mut context, 5);
 
-        configure(&mut context, COMPONENT, 1, 2, 0, 99, 2)
-            .await
-            .unwrap();
+        configure(&mut context, COMPONENT, 1, 2, 0, 99, 2).await.unwrap();
         assert_eq!(read_i32(&context, 0x0c), 30);
         assert_eq!(read_i32(&context, 0x10), 40);
 
-        configure(&mut context, COMPONENT, 1, 2, 99, -1, 2)
-            .await
-            .unwrap();
+        configure(&mut context, COMPONENT, 1, 2, 99, -1, 2).await.unwrap();
         assert_eq!(read_i32(&context, 0x0c), 30);
         assert_eq!(read_i32(&context, 0x10), 40);
 
         write_generic(&mut context, COMPONENT, 6u32).unwrap();
-        configure(&mut context, COMPONENT, 100, 200, 300, 400, 3)
-            .await
-            .unwrap();
+        configure(&mut context, COMPONENT, 100, 200, 300, 400, 3).await.unwrap();
         assert_eq!(read_i32(&context, 0x04), 10);
         assert_eq!(read_i32(&context, 0x08), 20);
         assert_eq!(read_i32(&context, 0x0c), 30);
         assert_eq!(read_i32(&context, 0x10), 40);
 
-        configure(&mut context, 0, 100, 200, 300, 400, 3)
-            .await
-            .unwrap();
+        configure(&mut context, 0, 100, 200, 300, 400, 3).await.unwrap();
     }
 }

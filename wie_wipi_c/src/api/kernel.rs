@@ -135,9 +135,15 @@ pub async fn set_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
     // Decoded and logged at info: a title that sets a property and reads it back
     // expects the value to survive, so seeing what it set (and not persisting it
     // yet) helps explain a later mismatch. Persistence is a follow-up.
-    let id = encoding_rs::EUC_KR.decode(&read_null_terminated_string_bytes(context, ptr_id)?).0.into_owned();
+    let id = encoding_rs::EUC_KR
+        .decode(&read_null_terminated_string_bytes(context, ptr_id)?)
+        .0
+        .into_owned();
     let value = if ptr_value != 0 {
-        encoding_rs::EUC_KR.decode(&read_null_terminated_string_bytes(context, ptr_value)?).0.into_owned()
+        encoding_rs::EUC_KR
+            .decode(&read_null_terminated_string_bytes(context, ptr_value)?)
+            .0
+            .into_owned()
     } else {
         String::new()
     };

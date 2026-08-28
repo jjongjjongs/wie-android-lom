@@ -119,10 +119,7 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x22 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowArrayIndexOutOfBoundsException)?,
         0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowArithmeticException)?,
         0x25 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowClassCastException)?,
-        0x26 => core.make_svc_stub(
-            SVC_CATEGORY_INIT,
-            InitSvcId::LegacyVmThrowNegativeArraySizeException,
-        )?,
+        0x26 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyVmThrowNegativeArraySizeException)?,
         // LoM legacy class-registration lifecycle: 0x40 registers the
         // module's class/raw-class tables and returns a registration slot.
         // Module cleanup later passes that saved slot to 0x38.
@@ -167,32 +164,19 @@ fn read_resolve_member(core: &ArmCore, table: u32, index: u32) -> Result<Option<
     let name = read_null_terminated_string_bytes(core, name)?;
     let descriptor = read_null_terminated_string_bytes(core, descriptor)?;
 
-    Ok(Some((
-        String::from_utf8_lossy(&name).into(),
-        String::from_utf8_lossy(&descriptor).into(),
-    )))
+    Ok(Some((String::from_utf8_lossy(&name).into(), String::from_utf8_lossy(&descriptor).into())))
 }
 
 fn write_continuation_slot(core: &mut ArmCore, output: u32, index: u32) -> Result<()> {
     let previous = output
         .checked_add(index * 2)
         .and_then(|address| address.checked_sub(2))
-        .ok_or_else(|| wie_util::WieError::FatalError(alloc::format!(
-            "Invalid LGT continuation slot {index} at {output:#x}"
-        )))?;
+        .ok_or_else(|| wie_util::WieError::FatalError(alloc::format!("Invalid LGT continuation slot {index} at {output:#x}")))?;
     let slot: u16 = read_generic(core, previous)?;
     write_generic(core, output + index * 2, slot.wrapping_add(1))
 }
 
-fn resolve_field_group(
-    core: &mut ArmCore,
-    class: &AppClass,
-    table: u32,
-    output: u32,
-    start: u32,
-    count: u32,
-    want_static: bool,
-) -> Result<()> {
+fn resolve_field_group(core: &mut ArmCore, class: &AppClass, table: u32, output: u32, start: u32, count: u32, want_static: bool) -> Result<()> {
     for index in start..start + count {
         let Some((name, descriptor)) = read_resolve_member(core, table, index)? else {
             write_continuation_slot(core, output, index)?;
@@ -200,10 +184,7 @@ fn resolve_field_group(
         };
 
         let member = class.members.iter().find(|member| {
-            member.is_field()
-                && member.name() == name
-                && member.descriptor() == descriptor
-                && ((member.flags() & 0x8) != 0) == want_static
+            member.is_field() && member.name() == name && member.descriptor() == descriptor && ((member.flags() & 0x8) != 0) == want_static
         });
 
         let Some(member) = member else {
@@ -233,12 +214,11 @@ fn resolve_virtual_member(
     let mut current = first.clone();
 
     for _ in 0..MAX_CLASS_DEPTH {
-        if let Some(member) = current.members.iter().find(|member| {
-            member.is_method()
-                && member.name() == name
-                && member.descriptor() == descriptor
-                && (member.slot() as u16 as i16) > 0
-        }) {
+        if let Some(member) = current
+            .members
+            .iter()
+            .find(|member| member.is_method() && member.name() == name && member.descriptor() == descriptor && (member.slot() as u16 as i16) > 0)
+        {
             return Some(member.slot());
         }
 
@@ -290,15 +270,7 @@ pub async fn java_resolve_one(
     let static_method_start: u16 = read_generic(core, class_entry + 20)?;
     let static_method_count: u16 = read_generic(core, class_entry + 22)?;
 
-    resolve_field_group(
-        core,
-        &class,
-        fields,
-        field_offsets,
-        field_start.into(),
-        field_count.into(),
-        false,
-    )?;
+    resolve_field_group(core, &class, fields, field_offsets, field_start.into(), field_count.into(), false)?;
     resolve_field_group(
         core,
         &class,
@@ -337,9 +309,11 @@ pub async fn java_resolve_one(
             )));
         };
 
-        let Some(member) = class.members.iter().find(|member| {
-            member.is_method() && member.name() == name && member.descriptor() == descriptor
-        }) else {
+        let Some(member) = class
+            .members
+            .iter()
+            .find(|member| member.is_method() && member.name() == name && member.descriptor() == descriptor)
+        else {
             return Err(wie_util::WieError::FatalError(alloc::format!(
                 "LGT vm_resolve_one could not resolve interface method {}.{}{}",
                 class.name,
@@ -367,9 +341,11 @@ pub async fn java_resolve_one(
             continue;
         };
 
-        let Some(member) = class.members.iter().find(|member| {
-            member.is_method() && member.name() == name && member.descriptor() == descriptor
-        }) else {
+        let Some(member) = class
+            .members
+            .iter()
+            .find(|member| member.is_method() && member.name() == name && member.descriptor() == descriptor)
+        else {
             return Err(wie_util::WieError::FatalError(alloc::format!(
                 "LGT vm_resolve_one could not resolve static method {}.{}{}",
                 class.name,
@@ -552,14 +528,7 @@ fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut 
 /// short table leaves that slot zero and the branch goes to address zero, so
 /// the slots a class does not declare are filled with stubs that report what
 /// was called instead.
-fn build_dispatch_table(
-    core: &mut ArmCore,
-    class_index: u32,
-    class_root: u32,
-    start: u32,
-    count: u32,
-    slots: &[Option<u32>],
-) -> Result<u32> {
+fn build_dispatch_table(core: &mut ArmCore, class_index: u32, class_root: u32, start: u32, count: u32, slots: &[Option<u32>]) -> Result<u32> {
     let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
     write_generic(core, vtable, class_root)?;
 
@@ -653,8 +622,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
             };
 
             write_generic(core, table.outputs.field_offsets + index * 2, field.slot as u16)?;
-            highest_native_field_slot =
-                Some(highest_native_field_slot.map_or(field.slot, |slot: u32| slot.max(field.slot)));
+            highest_native_field_slot = Some(highest_native_field_slot.map_or(field.slot, |slot: u32| slot.max(field.slot)));
 
             field_bindings.push(super::handles::JavaFieldBinding {
                 class_name: class.name.clone(),
@@ -665,11 +633,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         }
 
         for index in class.static_field_start..class.static_field_start + class.static_field_count {
-            let Some(member) = table
-                .static_fields
-                .get(index as usize)
-                .and_then(|member| member.as_ref())
-            else {
+            let Some(member) = table.static_fields.get(index as usize).and_then(|member| member.as_ref()) else {
                 write_continuation_slot(core, table.outputs.static_field_offsets, index)?;
                 continue;
             };
@@ -681,11 +645,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
                 )));
             };
 
-            write_generic(
-                core,
-                table.outputs.static_field_offsets + index * 2,
-                field.slot as u16,
-            )?;
+            write_generic(core, table.outputs.static_field_offsets + index * 2, field.slot as u16)?;
         }
     }
 
@@ -695,24 +655,14 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
             continue;
         };
 
-        write_generic(
-            core,
-            table.outputs.virtual_method_offsets + index as u32 * 2,
-            *slot as u16,
-        )?;
+        write_generic(core, table.outputs.virtual_method_offsets + index as u32 * 2, *slot as u16)?;
     }
 
     for class in &table.classes {
         let platform = platform_class(&class.name).expect("platform class checked above");
 
-        for index in
-            class.interface_method_start..class.interface_method_start + class.interface_method_count
-        {
-            let Some(member) = table
-                .interface_methods
-                .get(index as usize)
-                .and_then(|member| member.as_ref())
-            else {
+        for index in class.interface_method_start..class.interface_method_start + class.interface_method_count {
+            let Some(member) = table.interface_methods.get(index as usize).and_then(|member| member.as_ref()) else {
                 return Err(wie_util::WieError::FatalError(alloc::format!(
                     "Blank LGT interface-method import row {index}"
                 )));
@@ -725,21 +675,13 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
                 )));
             };
 
-            write_generic(
-                core,
-                table.outputs.interface_method_offsets + index * 2,
-                method.slot as u16,
-            )?;
+            write_generic(core, table.outputs.interface_method_offsets + index * 2, method.slot as u16)?;
         }
 
         let mut index = class.static_method_start;
         let end = index + class.static_method_count;
         while index < end {
-            match table
-                .static_methods
-                .get(index as usize)
-                .and_then(|member| member.as_ref())
-            {
+            match table.static_methods.get(index as usize).and_then(|member| member.as_ref()) {
                 Some(member) => {
                     if platform.method(&member.name, &member.descriptor).is_none() {
                         return Err(wie_util::WieError::FatalError(alloc::format!(
@@ -748,15 +690,8 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
                         )));
                     }
 
-                    let stub = core.make_svc_stub(
-                        SVC_CATEGORY_INIT,
-                        JAVA_STATIC_METHOD_SVC_BASE + index,
-                    )?;
-                    write_generic(
-                        core,
-                        table.outputs.static_method_offsets + index * 4,
-                        stub,
-                    )?;
+                    let stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_STATIC_METHOD_SVC_BASE + index)?;
+                    write_generic(core, table.outputs.static_method_offsets + index * 4, stub)?;
                     index += 1;
                 }
                 None => {
@@ -764,26 +699,12 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
                     // two-row pair. WIE bridges those class accessors through the
                     // existing reserved-row SVCs; their exact initialization
                     // distinction is implemented separately.
-                    let first = core.make_svc_stub(
-                        SVC_CATEGORY_INIT,
-                        JAVA_RESERVED_SLOT_SVC_BASE + index,
-                    )?;
-                    write_generic(
-                        core,
-                        table.outputs.static_method_offsets + index * 4,
-                        first,
-                    )?;
+                    let first = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_RESERVED_SLOT_SVC_BASE + index)?;
+                    write_generic(core, table.outputs.static_method_offsets + index * 4, first)?;
 
                     if index + 1 < end {
-                        let second = core.make_svc_stub(
-                            SVC_CATEGORY_INIT,
-                            JAVA_RESERVED_SLOT_SVC_BASE + index + 1,
-                        )?;
-                        write_generic(
-                            core,
-                            table.outputs.static_method_offsets + (index + 1) * 4,
-                            second,
-                        )?;
+                        let second = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_RESERVED_SLOT_SVC_BASE + index + 1)?;
+                        write_generic(core, table.outputs.static_method_offsets + (index + 1) * 4, second)?;
                     }
 
                     index += 2;
@@ -820,17 +741,10 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
                 .interface_methods
                 .get(index as usize)
                 .and_then(|member| member.as_ref())
-                .ok_or_else(|| {
-                    wie_util::WieError::FatalError(alloc::format!(
-                        "Blank LGT interface-method import row {index}"
-                    ))
-                })?;
-            let method = platform.method(&member.name, &member.descriptor).ok_or_else(|| {
-                wie_util::WieError::FatalError(alloc::format!(
-                    "LGT interface table could not resolve {}",
-                    table.describe(member)
-                ))
-            })?;
+                .ok_or_else(|| wie_util::WieError::FatalError(alloc::format!("Blank LGT interface-method import row {index}")))?;
+            let method = platform
+                .method(&member.name, &member.descriptor)
+                .ok_or_else(|| wie_util::WieError::FatalError(alloc::format!("LGT interface table could not resolve {}", table.describe(member))))?;
             highest_slot = highest_slot.max(method.slot);
         }
 
@@ -840,17 +754,10 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
         write_generic(core, dispatch, root)?;
 
         for index in class.interface_method_start..class.interface_method_start + class.interface_method_count {
-            let member = table.interface_methods[index as usize]
-                .as_ref()
-                .expect("interface member checked above");
-            let method = platform
-                .method(&member.name, &member.descriptor)
-                .expect("interface method checked above");
+            let member = table.interface_methods[index as usize].as_ref().expect("interface member checked above");
+            let method = platform.method(&member.name, &member.descriptor).expect("interface method checked above");
 
-            let stub = core.make_svc_stub(
-                SVC_CATEGORY_INIT,
-                JAVA_INTERFACE_METHOD_SVC_BASE + index,
-            )?;
+            let stub = core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_INTERFACE_METHOD_SVC_BASE + index)?;
             write_generic(core, dispatch + 4 + method.slot * 4, stub)?;
         }
 
@@ -865,11 +772,7 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
     let compatibility_base = highest_native_field_slot.map(|slot| slot + 1).unwrap_or(0);
 
     for row in table.fields.len() as u32..capacity {
-        write_generic(
-            core,
-            table.outputs.field_offsets + row * 2,
-            (compatibility_base + row) as u16,
-        )?;
+        write_generic(core, table.outputs.field_offsets + row * 2, (compatibility_base + row) as u16)?;
     }
 
     handles.set_field_bindings(field_bindings);

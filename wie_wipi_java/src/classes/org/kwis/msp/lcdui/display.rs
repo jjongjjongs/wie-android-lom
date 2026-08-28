@@ -3,7 +3,7 @@ use alloc::vec;
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_constants::{FieldAccessFlags, MethodAccessFlags};
 use java_runtime::classes::java::lang::{Object, Runnable, String};
-use jvm::{runtime::JavaLangString, ClassInstanceRef, Jvm, Result as JvmResult};
+use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
@@ -42,18 +42,8 @@ impl Display {
                     Self::get_default_display,
                     MethodAccessFlags::STATIC,
                 ),
-                JavaMethodProto::new(
-                    "getActivatedIndex",
-                    "()I",
-                    Self::get_activated_index,
-                    MethodAccessFlags::STATIC,
-                ),
-                JavaMethodProto::new(
-                    "activateCurrentDisplay",
-                    "()I",
-                    Self::activate_current_display,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("getActivatedIndex", "()I", Self::get_activated_index, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("activateCurrentDisplay", "()I", Self::activate_current_display, Default::default()),
                 JavaMethodProto::new("isDoubleBuffered", "()Z", Self::is_double_buffered, Default::default()),
                 JavaMethodProto::new("getDockedCard", "()Lorg/kwis/msp/lcdui/Card;", Self::get_docked_card, Default::default()),
                 JavaMethodProto::new(
@@ -131,11 +121,7 @@ impl Display {
                     "[Lorg/kwis/msp/lcdui/JletEventListener;",
                     FieldAccessFlags::STATIC,
                 ),
-                JavaFieldProto::new(
-                    "__wieJletEventListenerCount",
-                    "I",
-                    FieldAccessFlags::STATIC,
-                ),
+                JavaFieldProto::new("__wieJletEventListenerCount", "I", FieldAccessFlags::STATIC),
             ],
             access_flags: Default::default(),
         }
@@ -179,31 +165,17 @@ impl Display {
         Ok(())
     }
 
-    async fn get_display(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        name: ClassInstanceRef<String>,
-    ) -> JvmResult<ClassInstanceRef<Self>> {
+    async fn get_display(jvm: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<ClassInstanceRef<Self>> {
         tracing::debug!("org.kwis.msp.lcdui.Display::getDisplay({name:?})");
 
         let jlet: ClassInstanceRef<Jlet> = jvm
-            .invoke_static(
-                "org/kwis/msp/lcdui/Jlet",
-                "getActiveJlet",
-                "()Lorg/kwis/msp/lcdui/Jlet;",
-                (),
-            )
+            .invoke_static("org/kwis/msp/lcdui/Jlet", "getActiveJlet", "()Lorg/kwis/msp/lcdui/Jlet;", ())
             .await?;
 
         // Native first asks Jlet.getDisplay(name) for an existing cached
         // default/dual/rotated Display.
         let cached: ClassInstanceRef<Display> = jvm
-            .invoke_virtual(
-                &jlet,
-                "getDisplay",
-                "(Ljava/lang/String;)Lorg/kwis/msp/lcdui/Display;",
-                (name.clone(),),
-            )
+            .invoke_virtual(&jlet, "getDisplay", "(Ljava/lang/String;)Lorg/kwis/msp/lcdui/Display;", (name.clone(),))
             .await?;
 
         if !cached.is_null() {
@@ -234,27 +206,16 @@ impl Display {
             .await?
             .into();
 
-        jvm.put_field(&mut display, "__wieDisplayIndex", "I", index)
-            .await?;
+        jvm.put_field(&mut display, "__wieDisplayIndex", "I", index).await?;
 
         match index {
             1 => {
-                jvm.put_field(
-                    &mut jlet.clone(),
-                    "dualDis",
-                    "Lorg/kwis/msp/lcdui/Display;",
-                    display.clone(),
-                )
-                .await?;
+                jvm.put_field(&mut jlet.clone(), "dualDis", "Lorg/kwis/msp/lcdui/Display;", display.clone())
+                    .await?;
             }
             3 => {
                 let _: () = jvm
-                    .invoke_virtual(
-                        &jlet,
-                        "setRotatedDisplay",
-                        "(Lorg/kwis/msp/lcdui/Display;)V",
-                        (display.clone(),),
-                    )
+                    .invoke_virtual(&jlet, "setRotatedDisplay", "(Lorg/kwis/msp/lcdui/Display;)V", (display.clone(),))
                     .await?;
             }
             _ => {}
@@ -281,32 +242,18 @@ impl Display {
     async fn get_activated_index(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.lcdui.Display::getActivatedIndex");
 
-        jvm.get_static_field(
-            "org/kwis/msp/lcdui/Display",
-            "__wieActivatedIndex",
-            "I",
-        )
-        .await
+        jvm.get_static_field("org/kwis/msp/lcdui/Display", "__wieActivatedIndex", "I").await
     }
 
-    async fn activate_current_display(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
+    async fn activate_current_display(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.lcdui.Display::activateCurrentDisplay({this:?})");
 
         let index: i32 = jvm.get_field(&this, "__wieDisplayIndex", "I").await?;
 
         // Native activateCurrentDisplay() always copies this Display's +0x18
         // index into the class-static +0x50 slot after activateCurrentDisplay0().
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/Display",
-            "__wieActivatedIndex",
-            "I",
-            index,
-        )
-        .await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/Display", "__wieActivatedIndex", "I", index)
+            .await?;
 
         // WIE has one MIDP display backend, so there is no lower-level
         // platform display-switch status to propagate here.
@@ -385,9 +332,7 @@ impl Display {
         this: ClassInstanceRef<Display>,
         qel: ClassInstanceRef<JletEventListener>,
     ) -> JvmResult<()> {
-        tracing::debug!(
-            "org.kwis.msp.lcdui.Display::addJletEventListener({this:?}, {qel:?})"
-        );
+        tracing::debug!("org.kwis.msp.lcdui.Display::addJletEventListener({this:?}, {qel:?})");
 
         let mut listeners: ClassInstanceRef<()> = jvm
             .get_static_field(
@@ -398,13 +343,7 @@ impl Display {
             .await?;
 
         if listeners.is_null() {
-            listeners = jvm
-                .instantiate_array(
-                    "Lorg/kwis/msp/lcdui/JletEventListener;",
-                    4,
-                )
-                .await?
-                .into();
+            listeners = jvm.instantiate_array("Lorg/kwis/msp/lcdui/JletEventListener;", 4).await?.into();
 
             jvm.put_static_field(
                 "org/kwis/msp/lcdui/Display",
@@ -416,11 +355,7 @@ impl Display {
         }
 
         let count: i32 = jvm
-            .get_static_field(
-                "org/kwis/msp/lcdui/Display",
-                "__wieJletEventListenerCount",
-                "I",
-            )
+            .get_static_field("org/kwis/msp/lcdui/Display", "__wieJletEventListenerCount", "I")
             .await?;
 
         // Preserve the native generated duplicate-scan literally:
@@ -429,15 +364,13 @@ impl Display {
         // so two null references also compare equal on scanned slots.
         let mut index = count - 1;
         while index > 0 {
-            let values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> =
-                jvm.load_array(&listeners, index as usize, 1).await?;
+            let values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> = jvm.load_array(&listeners, index as usize, 1).await?;
             let current = &values[0];
 
             let same = if qel.is_null() {
                 current.is_null()
             } else {
-                !current.is_null()
-                    && current.identity() == qel.identity()
+                !current.is_null() && current.identity() == qel.identity()
             };
 
             if same {
@@ -449,19 +382,13 @@ impl Display {
 
         let capacity = jvm.array_length(&listeners).await?;
         if count as usize >= capacity {
-            let old_values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> =
-                if capacity == 0 {
-                    alloc::vec::Vec::new()
-                } else {
-                    jvm.load_array(&listeners, 0, capacity).await?
-                };
+            let old_values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> = if capacity == 0 {
+                alloc::vec::Vec::new()
+            } else {
+                jvm.load_array(&listeners, 0, capacity).await?
+            };
 
-            let mut expanded = jvm
-                .instantiate_array(
-                    "Lorg/kwis/msp/lcdui/JletEventListener;",
-                    capacity * 2,
-                )
-                .await?;
+            let mut expanded = jvm.instantiate_array("Lorg/kwis/msp/lcdui/JletEventListener;", capacity * 2).await?;
 
             if !old_values.is_empty() {
                 jvm.store_array(&mut expanded, 0, old_values).await?;
@@ -478,20 +405,10 @@ impl Display {
             .await?;
         }
 
-        jvm.store_array(
-            &mut listeners,
-            count as usize,
-            [qel.clone()],
-        )
-        .await?;
+        jvm.store_array(&mut listeners, count as usize, [qel.clone()]).await?;
 
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/Display",
-            "__wieJletEventListenerCount",
-            "I",
-            count + 1,
-        )
-        .await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/Display", "__wieJletEventListenerCount", "I", count + 1)
+            .await?;
 
         Ok(())
     }
@@ -589,9 +506,7 @@ impl Display {
         this: ClassInstanceRef<Self>,
         listener: ClassInstanceRef<JletEventListener>,
     ) -> JvmResult<()> {
-        tracing::debug!(
-            "org.kwis.msp.lcdui.Display::removeJletEventListener({this:?}, {listener:?})"
-        );
+        tracing::debug!("org.kwis.msp.lcdui.Display::removeJletEventListener({this:?}, {listener:?})");
 
         let mut listeners: ClassInstanceRef<()> = jvm
             .get_static_field(
@@ -606,11 +521,7 @@ impl Display {
         }
 
         let mut count: i32 = jvm
-            .get_static_field(
-                "org/kwis/msp/lcdui/Display",
-                "__wieJletEventListenerCount",
-                "I",
-            )
+            .get_static_field("org/kwis/msp/lcdui/Display", "__wieJletEventListenerCount", "I")
             .await?;
 
         // Preserve the native generated loop literally:
@@ -622,15 +533,13 @@ impl Display {
         }
 
         while index >= 0 {
-            let values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> =
-                jvm.load_array(&listeners, index as usize, 1).await?;
+            let values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> = jvm.load_array(&listeners, index as usize, 1).await?;
             let current = &values[0];
 
             let same = if listener.is_null() {
                 current.is_null()
             } else {
-                !current.is_null()
-                    && current.identity() == listener.identity()
+                !current.is_null() && current.identity() == listener.identity()
             };
 
             if same {
@@ -638,35 +547,20 @@ impl Display {
                 let old_count = count as usize;
 
                 while pos + 1 < old_count {
-                    let next: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> =
-                        jvm.load_array(&listeners, pos + 1, 1).await?;
+                    let next: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> = jvm.load_array(&listeners, pos + 1, 1).await?;
 
-                    jvm.store_array(
-                        &mut listeners,
-                        pos,
-                        [next[0].clone()],
-                    )
-                    .await?;
+                    jvm.store_array(&mut listeners, pos, [next[0].clone()]).await?;
 
                     pos += 1;
                 }
 
                 count -= 1;
 
-                jvm.put_static_field(
-                    "org/kwis/msp/lcdui/Display",
-                    "__wieJletEventListenerCount",
-                    "I",
-                    count,
-                )
-                .await?;
+                jvm.put_static_field("org/kwis/msp/lcdui/Display", "__wieJletEventListenerCount", "I", count)
+                    .await?;
 
-                jvm.store_array(
-                    &mut listeners,
-                    count as usize,
-                    [ClassInstanceRef::<JletEventListener>::new(None)],
-                )
-                .await?;
+                jvm.store_array(&mut listeners, count as usize, [ClassInstanceRef::<JletEventListener>::new(None)])
+                    .await?;
 
                 index = count - 1;
             } else {
@@ -734,12 +628,7 @@ impl Display {
         Ok(key_code)
     }
 
-    pub async fn notify_jlet_event_listeners(
-        jvm: &Jvm,
-        r#type: i32,
-        param1: i32,
-        param2: i32,
-    ) -> JvmResult<()> {
+    pub async fn notify_jlet_event_listeners(jvm: &Jvm, r#type: i32, param1: i32, param2: i32) -> JvmResult<()> {
         // Native Display.eventNotify_v0 handles event type 42 through
         // a separate Display-control path and does not dispatch it to
         // JletEventListener.notifyEvent(III)V.
@@ -756,11 +645,7 @@ impl Display {
             .await?;
 
         let count: i32 = jvm
-            .get_static_field(
-                "org/kwis/msp/lcdui/Display",
-                "__wieJletEventListenerCount",
-                "I",
-            )
+            .get_static_field("org/kwis/msp/lcdui/Display", "__wieJletEventListenerCount", "I")
             .await?;
 
         if listeners.is_null() || count == 0 {
@@ -771,28 +656,14 @@ impl Display {
         // dispatches listeners in reverse registration order.
         let mut index = count - 1;
         while index >= 0 {
-            let values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> =
-                jvm.load_array(&listeners, index as usize, 1).await?;
+            let values: alloc::vec::Vec<ClassInstanceRef<JletEventListener>> = jvm.load_array(&listeners, index as usize, 1).await?;
             let listener = values[0].clone();
 
             if listener.is_null() {
-                return Err(
-                    jvm.exception(
-                        "java/lang/NullPointerException",
-                        "",
-                    )
-                    .await,
-                );
+                return Err(jvm.exception("java/lang/NullPointerException", "").await);
             }
 
-            let _: () = jvm
-                .invoke_virtual(
-                    &listener,
-                    "notifyEvent",
-                    "(III)V",
-                    (r#type, param1, param2),
-                )
-                .await?;
+            let _: () = jvm.invoke_virtual(&listener, "notifyEvent", "(III)V", (r#type, param1, param2)).await?;
 
             index -= 1;
         }

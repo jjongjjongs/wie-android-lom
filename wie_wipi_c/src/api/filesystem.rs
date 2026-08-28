@@ -97,12 +97,7 @@ impl FilesystemState {
 /// - 2: write/append; create when missing
 /// - 4: write/truncate; create when missing
 /// - 8: read/write; create when missing
-pub async fn open(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    mode: i32,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn open(context: &mut dyn WIPICContext, path: WIPICWord, mode: i32, access: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_fsOpen({path:#x}, {mode}, {access})");
 
     // Native calls WPFS_IsPossibleAccess(mode, access) before path handling.
@@ -188,12 +183,7 @@ pub async fn open(
 /// - EOF => -23
 /// - other read failure => -1
 /// - successful short/full read returns its byte count
-pub async fn read(
-    context: &mut dyn WIPICContext,
-    fd: i32,
-    buffer: WIPICWord,
-    size: i32,
-) -> Result<i32> {
+pub async fn read(context: &mut dyn WIPICContext, fd: i32, buffer: WIPICWord, size: i32) -> Result<i32> {
     tracing::debug!("MC_fsRead({fd}, {buffer:#x}, {size})");
 
     if buffer == 0 || size <= 0 {
@@ -220,10 +210,7 @@ pub async fn read(
     let mut data = alloc::vec![0u8; size];
 
     let filesystem = context.system().filesystem().clone();
-    let Some(read) = filesystem
-        .read(&entry.path, entry.cursor, size, &mut data)
-        .await
-    else {
+    let Some(read) = filesystem.read(&entry.path, entry.cursor, size, &mut data).await else {
         return Ok(-1);
     };
 
@@ -277,12 +264,7 @@ fn byte_preview(data: &[u8]) -> alloc::string::String {
 /// - ENOSPC => -13
 /// - other write failure => -1
 /// - successful write returns the byte count
-pub async fn write(
-    context: &mut dyn WIPICContext,
-    fd: i32,
-    buffer: WIPICWord,
-    size: i32,
-) -> Result<i32> {
+pub async fn write(context: &mut dyn WIPICContext, fd: i32, buffer: WIPICWord, size: i32) -> Result<i32> {
     tracing::debug!("MC_fsWrite({fd}, {buffer:#x}, {size})");
 
     if buffer == 0 || size < 0 {
@@ -394,12 +376,7 @@ pub async fn close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
 /// - negative resulting position / generic seek failure => -1
 /// - resulting position beyond EOF => -4
 /// - success => new absolute file offset
-pub async fn seek(
-    context: &mut dyn WIPICContext,
-    fd: i32,
-    offset: i32,
-    origin: i32,
-) -> Result<i32> {
+pub async fn seek(context: &mut dyn WIPICContext, fd: i32, offset: i32, origin: i32) -> Result<i32> {
     tracing::debug!("MC_fsSeek({fd}, {offset}, {origin})");
 
     // These checks happen in MC_fsSeek before dfs_seek validates the fd.
@@ -502,12 +479,7 @@ pub async fn tell(context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
 /// - path longer than 128 bytes => -11
 /// - null output pointer => -1
 /// - missing/stat failure => -1
-pub async fn file_attribute(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    output: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn file_attribute(context: &mut dyn WIPICContext, path: WIPICWord, output: WIPICWord, access: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_fsFileAttribute({path:#x}, {output:#x}, {access})");
 
     // Native WPFS_IsPossibleAccess(1, access) precedes path processing.
@@ -570,11 +542,7 @@ pub async fn file_attribute(
 /// Native also distinguishes a busy-file unlink failure as -8, but WIE's
 /// boolean backend remove contract does not expose the underlying failure
 /// reason.
-pub async fn remove(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn remove(context: &mut dyn WIPICContext, path: WIPICWord, access: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_fsRemove({path:#x}, {access})");
 
     // Native uses WPFS_IsPossibleAccess(2, access). WIE does not model the
@@ -599,11 +567,7 @@ pub async fn remove(
     // MC_fsRemove performs dfs_stat before dfs_unlink. Preserve the native
     // missing-path distinction rather than collapsing it into remove failure.
     let is_file = filesystem.size(&path).await.is_some();
-    let is_directory = if is_file {
-        false
-    } else {
-        filesystem.list(&path).await.is_some()
-    };
+    let is_directory = if is_file { false } else { filesystem.list(&path).await.is_some() };
 
     if !is_file && !is_directory {
         return Ok(-12);
@@ -641,11 +605,7 @@ pub async fn remove(
 /// - missing parent => -12
 /// - generic mkdir failure => -1
 /// - success => 0
-pub async fn mkdir(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn mkdir(context: &mut dyn WIPICContext, path: WIPICWord, access: WIPICWord) -> Result<i32> {
     use wie_backend::FilesystemMkdirError;
 
     tracing::debug!("MC_fsMkDir({path:#x}, {access})");
@@ -690,11 +650,7 @@ pub async fn mkdir(
 /// - non-empty directory => -15
 /// - regular file or generic rmdir failure => -1
 /// - success => 0
-pub async fn rmdir(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn rmdir(context: &mut dyn WIPICContext, path: WIPICWord, access: WIPICWord) -> Result<i32> {
     use wie_backend::FilesystemRmDirError;
 
     tracing::debug!("MC_fsRmDir({path:#x}, {access})");
@@ -718,11 +674,7 @@ pub async fn rmdir(
 
     // Native dfs_stat precedes dfs_rmdir.
     let is_file = filesystem.size(&path).await.is_some();
-    let is_directory = if is_file {
-        false
-    } else {
-        filesystem.list(&path).await.is_some()
-    };
+    let is_directory = if is_file { false } else { filesystem.list(&path).await.is_some() };
 
     if !is_file && !is_directory {
         return Ok(-12);
@@ -759,12 +711,7 @@ pub async fn rmdir(
 /// - cross-device/non-empty-directory class => -5
 /// - generic rename failure => -1
 /// - success => 0
-pub async fn rename(
-    context: &mut dyn WIPICContext,
-    from: WIPICWord,
-    to: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn rename(context: &mut dyn WIPICContext, from: WIPICWord, to: WIPICWord, access: WIPICWord) -> Result<i32> {
     use wie_backend::FilesystemRenameError;
 
     tracing::debug!("MC_fsRename({from:#x}, {to:#x}, {access})");
@@ -835,11 +782,7 @@ pub async fn rename(
 ///
 /// The native HAL can additionally distinguish host permission failures as
 /// -24. WIE's filesystem abstraction does not expose that failure reason.
-pub async fn is_exist(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn is_exist(context: &mut dyn WIPICContext, path: WIPICWord, access: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_fsIsExist({path:#x}, {access})");
 
     // Native performs the access check before any filename processing.
@@ -887,11 +830,7 @@ pub async fn is_exist(
 /// (`/f/FMEM`, `/f/HDD`, `/f/ODD`, `/f/NFS`, `/f/VODD`). WIE currently
 /// presents one logical filesystem root rather than a physical mount table,
 /// so that root is represented by the canonical primary FMEM mount.
-pub async fn get_mounted_names(
-    context: &mut dyn WIPICContext,
-    output: WIPICWord,
-    output_size: i32,
-) -> Result<i32> {
+pub async fn get_mounted_names(context: &mut dyn WIPICContext, output: WIPICWord, output_size: i32) -> Result<i32> {
     tracing::debug!("MC_fsGetMountedNames({output:#x}, {output_size})");
 
     // Native passes output_size directly to memset(), so a negative value has
@@ -909,10 +848,7 @@ pub async fn get_mounted_names(
     let mut cleared = 0usize;
     while cleared < output_size {
         let chunk_size = (output_size - cleared).min(zeroes.len());
-        context.write_bytes(
-            output.wrapping_add(cleared as u32),
-            &zeroes[..chunk_size],
-        )?;
+        context.write_bytes(output.wrapping_add(cleared as u32), &zeroes[..chunk_size])?;
         cleared += chunk_size;
     }
 
@@ -948,11 +884,7 @@ pub async fn get_mounted_names(
 ///
 /// Access 100 intentionally does not inherit the 128-byte
 /// WPFS_MakeFullPathName limit because the native wrapper bypasses that helper.
-pub async fn get_counts(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn get_counts(context: &mut dyn WIPICContext, path: WIPICWord, access: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_fsGetCounts({path:#x}, {access})");
 
     // Native WPFS_IsPossibleAccess(1, access) executes before path handling.
@@ -1005,12 +937,7 @@ pub async fn get_counts(
 /// - missing path or directory => -12
 /// - generic chmod failure => -1
 /// - success => 0
-pub async fn set_mode(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    mode: i32,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn set_mode(context: &mut dyn WIPICContext, path: WIPICWord, mode: i32, access: WIPICWord) -> Result<i32> {
     use wie_backend::FilesystemSetModeError;
 
     tracing::debug!("MC_fsSetMode({path:#x}, {mode:#x}, {access})");
@@ -1045,11 +972,7 @@ pub async fn set_mode(
 
     // The native HAL stat() preflight accepts only a regular file.
     let is_file = filesystem.size(&path).await.is_some();
-    let is_directory = if is_file {
-        false
-    } else {
-        filesystem.list(&path).await.is_some()
-    };
+    let is_directory = if is_file { false } else { filesystem.list(&path).await.is_some() };
 
     if !is_file || is_directory {
         return Ok(-12);
@@ -1067,13 +990,7 @@ pub async fn set_mode(
 ///
 /// The LGT implementation returns direct child basenames as NUL-separated
 /// local-code strings followed by an additional terminating NUL.
-pub async fn list(
-    context: &mut dyn WIPICContext,
-    path: WIPICWord,
-    output: WIPICWord,
-    output_size: WIPICWord,
-    access: WIPICWord,
-) -> Result<i32> {
+pub async fn list(context: &mut dyn WIPICContext, path: WIPICWord, output: WIPICWord, output_size: WIPICWord, access: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_fsList({path:#x}, {output:#x}, {output_size}, {access})");
 
     // Native WPFS_IsPossibleAccess(1, access):
@@ -1145,8 +1062,7 @@ mod tests {
     use crate::context::{WIPICContext, test::TestContext};
 
     use super::{
-        close, file_attribute, get_counts, get_mounted_names, is_exist, list, mkdir, open, read, remove, rename, rmdir,
-        seek, set_mode, tell, write,
+        close, file_attribute, get_counts, get_mounted_names, is_exist, list, mkdir, open, read, remove, rename, rmdir, seek, set_mode, tell, write,
     };
 
     fn filesystem_test_context() -> TestContext {
@@ -1157,22 +1073,14 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_open_native_modes_and_fd_sequence() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/existing.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/existing.dat", 0, b"abc").await;
 
         context.write_bytes(0x1000, b"save/existing.dat\0").unwrap();
         context.write_bytes(0x1100, b"save/append.dat\0").unwrap();
         context.write_bytes(0x1200, b"save/truncate.dat\0").unwrap();
         context.write_bytes(0x1300, b"save/readwrite.dat\0").unwrap();
 
-        context
-            .system()
-            .filesystem()
-            .write("save/truncate.dat", 0, b"old")
-            .await;
+        context.system().filesystem().write("save/truncate.dat", 0, b"old").await;
 
         let fd1 = open(&mut context, 0x1000, 1, 1).await.unwrap();
         let fd2 = open(&mut context, 0x1100, 2, 1).await.unwrap();
@@ -1180,18 +1088,9 @@ mod tests {
         let fd4 = open(&mut context, 0x1300, 8, 1).await.unwrap();
 
         assert_eq!((fd1, fd2, fd3, fd4), (1, 2, 3, 4));
-        assert_eq!(
-            context.system().filesystem().size("save/append.dat").await,
-            Some(0)
-        );
-        assert_eq!(
-            context.system().filesystem().size("save/truncate.dat").await,
-            Some(0)
-        );
-        assert_eq!(
-            context.system().filesystem().size("save/readwrite.dat").await,
-            Some(0)
-        );
+        assert_eq!(context.system().filesystem().size("save/append.dat").await, Some(0));
+        assert_eq!(context.system().filesystem().size("save/truncate.dat").await, Some(0));
+        assert_eq!(context.system().filesystem().size("save/readwrite.dat").await, Some(0));
 
         let state = context.filesystem_state();
         let state = state.lock();
@@ -1209,11 +1108,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_open_append_starts_at_zero_offset() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/data.bin", 0, b"12345")
-            .await;
+        context.system().filesystem().write("save/data.bin", 0, b"12345").await;
         context.write_bytes(0x1000, b"save/data.bin\0").unwrap();
 
         let fd = open(&mut context, 0x1000, 2, 1).await.unwrap();
@@ -1240,11 +1135,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_read_returns_data_and_advances_cursor() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/read.dat", 0, b"abcdef")
-            .await;
+        context.system().filesystem().write("save/read.dat", 0, b"abcdef").await;
         context.write_bytes(0x1000, b"save/read.dat\0").unwrap();
         context.write_bytes(0x2000, &[0xcc; 8]).unwrap();
 
@@ -1280,11 +1171,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_read_eof_returns_minus_23_without_advancing() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/eof.dat", 0, b"x")
-            .await;
+        context.system().filesystem().write("save/eof.dat", 0, b"x").await;
         context.write_bytes(0x1000, b"save/eof.dat\0").unwrap();
         context.write_bytes(0x2000, &[0xcc; 4]).unwrap();
 
@@ -1301,11 +1188,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_read_matches_native_validation_and_mode_errors() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/write-only.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/write-only.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/write-only.dat\0").unwrap();
 
         // MC_fsRead checks buffer/size before dfs_read validates fd.
@@ -1327,10 +1210,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_read_supports_virtual_read_only_files() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .add_virtual("res/data.bin", b"virtual".to_vec());
+        context.system().filesystem().add_virtual("res/data.bin", b"virtual".to_vec());
 
         context.write_bytes(0x1000, b"res/data.bin\0").unwrap();
         context.write_bytes(0x2000, &[0; 7]).unwrap();
@@ -1346,11 +1226,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_write_writes_at_cursor_and_advances() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/rw.dat", 0, b"abcdef")
-            .await;
+        context.system().filesystem().write("save/rw.dat", 0, b"abcdef").await;
         context.write_bytes(0x1000, b"save/rw.dat\0").unwrap();
         context.write_bytes(0x2000, b"XYZ").unwrap();
 
@@ -1358,14 +1234,7 @@ mod tests {
         assert_eq!(write(&mut context, fd, 0x2000, 3).await.unwrap(), 3);
 
         let mut actual = [0u8; 6];
-        assert_eq!(
-            context
-                .system()
-                .filesystem()
-                .read("save/rw.dat", 0, 6, &mut actual)
-                .await,
-            Some(6)
-        );
+        assert_eq!(context.system().filesystem().read("save/rw.dat", 0, 6, &mut actual).await, Some(6));
         assert_eq!(&actual, b"XYZdef");
 
         let state = context.filesystem_state();
@@ -1376,11 +1245,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_write_append_uses_eof_and_sets_cursor_to_new_eof() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/append.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/append.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/append.dat\0").unwrap();
         context.write_bytes(0x2000, b"XY").unwrap();
 
@@ -1397,14 +1262,7 @@ mod tests {
         assert_eq!(write(&mut context, fd, 0x2000, 2).await.unwrap(), 2);
 
         let mut actual = [0u8; 5];
-        assert_eq!(
-            context
-                .system()
-                .filesystem()
-                .read("save/append.dat", 0, 5, &mut actual)
-                .await,
-            Some(5)
-        );
+        assert_eq!(context.system().filesystem().read("save/append.dat", 0, 5, &mut actual).await, Some(5));
         assert_eq!(&actual, b"abcXY");
 
         let state = context.filesystem_state();
@@ -1415,11 +1273,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_write_matches_native_validation_and_mode_errors() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/readonly.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/readonly.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/readonly.dat\0").unwrap();
         context.write_bytes(0x2000, b"Z").unwrap();
 
@@ -1448,11 +1302,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_write_truncate_mode_starts_from_zero() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/truncate-write.dat", 0, b"old-data")
-            .await;
+        context.system().filesystem().write("save/truncate-write.dat", 0, b"old-data").await;
         context.write_bytes(0x1000, b"save/truncate-write.dat\0").unwrap();
         context.write_bytes(0x2000, b"new").unwrap();
 
@@ -1461,11 +1311,7 @@ mod tests {
 
         let mut actual = [0u8; 3];
         assert_eq!(
-            context
-                .system()
-                .filesystem()
-                .read("save/truncate-write.dat", 0, 3, &mut actual)
-                .await,
+            context.system().filesystem().read("save/truncate-write.dat", 0, 3, &mut actual).await,
             Some(3)
         );
         assert_eq!(&actual, b"new");
@@ -1478,11 +1324,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_close_removes_descriptor_and_invalidates_future_io() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/close.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/close.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/close.dat\0").unwrap();
         context.write_bytes(0x2000, b"Z").unwrap();
 
@@ -1514,16 +1356,8 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_close_does_not_reuse_native_fd_sequence() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/a.dat", 0, b"a")
-            .await;
-        context
-            .system()
-            .filesystem()
-            .write("save/b.dat", 0, b"b")
-            .await;
+        context.system().filesystem().write("save/a.dat", 0, b"a").await;
+        context.system().filesystem().write("save/b.dat", 0, b"b").await;
 
         context.write_bytes(0x1000, b"save/a.dat\0").unwrap();
         context.write_bytes(0x1100, b"save/b.dat\0").unwrap();
@@ -1539,11 +1373,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_seek_set_cur_and_end_return_absolute_offset() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/seek.dat", 0, b"abcdef")
-            .await;
+        context.system().filesystem().write("save/seek.dat", 0, b"abcdef").await;
         context.write_bytes(0x1000, b"save/seek.dat\0").unwrap();
 
         let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
@@ -1577,11 +1407,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_seek_rejects_beyond_eof_and_preserves_cursor() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/seek-bound.dat", 0, b"abcdef")
-            .await;
+        context.system().filesystem().write("save/seek-bound.dat", 0, b"abcdef").await;
         context.write_bytes(0x1000, b"save/seek-bound.dat\0").unwrap();
 
         let fd = open(&mut context, 0x1000, 8, 1).await.unwrap();
@@ -1612,21 +1438,10 @@ mod tests {
         const BUFFER: u32 = 0x1000;
 
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .truncate("save/tell.dat", 6)
-            .await;
-        context
-            .system()
-            .filesystem()
-            .write("save/tell.dat", 0, &[1, 2, 3, 4, 5, 6])
-            .await;
+        context.system().filesystem().truncate("save/tell.dat", 6).await;
+        context.system().filesystem().write("save/tell.dat", 0, &[1, 2, 3, 4, 5, 6]).await;
 
-        let fd = context
-            .filesystem_state()
-            .lock()
-            .register(String::from("save/tell.dat"), 8, 0);
+        let fd = context.filesystem_state().lock().register(String::from("save/tell.dat"), 8, 0);
 
         assert_eq!(tell(&mut context, fd).await.unwrap(), 0);
 
@@ -1649,10 +1464,7 @@ mod tests {
         assert_eq!(tell(&mut context, -1).await.unwrap(), -2);
         assert_eq!(tell(&mut context, 12345).await.unwrap(), -2);
 
-        let fd = context
-            .filesystem_state()
-            .lock()
-            .register(String::from("save/tell.dat"), 1, 4);
+        let fd = context.filesystem_state().lock().register(String::from("save/tell.dat"), 1, 4);
 
         assert_eq!(tell(&mut context, fd).await.unwrap(), 4);
         assert_eq!(close(&mut context, fd).await.unwrap(), 0);
@@ -1662,11 +1474,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_seek_append_cursor_changes_but_write_still_uses_eof() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/seek-append.dat", 0, b"abcde")
-            .await;
+        context.system().filesystem().write("save/seek-append.dat", 0, b"abcde").await;
         context.write_bytes(0x1000, b"save/seek-append.dat\0").unwrap();
         context.write_bytes(0x2000, b"XY").unwrap();
 
@@ -1684,11 +1492,7 @@ mod tests {
 
         let mut actual = [0u8; 7];
         assert_eq!(
-            context
-                .system()
-                .filesystem()
-                .read("save/seek-append.dat", 0, 7, &mut actual)
-                .await,
+            context.system().filesystem().read("save/seek-append.dat", 0, 7, &mut actual).await,
             Some(7)
         );
         assert_eq!(&actual, b"abcdeXY");
@@ -1701,20 +1505,11 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_file_attribute_reports_regular_file_size() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/attr.dat", 0, b"abcdef")
-            .await;
+        context.system().filesystem().write("save/attr.dat", 0, b"abcdef").await;
         context.write_bytes(0x1000, b"save/attr.dat\0").unwrap();
         context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
 
-        assert_eq!(
-            file_attribute(&mut context, 0x1000, 0x2000, 1)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(file_attribute(&mut context, 0x1000, 0x2000, 1).await.unwrap(), 0);
 
         let mut actual = [0u8; 12];
         context.read_bytes(0x2000, &mut actual).unwrap();
@@ -1728,15 +1523,8 @@ mod tests {
     async fn lgt_fs_file_attribute_reports_directory_and_virtual_directory() {
         let mut context = filesystem_test_context();
 
-        context
-            .system()
-            .filesystem()
-            .write("save/child.dat", 0, b"x")
-            .await;
-        context
-            .system()
-            .filesystem()
-            .add_virtual("archive/sub/data.bin", b"x".to_vec());
+        context.system().filesystem().write("save/child.dat", 0, b"x").await;
+        context.system().filesystem().add_virtual("archive/sub/data.bin", b"x".to_vec());
 
         context.write_bytes(0x1000, b"save\0").unwrap();
         context.write_bytes(0x1100, b"archive/sub\0").unwrap();
@@ -1744,12 +1532,7 @@ mod tests {
         for path in [0x1000, 0x1100] {
             context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
 
-            assert_eq!(
-                file_attribute(&mut context, path, 0x2000, 1)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(file_attribute(&mut context, path, 0x2000, 1).await.unwrap(), 0);
 
             let mut actual = [0u8; 12];
             context.read_bytes(0x2000, &mut actual).unwrap();
@@ -1763,20 +1546,12 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_file_attribute_reports_virtual_file_size() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .add_virtual("res/attr.bin", b"virtual".to_vec());
+        context.system().filesystem().add_virtual("res/attr.bin", b"virtual".to_vec());
 
         context.write_bytes(0x1000, b"res/attr.bin\0").unwrap();
         context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
 
-        assert_eq!(
-            file_attribute(&mut context, 0x1000, 0x2000, 100)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(file_attribute(&mut context, 0x1000, 0x2000, 100).await.unwrap(), 0);
 
         let mut actual = [0u8; 12];
         context.read_bytes(0x2000, &mut actual).unwrap();
@@ -1792,45 +1567,20 @@ mod tests {
 
         context.write_bytes(0x1000, b"missing.dat\0").unwrap();
         context.write_bytes(0x1100, b"existing.dat\0").unwrap();
-        context
-            .system()
-            .filesystem()
-            .write("existing.dat", 0, b"x")
-            .await;
+        context.system().filesystem().write("existing.dat", 0, b"x").await;
 
         // Access validation occurs first.
-        assert_eq!(
-            file_attribute(&mut context, 0, 0, 0).await.unwrap(),
-            -24
-        );
+        assert_eq!(file_attribute(&mut context, 0, 0, 0).await.unwrap(), -24);
 
-        assert_eq!(
-            file_attribute(&mut context, 0, 0x2000, 1).await.unwrap(),
-            -3
-        );
+        assert_eq!(file_attribute(&mut context, 0, 0x2000, 1).await.unwrap(), -3);
 
         // The output pointer is checked only after path processing.
-        assert_eq!(
-            file_attribute(&mut context, 0x1100, 0, 1)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(file_attribute(&mut context, 0x1100, 0, 1).await.unwrap(), -1);
 
-        assert_eq!(
-            file_attribute(&mut context, 0x1000, 0x2000, 1)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(file_attribute(&mut context, 0x1000, 0x2000, 1).await.unwrap(), -1);
 
         for access in [1, 2, 3, 100] {
-            assert_eq!(
-                file_attribute(&mut context, 0x1100, 0x2000, access)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(file_attribute(&mut context, 0x1100, 0x2000, access).await.unwrap(), 0);
         }
     }
 
@@ -1840,12 +1590,7 @@ mod tests {
         context.write_bytes(0x1000, b"/\0").unwrap();
         context.write_bytes(0x2000, &[0xcc; 12]).unwrap();
 
-        assert_eq!(
-            file_attribute(&mut context, 0x1000, 0x2000, 1)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(file_attribute(&mut context, 0x1000, 0x2000, 1).await.unwrap(), 0);
 
         let mut actual = [0u8; 12];
         context.read_bytes(0x2000, &mut actual).unwrap();
@@ -1857,11 +1602,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_remove_deletes_regular_file() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/remove.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/remove.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/remove.dat\0").unwrap();
 
         assert!(context.system().filesystem().exists("save/remove.dat").await);
@@ -1883,11 +1624,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_remove_rejects_directory_like_native_unlink() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/sub/child.dat", 0, b"x")
-            .await;
+        context.system().filesystem().write("save/sub/child.dat", 0, b"x").await;
         context.write_bytes(0x1000, b"save/sub\0").unwrap();
 
         assert!(context.system().filesystem().list("save/sub").await.is_some());
@@ -1898,21 +1635,12 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_remove_virtual_file_is_visible_but_read_only() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .add_virtual("res/remove.bin", b"virtual".to_vec());
+        context.system().filesystem().add_virtual("res/remove.bin", b"virtual".to_vec());
         context.write_bytes(0x1000, b"res/remove.bin\0").unwrap();
 
-        assert_eq!(
-            context.system().filesystem().size("res/remove.bin").await,
-            Some(7)
-        );
+        assert_eq!(context.system().filesystem().size("res/remove.bin").await, Some(7));
         assert_eq!(remove(&mut context, 0x1000, 2).await.unwrap(), -1);
-        assert_eq!(
-            context.system().filesystem().size("res/remove.bin").await,
-            Some(7)
-        );
+        assert_eq!(context.system().filesystem().size("res/remove.bin").await, Some(7));
     }
 
     #[futures_test::test]
@@ -1923,21 +1651,13 @@ mod tests {
         assert_eq!(remove(&mut context, 0, 0).await.unwrap(), -24);
         assert_eq!(remove(&mut context, 0, 2).await.unwrap(), -3);
 
-        context
-            .system()
-            .filesystem()
-            .write("save/access.dat", 0, b"x")
-            .await;
+        context.system().filesystem().write("save/access.dat", 0, b"x").await;
         context.write_bytes(0x1000, b"save/access.dat\0").unwrap();
 
         // Recognized selectors are accepted under WIE's compatibility
         // adaptation for the unmodelled per-DLET permission mask.
         for access in [1, 2, 3, 100] {
-            context
-                .system()
-                .filesystem()
-                .write("save/access.dat", 0, b"x")
-                .await;
+            context.system().filesystem().write("save/access.dat", 0, b"x").await;
 
             assert_eq!(remove(&mut context, 0x1000, access).await.unwrap(), 0);
         }
@@ -1946,11 +1666,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_remove_open_descriptor_survives_but_future_io_sees_missing_file() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/open-remove.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/open-remove.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/open-remove.dat\0").unwrap();
         context.write_bytes(0x2000, &[0; 1]).unwrap();
 
@@ -1976,25 +1692,14 @@ mod tests {
         context.write_bytes(0x1000, b"created\0").unwrap();
 
         assert_eq!(mkdir(&mut context, 0x1000, 2).await.unwrap(), 0);
-        assert_eq!(
-            context.system().filesystem().list("created").await,
-            Some(Vec::new())
-        );
+        assert_eq!(context.system().filesystem().list("created").await, Some(Vec::new()));
 
         context.write_bytes(0x2000, &[0xaa; 12]).unwrap();
-        assert_eq!(
-            file_attribute(&mut context, 0x1000, 0x2000, 1)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(file_attribute(&mut context, 0x1000, 0x2000, 1).await.unwrap(), 0);
 
         let mut output = [0u8; 12];
         context.read_bytes(0x2000, &mut output).unwrap();
-        assert_eq!(
-            output,
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-        );
+        assert_eq!(output, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
 
     #[futures_test::test]
@@ -2024,10 +1729,7 @@ mod tests {
         assert_eq!(mkdir(&mut context, 0x1100, 2).await.unwrap(), 0);
         assert_eq!(mkdir(&mut context, 0x1100, 2).await.unwrap(), -5);
 
-        context
-            .system()
-            .filesystem()
-            .add_virtual("virtual/item.bin", b"x".to_vec());
+        context.system().filesystem().add_virtual("virtual/item.bin", b"x".to_vec());
         context.write_bytes(0x1200, b"virtual\0").unwrap();
         assert_eq!(mkdir(&mut context, 0x1200, 2).await.unwrap(), -5);
     }
@@ -2089,10 +1791,7 @@ mod tests {
 
         assert_eq!(rmdir(&mut context, 0x1000, 2).await.unwrap(), -12);
 
-        context
-            .system()
-            .filesystem()
-            .add_virtual("virtual/item.bin", b"x".to_vec());
+        context.system().filesystem().add_virtual("virtual/item.bin", b"x".to_vec());
         context.write_bytes(0x1100, b"virtual\0").unwrap();
 
         // Stat sees the virtual directory, but the packaged layer is read-only.
@@ -2117,11 +1816,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_rename_moves_regular_file_and_preserves_data() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/old.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/old.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/old.dat\0").unwrap();
         context.write_bytes(0x1100, b"save/new.dat\0").unwrap();
 
@@ -2130,14 +1825,7 @@ mod tests {
         assert_eq!(context.system().filesystem().size("save/new.dat").await, Some(3));
 
         let mut actual = [0u8; 3];
-        assert_eq!(
-            context
-                .system()
-                .filesystem()
-                .read("save/new.dat", 0, 3, &mut actual)
-                .await,
-            Some(3)
-        );
+        assert_eq!(context.system().filesystem().read("save/new.dat", 0, 3, &mut actual).await, Some(3));
         assert_eq!(&actual, b"abc");
     }
 
@@ -2154,40 +1842,22 @@ mod tests {
         assert_eq!(context.system().filesystem().size("new.dat").await, Some(6));
 
         let mut actual = [0u8; 6];
-        assert_eq!(
-            context
-                .system()
-                .filesystem()
-                .read("new.dat", 0, 6, &mut actual)
-                .await,
-            Some(6)
-        );
+        assert_eq!(context.system().filesystem().read("new.dat", 0, 6, &mut actual).await, Some(6));
         assert_eq!(&actual, b"source");
     }
 
     #[futures_test::test]
     async fn lgt_fs_rename_moves_implicit_directory_subtree() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("old/a.dat", 0, b"a")
-            .await;
-        context
-            .system()
-            .filesystem()
-            .write("old/sub/b.dat", 0, b"b")
-            .await;
+        context.system().filesystem().write("old/a.dat", 0, b"a").await;
+        context.system().filesystem().write("old/sub/b.dat", 0, b"b").await;
         context.write_bytes(0x1000, b"old\0").unwrap();
         context.write_bytes(0x1100, b"new\0").unwrap();
 
         assert_eq!(rename(&mut context, 0x1000, 0x1100, 2).await.unwrap(), 0);
         assert_eq!(context.system().filesystem().size("old/a.dat").await, None);
         assert_eq!(context.system().filesystem().size("new/a.dat").await, Some(1));
-        assert_eq!(
-            context.system().filesystem().size("new/sub/b.dat").await,
-            Some(1)
-        );
+        assert_eq!(context.system().filesystem().size("new/sub/b.dat").await, Some(1));
     }
 
     #[futures_test::test]
@@ -2198,10 +1868,7 @@ mod tests {
 
         assert_eq!(rename(&mut context, 0x1000, 0x1100, 2).await.unwrap(), -12);
 
-        context
-            .system()
-            .filesystem()
-            .add_virtual("virtual.dat", b"x".to_vec());
+        context.system().filesystem().add_virtual("virtual.dat", b"x".to_vec());
         context.write_bytes(0x1200, b"virtual.dat\0").unwrap();
 
         assert_eq!(rename(&mut context, 0x1200, 0x1100, 2).await.unwrap(), -1);
@@ -2250,11 +1917,7 @@ mod tests {
         let mut context = filesystem_test_context();
 
         context.write_bytes(PATH, b"save/existing.dat\0").unwrap();
-        context
-            .system()
-            .filesystem()
-            .truncate("save/existing.dat", 1)
-            .await;
+        context.system().filesystem().truncate("save/existing.dat", 1).await;
         assert_eq!(is_exist(&mut context, PATH, 1).await.unwrap(), 0);
 
         context.write_bytes(PATH, b"save/empty\0").unwrap();
@@ -2264,10 +1927,7 @@ mod tests {
         context.write_bytes(PATH, b"missing.dat\0").unwrap();
         assert_eq!(is_exist(&mut context, PATH, 3).await.unwrap(), -12);
 
-        context
-            .system()
-            .filesystem()
-            .add_virtual("virtual.dat", alloc::vec![1, 2, 3]);
+        context.system().filesystem().add_virtual("virtual.dat", alloc::vec![1, 2, 3]);
         context.write_bytes(PATH, b"virtual.dat\0").unwrap();
         assert_eq!(is_exist(&mut context, PATH, 100).await.unwrap(), 0);
     }
@@ -2298,10 +1958,7 @@ mod tests {
         let mut context = filesystem_test_context();
         context.write_bytes(OUTPUT, &[0xcc; 12]).unwrap();
 
-        assert_eq!(
-            get_mounted_names(&mut context, OUTPUT, 12).await.unwrap(),
-            1
-        );
+        assert_eq!(get_mounted_names(&mut context, OUTPUT, 12).await.unwrap(), 1);
 
         let mut actual = [0u8; 12];
         context.read_bytes(OUTPUT, &mut actual).unwrap();
@@ -2317,10 +1974,7 @@ mod tests {
         let mut context = filesystem_test_context();
         context.write_bytes(OUTPUT, &[0xcc; 7]).unwrap();
 
-        assert_eq!(
-            get_mounted_names(&mut context, OUTPUT, 7).await.unwrap(),
-            -18
-        );
+        assert_eq!(get_mounted_names(&mut context, OUTPUT, 7).await.unwrap(), -18);
 
         let mut actual = [0u8; 7];
         context.read_bytes(OUTPUT, &mut actual).unwrap();
@@ -2332,12 +1986,7 @@ mod tests {
     async fn lgt_fs_get_mounted_names_zero_size_returns_short_buffer() {
         let mut context = filesystem_test_context();
 
-        assert_eq!(
-            get_mounted_names(&mut context, 0x2000, 0)
-                .await
-                .unwrap(),
-            -18
-        );
+        assert_eq!(get_mounted_names(&mut context, 0x2000, 0).await.unwrap(), -18);
     }
 
     #[futures_test::test]
@@ -2391,11 +2040,7 @@ mod tests {
     #[futures_test::test]
     async fn lgt_fs_set_mode_matches_native_validation_order_and_modes() {
         let mut context = filesystem_test_context();
-        context
-            .system()
-            .filesystem()
-            .write("save/mode.dat", 0, b"abc")
-            .await;
+        context.system().filesystem().write("save/mode.dat", 0, b"abc").await;
         context.write_bytes(0x1000, b"save/mode.dat\0").unwrap();
 
         // Access validation precedes path construction and mode validation.
@@ -2531,4 +2176,3 @@ mod tests {
         assert_eq!(&exact, b"first\0\0");
     }
 }
-

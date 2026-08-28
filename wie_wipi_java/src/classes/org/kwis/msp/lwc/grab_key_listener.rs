@@ -14,17 +14,13 @@ impl GrabKeyListener {
             name: "org/kwis/msp/lwc/GrabKeyListener",
             parent_class: None,
             interfaces: vec![],
-            methods: vec![
-                JavaMethodProto::new_abstract(
-                    "grabKeyNotify",
-                    "(IILjava/lang/Object;)Z",
-                    Default::default(),
-                ),
-            ],
+            methods: vec![JavaMethodProto::new_abstract(
+                "grabKeyNotify",
+                "(IILjava/lang/Object;)Z",
+                Default::default(),
+            )],
             fields: vec![],
-            access_flags: ClassAccessFlags::PUBLIC
-                | ClassAccessFlags::INTERFACE
-                | ClassAccessFlags::ABSTRACT,
+            access_flags: ClassAccessFlags::PUBLIC | ClassAccessFlags::INTERFACE | ClassAccessFlags::ABSTRACT,
         }
     }
 }

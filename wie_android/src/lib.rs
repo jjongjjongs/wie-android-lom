@@ -27,10 +27,7 @@ use jni::{
     sys::{jbyteArray, jint, jshortArray, jstring},
 };
 
-use crate::{
-    platform::AndroidHandsetInformation,
-    runner::with_runner,
-};
+use crate::{platform::AndroidHandsetInformation, runner::with_runner};
 
 /// Upper bound on a single `nativeTick` call, whatever Java asks for. The tick
 /// thread also drives input and frame delivery, so letting it run away would
@@ -111,19 +108,12 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
         Err(error) => return to_java_string(&env, &format!("단말 모델을 읽을 수 없습니다: {error}")),
     };
 
-    let handset_information =
-        AndroidHandsetInformation::new(phone_model);
+    let handset_information = AndroidHandsetInformation::new(phone_model);
 
     tracing::info!("nativeStart: {} bytes, runtime dir {runtime_dir}", data.len());
 
     guard_string(&env, || {
-        with_runner(|runner| {
-            runner.start(
-                data,
-                PathBuf::from(runtime_dir),
-                handset_information,
-            )
-        })
+        with_runner(|runner| runner.start(data, PathBuf::from(runtime_dir), handset_information))
     })
 }
 

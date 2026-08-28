@@ -14,7 +14,7 @@ use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, Executab
 
 use crate::engine::fast::FastOp;
 
-use super::{JitCtx, exit, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
+use super::{JitCtx, exit, jit_alu_shift, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
 
 /// A compiled block owning its executable buffer (stable pointers; a flush drops
 /// it) plus the entry offset.
@@ -60,7 +60,7 @@ fn supported(op: FastOp) -> bool {
         | FastOp::CondBranch { .. }
         | FastOp::Branch { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
-        FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
+        FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x7 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
     }
 }
 
@@ -499,7 +499,30 @@ fn emit_alu(a: &mut Asm, op: u8, rd: u8, rs: u8) {
             dynasm!(a ; mov eax, [rbx + ro(rd)] ; imul eax, [rbx + ro(rs)] ; mov [rbx + ro(rd)], eax ; xor ecx, ecx);
             emit_flags_nzc(a);
         }
-        _ => unreachable!(), // ADC/SBC/shift-by-reg
+        0x2 | 0x3 | 0x4 | 0x7 => {
+            // Shift-by-register (LSL/LSR/ASR/ROR): rd shifted by rs & 0xff. N,Z
+            // from the result, C from the shifted-out bit, V preserved. The
+            // interpreter's exact shift semantics (large amounts, ROR/RRX edges)
+            // are reused via `jit_alu_shift` rather than re-encoded here.
+            let shift_type = (((op >> 1) & 2) | (op & 1)) as i32;
+            dynasm!(a
+                ; mov edi, [rbx + ro(rd)]      // val
+                ; mov esi, [rbx + ro(rs)]      // amount
+                ; mov edx, shift_type          // shift type
+                ; mov ecx, [rbx + CPSR]
+                ; shr ecx, 29
+                ; and ecx, 1                   // carry-in
+                ; mov rax, QWORD jit_alu_shift as *const () as i64
+                ; call rax
+                ; mov edx, eax                 // res (low 32)
+                ; shr rax, 32                  // carry (0/1)
+                ; mov ecx, eax
+                ; mov eax, edx
+                ; mov [rbx + ro(rd)], eax
+            );
+            emit_flags_nzc(a);
+        }
+        _ => unreachable!(), // ADC/SBC
     }
 }
 

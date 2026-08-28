@@ -432,7 +432,8 @@ impl Cpu {
                         // loaded value selects Thumb and is cleared from the
                         // branch target. This is how the firmware's ELF PLT
                         // reaches an (odd) Thumb import trampoline.
-                        self.reg[reg::CPSR] = (self.reg[reg::CPSR] & !(1u32 << cpsr::T)) | (loaded.get_bit(0) << cpsr::T);
+                        self.reg[reg::CPSR] = (self.reg[reg::CPSR] & !(1u32 << cpsr::T))
+                            | (loaded.get_bit(0) << cpsr::T);
                         self.reg[rd] = loaded & !1u32;
                     } else {
                         self.reg[rd] = loaded;

@@ -21,19 +21,9 @@ impl AnnunciatorComponent {
             parent_class: Some("org/kwis/msp/lwc/ShellComponent"),
             interfaces: vec![],
             methods: vec![
-                JavaMethodProto::new(
-                    "<clinit>",
-                    "()V",
-                    Self::cl_init,
-                    MethodAccessFlags::STATIC,
-                ),
+                JavaMethodProto::new("<clinit>", "()V", Self::cl_init, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("<init>", "(Z)V", Self::init, Default::default()),
-                JavaMethodProto::new(
-                    "<init>",
-                    "(Lorg/kwis/msp/lcdui/Display;Z)V",
-                    Self::init_with_display,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("<init>", "(Lorg/kwis/msp/lcdui/Display;Z)V", Self::init_with_display, Default::default()),
                 JavaMethodProto::new("show", "()V", Self::show, Default::default()),
                 JavaMethodProto::new("hide", "()V", Self::hide, Default::default()),
                 JavaMethodProto::new("layout", "()V", Self::layout, Default::default()),
@@ -49,26 +39,12 @@ impl AnnunciatorComponent {
                     Self::remove_component,
                     Default::default(),
                 ),
-                JavaMethodProto::new(
-                    "paint",
-                    "(Lorg/kwis/msp/lcdui/Graphics;)V",
-                    Self::paint,
-                    Default::default(),
-                ),
-                JavaMethodProto::new(
-                    "isHorizonEnabled",
-                    "()Z",
-                    Self::is_horizon_enabled,
-                    MethodAccessFlags::STATIC,
-                ),
+                JavaMethodProto::new("paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", Self::paint, Default::default()),
+                JavaMethodProto::new("isHorizonEnabled", "()Z", Self::is_horizon_enabled, MethodAccessFlags::STATIC),
             ],
             fields: vec![
                 // Native class-static +0x3c.
-                JavaFieldProto::new(
-                    "__wieAnnunciatorSizes",
-                    "[I",
-                    FieldAccessFlags::STATIC,
-                ),
+                JavaFieldProto::new("__wieAnnunciatorSizes", "[I", FieldAccessFlags::STATIC),
                 // Native AnnunciatorComponent +0x84.
                 JavaFieldProto::new("__wieBTrans", "Z", Default::default()),
                 // Native AnnunciatorComponent +0x88.
@@ -78,58 +54,30 @@ impl AnnunciatorComponent {
         }
     }
 
-    async fn cl_init(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-    ) -> JvmResult<()> {
+    async fn cl_init(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<()> {
         // Native AnnunciatorComponent.<clinit> creates int[11]:
         // [14, 20, 24, 24, 0, 20, 24, 48, 48, 48, 48]
         let mut sizes = jvm.instantiate_array("I", 11).await?;
-        jvm.store_array(
-            &mut sizes,
-            0,
-            [14i32, 20, 24, 24, 0, 20, 24, 48, 48, 48, 48],
-        )
-        .await?;
+        jvm.store_array(&mut sizes, 0, [14i32, 20, 24, 24, 0, 20, 24, 48, 48, 48, 48]).await?;
 
-        jvm.put_static_field(
-            "org/kwis/msp/lwc/AnnunciatorComponent",
-            "__wieAnnunciatorSizes",
-            "[I",
-            sizes,
-        )
-        .await?;
+        jvm.put_static_field("org/kwis/msp/lwc/AnnunciatorComponent", "__wieAnnunciatorSizes", "[I", sizes)
+            .await?;
 
         Ok(())
     }
 
-    async fn is_horizon_enabled(
-        _: &Jvm,
-        _: &mut WieJvmContext,
-    ) -> JvmResult<bool> {
+    async fn is_horizon_enabled(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<bool> {
         // Native helper @ 0x20f684 always returns true.
         Ok(true)
     }
 
-    async fn init(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<AnnunciatorComponent>,
-        b_trans: bool,
-    ) -> JvmResult<()> {
-        tracing::debug!(
-            "org.kwis.msp.lwc.AnnunciatorComponent::<init>({this:?}, {b_trans})"
-        );
+    async fn init(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<AnnunciatorComponent>, b_trans: bool) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lwc.AnnunciatorComponent::<init>({this:?}, {b_trans})");
 
         // Native <init>(Z):
         // this(Display.getDefaultDisplay(), bTrans)
         let display: ClassInstanceRef<Display> = jvm
-            .invoke_static(
-                "org/kwis/msp/lcdui/Display",
-                "getDefaultDisplay",
-                "()Lorg/kwis/msp/lcdui/Display;",
-                (),
-            )
+            .invoke_static("org/kwis/msp/lcdui/Display", "getDefaultDisplay", "()Lorg/kwis/msp/lcdui/Display;", ())
             .await?;
 
         let _: () = jvm
@@ -152,9 +100,7 @@ impl AnnunciatorComponent {
         display: ClassInstanceRef<Display>,
         b_trans: bool,
     ) -> JvmResult<()> {
-        tracing::debug!(
-            "org.kwis.msp.lwc.AnnunciatorComponent::<init>({this:?}, bTrans={b_trans})"
-        );
+        tracing::debug!("org.kwis.msp.lwc.AnnunciatorComponent::<init>({this:?}, bTrans={b_trans})");
 
         // Native Annunciator constructor calls:
         // ShellComponent.<init>(display, false, bTrans)
@@ -168,9 +114,7 @@ impl AnnunciatorComponent {
             )
             .await?;
 
-        let width: i32 = jvm
-            .invoke_virtual(&display, "getWidth", "()I", ())
-            .await?;
+        let width: i32 = jvm.invoke_virtual(&display, "getWidth", "()I", ()).await?;
 
         // Native +0x88 maps the current Display width to the
         // annunciator size-table index.
@@ -188,75 +132,33 @@ impl AnnunciatorComponent {
         };
 
         let mut this = this;
-        jvm.put_field(&mut this, "__wieBTrans", "Z", b_trans)
-            .await?;
-        jvm.put_field(
-            &mut this,
-            "__wieDisplaySizeIndex",
-            "I",
-            size_index,
-        )
-        .await?;
+        jvm.put_field(&mut this, "__wieBTrans", "Z", b_trans).await?;
+        jvm.put_field(&mut this, "__wieDisplaySizeIndex", "I", size_index).await?;
 
         Ok(())
     }
 
-    async fn show(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<AnnunciatorComponent>,
-    ) -> JvmResult<()> {
-        tracing::debug!(
-            "org.kwis.msp.lwc.AnnunciatorComponent::show({this:?})"
-        );
+    async fn show(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<AnnunciatorComponent>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lwc.AnnunciatorComponent::show({this:?})");
 
         // Native order:
         // 1. validate()
         // 2. pushCard(getCard()) when bTrans, otherwise
         //    setDockedCard(getCard(), 0)
         // 3. register a fresh AnnunciatorEventListener.
-        let _: () = jvm
-            .invoke_virtual(&this, "validate", "()V", ())
-            .await?;
+        let _: () = jvm.invoke_virtual(&this, "validate", "()V", ()).await?;
 
-        let b_trans: bool = jvm
-            .get_field(&this, "__wieBTrans", "Z")
-            .await?;
+        let b_trans: bool = jvm.get_field(&this, "__wieBTrans", "Z").await?;
 
-        let display: ClassInstanceRef<Display> = jvm
-            .get_field(
-                &this,
-                "display",
-                "Lorg/kwis/msp/lcdui/Display;",
-            )
-            .await?;
+        let display: ClassInstanceRef<Display> = jvm.get_field(&this, "display", "Lorg/kwis/msp/lcdui/Display;").await?;
 
-        let card: ClassInstanceRef<()> = jvm
-            .invoke_virtual(
-                &this,
-                "getCard",
-                "()Lorg/kwis/msp/lcdui/Card;",
-                (),
-            )
-            .await?;
+        let card: ClassInstanceRef<()> = jvm.invoke_virtual(&this, "getCard", "()Lorg/kwis/msp/lcdui/Card;", ()).await?;
 
         if b_trans {
-            let _: () = jvm
-                .invoke_virtual(
-                    &display,
-                    "pushCard",
-                    "(Lorg/kwis/msp/lcdui/Card;)V",
-                    (card,),
-                )
-                .await?;
+            let _: () = jvm.invoke_virtual(&display, "pushCard", "(Lorg/kwis/msp/lcdui/Card;)V", (card,)).await?;
         } else {
             let _: () = jvm
-                .invoke_virtual(
-                    &display,
-                    "setDockedCard",
-                    "(Lorg/kwis/msp/lcdui/Card;I)V",
-                    (card, 0i32),
-                )
+                .invoke_virtual(&display, "setDockedCard", "(Lorg/kwis/msp/lcdui/Card;I)V", (card, 0i32))
                 .await?;
         }
 
@@ -269,25 +171,14 @@ impl AnnunciatorComponent {
             .await?;
 
         let _: () = jvm
-            .invoke_virtual(
-                &display,
-                "addJletEventListener",
-                "(Lorg/kwis/msp/lcdui/JletEventListener;)V",
-                (listener,),
-            )
+            .invoke_virtual(&display, "addJletEventListener", "(Lorg/kwis/msp/lcdui/JletEventListener;)V", (listener,))
             .await?;
 
         Ok(())
     }
 
     async fn hide(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<()> {
-        Err(
-            jvm.exception(
-                "java/lang/IllegalStateException",
-                "cannot hide annunciator",
-            )
-            .await,
-        )
+        Err(jvm.exception("java/lang/IllegalStateException", "cannot hide annunciator").await)
     }
 
     async fn add_component(
@@ -297,60 +188,26 @@ impl AnnunciatorComponent {
         _: i32,
         _: ClassInstanceRef<()>,
     ) -> JvmResult<()> {
-        Err(
-            jvm.exception(
-                "java/lang/IllegalStateException",
-                "cannot add component",
-            )
-            .await,
-        )
+        Err(jvm.exception("java/lang/IllegalStateException", "cannot add component").await)
     }
 
-    async fn remove_component(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        _: ClassInstanceRef<AnnunciatorComponent>,
-        _: ClassInstanceRef<()>,
-    ) -> JvmResult<()> {
-        Err(
-            jvm.exception(
-                "java/lang/IllegalStateException",
-                "cannot remove component",
-            )
-            .await,
-        )
+    async fn remove_component(jvm: &Jvm, _: &mut WieJvmContext, _: ClassInstanceRef<AnnunciatorComponent>, _: ClassInstanceRef<()>) -> JvmResult<()> {
+        Err(jvm.exception("java/lang/IllegalStateException", "cannot remove component").await)
     }
 
-    async fn layout(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<AnnunciatorComponent>,
-    ) -> JvmResult<()> {
+    async fn layout(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<AnnunciatorComponent>) -> JvmResult<()> {
         // Native @ 0x20ef28:
         // configure(0, 0, getWorkComponent().getWidth(), sizes[sizeIndex], 2)
         let work: ClassInstanceRef<()> = jvm
-            .invoke_virtual(
-                &this,
-                "getWorkComponent",
-                "()Lorg/kwis/msp/lwc/Component;",
-                (),
-            )
+            .invoke_virtual(&this, "getWorkComponent", "()Lorg/kwis/msp/lwc/Component;", ())
             .await?;
 
-        let width: i32 = jvm
-            .invoke_virtual(&work, "getWidth", "()I", ())
-            .await?;
+        let width: i32 = jvm.invoke_virtual(&work, "getWidth", "()I", ()).await?;
 
-        let size_index: i32 = jvm
-            .get_field(&this, "__wieDisplaySizeIndex", "I")
-            .await?;
+        let size_index: i32 = jvm.get_field(&this, "__wieDisplaySizeIndex", "I").await?;
 
         let sizes: ClassInstanceRef<Array<i32>> = jvm
-            .get_static_field(
-                "org/kwis/msp/lwc/AnnunciatorComponent",
-                "__wieAnnunciatorSizes",
-                "[I",
-            )
+            .get_static_field("org/kwis/msp/lwc/AnnunciatorComponent", "__wieAnnunciatorSizes", "[I")
             .await?;
 
         let mut height = [0i32; 1];
@@ -359,12 +216,7 @@ impl AnnunciatorComponent {
             .read(size_index as usize * 4, bytemuck::cast_slice_mut(&mut height))?;
 
         let _: () = jvm
-            .invoke_virtual(
-                &this,
-                "configure",
-                "(IIIII)V",
-                (0i32, 0i32, width, height[0], 2i32),
-            )
+            .invoke_virtual(&this, "configure", "(IIIII)V", (0i32, 0i32, width, height[0], 2i32))
             .await?;
 
         Ok(())
@@ -379,27 +231,18 @@ impl AnnunciatorComponent {
         // Native @ 0x20eac8:
         // if (bTrans) graphics.setAlpha(100);
         // paint0(graphics, sizeIndex);
-        let b_trans: bool = jvm
-            .get_field(&this, "__wieBTrans", "Z")
-            .await?;
+        let b_trans: bool = jvm.get_field(&this, "__wieBTrans", "Z").await?;
 
         if b_trans {
-            let _: () = jvm
-                .invoke_virtual(&graphics, "setAlpha", "(I)V", (100i32,))
-                .await?;
+            let _: () = jvm.invoke_virtual(&graphics, "setAlpha", "(I)V", (100i32,)).await?;
         }
 
-        let size_index: i32 = jvm
-            .get_field(&this, "__wieDisplaySizeIndex", "I")
-            .await?;
+        let size_index: i32 = jvm.get_field(&this, "__wieDisplaySizeIndex", "I").await?;
 
         Self::paint0(jvm, context, graphics, size_index).await
     }
 
-    async fn load_annunciator_image(
-        jvm: &Jvm,
-        data: &[u8],
-    ) -> JvmResult<ClassInstanceRef<Image>> {
+    async fn load_annunciator_image(jvm: &Jvm, data: &[u8]) -> JvmResult<ClassInstanceRef<Image>> {
         let decoded = decode_image(data).map_err(|_| {
             // The embedded resources are build-time constants and validated
             // ECNX blobs. Reaching this path indicates a broken build.
@@ -409,40 +252,20 @@ impl AnnunciatorComponent {
         let decoded = match decoded {
             Ok(decoded) => decoded,
             Err(()) => {
-                return Err(
-                    jvm.exception(
-                        "java/lang/IllegalArgumentException",
-                        "Failed to decode annunciator image",
-                    )
-                    .await,
-                );
+                return Err(jvm
+                    .exception("java/lang/IllegalArgumentException", "Failed to decode annunciator image")
+                    .await);
             }
         };
 
-        let midp_image = MidpImage::create_image_instance(
-            jvm,
-            decoded.width(),
-            decoded.height(),
-            &decoded.raw(),
-            decoded.bytes_per_pixel(),
-        )
-        .await?;
+        let midp_image = MidpImage::create_image_instance(jvm, decoded.width(), decoded.height(), &decoded.raw(), decoded.bytes_per_pixel()).await?;
 
-        jvm.new_class(
-            "org/kwis/msp/lcdui/Image",
-            "(Ljavax/microedition/lcdui/Image;)V",
-            (midp_image,),
-        )
-        .await
-        .map(Into::into)
+        jvm.new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
+            .await
+            .map(Into::into)
     }
 
-    async fn paint0(
-        jvm: &Jvm,
-        context: &mut WieJvmContext,
-        graphics: ClassInstanceRef<Graphics>,
-        selector: i32,
-    ) -> JvmResult<()> {
+    async fn paint0(jvm: &Jvm, context: &mut WieJvmContext, graphics: ClassInstanceRef<Graphics>, selector: i32) -> JvmResult<()> {
         // Native commonui_draw_image supports selectors 0,1,2,3,5,6.
         // Constructor indices 7/8/10 have no corresponding native atlas
         // selector and therefore produce no annunciator image.
@@ -473,8 +296,7 @@ impl AnnunciatorComponent {
         const ROW_2: [i32; 13] = [9, 8, 7, 6, 5, 4, 1, 3, 0, 0, 0, 0, 0];
         const ROW_3: [i32; 13] = [9, 8, 7, 6, 5, 4, 1, 3, 0, 0, 0, 0, 0];
 
-        let (screen_width, bar_height, item_count, state0, widths, margins, rows, atlas_data):
-            (i32, i32, usize, i32, &[i32], &[i32], &[i32], &[u8]) =
+        let (screen_width, bar_height, item_count, state0, widths, margins, rows, atlas_data): (i32, i32, usize, i32, &[i32], &[i32], &[i32], &[u8]) =
             match internal_index {
                 0 => (
                     120i32,
@@ -550,8 +372,8 @@ impl AnnunciatorComponent {
         states[3] = -1; // ANNUN_ALARM raw 0
         states[4] = -1; // ANNUN_SMS raw 0
         states[5] = -1; // ANNUN_SECURITY raw 0
-        states[6] = 0;  // ANNUN_CARD raw/default 0
-        states[7] = 0;  // max(3 - BATTERYLEVEL(100), 0)
+        states[6] = 0; // ANNUN_CARD raw/default 0
+        states[7] = 0; // max(3 - BATTERYLEVEL(100), 0)
 
         if item_count == 13 {
             // Native fallback is localtime(). WIE's existing LGT localtime
@@ -573,27 +395,13 @@ impl AnnunciatorComponent {
         let atlas = Self::load_annunciator_image(jvm, atlas_data).await?;
 
         // Native background.
+        let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (0x00ffffffi32,)).await?;
         let _: () = jvm
-            .invoke_virtual(&graphics, "setColor", "(I)V", (0x00ffffffi32,))
+            .invoke_virtual(&graphics, "fillRect", "(IIII)V", (0i32, 0i32, screen_width, bar_height - 1))
             .await?;
+        let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (0x00a0a0a0i32,)).await?;
         let _: () = jvm
-            .invoke_virtual(
-                &graphics,
-                "fillRect",
-                "(IIII)V",
-                (0i32, 0i32, screen_width, bar_height - 1),
-            )
-            .await?;
-        let _: () = jvm
-            .invoke_virtual(&graphics, "setColor", "(I)V", (0x00a0a0a0i32,))
-            .await?;
-        let _: () = jvm
-            .invoke_virtual(
-                &graphics,
-                "drawLine",
-                "(IIII)V",
-                (0i32, bar_height - 1, screen_width, bar_height - 1),
-            )
+            .invoke_virtual(&graphics, "drawLine", "(IIII)V", (0i32, bar_height - 1, screen_width, bar_height - 1))
             .await?;
 
         // Native CURRENTCH comparison selects one of two row variants.
@@ -612,21 +420,9 @@ impl AnnunciatorComponent {
 
                 // Draw the atlas source rectangle directly through the
                 // MIDP Graphics backing this WIPI Graphics instance.
-                let midp_graphics: ClassInstanceRef<()> = jvm
-                    .get_field(
-                        &graphics,
-                        "midpGraphics",
-                        "Ljavax/microedition/lcdui/Graphics;",
-                    )
-                    .await?;
+                let midp_graphics: ClassInstanceRef<()> = jvm.get_field(&graphics, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
-                let midp_atlas: ClassInstanceRef<MidpImage> = jvm
-                    .get_field(
-                        &atlas,
-                        "midpImage",
-                        "Ljavax/microedition/lcdui/Image;",
-                    )
-                    .await?;
+                let midp_atlas: ClassInstanceRef<MidpImage> = jvm.get_field(&atlas, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
 
                 let _: () = jvm
                     .invoke_virtual(
