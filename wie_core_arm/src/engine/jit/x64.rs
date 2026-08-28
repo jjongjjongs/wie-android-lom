@@ -59,7 +59,7 @@ fn supported(op: FastOp) -> bool {
         | FastOp::CondBranch { .. }
         | FastOp::Branch { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
-        FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9),
+        FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
         FastOp::HwSgnXfer { .. } => false,
     }
 }
@@ -483,7 +483,12 @@ fn emit_alu(a: &mut Asm, op: u8, rd: u8, rs: u8) {
             emit_flags_nzcv(a, false);
             dynasm!(a ; mov [rbx + ro(rd)], r8d);
         }
-        _ => unreachable!(), // ADC/SBC/MUL/shift-by-reg
+        0xD => {
+            // MUL: rd * rs (low 32 bits); N,Z from result, C forced to 0, V kept.
+            dynasm!(a ; mov eax, [rbx + ro(rd)] ; imul eax, [rbx + ro(rs)] ; mov [rbx + ro(rd)], eax ; xor ecx, ecx);
+            emit_flags_nzc(a);
+        }
+        _ => unreachable!(), // ADC/SBC/shift-by-reg
     }
 }
 
