@@ -707,7 +707,7 @@ const LGT_LOCAL_PURCHASE_RESPONSE_SIZE: usize = 7;
 /// Red Gem's native protocol establishes:
 ///
 ///   frame +0x00 : 0xffff
-///   frame +0x02 : application payload length (u16, network order)
+///   frame +0x02 : total application-frame length (u16, network order)
 ///   frame +0x04 : message type (u16, network order)
 ///   frame +0x06 : application payload
 ///
@@ -726,22 +726,24 @@ fn lgt_local_purchase_success_response(
         return None;
     }
 
-    let declared_payload =
+    let declared_length =
         u16::from_be_bytes([request[2], request[3]]) as usize;
     let message_type =
         u16::from_be_bytes([request[4], request[5]]);
 
-    if declared_payload != request.len() - 6
+    if declared_length != request.len()
         || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE
     {
         return None;
     }
 
+    let response_length = LGT_LOCAL_PURCHASE_RESPONSE_SIZE as u16;
+
     Some([
         0xff,
         0xff,
-        0x00,
-        0x01,
+        (response_length >> 8) as u8,
+        response_length as u8,
         (LGT_LOCAL_PURCHASE_RESPONSE_TYPE >> 8) as u8,
         LGT_LOCAL_PURCHASE_RESPONSE_TYPE as u8,
         0x00,
@@ -3801,7 +3803,7 @@ mod network_state_tests {
     fn local_lgt_purchase_68_builds_69_status_zero_response() {
         let request = [
             0xff, 0xff,
-            0x00, 0x0d,
+            0x00, 0x13,
             0x00, 0x68,
             0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
             0x37, 0x38, 0x39, 0x30, 0x31,
@@ -3813,7 +3815,7 @@ mod network_state_tests {
             lgt_local_purchase_success_response(&request),
             Some([
                 0xff, 0xff,
-                0x00, 0x01,
+                0x00, 0x07,
                 0x00, 0x69,
                 0x00,
             ])
@@ -3824,14 +3826,14 @@ mod network_state_tests {
     fn local_lgt_purchase_does_not_intercept_other_operations() {
         let catalog = [
             0xff, 0xff,
-            0x00, 0x01,
+            0x00, 0x07,
             0x00, 0x66,
             0x00,
         ];
 
         let gift_or_other = [
             0xff, 0xff,
-            0x00, 0x01,
+            0x00, 0x07,
             0x00, 0x6a,
             0x00,
         ];
@@ -3870,7 +3872,7 @@ mod network_state_tests {
             7,
             [
                 0xff, 0xff,
-                0x00, 0x01,
+                0x00, 0x07,
                 0x00, 0x69,
                 0x00,
             ],
@@ -3888,7 +3890,7 @@ mod network_state_tests {
             state.take_local_billing_response(7, &mut second),
             Some(4)
         );
-        assert_eq!(&second[..4], &[0x01, 0x00, 0x69, 0x00]);
+        assert_eq!(&second[..4], &[0x07, 0x00, 0x69, 0x00]);
 
         assert_eq!(
             state.take_local_billing_response(7, &mut second),
