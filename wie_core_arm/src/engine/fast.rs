@@ -20,7 +20,8 @@
 //! It is the substrate a machine-code backend plugs into later: replace
 //! "interpret this block's `FastOp`s" with "emit and run native code for them".
 
-use alloc::{boxed::Box, collections::BTreeMap, format, vec::Vec};
+use alloc::{boxed::Box, format, vec::Vec};
+use core::array;
 
 use arm32_cpu::{
     Cpu, Mode, reg,
@@ -83,8 +84,28 @@ enum Decoded {
     Terminator(FastOp),
 }
 
-struct Block {
+/// Number of direct-mapped block-cache slots (power of two). A guest PC hashes
+/// to `(pc >> 1) & (SLOTS - 1)`; hot loops touch only a handful of blocks, which
+/// map to distinct slots and hit every time.
+const CACHE_SLOTS: usize = 1 << 9;
+const CACHE_MASK: u32 = (CACHE_SLOTS - 1) as u32;
+
+/// One direct-mapped cache slot. Validity is `gen == engine.generation`, which
+/// lets a cache flush be an O(1) generation bump instead of clearing every slot.
+struct Slot {
+    gen_tag: u32,
+    pc: u32,
     ops: Vec<FastOp>,
+}
+
+impl Default for Slot {
+    fn default() -> Self {
+        Slot {
+            gen_tag: 0,
+            pc: 0,
+            ops: Vec::new(),
+        }
+    }
 }
 
 pub struct FastCpuEngine {
@@ -93,8 +114,10 @@ pub struct FastCpuEngine {
     /// working copy loaded from / stored back to this around fast runs.
     cpu: Cpu,
     mem: EmulatedMemory,
-    /// Decoded block cache, keyed by Thumb start PC.
-    blocks: BTreeMap<u32, Block>,
+    /// Direct-mapped decoded-block cache.
+    cache: Box<[Slot; CACHE_SLOTS]>,
+    /// Current cache generation; slots with an older `gen` are stale.
+    generation: u32,
     /// Which 64 KiB regions currently hold cached blocks, so a guest store into
     /// one can invalidate the cache (self-modifying code) cheaply.
     code_pages: Box<[bool; 65536]>,
@@ -105,16 +128,23 @@ impl FastCpuEngine {
         Self {
             cpu: Cpu::new(),
             mem: EmulatedMemory::new(),
-            blocks: BTreeMap::new(),
+            cache: Box::new(array::from_fn(|_| Slot::default())),
+            generation: 1,
             code_pages: Box::new([false; 65536]),
         }
     }
 
     fn flush_blocks(&mut self) {
-        if !self.blocks.is_empty() {
-            self.blocks.clear();
-            self.code_pages.fill(false);
+        // O(1): bump the generation so every cached slot reads as stale. On the
+        // (astronomically rare) wrap, actually clear so gen 0 slots don't alias.
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            for slot in self.cache.iter_mut() {
+                *slot = Slot::default();
+            }
+            self.generation = 1;
         }
+        self.code_pages.fill(false);
     }
 }
 
@@ -516,24 +546,35 @@ fn decode(inst: u16, pc: u32) -> Option<Decoded> {
 }
 
 impl FastCpuEngine {
-    /// Ensure a decoded block exists at `pc`, building it if needed. Returns
-    /// `false` if the instruction there is not fast-decodable (caller falls
-    /// back to the interpreter for one instruction).
+    #[inline(always)]
+    fn slot_index(pc: u32) -> usize {
+        ((pc >> 1) & CACHE_MASK) as usize
+    }
+
+    /// Ensure a decoded block for `pc` occupies its cache slot, building it if
+    /// the slot is stale or holds a different PC. Returns `false` if the
+    /// instruction there is not fast-decodable (caller falls back for one
+    /// instruction).
     fn ensure_block(&mut self, pc: u32) -> bool {
-        if self.blocks.contains_key(&pc) {
+        let idx = Self::slot_index(pc);
+        if self.cache[idx].gen_tag == self.generation && self.cache[idx].pc == pc {
             return true;
         }
         match self.build_block(pc) {
-            Some(block) => {
+            Some(ops) => {
                 self.code_pages[(pc >> 16) as usize] = true;
-                self.blocks.insert(pc, block);
+                let cur_gen = self.generation;
+                let slot = &mut self.cache[idx];
+                slot.gen_tag = cur_gen;
+                slot.pc = pc;
+                slot.ops = ops;
                 true
             }
             None => false,
         }
     }
 
-    fn build_block(&self, start: u32) -> Option<Block> {
+    fn build_block(&self, start: u32) -> Option<Vec<FastOp>> {
         let mut ops = Vec::new();
         let mut pc = start;
         while ops.len() < MAX_BLOCK_LEN {
@@ -553,7 +594,7 @@ impl FastCpuEngine {
         if ops.is_empty() {
             return None;
         }
-        Some(Block { ops })
+        Some(ops)
     }
 }
 
@@ -607,10 +648,16 @@ impl ArmEngine for FastCpuEngine {
             if has_block {
                 crate::PC_SAMPLES[(pc >> 16) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
                 // Borrow the disjoint fields directly so the cached block (in
-                // `blocks`) can be read while `mem` is mutated by loads/stores.
+                // `cache`) can be read while `mem` is mutated by loads/stores.
                 let (fault, hit_end, retired, smc) = {
-                    let FastCpuEngine { blocks, mem, code_pages, .. } = &mut *self;
-                    let block = blocks.get(&pc).unwrap();
+                    let FastCpuEngine { cache, mem, code_pages, .. } = &mut *self;
+                    let block = &cache[Self::slot_index(pc)];
+                    // Only watch for `end` per-instruction when it actually falls
+                    // inside this block's PC span. In normal control flow `end`
+                    // (a return sentinel) is only ever reached as a branch target,
+                    // i.e. at a block start, so the hot path skips this check.
+                    let block_span = pc.wrapping_add(2 * block.ops.len() as u32);
+                    let end_in_block = end >= pc && end < block_span && end & 1 == pc & 1;
                     let mut ctx = Ctx { r, cpsr, mem, fault: None };
                     let mut cur = pc;
                     let mut smc = false;
@@ -619,7 +666,7 @@ impl ArmEngine for FastCpuEngine {
                         // Stop before executing the instruction at `end`, even
                         // mid-block: a straight-line block can span the stop
                         // address (e.g. it extends into not-yet-branch code).
-                        if cur == end {
+                        if end_in_block && cur == end {
                             hit_end = true;
                             break;
                         }
