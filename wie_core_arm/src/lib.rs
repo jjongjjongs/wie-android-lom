@@ -16,6 +16,11 @@ mod gdb;
 
 pub type ThreadId = usize;
 
+/// Total guest instructions executed by the engine, for a coarse MIPS meter.
+/// Incremented in batches (once per `ArmEngine::run` call) to keep the hot loop
+/// free of atomics; readers sample it against wall-clock time.
+pub static EXECUTED_INSTRUCTIONS: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic::AtomicU64::new(0);
+
 pub use self::{
     allocator::Allocator,
     binary_patches::install_binary_patches,

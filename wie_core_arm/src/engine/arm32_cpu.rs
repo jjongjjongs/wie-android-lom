@@ -45,6 +45,16 @@ impl Arm32CpuEngine {
 
 impl ArmEngine for Arm32CpuEngine {
     fn run(&mut self, end: u32, mut count: u32) -> Result<EngineRunResult> {
+        // Accumulate the instruction count locally and publish it once, on any
+        // exit from this call, so the hot loop stays free of atomics.
+        struct Batch(u64);
+        impl Drop for Batch {
+            fn drop(&mut self) {
+                crate::EXECUTED_INSTRUCTIONS.fetch_add(self.0, ::core::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let mut batch = Batch(0);
+
         loop {
             let pc = self.cpu.reg_get(Mode::User, reg::PC);
 
@@ -73,6 +83,7 @@ impl ArmEngine for Arm32CpuEngine {
                 return Err(WieError::FatalError(format!("Undefined instruction at {pc:#x}: opcode {opcode:#010x}")));
             }
             count -= 1;
+            batch.0 += 1;
 
             if let Some(x) = arm32cpu_memory.memory_error() {
                 return Err(WieError::InvalidMemoryAccess(x));

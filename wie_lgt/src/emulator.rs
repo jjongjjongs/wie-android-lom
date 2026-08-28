@@ -5,7 +5,7 @@ use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeMap, format, string::
 use jvm::runtime::{JavaIoInputStream, JavaLangClassLoader};
 
 use wie_backend::{Emulator, Event, Options, Platform, System, TaskRunner, extract_zip};
-use wie_core_arm::{Allocator, ArmCore};
+use wie_core_arm::{Allocator, ArmCore, EXECUTED_INSTRUCTIONS};
 use wie_jvm_support::{JvmSupport, RustJavaJvmImplementation};
 use wie_util::{Result, WieError};
 
@@ -25,6 +25,12 @@ impl TaskRunner for LgtTaskRunner {
 pub struct LgtEmulator {
     core: ArmCore,
     system: System,
+    /// Coarse MIPS/tick meter state: wall-clock ms and instruction count at the
+    /// last report, and ticks since. Lets one game run reveal whether the title
+    /// is CPU-bound (interpreter flat out) or waiting elsewhere.
+    perf_last_ms: u64,
+    perf_last_instr: u64,
+    perf_ticks: u32,
 }
 
 impl LgtEmulator {
@@ -149,7 +155,13 @@ impl LgtEmulator {
 
         system.spawn(async move || Self::do_start(&mut core_clone, &mut system_clone, jar_filename, aid, main_class_name_clone).await);
 
-        Ok(Self { core, system })
+        Ok(Self {
+            core,
+            system,
+            perf_last_ms: 0,
+            perf_last_instr: 0,
+            perf_ticks: 0,
+        })
     }
 
     #[tracing::instrument(name = "start", skip_all)]
@@ -253,7 +265,30 @@ impl Emulator for LgtEmulator {
                 WieError::FatalError(msg) => WieError::FatalError(format!("{msg}\n{reg_stack}")),
                 _ => WieError::FatalError(format!("{x}\n{reg_stack}")),
             }
-        })
+        })?;
+
+        // Report a coarse MIPS/tick rate about once a second. Compared against
+        // the device's ceiling this shows whether raw interpretation is the
+        // bottleneck (worth a JIT) or the title is waiting on something else.
+        let now_ms = self.system.platform().now().raw();
+        self.perf_ticks += 1;
+        if self.perf_last_ms == 0 {
+            self.perf_last_ms = now_ms;
+            self.perf_last_instr = EXECUTED_INSTRUCTIONS.load(core::sync::atomic::Ordering::Relaxed);
+        } else if now_ms.saturating_sub(self.perf_last_ms) >= 1000 {
+            let dt_ms = now_ms - self.perf_last_ms;
+            let instr = EXECUTED_INSTRUCTIONS.load(core::sync::atomic::Ordering::Relaxed);
+            let executed = instr.saturating_sub(self.perf_last_instr);
+            let ticks = self.perf_ticks;
+            let mips = executed as f64 / dt_ms as f64 / 1000.0;
+            let tps = ticks as f64 * 1000.0 / dt_ms as f64;
+            tracing::info!("[perf] {mips:.1} MIPS, {tps:.1} tick/s ({executed} insn / {ticks} ticks in {dt_ms} ms)");
+            self.perf_last_ms = now_ms;
+            self.perf_last_instr = instr;
+            self.perf_ticks = 0;
+        }
+
+        Ok(())
     }
 }
 
