@@ -56,9 +56,11 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        # -PenableJit selects the machine-code JIT engine (wie_core_arm `jit`
-        # feature); drop it to fall back to the interpreter.
-        run: gradle --no-daemon assembleDebug -PenableJit
+        # Add -PenableJit to select the machine-code JIT engine; off for now
+        # because on real game code it falls back too often to the interpreter
+        # (signed loads, push/pop, bl/bx) and loses to it. Re-enable once those
+        # ops are compiled.
+        run: gradle --no-daemon assembleDebug
 
       - name: Upload APK
         continue-on-error: true
