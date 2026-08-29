@@ -1042,12 +1042,19 @@ public final class MainActivity extends Activity {
             super.onMeasure(widthSpec, heightSpec);
         }
 
+        private int frameLog;
+        private int drawLog;
+
         /** @param frame {@code {width, height, RGB565 pixels...}} */
         void setFrame(short[] frame) {
             int width = frame[0] & 0xFFFF;
             int height = frame[1] & 0xFFFF;
 
             if (width <= 0 || height <= 0 || frame.length != width * height + 2) {
+                // Diagnostic: a malformed frame is dropped, which freezes the LCD.
+                if ((frameLog++ % 30) == 0) {
+                    Log.w(TAG, "setFrame drop: w=" + width + " h=" + height + " len=" + frame.length);
+                }
                 return;
             }
 
@@ -1056,6 +1063,10 @@ public final class MainActivity extends Activity {
             }
 
             bitmap.copyPixelsFromBuffer(ShortBuffer.wrap(frame, 2, width * height));
+            if ((frameLog++ % 30) == 0) {
+                Log.i(TAG, "setFrame ok: " + width + "x" + height + " view=" + getWidth() + "x" + getHeight()
+                        + " shown=" + isShown() + " vis=" + getVisibility());
+            }
             invalidate();
         }
 
@@ -1065,6 +1076,10 @@ public final class MainActivity extends Activity {
 
             if (bitmap == null) {
                 return;
+            }
+
+            if ((drawLog++ % 30) == 0) {
+                Log.i(TAG, "onDraw: view=" + getWidth() + "x" + getHeight() + " bitmap=" + bitmap.getWidth() + "x" + bitmap.getHeight());
             }
 
             float scale = Math.min((float) getWidth() / bitmap.getWidth(), (float) getHeight() / bitmap.getHeight());

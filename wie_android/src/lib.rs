@@ -194,6 +194,22 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
         }
     };
 
+    // Diagnostic (rate-limited): confirm frames are actually handed to Java.
+    // Continuous hand-off here with a black display isolates the fault to the
+    // Android UI (setFrame/onDraw), not the emulator or this bridge.
+    {
+        use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        static HANDED: AtomicU32 = AtomicU32::new(0);
+        if HANDED.fetch_add(1, Relaxed) % 30 == 0 {
+            tracing::info!(
+                "[present] nativeFrame -> Java {}x{} ({} px)",
+                frame.width,
+                frame.height,
+                frame.pixels.len()
+            );
+        }
+    }
+
     let length = frame.pixels.len() + 2;
     let array = match env.new_short_array(length as jint) {
         Ok(array) => array,
