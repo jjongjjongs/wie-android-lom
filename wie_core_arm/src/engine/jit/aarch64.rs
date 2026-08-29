@@ -80,6 +80,7 @@ fn supported(op: FastOp) -> bool {
         | FastOp::PushPop { .. }
         | FastOp::BranchExchange { .. }
         | FastOp::BranchLink { .. }
+        | FastOp::MovPc { .. }
         | FastOp::BlockXfer { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x7 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
@@ -221,7 +222,10 @@ pub(crate) fn compile_block(ops: &[FastOp], start_pc: u32) -> Option<(Code, usiz
                 ended_unconditional = true;
             }
             // Control-flow ops that write a dynamic/far PC end the trace.
-            t @ (FastOp::BranchExchange { .. } | FastOp::BranchLink { .. } | FastOp::PushPop { load: true, extra: true, .. }) => {
+            t @ (FastOp::BranchExchange { .. }
+            | FastOp::BranchLink { .. }
+            | FastOp::MovPc { .. }
+            | FastOp::PushPop { load: true, extra: true, .. }) => {
                 emit_op(&mut a, t, pc);
                 ended_unconditional = true;
             }
@@ -789,6 +793,7 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
         FastOp::PushPop { load, extra, rlist } => emit_push_pop(a, load, extra, rlist, pc),
         FastOp::BlockXfer { load, rb, rlist } => emit_block_xfer(a, load, rb, rlist, pc),
         FastOp::BranchExchange { link, rm } => emit_bx(a, link, rm, pc),
+        FastOp::MovPc { rm } => emit_mov_pc(a, rm),
         FastOp::BranchLink { exchange, target, ret } => emit_bl(a, exchange, target, ret),
         FastOp::CondBranch { .. } | FastOp::Branch { .. } => {
             unreachable!("handled by compile_block")
@@ -927,6 +932,19 @@ fn emit_bx(a: &mut Asm, link: bool, rm: u8, pc: u32) {
         a64!(a ; str w10, [x19, #ro(14)]);
     }
     a64!(a ; movz w0, #exit::CONTINUE ; b ->epilogue);
+}
+
+/// Emit `mov pc, rm` (`rm != PC`). Unlike `bx`, this does not interwork: the
+/// target is `rm & !1` and the Thumb state is unchanged, so no CPSR write.
+fn emit_mov_pc(a: &mut Asm, rm: u8) {
+    a64!(a
+        ; ldr w0, [x19, #ro(rm)]
+        ; movz w9, #1
+        ; bic w0, w0, w9
+        ; str w0, [x19, #PC]
+        ; movz w0, #exit::CONTINUE
+        ; b ->epilogue
+    );
 }
 
 /// Emit `bl`/`blx` immediate: set LR to the return address and PC to the

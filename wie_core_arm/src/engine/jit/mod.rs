@@ -346,6 +346,18 @@ impl JitEngine {
             let rm = ((i.get_bit(6) * 8) + i.extract(3, 3)) as u8;
             return Some((FastOp::BranchExchange { link, rm }, 2));
         }
+        // MOV PC, Rm (HiRegBx op 2 with destination PC): a computed branch that
+        // stays in Thumb (target `rm & !1`, no interworking). Destination is PC
+        // (H1=1, Rd=7); source rm = (H2:Rs). rm==PC is degenerate and left to the
+        // interpreter. The shared frontend declines every crd==PC hi-reg form.
+        if i & 0xff00 == 0x4600 {
+            let rm = ((i.get_bit(6) * 8) + i.extract(3, 3)) as u8;
+            let crd = ((i.get_bit(7) * 8) + i.extract(0, 3)) as u8;
+            if crd == 15 && rm != 15 {
+                return Some((FastOp::MovPc { rm }, 2));
+            }
+            return None;
+        }
         // PUSH/POP.
         if i & 0xf600 == 0xb400 {
             return Some((
@@ -1114,6 +1126,39 @@ mod tests {
     // clean block boundary exactly at `end`, so the ops before it are actually
     // JIT-compiled rather than single-stepped by the end-in-block guard.
     const B_NEXT: u16 = 0xe7ff;
+
+    #[test]
+    fn jit_mov_pc_register() {
+        // mov pc, r2 (HiRegBx op 2, dest PC): a computed branch that, unlike bx,
+        // does not interwork — target is r2 & !1 and execution stays in Thumb.
+        // The target here is even, so a wrongly-cleared Thumb bit would diverge.
+        let code = thumb(&[
+            0x4697, // CODE+0: mov pc, r2
+            0x0000, 0x0000, 0x0000, // padding to CODE+8
+            0x2011, // CODE+8: movs r0, #0x11
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        regs[2] = CODE + 8; // even target: mov pc masks bit 0 and keeps Thumb
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_mov_pc_register_odd_target() {
+        // Same, but the target register carries a set low bit; mov pc masks it off
+        // (result identical to the even case) rather than interworking.
+        let code = thumb(&[
+            0x469f, // CODE+0: mov pc, r3
+            0x0000, 0x0000, 0x0000, // padding to CODE+8
+            0x2011, // CODE+8: movs r0, #0x11
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        regs[3] = (CODE + 8) | 1;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
 
     #[test]
     fn jit_push_pop_roundtrip() {

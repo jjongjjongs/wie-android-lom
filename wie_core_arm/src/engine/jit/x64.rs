@@ -64,6 +64,7 @@ fn supported(op: FastOp) -> bool {
         | FastOp::PushPop { .. }
         | FastOp::BranchExchange { .. }
         | FastOp::BranchLink { .. }
+        | FastOp::MovPc { .. }
         | FastOp::BlockXfer { .. } => true,
         FastOp::HiReg { op, .. } => op != 3,
         FastOp::AluOp { op, .. } => matches!(op, 0x0 | 0x1 | 0x2 | 0x3 | 0x4 | 0x7 | 0xC | 0xE | 0xF | 0x8 | 0xA | 0xB | 0x9 | 0xD),
@@ -225,7 +226,10 @@ pub(crate) fn compile_block(ops: &[FastOp], start_pc: u32) -> Option<(Code, usiz
             }
             // Control-flow ops that write a dynamic/far PC end the trace: emit
             // them, then let the epilogue follow (they jump to it themselves).
-            t @ (FastOp::BranchExchange { .. } | FastOp::BranchLink { .. } | FastOp::PushPop { load: true, extra: true, .. }) => {
+            t @ (FastOp::BranchExchange { .. }
+            | FastOp::BranchLink { .. }
+            | FastOp::MovPc { .. }
+            | FastOp::PushPop { load: true, extra: true, .. }) => {
                 emit_op(&mut a, t, pc);
                 ended_unconditional = true;
             }
@@ -870,6 +874,7 @@ fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
         FastOp::PushPop { load, extra, rlist } => emit_push_pop(a, load, extra, rlist, pc),
         FastOp::BlockXfer { load, rb, rlist } => emit_block_xfer(a, load, rb, rlist, pc),
         FastOp::BranchExchange { link, rm } => emit_bx(a, link, rm, pc),
+        FastOp::MovPc { rm } => emit_mov_pc(a, rm),
         FastOp::BranchLink { exchange, target, ret } => emit_bl(a, exchange, target, ret),
         FastOp::CondBranch { .. } | FastOp::Branch { .. } => {
             unreachable!("handled by compile_block")
@@ -1050,6 +1055,18 @@ fn emit_bx(a: &mut Asm, link: bool, rm: u8, pc: u32) {
         dynasm!(a ; mov DWORD [rbx + ro(14)], (pc.wrapping_add(2) | 1) as i32);
     }
     dynasm!(a ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
+}
+
+/// Emit `mov pc, rm` (`rm != PC`). Unlike `bx`, this does not interwork: the
+/// target is `rm & !1` and the Thumb state is unchanged, so no CPSR write.
+fn emit_mov_pc(a: &mut Asm, rm: u8) {
+    dynasm!(a
+        ; mov eax, [rbx + ro(rm)]
+        ; and eax, !1
+        ; mov [rbx + PC], eax
+        ; mov eax, exit::CONTINUE as i32
+        ; jmp ->epilogue
+    );
 }
 
 /// Emit `bl`/`blx` immediate: set LR to the return address and PC to the

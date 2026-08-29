@@ -93,6 +93,12 @@ pub(crate) enum FastOp {
     /// writeback to `rb`; `rlist` covers r0..r7 only (no PC), so it is
     /// straight-line. Produced only by the JIT frontend.
     BlockXfer { load: bool, rb: u8, rlist: u8 },
+    /// `mov pc, rm` (`HiRegBx` op 2 with destination PC). A computed branch that,
+    /// unlike `bx`, does *not* interwork: the target is `rm & !1` and execution
+    /// stays in Thumb. Dynamic PC, so it ends the trace. `rm` is never PC (that
+    /// degenerate form is left to the interpreter). Produced only by the JIT
+    /// frontend.
+    MovPc { rm: u8 },
 }
 
 /// Whether a decoded op continues the block or ends it (a branch).
@@ -107,7 +113,11 @@ pub(crate) enum Decoded {
 pub(crate) fn ends_trace(op: &FastOp) -> bool {
     matches!(
         op,
-        FastOp::Branch { .. } | FastOp::BranchExchange { .. } | FastOp::BranchLink { .. } | FastOp::PushPop { load: true, extra: true, .. }
+        FastOp::Branch { .. }
+            | FastOp::BranchExchange { .. }
+            | FastOp::BranchLink { .. }
+            | FastOp::MovPc { .. }
+            | FastOp::PushPop { load: true, extra: true, .. }
     )
 }
 
@@ -427,6 +437,7 @@ impl Ctx<'_> {
             | FastOp::PushPop { .. }
             | FastOp::BranchExchange { .. }
             | FastOp::BranchLink { .. }
+            | FastOp::MovPc { .. }
             | FastOp::BlockXfer { .. } => unreachable!("branch in straight-line slot"),
         }
     }
