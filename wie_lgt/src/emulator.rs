@@ -316,7 +316,17 @@ impl Emulator for LgtEmulator {
             let ticks = self.perf_ticks;
             let mips = executed as f64 / dt_ms as f64 / 1000.0;
             let tps = ticks as f64 * 1000.0 / dt_ms as f64;
-            tracing::info!("[perf] {mips:.1} MIPS, {tps:.1} tick/s ({executed} insn / {ticks} ticks in {dt_ms} ms)");
+            // SVCs and run() calls per second: a high SVC rate points the frame
+            // cost at the syscall round-trip rather than raw execution.
+            let svc = wie_core_arm::SVC_COUNT.swap(0, core::sync::atomic::Ordering::Relaxed);
+            let runs = wie_core_arm::RUN_CALLS.swap(0, core::sync::atomic::Ordering::Relaxed);
+            let fb = wie_core_arm::JIT_FALLBACKS.swap(0, core::sync::atomic::Ordering::Relaxed);
+            let svc_per_s = svc as f64 * 1000.0 / dt_ms as f64;
+            let runs_per_s = runs as f64 * 1000.0 / dt_ms as f64;
+            let fb_per_s = fb as f64 * 1000.0 / dt_ms as f64;
+            tracing::info!(
+                "[perf] {mips:.1} MIPS, {tps:.1} tick/s, {svc_per_s:.0} svc/s, {runs_per_s:.0} run/s, {fb_per_s:.0} fallback/s ({executed} insn / {ticks} ticks in {dt_ms} ms)"
+            );
             report_hot_regions();
             self.perf_last_ms = now_ms;
             self.perf_last_instr = instr;

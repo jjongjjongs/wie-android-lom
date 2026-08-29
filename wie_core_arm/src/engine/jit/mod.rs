@@ -218,7 +218,8 @@ impl JitEngine {
     fn record_fallback(&mut self, category: usize) {
         self.fallbacks[category] += 1;
         self.fallback_total += 1;
-        if self.fallback_total.is_power_of_two() && self.fallback_total >= 1 << 20 {
+        crate::JIT_FALLBACKS.fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
+        if self.fallback_total.is_power_of_two() && self.fallback_total >= 1 << 16 {
             let mut idx: [usize; NUM_FALLBACK] = core::array::from_fn(|i| i);
             idx.sort_unstable_by_key(|&i| core::cmp::Reverse(self.fallbacks[i]));
             let mut top = alloc::string::String::new();
