@@ -93,6 +93,12 @@ pub(crate) struct JitCtx {
     /// reads it to service the common in-bounds, aligned load/store inline
     /// instead of calling a helper. Offset 104.
     pub pages: *const *const u8,
+    /// The address of a store that hit a code page (see `smc`), used to
+    /// invalidate only the block(s) that actually cover it. `smc == 2` means two
+    /// distinct such addresses were seen in one run and the exact one is unknown,
+    /// so the dispatcher flushes everything to stay correct. Offset 112 (only the
+    /// Rust helpers touch it; the code generator needs no offset for it).
+    pub smc_addr: u32,
 }
 
 impl JitCtx {
@@ -108,6 +114,7 @@ impl JitCtx {
             budget: 0,
             scratch: 0,
             pages: core::ptr::null(),
+            smc_addr: 0,
         }
     }
 }
@@ -208,10 +215,11 @@ pub struct JitEngine {
     /// the periodic fallback profile (see `note_fallback`).
     fallbacks: [u64; NUM_FALLBACK],
     fallback_total: u64,
-    /// Count of full block-cache flushes caused by self-modifying-code hits, for
-    /// the periodic profile. A high rate means a title's data stores keep
-    /// aliasing its code region and forcing recompilation.
+    /// Count of full block-cache flushes (ambiguous multi-address SMC), and of
+    /// precise single-block invalidations, for the periodic profile. A store that
+    /// hits a code page but lands on data (the common false alarm) bumps neither.
     smc_flushes: u64,
+    smc_invalidations: u64,
     /// Histogram of the un-compilable Thumb opcodes that land in the catch-all
     /// `other` category, keyed by the instruction's high byte (`inst >> 8`),
     /// which selects the Thumb opcode group. When `other` dominates the profile
@@ -240,6 +248,7 @@ impl JitEngine {
             fallback_total: 0,
             other_hist: [0; 256],
             smc_flushes: 0,
+            smc_invalidations: 0,
         }
     }
 
@@ -278,16 +287,18 @@ impl JitEngine {
             }
             if other_top.is_empty() {
                 tracing::info!(
-                    "[jit] {} fallbacks (smc-flushes={}); top: {}",
+                    "[jit] {} fallbacks (smc-flushes={} inval={}); top: {}",
                     self.fallback_total,
                     self.smc_flushes,
+                    self.smc_invalidations,
                     top.trim_end()
                 );
             } else {
                 tracing::info!(
-                    "[jit] {} fallbacks (smc-flushes={}); top: {}; other:{}",
+                    "[jit] {} fallbacks (smc-flushes={} inval={}); top: {}; other:{}",
                     self.fallback_total,
                     self.smc_flushes,
+                    self.smc_invalidations,
                     top.trim_end(),
                     other_top
                 );
@@ -318,6 +329,55 @@ impl JitEngine {
             self.generation = 1;
         }
         self.code_pages.fill(false);
+    }
+
+    /// Handle a store that flagged a code page (`exit::SMC`). If two distinct
+    /// addresses were flagged in the run the culprit is ambiguous, so flush
+    /// everything; otherwise invalidate only the block(s) actually covering the
+    /// written address — a store to data that merely shares a page with code
+    /// (the common case) then invalidates nothing and the hot blocks survive.
+    fn handle_smc(&mut self) {
+        if self.ctx.smc >= 2 {
+            self.flush_blocks();
+        } else if self.invalidate_at(self.ctx.smc_addr) {
+            self.smc_invalidations += 1;
+        }
+    }
+
+    /// Invalidate every cached block whose compiled instruction range contains
+    /// `addr`. Returns whether any block was dropped. Only block starts within one
+    /// maximum block span before `addr` can cover it, so the search is bounded.
+    fn invalidate_at(&mut self, addr: u32) -> bool {
+        let cur_gen = self.generation;
+        let mut hit = false;
+
+        // A Thumb block is at most `MAX_BLOCK_LEN` ops, and an op is up to 4
+        // bytes (the 32-bit `bl`/`blx`), so its byte span is bounded by
+        // `MAX_BLOCK_LEN * 4`; any block covering `addr` starts within that span.
+        let mut pc = (addr.saturating_sub(MAX_BLOCK_LEN as u32 * 4)) & !1;
+        while pc <= addr {
+            let idx = Self::slot_index(pc);
+            let slot = &self.cache[idx];
+            if slot.gen_tag == cur_gen && slot.pc == pc && slot.block.as_ref().is_some_and(|b| addr < b.end_pc) {
+                self.cache[idx] = Slot::default();
+                hit = true;
+            }
+            pc = pc.wrapping_add(2);
+        }
+
+        // ARM blocks span at most `MAX_BLOCK_LEN` 4-byte ops.
+        let mut pc = (addr.saturating_sub(MAX_BLOCK_LEN as u32 * 4)) & !3;
+        while pc <= addr {
+            let idx = Self::slot_index(pc);
+            let slot = &self.arm_cache[idx];
+            if slot.gen_tag == cur_gen && slot.pc == pc && slot.block.as_ref().is_some_and(|b| addr < b.end_pc) {
+                self.arm_cache[idx] = Slot::default();
+                hit = true;
+            }
+            pc = pc.wrapping_add(4);
+        }
+
+        hit
     }
 
     #[inline(always)]
@@ -641,7 +701,7 @@ impl ArmEngine for JitEngine {
                     match reason {
                         exit::CONTINUE => {}
                         exit::FAULT => break Err(WieError::InvalidMemoryAccess(self.ctx.fault_addr)),
-                        exit::SMC => self.flush_blocks(),
+                        exit::SMC => self.handle_smc(),
                         other => break Err(WieError::FatalError(format!("bad JIT exit {other}"))),
                     }
                     continue;
@@ -730,7 +790,7 @@ impl ArmEngine for JitEngine {
                 match reason {
                     exit::CONTINUE => {}
                     exit::FAULT => break Err(WieError::InvalidMemoryAccess(self.ctx.fault_addr)),
-                    exit::SMC => self.flush_blocks(),
+                    exit::SMC => self.handle_smc(),
                     other => break Err(WieError::FatalError(format!("bad JIT exit {other}"))),
                 }
             } else {
@@ -889,11 +949,21 @@ pub(crate) unsafe extern "C" fn jit_load32(ctx: *mut JitCtx, addr: u32) -> u32 {
 
 #[inline(always)]
 unsafe fn note_store(ctx: &mut JitCtx, addr: u32) {
-    // Flag self-modifying code: a store into a page that holds compiled blocks.
+    // Flag a store into a page that holds compiled blocks. It only *might* be
+    // self-modifying code: the page also holds data, so the dispatcher confirms
+    // by checking whether `addr` actually falls in a compiled block's byte range.
+    // Record the address for that precise check. Two distinct flagged addresses
+    // in one run (`smc == 2`) leave the exact culprit ambiguous, so the
+    // dispatcher then flushes everything.
     if !ctx.code_pages.is_null() {
         let page = (addr >> CODE_PAGE_BITS) as usize;
         if unsafe { *ctx.code_pages.add(page) } {
-            ctx.smc = 1;
+            if ctx.smc == 0 {
+                ctx.smc = 1;
+                ctx.smc_addr = addr;
+            } else if ctx.smc_addr != addr {
+                ctx.smc = 2;
+            }
         }
     }
 }
@@ -1195,6 +1265,32 @@ mod tests {
         regs[3] = (CODE + 8) | 1;
         regs[13] = DATA + 0x8000;
         assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_self_modifying_code() {
+        // A counted loop patches its own first instruction, then re-enters the
+        // block at that start. The compiler must invalidate the stale block so the
+        // re-entry runs the patched instruction; without invalidation it would
+        // keep running the pre-patch `adds r0, #1`. Differential against the
+        // interpreter (which never caches): with correct invalidation both give
+        // r0 = 1 + 0x10 + 0x10 = 0x21; a miss yields r0 = 3.
+        let code = thumb(&[
+            0x3001, // CODE+0: adds r0, #1     (patched -> adds r0, #0x10)
+            0x6011, // CODE+2: str r1, [r2]    (r2 = CODE; rewrites CODE+0)
+            0x3c01, // CODE+4: subs r4, #1
+            0xd1fb, // CODE+6: bne CODE+0
+            B_NEXT, // CODE+8: b CODE+10 (exit) — keeps the loop block a full JIT block
+        ]);
+        let mut regs = [0u32; 15];
+        regs[1] = 0x6011_3010; // low: adds r0,#0x10 at CODE+0; high: str unchanged at CODE+2
+        regs[2] = CODE; // patch target = block start
+        regs[4] = 3; // iteration count
+        regs[13] = DATA + 0x8000;
+        // `end` at CODE+10 (a block boundary), so the loop body runs as a compiled
+        // block rather than being single-stepped — which is what exercises the
+        // stale-block invalidation.
+        assert_same(&code, &regs, CODE + 10);
     }
 
     #[test]
