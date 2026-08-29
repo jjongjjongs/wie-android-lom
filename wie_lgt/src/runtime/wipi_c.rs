@@ -5,7 +5,7 @@ mod context;
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_rust::ClassDefinitionImpl;
 use wipi_types::lgt::CletFunctions;
-use wipi_types::wipic::WIPICIndirectPtr;
+use wipi_types::wipic::{WIPICFramebuffer, WIPICIndirectPtr};
 
 use wie_backend::System;
 use wie_core_arm::{ArmCore, EmulatedFunction, EmulatedFunctionParam, ResultWriter, SvcId};
@@ -91,6 +91,37 @@ async fn handle_wipic_svc(
     id: SvcId,
 ) -> Result<()> {
     WIPIC_SVC_COUNT[(id.0 as usize).min(WIPIC_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let (_, lr) = core.read_pc_lr()?;
+
+    // Fast path for the two getters that dominate software-rendering loops
+    // (hundreds of thousands of calls per second, together ~all WIPI-C traffic).
+    // They do almost no work, so skip the context construction, method boxing,
+    // argument-slice allocation and async dispatch that cost far more than the
+    // call itself.
+    const ID_GET_FRAMEBUFFER_POINTER: u32 = WIPICSvcId::GetFramebufferPointer as u32;
+    const ID_GET_IMAGE_FRAMEBUFFER: u32 = WIPICSvcId::GetImageFramebuffer as u32;
+    match id.0 {
+        ID_GET_FRAMEBUFFER_POINTER => {
+            // MC_grpGetFrameBufferPointer: return WIPICFramebuffer.buf. The handle
+            // is the struct's guest address (data_ptr is identity); read the struct
+            // and return `buf`, exactly as the generic handler does.
+            let handle = core.read_param(0)?;
+            let framebuffer: WIPICFramebuffer = read_generic(core, handle)?;
+            core.write_return_value(&[framebuffer.buf.0])?;
+            core.set_next_pc(lr)?;
+            return Ok(());
+        }
+        ID_GET_IMAGE_FRAMEBUFFER => {
+            // MC_grpGetImageFrameBuffer: WIPICImage begins with its framebuffer, so
+            // the image handle doubles as a framebuffer handle — return it as is.
+            let arg = core.read_param(0)?;
+            core.write_return_value(&[arg])?;
+            core.set_next_pc(lr)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let wipic_context = LgtWIPICContext::new(
         core.clone(),
         system.clone(),
@@ -99,7 +130,6 @@ async fn handle_wipic_svc(
         serial_state.clone(),
         filesystem_state.clone(),
     );
-    let (_, lr) = core.read_pc_lr()?;
     // An unimplemented WIPI-C function is reported and skipped rather than
     // ending the run. Stopping on the first one hides everything a title does
     // afterwards, and the calls that turn up are usually peripheral - Xenogia
