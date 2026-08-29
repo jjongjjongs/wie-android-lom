@@ -1163,12 +1163,42 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 tracing::debug!("vm_get_string_class() -> {class:#x}");
                 class.write(core, lr)
             }
-            // On the classic ABI the import table is loaded before this runs. A
-            // title that reaches here with no table is using slot 0x14 for a
-            // different function (its registers carry class-table pointers, not
-            // a bare string-class request). Log what it passed and continue.
+            // On the classic ABI the import table is already loaded before this
+            // slot runs, so reaching it with no table means the title is not
+            // using slot 0x14 for string-class at all: it calls it before any
+            // load, with the class/field/method tables in the same registers
+            // that classic slot 0x13 (JavaLoadClasses) takes. Load them here so
+            // the main class the title runs next has its classes. A parse
+            // failure is logged rather than fatal, so the run still reveals what
+            // comes after.
             None => {
-                dump_ambiguous_slot(core, "0x14 (classic vm_get_string_class)");
+                dump_ambiguous_slot(core, "0x14 (loading as the class table)");
+
+                let args: Vec<u32> = (0..11).map(|index| core.read_param(index)).collect::<Result<_>>()?;
+                match java_load_classes(
+                    core,
+                    &context.java_handles,
+                    args[0],
+                    args[1],
+                    args[2],
+                    args[3],
+                    args[4],
+                    args[5],
+                    args[6],
+                    args[7],
+                    args[8],
+                    args[9],
+                    args[10],
+                )
+                .await
+                {
+                    Ok(table) => {
+                        tracing::warn!("LGT slot 0x14: loaded {} class(es) as the class table", table.classes.len());
+                        *context.imported_classes.lock() = Some(table);
+                    }
+                    Err(error) => tracing::warn!("LGT slot 0x14: class-table load failed: {error:?}"),
+                }
+
                 0u32.write(core, lr)
             }
         },
