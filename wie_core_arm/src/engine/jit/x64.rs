@@ -14,7 +14,8 @@ use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, Executab
 
 use crate::engine::fast::{FastOp, ends_trace};
 
-use super::{JitCtx, exit, jit_alu_shift, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
+use super::arm_frontend::{ArmOp, Off, Op2, arm_ends_trace};
+use super::{JitCtx, exit, jit_alu_shift, jit_arm_shift, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
 
 /// A compiled block owning its executable buffer (stable pointers; a flush drops
 /// it) plus the entry offset.
@@ -241,6 +242,480 @@ pub(crate) fn compile_block(ops: &[FastOp], start_pc: u32) -> Option<(Code, usiz
 
     let buf = a.finalize().ok()?;
     Some((Code { buf, entry }, limit))
+}
+
+// ---------------------------------------------------------------------------
+// ARM (A32) code generation. Shares the block/exit protocol and helpers with the
+// Thumb path above; only the instruction encoding differs.
+// ---------------------------------------------------------------------------
+
+/// Whether `emit_arm`/`emit_arm_terminator` can compile this op.
+fn arm_supported(_op: &ArmOp) -> bool {
+    true
+}
+
+/// Compile a linear ARM trace (straight-line ops through the first terminator)
+/// into one native function. No in-trace linking yet: each trace is one basic
+/// block, charged to the budget once, and every terminator sets PC and exits.
+pub(crate) fn compile_arm_block(ops: &[ArmOp], start_pc: u32) -> Option<(Code, usize)> {
+    let mut limit = ops.len();
+    for (i, op) in ops.iter().enumerate() {
+        if !arm_supported(op) {
+            limit = i;
+            break;
+        }
+        if arm_ends_trace(op) {
+            limit = i + 1;
+            break;
+        }
+    }
+    if limit == 0 {
+        return None;
+    }
+    let end_pc = start_pc.wrapping_add(4 * limit as u32);
+    let block_len = limit as i32;
+
+    let mut a = Asm::new().ok()?;
+    let entry = a.offset();
+    dynasm!(a
+        ; .arch x64
+        ; push rbx
+        ; mov rbx, rdi
+        // Whole-trace budget: yield if spent, else charge every op once.
+        ; mov ecx, [rbx + BUDGET]
+        ; test ecx, ecx
+        ; jg >run
+        ; mov DWORD [rbx + PC], start_pc as i32
+        ; mov eax, exit::CONTINUE as i32
+        ; jmp ->epilogue
+        ; run:
+        ; sub DWORD [rbx + BUDGET], block_len
+    );
+
+    let mut ended = false;
+    for (i, op) in ops[..limit].iter().enumerate() {
+        let pc = start_pc.wrapping_add(4 * i as u32);
+        if arm_ends_trace(op) {
+            emit_arm_terminator(&mut a, op, pc, end_pc);
+            ended = true;
+        } else {
+            emit_arm(&mut a, op, pc);
+        }
+    }
+    if !ended {
+        dynasm!(a ; mov DWORD [rbx + PC], end_pc as i32 ; mov eax, exit::CONTINUE as i32);
+    }
+    dynasm!(a ; ->epilogue: ; pop rbx ; ret);
+
+    let buf = a.finalize().ok()?;
+    Some((Code { buf, entry }, limit))
+}
+
+/// Emit a guard that jumps to the local `>skip` label when `cond` is *not* met.
+/// Returns whether a guard (and thus a `skip:` the caller must place) was
+/// emitted. `cond` 0xE (AL) needs none.
+fn emit_arm_guard(a: &mut Asm, cond: u8) -> bool {
+    let single: Option<(i32, bool)> = match cond {
+        0x0 => Some(((1 << 30), true)),              // EQ: Z==1
+        0x1 => Some(((1 << 30), false)),             // NE
+        0x2 => Some(((1 << 29), true)),              // CS: C==1
+        0x3 => Some(((1 << 29), false)),             // CC
+        0x4 => Some((((1u32 << 31) as i32), true)),  // MI: N==1
+        0x5 => Some((((1u32 << 31) as i32), false)), // PL
+        0x6 => Some(((1 << 28), true)),              // VS: V==1
+        0x7 => Some(((1 << 28), false)),             // VC
+        _ => None,
+    };
+    match single {
+        Some((mask, take_when_set)) => {
+            dynasm!(a ; test DWORD [rbx + CPSR], mask);
+            if take_when_set {
+                dynasm!(a ; jz >skip); // bit clear -> not taken
+            } else {
+                dynasm!(a ; jnz >skip);
+            }
+            true
+        }
+        None if cond >= 0xe => false, // AL / unconditional
+        None => {
+            // Compound condition: defer to the interpreter's exact predicate.
+            dynasm!(a
+                ; mov edi, cond as i32
+                ; mov esi, [rbx + CPSR]
+                ; mov rax, QWORD jit_cond_met as *const () as i64
+                ; call rax
+                ; test eax, eax
+                ; jz >skip
+            );
+            true
+        }
+    }
+}
+
+/// Compute operand2 into `r10d` (value) and `r11d` (shifter carry, for logical
+/// flag-setting ops).
+fn emit_arm_op2(a: &mut Asm, op2: Op2) {
+    match op2 {
+        Op2::Imm { val, carry } => {
+            dynasm!(a ; mov r10d, val as i32 ; mov r11d, carry as i32);
+        }
+        Op2::ShiftImm { rm, ty, amount } => {
+            emit_arm_shift_call(a, rm, ty, amount as i32, false, None);
+        }
+        Op2::ShiftReg { rm, ty, rs } => {
+            emit_arm_shift_call(a, rm, ty, 0, true, Some(rs));
+        }
+    }
+}
+
+/// Call `jit_arm_shift(reg[rm], ty, amount, reg_shift, c)`, leaving value in
+/// `r10d` and carry in `r11d`. For a register shift, `amount` comes from
+/// `reg[rs] & 0xff`.
+fn emit_arm_shift_call(a: &mut Asm, rm: u8, ty: u8, amount_imm: i32, reg_shift: bool, rs: Option<u8>) {
+    dynasm!(a
+        ; mov edi, [rbx + ro(rm)]
+        ; mov esi, ty as i32
+    );
+    if let Some(rs) = rs {
+        dynasm!(a ; mov edx, [rbx + ro(rs)] ; and edx, 0xff);
+    } else {
+        dynasm!(a ; mov edx, amount_imm);
+    }
+    dynasm!(a
+        ; mov ecx, reg_shift as i32
+        ; mov r8d, [rbx + CPSR]
+        ; shr r8d, 29
+        ; and r8d, 1
+        ; mov rax, QWORD jit_arm_shift as *const () as i64
+        ; call rax
+        ; mov r10d, eax
+        ; shr rax, 32
+        ; mov r11d, eax
+    );
+}
+
+/// Emit a straight-line (non-terminator) ARM op.
+fn emit_arm(a: &mut Asm, op: &ArmOp, pc: u32) {
+    match *op {
+        ArmOp::DataProc {
+            cond,
+            opcode,
+            s,
+            rd,
+            rn,
+            op2,
+        } => {
+            let guarded = emit_arm_guard(a, cond);
+            emit_arm_op2(a, op2);
+            emit_arm_alu(a, opcode, s, rn);
+            // Writeback (result in r8d) unless TST/TEQ/CMP/CMN.
+            if !matches!(opcode, 0x8..=0xB) {
+                dynasm!(a ; mov [rbx + ro(rd)], r8d);
+            }
+            if guarded {
+                dynasm!(a ; skip:);
+            }
+        }
+        ArmOp::LoadStore { .. } => emit_arm_load_store(a, op, pc),
+        ArmOp::Block { .. } => {
+            let guarded = emit_arm_guard(a, block_cond(op));
+            emit_arm_block_body(a, op, pc);
+            if guarded {
+                dynasm!(a ; skip:);
+            }
+        }
+        _ => unreachable!("terminator in straight slot"),
+    }
+}
+
+/// The ALU core: operand2 in `r10d`, shifter carry in `r11d`; leaves the result
+/// in `r8d` and, when `s`, updates CPSR.
+fn emit_arm_alu(a: &mut Asm, opcode: u8, s: bool, rn: u8) {
+    let logical = matches!(opcode, 0x0 | 0x1 | 0x8 | 0x9 | 0xC | 0xD | 0xE | 0xF);
+    match opcode {
+        0x0 | 0x8 => dynasm!(a ; mov eax, [rbx + ro(rn)] ; and eax, r10d),
+        0x1 | 0x9 => dynasm!(a ; mov eax, [rbx + ro(rn)] ; xor eax, r10d),
+        0xC => dynasm!(a ; mov eax, [rbx + ro(rn)] ; or eax, r10d),
+        0xE => dynasm!(a ; mov eax, r10d ; not eax ; and eax, [rbx + ro(rn)]),
+        0xD => dynasm!(a ; mov eax, r10d),
+        0xF => dynasm!(a ; mov eax, r10d ; not eax),
+        0x2 | 0xA => dynasm!(a ; mov eax, [rbx + ro(rn)] ; sub eax, r10d),
+        0x3 => dynasm!(a ; mov eax, r10d ; sub eax, [rbx + ro(rn)]),
+        0x4 | 0xB => dynasm!(a ; mov eax, [rbx + ro(rn)] ; add eax, r10d),
+        0x5 => dynasm!(a
+            ; mov eax, [rbx + ro(rn)]
+            ; mov ecx, [rbx + CPSR] ; shr ecx, 29 ; and ecx, 1 ; neg ecx // CF = C
+            ; adc eax, r10d),
+        0x6 => dynasm!(a
+            ; mov eax, [rbx + ro(rn)]
+            ; mov ecx, [rbx + CPSR] ; shr ecx, 29 ; and ecx, 1 ; xor ecx, 1 ; neg ecx // CF = 1-C
+            ; sbb eax, r10d),
+        0x7 => dynasm!(a
+            ; mov eax, r10d
+            ; mov ecx, [rbx + CPSR] ; shr ecx, 29 ; and ecx, 1 ; xor ecx, 1 ; neg ecx
+            ; sbb eax, [rbx + ro(rn)]),
+        _ => unreachable!(),
+    }
+    if logical {
+        dynasm!(a ; mov r8d, eax);
+        if s {
+            // N,Z from result, C = shifter carry, V preserved.
+            dynasm!(a ; mov ecx, r11d);
+            emit_flags_nzc(a);
+        }
+    } else if s {
+        let is_add = matches!(opcode, 0x4 | 0x5 | 0xB);
+        emit_flags_nzcv(a, is_add);
+    } else {
+        dynasm!(a ; mov r8d, eax);
+    }
+}
+
+fn block_cond(op: &ArmOp) -> u8 {
+    match op {
+        ArmOp::Block { cond, .. } => *cond,
+        _ => 0xe,
+    }
+}
+
+/// Emit an ARM single load/store (word/byte), all index modes. Writeback follows
+/// the interpreter: post-index or the W bit updates `rn` (skipped for a load into
+/// `rn`), and a store captures its value before writeback so `str rX,[rX],#n`
+/// stores the original.
+fn emit_arm_load_store(a: &mut Asm, op: &ArmOp, pc: u32) {
+    let ArmOp::LoadStore {
+        cond,
+        load,
+        byte,
+        rd,
+        rn,
+        pre,
+        up,
+        wb,
+        base_pc,
+        offset,
+    } = *op
+    else {
+        unreachable!()
+    };
+    let guarded = emit_arm_guard(a, cond);
+
+    // Offset -> edx (may call the shifter, which clobbers scratch, so do it
+    // before reading the base).
+    match offset {
+        Off::Imm(v) => dynasm!(a ; mov edx, v as i32),
+        Off::ShiftImm { rm, ty, amount } => {
+            emit_arm_shift_call(a, rm, ty, amount as i32, false, None);
+            dynasm!(a ; mov edx, r10d);
+        }
+    }
+    // Base -> ecx.
+    match base_pc {
+        Some(v) => dynasm!(a ; mov ecx, v as i32),
+        None => dynasm!(a ; mov ecx, [rbx + ro(rn)]),
+    }
+    // post = up ? base+off : base-off (eax); addr = pre ? post : base (esi).
+    dynasm!(a ; mov eax, ecx);
+    if up {
+        dynasm!(a ; add eax, edx);
+    } else {
+        dynasm!(a ; sub eax, edx);
+    }
+    if pre {
+        dynasm!(a ; mov esi, eax);
+    } else {
+        dynasm!(a ; mov esi, ecx);
+    }
+
+    let do_wb = (!pre || wb) && base_pc.is_none() && (!load || rd != rn);
+
+    if load {
+        if do_wb {
+            dynasm!(a ; mov [rbx + ro(rn)], eax); // rn = post (eax dies in the call)
+        }
+        let helper = if byte { jit_load8 } else { jit_load32 } as *const () as i64;
+        dynasm!(a
+            ; mov rdi, rbx
+            ; mov rax, QWORD helper
+            ; call rax
+            ; mov [rbx + ro(rd)], eax   // write before the fault check (interpreter parity)
+            ; mov ecx, [rbx + FAULTED]
+            ; test ecx, ecx
+            ; jz >nofault
+            ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+            ; mov eax, exit::FAULT as i32
+            ; jmp ->epilogue
+            ; nofault:
+        );
+    } else {
+        // Capture the store value before writeback so a store of rn is correct.
+        dynasm!(a ; mov edi, [rbx + ro(rd)]);
+        if do_wb {
+            dynasm!(a ; mov [rbx + ro(rn)], eax);
+        }
+        let helper = if byte { jit_store8 } else { jit_store32 } as *const () as i64;
+        dynasm!(a
+            ; mov edx, edi              // value
+            ; mov rdi, rbx
+            ; mov rax, QWORD helper
+            ; call rax
+            ; mov ecx, [rbx + FAULTED]
+            ; test ecx, ecx
+            ; jz >nofault
+            ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+            ; mov eax, exit::FAULT as i32
+            ; jmp ->epilogue
+            ; nofault:
+            ; mov ecx, [rbx + SMC]
+            ; test ecx, ecx
+            ; jz >nosmc
+            ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+            ; mov eax, exit::SMC as i32
+            ; jmp ->epilogue
+            ; nosmc:
+        );
+    }
+    if guarded {
+        dynasm!(a ; skip:);
+    }
+}
+
+/// Emit the register-list transfer of an ARM LDM/STM (S bit clear), fully
+/// unrolled. On a load that includes r15 the caller ends the trace afterwards.
+fn emit_arm_block_body(a: &mut Asm, op: &ArmOp, pc: u32) {
+    let ArmOp::Block {
+        load,
+        rn,
+        pre,
+        up,
+        wb,
+        reglist,
+        ..
+    } = *op
+    else {
+        unreachable!()
+    };
+    let regs: alloc::vec::Vec<u8> = (0..16u8).filter(|&r| reglist & (1 << r) != 0).collect();
+    let total = regs.len() as i32;
+    // orig base -> scratch; writeback rn = post first.
+    dynasm!(a ; mov eax, [rbx + ro(rn)] ; mov [rbx + SCRATCH], eax);
+    let post_delta = if up { total * 4 } else { -total * 4 };
+    if wb {
+        dynasm!(a ; mov eax, [rbx + SCRATCH] ; add eax, post_delta ; mov [rbx + ro(rn)], eax);
+    }
+    let addr_base = if up { 0 } else { -total * 4 };
+    let pre_incr = (pre == up) as i32;
+    for (i, &r) in regs.iter().enumerate() {
+        let off = addr_base + (i as i32 + pre_incr) * 4;
+        if load {
+            dynasm!(a
+                ; mov rdi, rbx
+                ; mov esi, [rbx + SCRATCH]
+                ; add esi, off
+                ; mov rax, QWORD jit_load32 as *const () as i64
+                ; call rax
+                ; mov [rbx + ro(r)], eax
+            );
+        } else {
+            dynasm!(a ; mov rdi, rbx ; mov esi, [rbx + SCRATCH] ; add esi, off);
+            if r == 15 {
+                dynasm!(a ; mov edx, pc.wrapping_add(12) as i32);
+            } else if r == rn && wb && i == 0 {
+                dynasm!(a ; mov edx, [rbx + SCRATCH]); // lowest reg + writeback -> original base
+            } else {
+                dynasm!(a ; mov edx, [rbx + ro(r)]);
+            }
+            dynasm!(a ; mov rax, QWORD jit_store32 as *const () as i64 ; call rax);
+        }
+    }
+    // Deferred fault (+ SMC for stores) check.
+    dynasm!(a
+        ; mov ecx, [rbx + FAULTED]
+        ; test ecx, ecx
+        ; jz >nofault
+        ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+        ; mov eax, exit::FAULT as i32
+        ; jmp ->epilogue
+        ; nofault:
+    );
+    if !load {
+        dynasm!(a
+            ; mov ecx, [rbx + SMC]
+            ; test ecx, ecx
+            ; jz >nosmc
+            ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+            ; mov eax, exit::SMC as i32
+            ; jmp ->epilogue
+            ; nosmc:
+        );
+    }
+}
+
+/// Emit an ARM trace terminator (branch / bx / computed-PC data-proc / ldm-pc).
+/// A conditional terminator falls through to `end_pc` when not taken.
+fn emit_arm_terminator(a: &mut Asm, op: &ArmOp, pc: u32, end_pc: u32) {
+    let cond = match op {
+        ArmOp::Branch { cond, .. } | ArmOp::BranchEx { cond, .. } | ArmOp::DataProc { cond, .. } | ArmOp::Block { cond, .. } => *cond,
+        _ => 0xe,
+    };
+    let guarded = emit_arm_guard(a, cond);
+
+    match *op {
+        ArmOp::Branch {
+            target, link, ret, to_thumb, ..
+        } => {
+            if link {
+                dynasm!(a ; mov DWORD [rbx + ro(14)], ret as i32);
+            }
+            if to_thumb {
+                dynasm!(a ; or DWORD [rbx + CPSR], (1 << 5));
+            }
+            dynasm!(a ; mov DWORD [rbx + PC], target as i32);
+        }
+        ArmOp::BranchEx { rm, .. } => {
+            if rm == 15 {
+                dynasm!(a ; mov eax, pc.wrapping_add(8) as i32);
+            } else {
+                dynasm!(a ; mov eax, [rbx + ro(rm)]);
+            }
+            dynasm!(a
+                ; mov ecx, eax
+                ; and ecx, 1
+                ; mov edx, ecx
+                ; shl edx, 1
+                ; or edx, -4
+                ; and eax, edx
+                ; mov [rbx + PC], eax
+                ; mov edx, [rbx + CPSR]
+                ; and edx, !(1 << 5)
+                ; mov r8d, ecx
+                ; shl r8d, 5
+                ; or edx, r8d
+                ; mov [rbx + CPSR], edx
+            );
+        }
+        ArmOp::DataProc { opcode, rn, op2, .. } => {
+            // rd == 15: compute the result and use it as the branch target (no
+            // flags: the S form fell back at decode).
+            emit_arm_op2(a, op2);
+            emit_arm_alu(a, opcode, false, rn);
+            dynasm!(a ; mov [rbx + PC], r8d);
+        }
+        ArmOp::Block { .. } => {
+            emit_arm_block_body(a, op, pc);
+            // The loaded r15 is already in regs[15]; fall through to the exit.
+        }
+        _ => unreachable!(),
+    }
+    dynasm!(a ; mov eax, exit::CONTINUE as i32 ; jmp ->epilogue);
+    if guarded {
+        dynasm!(a
+            ; skip:
+            ; mov DWORD [rbx + PC], end_pc as i32
+            ; mov eax, exit::CONTINUE as i32
+            ; jmp ->epilogue
+        );
+    }
 }
 
 /// Emit one straight-line op (branches are handled by `compile_block`).

@@ -26,7 +26,8 @@ use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, Executab
 
 use crate::engine::fast::{FastOp, ends_trace};
 
-use super::{JitCtx, exit, jit_alu_shift, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
+use super::arm_frontend::{ArmOp, Off, Op2, arm_ends_trace};
+use super::{JitCtx, exit, jit_alu_shift, jit_arm_shift, jit_cond_met, jit_load8, jit_load16, jit_load32, jit_store8, jit_store16, jit_store32};
 
 /// `dynasm!` selects the target architecture per invocation, defaulting to x64;
 /// this wrapper prepends `.arch aarch64` so every code-emitting helper assembles
@@ -240,6 +241,401 @@ pub(crate) fn compile_block(ops: &[FastOp], start_pc: u32) -> Option<(Code, usiz
 
     let buf = a.finalize().ok()?;
     Some((Code { buf, entry }, limit))
+}
+
+// ---------------------------------------------------------------------------
+// ARM (A32) code generation — mirror of the x86-64 ARM path.
+// ---------------------------------------------------------------------------
+
+fn arm_supported(_op: &ArmOp) -> bool {
+    true
+}
+
+pub(crate) fn compile_arm_block(ops: &[ArmOp], start_pc: u32) -> Option<(Code, usize)> {
+    let mut limit = ops.len();
+    for (i, op) in ops.iter().enumerate() {
+        if !arm_supported(op) {
+            limit = i;
+            break;
+        }
+        if arm_ends_trace(op) {
+            limit = i + 1;
+            break;
+        }
+    }
+    if limit == 0 {
+        return None;
+    }
+    let end_pc = start_pc.wrapping_add(4 * limit as u32);
+    let block_len = limit as u32;
+
+    let mut a = Asm::new().ok()?;
+    let entry = a.offset();
+    a64!(a
+        ; stp x19, x30, [sp, #-16]!
+        ; mov x19, x0
+        ; ldr w9, [x19, #BUDGET]
+        ; cmp w9, #0
+        ; b.gt >run
+    );
+    mov_imm32!(a, w10, start_pc);
+    a64!(a
+        ; str w10, [x19, #PC]
+        ; movz w0, #exit::CONTINUE
+        ; b ->epilogue
+        ; run:
+        ; sub w9, w9, #block_len
+        ; str w9, [x19, #BUDGET]
+    );
+
+    let mut ended = false;
+    for (i, op) in ops[..limit].iter().enumerate() {
+        let pc = start_pc.wrapping_add(4 * i as u32);
+        if arm_ends_trace(op) {
+            emit_arm_terminator(&mut a, op, pc, end_pc);
+            ended = true;
+        } else {
+            emit_arm(&mut a, op, pc);
+        }
+    }
+    if !ended {
+        mov_imm32!(a, w10, end_pc);
+        a64!(a ; str w10, [x19, #PC] ; movz w0, #exit::CONTINUE);
+    }
+    a64!(a ; ->epilogue: ; ldp x19, x30, [sp], #16 ; ret);
+
+    let buf = a.finalize().ok()?;
+    Some((Code { buf, entry }, limit))
+}
+
+/// Emit a guard that branches to `>skip` when `cond` is not met. Returns whether
+/// a guard was emitted (AL needs none).
+fn emit_arm_guard(a: &mut Asm, cond: u8) -> bool {
+    // (bit, take_when_set)
+    let single: Option<(u32, bool)> = match cond {
+        0x0 => Some((30, true)),
+        0x1 => Some((30, false)),
+        0x2 => Some((29, true)),
+        0x3 => Some((29, false)),
+        0x4 => Some((31, true)),
+        0x5 => Some((31, false)),
+        0x6 => Some((28, true)),
+        0x7 => Some((28, false)),
+        _ => None,
+    };
+    match single {
+        Some((bit, take_when_set)) => {
+            a64!(a ; ldr w9, [x19, #CPSR]);
+            if take_when_set {
+                a64!(a ; tbz w9, #bit, >skip);
+            } else {
+                a64!(a ; tbnz w9, #bit, >skip);
+            }
+            true
+        }
+        None if cond >= 0xe => false,
+        None => {
+            a64!(a ; movz w0, #(cond as u32) ; ldr w1, [x19, #CPSR]);
+            emit_call(a, jit_cond_met as *const () as u64);
+            a64!(a ; cbz w0, >skip);
+            true
+        }
+    }
+}
+
+/// operand2 -> value in `w10`, shifter carry in `w11`.
+fn emit_arm_op2(a: &mut Asm, op2: Op2) {
+    match op2 {
+        Op2::Imm { val, carry } => {
+            mov_imm32!(a, w10, val);
+            a64!(a ; movz w11, #(carry & 0xffff));
+        }
+        Op2::ShiftImm { rm, ty, amount } => emit_arm_shift_call(a, rm, ty, amount as u32, false, None),
+        Op2::ShiftReg { rm, ty, rs } => emit_arm_shift_call(a, rm, ty, 0, true, Some(rs)),
+    }
+}
+
+fn emit_arm_shift_call(a: &mut Asm, rm: u8, ty: u8, amount_imm: u32, reg_shift: bool, rs: Option<u8>) {
+    a64!(a ; ldr w0, [x19, #ro(rm)] ; movz w1, #(ty as u32));
+    if let Some(rs) = rs {
+        a64!(a ; ldr w2, [x19, #ro(rs)] ; and w2, w2, #0xff);
+    } else {
+        a64!(a ; movz w2, #amount_imm);
+    }
+    a64!(a
+        ; movz w3, #(reg_shift as u32)
+        ; ldr w4, [x19, #CPSR]
+        ; ubfx w4, w4, #29, #1
+    );
+    emit_call(a, jit_arm_shift as *const () as u64);
+    a64!(a ; mov w10, w0 ; lsr x11, x0, #32);
+}
+
+fn emit_arm(a: &mut Asm, op: &ArmOp, pc: u32) {
+    match *op {
+        ArmOp::DataProc {
+            cond,
+            opcode,
+            s,
+            rd,
+            rn,
+            op2,
+        } => {
+            let guarded = emit_arm_guard(a, cond);
+            emit_arm_op2(a, op2);
+            emit_arm_alu(a, opcode, s, rn);
+            if !matches!(opcode, 0x8..=0xB) {
+                a64!(a ; str w8, [x19, #ro(rd)]);
+            }
+            if guarded {
+                a64!(a ; skip:);
+            }
+        }
+        ArmOp::LoadStore { .. } => emit_arm_load_store(a, op, pc),
+        ArmOp::Block { cond, .. } => {
+            let guarded = emit_arm_guard(a, cond);
+            emit_arm_block_body(a, op, pc);
+            if guarded {
+                a64!(a ; skip:);
+            }
+        }
+        _ => unreachable!("terminator in straight slot"),
+    }
+}
+
+/// operand2 in `w10`, shifter carry in `w11`; result -> `w8`, updates CPSR when
+/// `s`.
+fn emit_arm_alu(a: &mut Asm, opcode: u8, s: bool, rn: u8) {
+    let logical = matches!(opcode, 0x0 | 0x1 | 0x8 | 0x9 | 0xC | 0xD | 0xE | 0xF);
+    match opcode {
+        0x0 | 0x8 => a64!(a ; ldr w9, [x19, #ro(rn)] ; and w0, w9, w10),
+        0x1 | 0x9 => a64!(a ; ldr w9, [x19, #ro(rn)] ; eor w0, w9, w10),
+        0xC => a64!(a ; ldr w9, [x19, #ro(rn)] ; orr w0, w9, w10),
+        0xE => a64!(a ; ldr w9, [x19, #ro(rn)] ; bic w0, w9, w10),
+        0xD => a64!(a ; mov w0, w10),
+        0xF => a64!(a ; mvn w0, w10),
+        0x2 | 0xA => a64!(a ; ldr w9, [x19, #ro(rn)] ; subs w0, w9, w10),
+        0x3 => a64!(a ; ldr w9, [x19, #ro(rn)] ; subs w0, w10, w9),
+        0x4 | 0xB => a64!(a ; ldr w9, [x19, #ro(rn)] ; adds w0, w9, w10),
+        0x5 => a64!(a
+            ; ldr w9, [x19, #ro(rn)]
+            ; ldr w12, [x19, #CPSR] ; ubfx w12, w12, #29, #1 ; cmp w12, #1 // C flag = ARM C
+            ; adcs w0, w9, w10),
+        0x6 => a64!(a
+            ; ldr w9, [x19, #ro(rn)]
+            ; ldr w12, [x19, #CPSR] ; ubfx w12, w12, #29, #1 ; cmp w12, #1
+            ; sbcs w0, w9, w10),
+        0x7 => a64!(a
+            ; ldr w9, [x19, #ro(rn)]
+            ; ldr w12, [x19, #CPSR] ; ubfx w12, w12, #29, #1 ; cmp w12, #1
+            ; sbcs w0, w10, w9),
+        _ => unreachable!(),
+    }
+    if logical {
+        a64!(a ; mov w8, w0);
+        if s {
+            a64!(a ; mov w1, w11);
+            emit_flags_nzc(a);
+        }
+    } else if s {
+        emit_flags_nzcv(a);
+    } else {
+        a64!(a ; mov w8, w0);
+    }
+}
+
+fn emit_arm_load_store(a: &mut Asm, op: &ArmOp, pc: u32) {
+    let ArmOp::LoadStore {
+        cond,
+        load,
+        byte,
+        rd,
+        rn,
+        pre,
+        up,
+        wb,
+        base_pc,
+        offset,
+    } = *op
+    else {
+        unreachable!()
+    };
+    let guarded = emit_arm_guard(a, cond);
+
+    // offset -> w2
+    match offset {
+        Off::Imm(v) => mov_imm32!(a, w2, v),
+        Off::ShiftImm { rm, ty, amount } => {
+            emit_arm_shift_call(a, rm, ty, amount as u32, false, None);
+            a64!(a ; mov w2, w10);
+        }
+    }
+    // base -> w9
+    match base_pc {
+        Some(v) => mov_imm32!(a, w9, v),
+        None => a64!(a ; ldr w9, [x19, #ro(rn)]),
+    }
+    // post -> w10 ; addr -> w1
+    if up {
+        a64!(a ; add w10, w9, w2);
+    } else {
+        a64!(a ; sub w10, w9, w2);
+    }
+    if pre {
+        a64!(a ; mov w1, w10);
+    } else {
+        a64!(a ; mov w1, w9);
+    }
+    let do_wb = (!pre || wb) && base_pc.is_none() && (!load || rd != rn);
+
+    if load {
+        if do_wb {
+            a64!(a ; str w10, [x19, #ro(rn)]);
+        }
+        a64!(a ; mov x0, x19);
+        emit_call(a, if byte { jit_load8 } else { jit_load32 } as *const () as u64);
+        a64!(a
+            ; str w0, [x19, #ro(rd)]
+            ; ldr w9, [x19, #FAULTED]
+            ; cbz w9, >nofault
+        );
+        mov_imm32!(a, w12, pc.wrapping_add(4));
+        a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::FAULT ; b ->epilogue ; nofault:);
+    } else {
+        a64!(a ; ldr w2, [x19, #ro(rd)]); // capture value before writeback
+        if do_wb {
+            a64!(a ; str w10, [x19, #ro(rn)]);
+        }
+        a64!(a ; mov x0, x19);
+        emit_call(a, if byte { jit_store8 } else { jit_store32 } as *const () as u64);
+        a64!(a ; ldr w9, [x19, #FAULTED] ; cbz w9, >nofault);
+        mov_imm32!(a, w12, pc.wrapping_add(4));
+        a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::FAULT ; b ->epilogue ; nofault:);
+        a64!(a ; ldr w9, [x19, #SMC] ; cbz w9, >nosmc);
+        mov_imm32!(a, w12, pc.wrapping_add(4));
+        a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::SMC ; b ->epilogue ; nosmc:);
+    }
+    if guarded {
+        a64!(a ; skip:);
+    }
+}
+
+fn emit_arm_block_body(a: &mut Asm, op: &ArmOp, pc: u32) {
+    let ArmOp::Block {
+        load,
+        rn,
+        pre,
+        up,
+        wb,
+        reglist,
+        ..
+    } = *op
+    else {
+        unreachable!()
+    };
+    let regs: alloc::vec::Vec<u8> = (0..16u8).filter(|&r| reglist & (1 << r) != 0).collect();
+    let total = regs.len() as i32;
+    a64!(a ; ldr w0, [x19, #ro(rn)] ; str w0, [x19, #SCRATCH]);
+    if wb {
+        let delta = if up { total * 4 } else { -total * 4 };
+        a64!(a ; ldr w0, [x19, #SCRATCH]);
+        if delta >= 0 {
+            a64!(a ; add w0, w0, #(delta as u32));
+        } else {
+            a64!(a ; sub w0, w0, #((-delta) as u32));
+        }
+        a64!(a ; str w0, [x19, #ro(rn)]);
+    }
+    let addr_base = if up { 0 } else { -total * 4 };
+    let pre_incr = (pre == up) as i32;
+    for (i, &r) in regs.iter().enumerate() {
+        let off = addr_base + (i as i32 + pre_incr) * 4;
+        a64!(a ; mov x0, x19 ; ldr w1, [x19, #SCRATCH]);
+        if off >= 0 {
+            a64!(a ; add w1, w1, #(off as u32));
+        } else {
+            a64!(a ; sub w1, w1, #((-off) as u32));
+        }
+        if load {
+            emit_call(a, jit_load32 as *const () as u64);
+            a64!(a ; str w0, [x19, #ro(r)]);
+        } else {
+            if r == 15 {
+                mov_imm32!(a, w2, pc.wrapping_add(12));
+            } else if r == rn && wb && i == 0 {
+                a64!(a ; ldr w2, [x19, #SCRATCH]);
+            } else {
+                a64!(a ; ldr w2, [x19, #ro(r)]);
+            }
+            emit_call(a, jit_store32 as *const () as u64);
+        }
+    }
+    a64!(a ; ldr w9, [x19, #FAULTED] ; cbz w9, >nofault);
+    mov_imm32!(a, w12, pc.wrapping_add(4));
+    a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::FAULT ; b ->epilogue ; nofault:);
+    if !load {
+        a64!(a ; ldr w9, [x19, #SMC] ; cbz w9, >nosmc);
+        mov_imm32!(a, w12, pc.wrapping_add(4));
+        a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::SMC ; b ->epilogue ; nosmc:);
+    }
+}
+
+fn emit_arm_terminator(a: &mut Asm, op: &ArmOp, pc: u32, end_pc: u32) {
+    let cond = match op {
+        ArmOp::Branch { cond, .. } | ArmOp::BranchEx { cond, .. } | ArmOp::DataProc { cond, .. } | ArmOp::Block { cond, .. } => *cond,
+        _ => 0xe,
+    };
+    let guarded = emit_arm_guard(a, cond);
+
+    match *op {
+        ArmOp::Branch {
+            target, link, ret, to_thumb, ..
+        } => {
+            if link {
+                mov_imm32!(a, w10, ret);
+                a64!(a ; str w10, [x19, #ro(14)]);
+            }
+            if to_thumb {
+                a64!(a ; ldr w10, [x19, #CPSR] ; orr w10, w10, #0x20 ; str w10, [x19, #CPSR]);
+            }
+            mov_imm32!(a, w10, target);
+            a64!(a ; str w10, [x19, #PC]);
+        }
+        ArmOp::BranchEx { rm, .. } => {
+            if rm == 15 {
+                mov_imm32!(a, w0, pc.wrapping_add(8));
+            } else {
+                a64!(a ; ldr w0, [x19, #ro(rm)]);
+            }
+            a64!(a ; and w9, w0, #1);
+            mov_imm32!(a, w10, 0xffff_fffc);
+            a64!(a
+                ; orr w10, w10, w9, lsl #1
+                ; and w0, w0, w10
+                ; str w0, [x19, #PC]
+                ; ldr w10, [x19, #CPSR]
+                ; movz w11, #0x20
+                ; bic w10, w10, w11
+                ; orr w10, w10, w9, lsl #5
+                ; str w10, [x19, #CPSR]
+            );
+        }
+        ArmOp::DataProc { opcode, rn, op2, .. } => {
+            emit_arm_op2(a, op2);
+            emit_arm_alu(a, opcode, false, rn);
+            a64!(a ; str w8, [x19, #PC]);
+        }
+        ArmOp::Block { .. } => {
+            emit_arm_block_body(a, op, pc);
+        }
+        _ => unreachable!(),
+    }
+    a64!(a ; movz w0, #exit::CONTINUE ; b ->epilogue);
+    if guarded {
+        a64!(a ; skip:);
+        mov_imm32!(a, w10, end_pc);
+        a64!(a ; str w10, [x19, #PC] ; movz w0, #exit::CONTINUE ; b ->epilogue);
+    }
 }
 
 fn emit_op(a: &mut Asm, op: FastOp, pc: u32) {
