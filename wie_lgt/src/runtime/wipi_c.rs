@@ -400,12 +400,21 @@ fn install_fast_wipic_svc(core: &ArmCore) {
     const ID_GET_FRAMEBUFFER_POINTER: u32 = WIPICSvcId::GetFramebufferPointer as u32;
     const ID_GET_IMAGE_FRAMEBUFFER: u32 = WIPICSvcId::GetImageFramebuffer as u32;
 
-    core.set_fast_svc_handler(Arc::new(move |core: &mut ArmCore, category: u32, lr: u32| -> Result<bool> {
+    core.set_fast_svc_handler(Arc::new(move |core: &mut ArmCore, category: u32, _lr: u32| -> Result<bool> {
         if category != SVC_CATEGORY_WIPIC {
             return Ok(false);
         }
         let id = core.read_svc_id();
+        if id != ID_GET_FRAMEBUFFER_POINTER && id != ID_GET_IMAGE_FRAMEBUFFER {
+            return Ok(false);
+        }
         WIPIC_SVC_COUNT[(id as usize).min(WIPIC_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        // Return straight to the caller, exactly as the generic handler does:
+        // the target is the *link register* (the game's Thumb return address,
+        // low bit set), not the SVC-exception return address, which points at
+        // the stub's `bx lr` and is even — using it would clear the Thumb bit in
+        // `set_next_pc` and resume the caller in ARM state on Thumb code.
+        let (_, ret) = core.read_pc_lr()?;
         match id {
             ID_GET_FRAMEBUFFER_POINTER => {
                 // MC_grpGetFrameBufferPointer: return WIPICFramebuffer.buf. The
@@ -415,19 +424,17 @@ fn install_fast_wipic_svc(core: &ArmCore) {
                 let handle = core.read_param(0)?;
                 let framebuffer: WIPICFramebuffer = read_generic(core, handle)?;
                 core.write_return_value(&[framebuffer.buf.0])?;
-                core.set_next_pc(lr)?;
+                core.set_next_pc(ret)?;
                 Ok(true)
             }
-            ID_GET_IMAGE_FRAMEBUFFER => {
-                // MC_grpGetImageFrameBuffer: WIPICImage begins with its
-                // framebuffer, so the image handle doubles as a framebuffer
-                // handle — return it as is.
+            // ID_GET_IMAGE_FRAMEBUFFER: WIPICImage begins with its framebuffer,
+            // so the image handle doubles as a framebuffer handle — return as is.
+            _ => {
                 let arg = core.read_param(0)?;
                 core.write_return_value(&[arg])?;
-                core.set_next_pc(lr)?;
+                core.set_next_pc(ret)?;
                 Ok(true)
             }
-            _ => Ok(false),
         }
     }));
 }
