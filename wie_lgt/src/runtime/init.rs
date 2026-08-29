@@ -1158,21 +1158,31 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             );
             dispatch.write(core, lr)
         }
-        InitSvcId::VmGetStringClass => {
-            let class = imported_class_token(context, "java/lang/String")
-                .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
-
-            tracing::debug!("vm_get_string_class() -> {class:#x}");
-            class.write(core, lr)
-        }
-        InitSvcId::VmGetStringArrayClass => {
-            let string_class = imported_class_token(context, "java/lang/String")
-                .ok_or_else(|| WieError::FatalError("java/lang/String has no imported class token".into()))?;
-
-            let class = get_array_class(core, context, 1, string_class, 0)?;
-            tracing::debug!("vm_get_string_array_class() -> {class:#x}");
-            class.write(core, lr)
-        }
+        InitSvcId::VmGetStringClass => match imported_class_token(context, "java/lang/String") {
+            Some(class) => {
+                tracing::debug!("vm_get_string_class() -> {class:#x}");
+                class.write(core, lr)
+            }
+            // On the classic ABI the import table is loaded before this runs. A
+            // title that reaches here with no table is using slot 0x14 for a
+            // different function (its registers carry class-table pointers, not
+            // a bare string-class request). Log what it passed and continue.
+            None => {
+                dump_ambiguous_slot(core, "0x14 (classic vm_get_string_class)");
+                0u32.write(core, lr)
+            }
+        },
+        InitSvcId::VmGetStringArrayClass => match imported_class_token(context, "java/lang/String") {
+            Some(string_class) => {
+                let class = get_array_class(core, context, 1, string_class, 0)?;
+                tracing::debug!("vm_get_string_array_class() -> {class:#x}");
+                class.write(core, lr)
+            }
+            None => {
+                dump_ambiguous_slot(core, "0xe1 (classic vm_get_string_array_class)");
+                0u32.write(core, lr)
+            }
+        },
     }
 }
 /// Handles a call the compiled code made through `static_method_offsets`.
@@ -1527,6 +1537,40 @@ fn class_implements_interface(context: &InitSvcContext, class_name: &str, interf
     }
 
     false
+}
+
+/// Logs the argument registers, and the memory each pointer-looking one points
+/// at, for a table-`0x64` slot whose meaning differs across LGT ABI revisions.
+/// Several titles use these slot numbers for functions other than the ones the
+/// classic (LoM) ABI assigns; dumping what the game actually passes lets the
+/// slot be identified from one run instead of guessed, without ending it.
+fn dump_ambiguous_slot(core: &ArmCore, slot: &str) {
+    use core::fmt::Write;
+
+    let mut line = String::new();
+    for reg in 0..4usize {
+        let Ok(value) = core.read_param(reg) else { continue };
+        let _ = write!(line, " r{reg}={value:#x}");
+
+        // Only chase values that look like a guest pointer, not small scalars.
+        if (0x1000..0x4000_0000).contains(&value) {
+            let _ = write!(line, "[");
+            for word in 0..6u32 {
+                match read_generic::<u32, _>(core, value.wrapping_add(word * 4)) {
+                    Ok(bytes) => {
+                        let _ = write!(line, "{bytes:#010x} ");
+                    }
+                    Err(_) => {
+                        let _ = write!(line, "<unmapped>");
+                        break;
+                    }
+                }
+            }
+            let _ = write!(line, "]");
+        }
+    }
+
+    tracing::warn!("LGT table-0x64 slot {slot}: classic handler has no data (imported classes not loaded yet);{line}");
 }
 
 fn imported_class_token(context: &InitSvcContext, name: &str) -> Option<u32> {
