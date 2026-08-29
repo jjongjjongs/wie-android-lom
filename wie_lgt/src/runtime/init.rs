@@ -233,8 +233,13 @@ struct InitSvcContext {
     vm_reschedule_deadlines_ms: Arc<Mutex<BTreeMap<ThreadId, u64>>>,
     /// Guest-object monitor owner and recursion depth.
     vm_monitors: VmMonitors,
+    /// The application main class the archive descriptor named (`app_info`
+    /// `mclass`). Used as `Main::main`'s argv[0] when a title's ABI does not
+    /// hand `vm_run_main_class` a readable argument vector.
+    main_class_name: Option<Arc<str>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_init_svc_handler(
     core: &mut ArmCore,
     system: &System,
@@ -243,6 +248,7 @@ fn register_init_svc_handler(
     save_points: &SavePointState,
     dlet_properties: DletProperties,
     firmware_mda_routes: BTreeMap<u32, u32>,
+    main_class_name: Option<Arc<str>>,
 ) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
 
@@ -271,6 +277,7 @@ fn register_init_svc_handler(
             vm_reschedule_count: Arc::new(Mutex::new(VM_RESCHEDULE_COUNT_THRESHOLD)),
             vm_reschedule_deadlines_ms: Default::default(),
             vm_monitors: Default::default(),
+            main_class_name,
         },
     )
 }
@@ -756,10 +763,20 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let app_classes = context.app_classes.clone();
             let image_ranges = context.image_ranges.clone();
             let java_handles = context.java_handles.clone();
+            let fallback_main_class = context.main_class_name.clone();
 
-            vm_run_main_class(core, jvm, &java_handles, &app_classes, &image_ranges, argc, argv)
-                .await?
-                .write(core, lr)
+            vm_run_main_class(
+                core,
+                jvm,
+                &java_handles,
+                &app_classes,
+                &image_ranges,
+                argc,
+                argv,
+                fallback_main_class.as_deref(),
+            )
+            .await?
+            .write(core, lr)
         }
         InitSvcId::VmGetConstantString => {
             let chars = core.read_param(1)?;
@@ -2401,7 +2418,7 @@ pub async fn load_native(
     jvm: &Jvm,
     data: &[u8],
     jar_filename: &str,
-    _main_class_name: Option<&str>,
+    main_class_name: Option<&str>,
     firmware_mda_routes: BTreeMap<u32, u32>,
 ) -> Result<()> {
     let (entrypoint, image_ranges) = load_executable(core, data)?;
@@ -2426,6 +2443,7 @@ pub async fn load_native(
         &save_points,
         dlet_properties,
         firmware_mda_routes,
+        main_class_name.map(Arc::from),
     )?;
 
     let ptr_init_param_1 = Allocator::alloc(core, size_of::<InitParam1>() as u32)?;

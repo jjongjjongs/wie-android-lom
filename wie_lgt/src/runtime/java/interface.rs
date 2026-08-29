@@ -804,6 +804,7 @@ pub async fn vm_run_main_class(
     image_ranges: &[(u32, u32)],
     argc: u32,
     argv: u32,
+    fallback_main_class: Option<&str>,
 ) -> Result<u32> {
     let argc = argc.min(MAX_MAIN_ARGUMENTS);
     tracing::debug!("vm_run_main_class: argc={argc}, argv={argv:#x}");
@@ -838,6 +839,18 @@ pub async fn vm_run_main_class(
         };
 
         arguments.push(String::from_utf8_lossy(&bytes).into_owned());
+    }
+
+    // `org.kwis.msp.lcdui.Main::main` reads argv[0] as the application's main
+    // class. When the ABI did not hand over a readable vector, fall back to the
+    // main class the archive descriptor named (`app_info` `mclass`), which WIE
+    // already knows, so the title still launches its Jlet.
+    if arguments.is_empty()
+        && let Some(main_class) = fallback_main_class
+        && !main_class.is_empty()
+    {
+        tracing::debug!("vm_run_main_class: no argv read; falling back to descriptor main class {main_class:?}");
+        arguments.push(main_class.to_owned());
     }
 
     tracing::debug!("java_run_main({arguments:?})");
