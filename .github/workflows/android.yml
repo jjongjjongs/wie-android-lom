@@ -56,7 +56,9 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        # -PenableJit selects the machine-code JIT engine; drop it to ship the
+        # interpreter.
+        run: gradle --no-daemon assembleDebug -PenableJit
 
       - name: Upload APK
         continue-on-error: true

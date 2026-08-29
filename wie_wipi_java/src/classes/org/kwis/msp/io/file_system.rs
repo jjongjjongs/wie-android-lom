@@ -148,26 +148,14 @@ impl FileSystem {
     async fn remove(jvm: &Jvm, _: &mut WieJvmContext, filename: ClassInstanceRef<String>) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.io.FileSystem::remove({filename:?})");
 
-        jvm.invoke_static(
-            "org/kwis/msp/io/FileSystem",
-            "remove",
-            "(Ljava/lang/String;I)V",
-            (filename, 1),
-        )
-        .await
+        jvm.invoke_static("org/kwis/msp/io/FileSystem", "remove", "(Ljava/lang/String;I)V", (filename, 1))
+            .await
     }
 
-    async fn remove_with_flag(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        filename: ClassInstanceRef<String>,
-        flag: i32,
-    ) -> JvmResult<()> {
+    async fn remove_with_flag(jvm: &Jvm, _: &mut WieJvmContext, filename: ClassInstanceRef<String>, flag: i32) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.io.FileSystem::remove({filename:?}, {flag})");
 
-        let file = jvm
-            .new_class("java/io/File", "(Ljava/lang/String;)V", (filename,))
-            .await?;
+        let file = jvm.new_class("java/io/File", "(Ljava/lang/String;)V", (filename,)).await?;
 
         let removed: bool = jvm.invoke_virtual(&file, "delete", "()Z", ()).await?;
 
@@ -348,16 +336,11 @@ mod test {
     #[test]
     fn test_filesystem_remove_deletes_file_and_reports_missing_file() -> Result<()> {
         run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
-            let name: ClassInstanceRef<String> =
-                JavaLangString::from_rust_string(&jvm, "remove-test.dat").await?.into();
+            let name: ClassInstanceRef<String> = JavaLangString::from_rust_string(&jvm, "remove-test.dat").await?.into();
 
-            let file = jvm
-                .new_class("java/io/File", "(Ljava/lang/String;)V", (name.clone(),))
-                .await?;
+            let file = jvm.new_class("java/io/File", "(Ljava/lang/String;)V", (name.clone(),)).await?;
 
-            let output = jvm
-                .new_class("java/io/FileOutputStream", "(Ljava/io/File;)V", (file.clone(),))
-                .await?;
+            let output = jvm.new_class("java/io/FileOutputStream", "(Ljava/io/File;)V", (file.clone(),)).await?;
 
             let _: () = jvm.invoke_virtual(&output, "write", "(I)V", (0x41,)).await?;
             let _: () = jvm.invoke_virtual(&output, "close", "()V", ()).await?;
@@ -366,24 +349,14 @@ mod test {
             assert!(exists_before);
 
             let _: () = jvm
-                .invoke_static(
-                    "org/kwis/msp/io/FileSystem",
-                    "remove",
-                    "(Ljava/lang/String;)V",
-                    (name.clone(),),
-                )
+                .invoke_static("org/kwis/msp/io/FileSystem", "remove", "(Ljava/lang/String;)V", (name.clone(),))
                 .await?;
 
             let exists_after: bool = jvm.invoke_virtual(&file, "exists", "()Z", ()).await?;
             assert!(!exists_after);
 
             let second: JvmResult<()> = jvm
-                .invoke_static(
-                    "org/kwis/msp/io/FileSystem",
-                    "remove",
-                    "(Ljava/lang/String;)V",
-                    (name,),
-                )
+                .invoke_static("org/kwis/msp/io/FileSystem", "remove", "(Ljava/lang/String;)V", (name,))
                 .await;
 
             let Err(JavaError::JavaException(exception)) = second else {
@@ -395,5 +368,4 @@ mod test {
             Ok(())
         })
     }
-
 }

@@ -21,13 +21,16 @@
 
 use alloc::{boxed::Box, format};
 
-use arm32_cpu::{Cpu, Mode, reg};
+use arm32_cpu::{Cpu, Mode, reg, util::bit::BitUtilExt};
 
 use wie_util::{Result, WieError};
 
 use super::arm32_cpu::EmulatedMemory;
-use super::fast::{Decoded, FastOp, decode};
+use super::fast::{Decoded, FastOp, decode, ends_trace};
 use crate::engine::{ArmEngine, ArmRegister, EngineRunResult, MemoryPermission};
+
+mod arm_frontend;
+use arm_frontend::{ArmOp, arm_ends_trace, decode_arm};
 
 #[cfg(target_arch = "x86_64")]
 mod x64;
@@ -69,6 +72,10 @@ pub(crate) struct JitCtx {
     /// dispatcher reads the delta back as the retired-instruction count.
     /// Offset 96.
     pub budget: i32,
+    /// Scratch word for compiled code needing a value to survive helper calls
+    /// (the base address of an ldm/stm, whose base register may be overwritten
+    /// mid-transfer). Offset 100.
+    pub scratch: u32,
 }
 
 impl JitCtx {
@@ -82,6 +89,7 @@ impl JitCtx {
             mem: core::ptr::null_mut(),
             code_pages: core::ptr::null(),
             budget: 0,
+            scratch: 0,
         }
     }
 }
@@ -111,13 +119,77 @@ struct Slot {
     block: Option<CompiledBlock>,
 }
 
+/// Reasons the JIT declines an instruction and falls back to the interpreter,
+/// for the fallback profile. Order matches `FALLBACK_NAMES`.
+const FALLBACK_NAMES: [&str; 13] = [
+    "shift",        // 0: LSL/LSR/ASR immediate
+    "shift-by-reg", // 1: ALU LSL/LSR/ASR/ROR by register
+    "adc",          // 2
+    "sbc",          // 3
+    "mul",          // 4
+    "ldrsb/ldrsh",  // 5: signed halfword transfers
+    "bx/blx",       // 6
+    "push/pop",     // 7
+    "ldm/stm",      // 8
+    "bl/b.w",       // 9: long / wide branches
+    "svc",          // 10
+    "other",        // 11: undefined, hints, …
+    "arm-mode",     // 12: guest running in ARM state (the JIT is Thumb-only)
+];
+
+/// `FALLBACK_NAMES` index for ARM-state execution.
+const ARM_MODE: usize = 12;
+const NUM_FALLBACK: usize = FALLBACK_NAMES.len();
+
+/// Classify why the instruction at `inst` is not JIT-compilable, as an index
+/// into `FALLBACK_NAMES`.
+fn fallback_category(inst: u16) -> usize {
+    match decode(inst, 0) {
+        Some(Decoded::Straight(op)) | Some(Decoded::Terminator(op)) => match op {
+            FastOp::Shift { .. } => 0,
+            FastOp::AluOp { op, .. } => match op {
+                0x2 | 0x3 | 0x4 | 0x7 => 1,
+                0x5 => 2,
+                0x6 => 3,
+                0xD => 4,
+                _ => 11,
+            },
+            FastOp::HwSgnXfer { .. } => 5,
+            _ => 11,
+        },
+        None => {
+            let i = inst as u32;
+            if i & 0xff00 == 0x4700 {
+                6 // BX/BLX
+            } else if i & 0xf600 == 0xb400 {
+                7 // PUSH/POP
+            } else if i & 0xf000 == 0xc000 {
+                8 // LDMIA/STMIA
+            } else if i & 0xf000 == 0xf000 || i & 0xf800 == 0xe800 {
+                9 // BL / BLX / B.W
+            } else if i & 0xff00 == 0xdf00 {
+                10 // SVC
+            } else {
+                11
+            }
+        }
+    }
+}
+
 pub struct JitEngine {
     cpu: Cpu,
     mem: Box<EmulatedMemory>,
     ctx: Box<JitCtx>,
     cache: Box<[Slot; CACHE_SLOTS]>,
+    /// Compiled ARM (A32) blocks, kept apart from the Thumb `cache` so a PC that
+    /// is only ever one ISA never aliases the other.
+    arm_cache: Box<[Slot; CACHE_SLOTS]>,
     generation: u32,
     code_pages: Box<[bool; 65536]>,
+    /// Per-category count of interpreter fallbacks, and the running total, for
+    /// the periodic fallback profile (see `note_fallback`).
+    fallbacks: [u64; NUM_FALLBACK],
+    fallback_total: u64,
 }
 
 // The raw pointers in `JitCtx` are refreshed at the start of every `run` and
@@ -132,15 +204,50 @@ impl JitEngine {
             mem: Box::new(EmulatedMemory::new()),
             ctx: Box::new(JitCtx::new()),
             cache: Box::new(core::array::from_fn(|_| Slot::default())),
+            arm_cache: Box::new(core::array::from_fn(|_| Slot::default())),
             generation: 1,
             code_pages: Box::new([false; 65536]),
+            fallbacks: [0; NUM_FALLBACK],
+            fallback_total: 0,
         }
+    }
+
+    /// Record one interpreter fallback in `category` and, at coarse milestones,
+    /// log the top reasons so on-device profiling shows which instructions to
+    /// teach the compiler next.
+    fn record_fallback(&mut self, category: usize) {
+        self.fallbacks[category] += 1;
+        self.fallback_total += 1;
+        crate::JIT_FALLBACKS.fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
+        if self.fallback_total.is_power_of_two() && self.fallback_total >= 1 << 16 {
+            let mut idx: [usize; NUM_FALLBACK] = core::array::from_fn(|i| i);
+            idx.sort_unstable_by_key(|&i| core::cmp::Reverse(self.fallbacks[i]));
+            let mut top = alloc::string::String::new();
+            for &i in idx.iter().take(6) {
+                if self.fallbacks[i] == 0 {
+                    break;
+                }
+                use core::fmt::Write;
+                let _ = write!(top, "{}={} ", FALLBACK_NAMES[i], self.fallbacks[i]);
+            }
+            tracing::info!("[jit] {} fallbacks; top: {}", self.fallback_total, top.trim_end());
+        }
+    }
+
+    /// Classify and record a Thumb-mode fallback for the instruction at `pc`.
+    fn note_fallback(&mut self, pc: u32) {
+        let inst = self.mem.peek_u16(pc).unwrap_or(0);
+        let category = fallback_category(inst);
+        self.record_fallback(category);
     }
 
     fn flush_blocks(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
             for slot in self.cache.iter_mut() {
+                *slot = Slot::default();
+            }
+            for slot in self.arm_cache.iter_mut() {
                 *slot = Slot::default();
             }
             self.generation = 1;
@@ -175,13 +282,91 @@ impl JitEngine {
                         break;
                     }
                 }
-                None => break,
+                None => {
+                    // The shared frontend declined it; try the JIT-only
+                    // control-flow ops (push/pop, bx/blx, bl) before giving up.
+                    match self.decode_cf(inst, pc) {
+                        Some((op, len)) => {
+                            ops.push(op);
+                            pc = pc.wrapping_add(len);
+                            if ends_trace(&op) {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
             }
         }
         if ops.is_empty() {
             return None;
         }
         Some((ops, pc))
+    }
+
+    /// Decode the control-flow Thumb ops the shared frontend declines, into their
+    /// JIT-only `FastOp` variants, returning the op and its byte length (2, or 4
+    /// for the 32-bit long branch). `None` if still not compilable, so the caller
+    /// ends the trace and single-steps it in the interpreter.
+    fn decode_cf(&self, inst: u16, pc: u32) -> Option<(FastOp, u32)> {
+        let i = inst as u32;
+        // BX/BLX register (HiRegBx op 3): H1 (bit 7) is the link bit, the source
+        // register is (H2:Rs) = bit6<<3 | bits[5:3].
+        if i & 0xff00 == 0x4700 {
+            let link = i.get_bit(7) == 1;
+            let rm = ((i.get_bit(6) * 8) + i.extract(3, 3)) as u8;
+            return Some((FastOp::BranchExchange { link, rm }, 2));
+        }
+        // PUSH/POP.
+        if i & 0xf600 == 0xb400 {
+            return Some((
+                FastOp::PushPop {
+                    load: i.get_bit(11) == 1,
+                    extra: i.get_bit(8) == 1,
+                    rlist: i.extract(0, 8) as u8,
+                },
+                2,
+            ));
+        }
+        // LDMIA/STMIA (BlockXfer).
+        if i & 0xf000 == 0xc000 {
+            return Some((
+                FastOp::BlockXfer {
+                    load: i.get_bit(11) == 1,
+                    rb: i.extract(8, 3) as u8,
+                    rlist: i.extract(0, 8) as u8,
+                },
+                2,
+            ));
+        }
+        // Long branch (BL / BLX immediate). A 32-bit instruction: this is only
+        // the prefix halfword; the suffix selects the form. The Thumb-2 wide-
+        // branch (B.W) forms are left to the interpreter.
+        if i & 0xf800 == 0xf000 {
+            let inst2 = self.mem.peek_u16(pc.wrapping_add(2))? as u32;
+            let offset_hi = i.extract(0, 11);
+            let offset_lo = inst2.extract(0, 11);
+            let base = pc.wrapping_add(4).wrapping_add((offset_hi << 12).sign_extend(23));
+            let ret = pc.wrapping_add(4) | 1;
+            if inst2 & 0xf800 == 0xf800 {
+                // BL: stay in Thumb.
+                let target = base.wrapping_add(offset_lo << 1);
+                return Some((
+                    FastOp::BranchLink {
+                        exchange: false,
+                        target,
+                        ret,
+                    },
+                    4,
+                ));
+            } else if inst2 & 0xf801 == 0xe800 {
+                // BLX: switch to ARM (target word-aligned, Thumb bit cleared).
+                let target = base.wrapping_add(offset_lo << 1) & !3;
+                return Some((FastOp::BranchLink { exchange: true, target, ret }, 4));
+            }
+            return None;
+        }
+        None
     }
 
     /// Ensure a compiled block for `pc` occupies its cache slot. Returns `false`
@@ -214,18 +399,86 @@ impl JitEngine {
         true
     }
 
+    /// Decode the ARM block at `start` into `ArmOp`s. `None` if the first
+    /// instruction is not compilable (caller falls back). ARM instructions are a
+    /// fixed 4 bytes, and the trace ends after the first terminator.
+    fn decode_arm_block(&self, start: u32) -> Option<(alloc::vec::Vec<ArmOp>, u32)> {
+        let mut ops = alloc::vec::Vec::new();
+        let mut pc = start;
+        while ops.len() < MAX_BLOCK_LEN {
+            let inst = self.mem.load_u32(pc)?;
+            match decode_arm(inst, pc) {
+                Some(op) => {
+                    ops.push(op);
+                    pc = pc.wrapping_add(4);
+                    if arm_ends_trace(&op) {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        if ops.is_empty() {
+            return None;
+        }
+        Some((ops, pc))
+    }
+
+    /// Ensure a compiled ARM block for `pc` occupies its cache slot. `false` if
+    /// the instruction there cannot start a compiled ARM block.
+    fn ensure_arm_block(&mut self, pc: u32) -> bool {
+        let idx = Self::slot_index(pc);
+        if self.arm_cache[idx].gen_tag == self.generation && self.arm_cache[idx].pc == pc && self.arm_cache[idx].block.is_some() {
+            return true;
+        }
+        let Some((ops, end_pc)) = self.decode_arm_block(pc) else {
+            return false;
+        };
+        let Some((code, compiled_ops)) = backend::compile_arm_block(&ops, pc) else {
+            return false;
+        };
+        let end_pc = if compiled_ops == ops.len() {
+            end_pc
+        } else {
+            pc.wrapping_add(4 * compiled_ops as u32)
+        };
+        self.code_pages[(pc >> 16) as usize] = true;
+        let cur_gen = self.generation;
+        let slot = &mut self.arm_cache[idx];
+        slot.gen_tag = cur_gen;
+        slot.pc = pc;
+        slot.block = Some(CompiledBlock { code, end_pc });
+        true
+    }
+
+    /// Copy the flat working registers into the interpreter CPU. In the
+    /// User/System bank this is a slice copy (r0..r15 at raw[0..16], CPSR at
+    /// raw[16]); other banks use the per-register path. Fast because it runs on
+    /// every interpreter fallback.
     fn store_back(&mut self, mode: Mode) {
-        self.cpu.reg_set(mode, reg::CPSR, self.ctx.cpsr);
-        for i in 0..16 {
-            self.cpu.reg_set(mode, i as u8, self.ctx.regs[i]);
+        if self.cpu.cur_bank() == 0 {
+            let dst = self.cpu.raw_regs_mut();
+            dst[0..16].copy_from_slice(&self.ctx.regs);
+            dst[16] = self.ctx.cpsr;
+        } else {
+            self.cpu.reg_set(mode, reg::CPSR, self.ctx.cpsr);
+            for i in 0..16 {
+                self.cpu.reg_set(mode, i as u8, self.ctx.regs[i]);
+            }
         }
     }
 
     fn load_regs(&mut self, mode: Mode) {
-        for i in 0..16 {
-            self.ctx.regs[i] = self.cpu.reg_get(mode, i as u8);
+        if self.cpu.cur_bank() == 0 {
+            let src = self.cpu.raw_regs();
+            self.ctx.regs.copy_from_slice(&src[0..16]);
+            self.ctx.cpsr = src[16];
+        } else {
+            for i in 0..16 {
+                self.ctx.regs[i] = self.cpu.reg_get(mode, i as u8);
+            }
+            self.ctx.cpsr = self.cpu.reg_get(mode, reg::CPSR);
         }
-        self.ctx.cpsr = self.cpu.reg_get(mode, reg::CPSR);
     }
 
     fn read_svc_result(&mut self) -> Result<EngineRunResult> {
@@ -282,6 +535,97 @@ impl ArmEngine for JitEngine {
             }
 
             let thumb = self.ctx.cpsr & (1 << 5) != 0;
+
+            if !thumb {
+                // ARM state. Prefer a compiled ARM block; when the instruction
+                // here is not compilable, run the interpreter until it reaches one
+                // (or Thumb, or a stop), syncing once around that batch instead of
+                // per instruction.
+                let arm_jit = self.ensure_arm_block(pc);
+                let end_in_block = arm_jit && {
+                    let b = self.arm_cache[Self::slot_index(pc)].block.as_ref().unwrap();
+                    end > pc && end < b.end_pc
+                };
+
+                if arm_jit && !end_in_block {
+                    crate::PC_SAMPLES[(pc >> 16) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
+                    self.ctx.faulted = 0;
+                    self.ctx.smc = 0;
+                    let start_budget = budget.min(i32::MAX as u64) as i32;
+                    self.ctx.budget = start_budget;
+                    let reason = {
+                        let block = self.arm_cache[Self::slot_index(pc)].block.as_ref().unwrap();
+                        backend::run_block(&block.code, &mut self.ctx)
+                    };
+                    let retired = (start_budget - self.ctx.budget).max(0) as u64;
+                    batch.0 += retired;
+                    budget = budget.saturating_sub(retired);
+                    match reason {
+                        exit::CONTINUE => {}
+                        exit::FAULT => break Err(WieError::InvalidMemoryAccess(self.ctx.fault_addr)),
+                        exit::SMC => self.flush_blocks(),
+                        other => break Err(WieError::FatalError(format!("bad JIT exit {other}"))),
+                    }
+                    continue;
+                }
+
+                // Interpreter path for uncompiled ARM (or an `end` inside the
+                // compiled block). `yield_to_jit` is off in the end-in-block case
+                // so a single step makes progress instead of bouncing back to the
+                // JIT it just declined.
+                let yield_to_jit = !end_in_block;
+                self.store_back(mode);
+                let outcome: Option<Result<EngineRunResult>> = loop {
+                    let apc = self.cpu.reg_get(Mode::User, reg::PC);
+                    let acpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
+                    if apc == 0x08 && (acpsr & 0x1f) == 0x13 {
+                        return self.read_svc_result();
+                    }
+                    if apc < 0x1000 {
+                        break Some(Err(WieError::InvalidMemoryAccess(apc)));
+                    }
+                    if apc == end {
+                        break Some(Ok(EngineRunResult::End));
+                    }
+                    if budget == 0 {
+                        break Some(Ok(EngineRunResult::CountExhausted));
+                    }
+                    if acpsr & (1 << 5) != 0 {
+                        break None; // back in Thumb; resume the JIT
+                    }
+                    if yield_to_jit && self.mem.load_u32(apc).is_some_and(|w| decode_arm(w, apc).is_some()) {
+                        break None; // a compilable ARM op starts here; let the JIT take it
+                    }
+                    self.record_fallback(ARM_MODE);
+                    let mut wrapper = self.mem.as_arm32cpu_memory();
+                    let ok = self.cpu.step(&mut wrapper);
+                    let mem_err = wrapper.memory_error();
+                    batch.0 += 1;
+                    budget = budget.saturating_sub(1);
+                    if !ok {
+                        let mut bytes = [0u8; 4];
+                        let _ = self.mem.read_range(apc, 4, &mut bytes);
+                        let opcode = u32::from_le_bytes(bytes);
+                        break Some(Err(WieError::FatalError(format!(
+                            "Undefined instruction at {apc:#x}: opcode {opcode:#010x}"
+                        ))));
+                    }
+                    if let Some(addr) = mem_err {
+                        break Some(Err(WieError::InvalidMemoryAccess(addr)));
+                    }
+                    if !yield_to_jit {
+                        // Single-step mode: stop after exactly one instruction.
+                        break None;
+                    }
+                };
+                mode = self.cpu.mode();
+                self.load_regs(mode);
+                match outcome {
+                    Some(r) => break r,
+                    None => continue,
+                }
+            }
+
             // `end` mid-block: fall back to single-stepping so we stop exactly at
             // it. In normal control flow `end` is a return sentinel reached only
             // at block starts, so this is the rare path.
@@ -313,6 +657,7 @@ impl ArmEngine for JitEngine {
                 }
             } else {
                 // Fallback: one interpreter step on the real CPU.
+                self.note_fallback(pc);
                 self.store_back(mode);
                 let mut wrapper = self.mem.as_arm32cpu_memory();
                 let ok = self.cpu.step(&mut wrapper);
@@ -381,6 +726,39 @@ impl ArmEngine for JitEngine {
 /// logic so compiled conditional branches match bit-for-bit.
 pub(crate) extern "C" fn jit_cond_met(cond: u32, cpsr: u32) -> u32 {
     arm32_cpu::util::arm::cond_met(cond, cpsr) as u32
+}
+
+/// Barrel-shifter for ARM operand2 / load-store register offset. `reg_shift` is
+/// the ARM `r` bit (1 = shift amount from a register, 0 = immediate); `amount` is
+/// the resolved shift amount (immediate, or `rs & 0xff`). Reuses the
+/// interpreter's `arg_shift`/`arg_shift0` so the shifted value and its carry-out
+/// match bit-for-bit. Returns the value in the low 32 bits, carry in bit 32.
+pub(crate) extern "C" fn jit_arm_shift(val: u32, shift_type: u32, amount: u32, reg_shift: u32, c_in: u32) -> u64 {
+    use arm32_cpu::util::arm::{arg_shift, arg_shift0};
+    let (v, carry) = if reg_shift == 0 && amount == 0 {
+        arg_shift0(val, shift_type, c_in)
+    } else if amount != 0 {
+        arg_shift(val, amount, shift_type)
+    } else {
+        (val, c_in)
+    };
+    (v as u64) | ((carry as u64) << 32)
+}
+
+/// Register-amount shift for the Thumb ALU LSL/LSR/ASR/ROR-by-register ops
+/// (`AluOp` 0x2/0x3/0x4/0x7). Mirrors `engine::fast`'s `exec_straight` exactly: a
+/// zero shift (low 8 bits of the amount register) leaves the value and carry
+/// untouched, otherwise the interpreter's own `arg_shift` applies. Returns the
+/// result in the low 32 bits and the new carry (0/1) in bit 32, so a single
+/// return register carries both.
+pub(crate) extern "C" fn jit_alu_shift(val: u32, amount: u32, shift_type: u32, c_in: u32) -> u64 {
+    let shift = amount & 0xff;
+    let (res, new_c) = if shift == 0 {
+        (val, c_in)
+    } else {
+        arm32_cpu::util::arm::arg_shift(val, shift, shift_type)
+    };
+    (res as u64) | ((new_c as u64) << 32)
 }
 
 /// SAFETY: `ctx` points at a live `JitCtx` whose `mem`/`code_pages` are valid for
@@ -621,6 +999,343 @@ mod tests {
             }
         }
         std::eprintln!("no divergence found");
+    }
+
+    /// Assemble Thumb halfwords into a little-endian byte program.
+    fn thumb(words: &[u16]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(words.len() * 2);
+        for &w in words {
+            v.extend_from_slice(&w.to_le_bytes());
+        }
+        v
+    }
+
+    /// Assemble ARM words into a little-endian byte program.
+    fn arm(words: &[u32]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(words.len() * 4);
+        for &w in words {
+            v.extend_from_slice(&w.to_le_bytes());
+        }
+        v
+    }
+
+    /// Like `setup`, but enter in ARM state (PC even, T bit clear).
+    fn setup_arm<E: ArmEngine>(mut e: E, code: &[u8], regs: &[u32; 15]) -> E {
+        e.mem_map(0, 0x10000, MemoryPermission::ReadExecute);
+        e.mem_map(DATA, DATA_SIZE, MemoryPermission::ReadWrite);
+        e.mem_write(CODE, code).unwrap();
+        for (i, &v) in regs.iter().enumerate() {
+            e.reg_write(reg_of(i), v);
+        }
+        e.reg_write(ArmRegister::PC, CODE);
+        e
+    }
+
+    fn assert_same_arm(code: &[u8], regs: &[u32; 15], end: u32) {
+        let (jo, jr, jm) = drive(setup_arm(JitEngine::new(), code, regs), end, 37);
+        let (so, sr, sm) = drive(setup_arm(Arm32CpuEngine::new(), code, regs), end, 37);
+        assert_eq!(so, jo, "outcome differs (interp {so:?} vs jit {jo:?})");
+        if sr != jr {
+            for i in 0..17 {
+                if sr[i] != jr[i] {
+                    panic!("reg[{i}] differs: interp {:#010x} vs jit {:#010x}", sr[i], jr[i]);
+                }
+            }
+        }
+        assert!(sm == jm, "data memory differs between engines");
+    }
+
+    #[test]
+    fn jit_arm_then_thumb() {
+        // ARM: mov r0,#0x42; add r1,r0,#1; bx r2 -> Thumb: movs r3,#0x55; b next.
+        // Exercises the ARM batch, the ARM->Thumb handoff into compiled code, and
+        // the final register sync.
+        let mut code = arm(&[0xe3a00042, 0xe2801001, 0xe12fff12, 0xe1a00000]);
+        code.extend_from_slice(&thumb(&[0x2355, B_NEXT]));
+        let mut regs = [0u32; 15];
+        regs[2] = (CODE + 0x10) | 1; // Thumb target for bx r2
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0x14);
+    }
+
+    #[test]
+    fn jit_arm_fault() {
+        // ARM ldr r0,[r5] with r5 unmapped: both engines must fault identically.
+        let code = arm(&[0xe5950000]);
+        let mut regs = [0u32; 15];
+        regs[5] = 0x0005_0000; // unmapped
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0x100);
+    }
+
+    #[test]
+    fn jit_arm_loop_to_end() {
+        // A short ARM loop that decrements r0 and branches back, then reaches the
+        // `end` breakpoint via fall-through. Exercises repeated ARM stepping and
+        // exact stop-at-end inside the batch.
+        // CODE+0: subs r0,r0,#1 (0xe2500001); CODE+4: bne CODE+0 (0x1afffffd).
+        let code = arm(&[0xe2500001, 0x1afffffd]);
+        let mut regs = [0u32; 15];
+        regs[0] = 5;
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 8);
+    }
+
+    // `0xe7ff` is `b .` to the following halfword: a trailing one gives a trace a
+    // clean block boundary exactly at `end`, so the ops before it are actually
+    // JIT-compiled rather than single-stepped by the end-in-block guard.
+    const B_NEXT: u16 = 0xe7ff;
+
+    #[test]
+    fn jit_push_pop_roundtrip() {
+        // push {r0,r1}; pop {r2,r3}; b next
+        let code = thumb(&[0xb403, 0xbc0c, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0x1111_2222;
+        regs[1] = 0x3333_4444;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_push_pop_many() {
+        // push {r0,r2,r4,r7,lr}; pop {r1,r3,r5,r6,pc}. The pop's pc lands on the
+        // movs below (set via lr), which then branches to end.
+        let code = thumb(&[
+            0xb495,                // push {r0,r2,r4,r7,lr}
+            0xbc00 | 0x100 | 0x6a, // pop {r1,r3,r5,r6,pc} = 0xbdea
+            0x0000,
+            0x0000, // padding at CODE+4, CODE+6
+            0x2055, // CODE+8: movs r0, #0x55
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        for (i, r) in regs.iter_mut().enumerate().take(13) {
+            *r = 0x1000_0000u32.wrapping_add((i as u32) * 0x11);
+        }
+        regs[14] = (CODE + 8) | 1; // lr -> the movs (Thumb)
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_pop_pc_return() {
+        // push {r0}; pop {pc} (jumps to r0); ...; movs r1; b next.
+        let code = thumb(&[
+            0xb401, // CODE+0: push {r0}
+            0xbd00, // CODE+2: pop {pc}
+            0x0000, 0x0000, 0x0000, // padding to CODE+8
+            0x2155, // CODE+8: movs r1, #0x55
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        regs[0] = (CODE + 8) | 1; // return address (Thumb)
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_bl_bx_call_return() {
+        // bl func; movs r1; b next  |  func: movs r0; bx lr
+        let code = thumb(&[
+            0xf000, 0xf806, // CODE+0: bl CODE+0x10
+            0x2133, // CODE+4: movs r1, #0x33
+            B_NEXT, // CODE+6 -> CODE+8 (end)
+            0x0000, 0x0000, 0x0000, 0x0000, // CODE+8..0xe padding
+            0x2042, // CODE+0x10: movs r0, #0x42
+            0x4770, // CODE+0x12: bx lr
+        ]);
+        let mut regs = [0u32; 15];
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 8);
+    }
+
+    #[test]
+    fn jit_bx_register() {
+        // bx r2 (jumps to r2); ...; movs r0; b next
+        let code = thumb(&[
+            0x4710, // CODE+0: bx r2
+            0x0000, 0x0000, 0x0000, // padding to CODE+8
+            0x2011, // CODE+8: movs r0, #0x11
+            B_NEXT, // CODE+10 -> CODE+12
+        ]);
+        let mut regs = [0u32; 15];
+        regs[2] = (CODE + 8) | 1; // Thumb target
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + 12);
+    }
+
+    #[test]
+    fn jit_ldm_stm_roundtrip() {
+        // stmia r6!,{r0,r1,r2}; ldmia r7!,{r3,r4,r5}; b next (r6,r7 share a base).
+        let code = thumb(&[0xc607, 0xcf38, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0x1111_1111;
+        regs[1] = 0x2222_2222;
+        regs[2] = 0x3333_3333;
+        regs[6] = DATA + 0x100;
+        regs[7] = DATA + 0x100;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_stm_base_in_list() {
+        // stmia r0!,{r0,r1}: r0 is the lowest reg, so slot 0 stores the original
+        // base, not the written-back value.
+        let code = thumb(&[0xc003, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = DATA + 0x200;
+        regs[1] = 0x9999_9999;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_ldm_base_in_list() {
+        // Seed memory with stmia r5!,{r2,r3}, then ldmia r0!,{r0,r1} where r0 is
+        // both base and in the list: the loaded value must win over writeback.
+        let code = thumb(&[0xc50c, 0xc803, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = DATA + 0x300;
+        regs[5] = DATA + 0x300;
+        regs[2] = 0x0abc_0abc;
+        regs[3] = 0x0def_0def;
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_stm_fault() {
+        // stmia r6!,{r0,r1} onto an unmapped base: writeback still happens and
+        // both engines fault at the same (last) address.
+        let code = thumb(&[0xc603, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0xdead_beef;
+        regs[1] = 0xfeed_face;
+        regs[6] = 0x0005_0000; // unmapped
+        regs[13] = DATA + 0x8000;
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    #[test]
+    fn jit_push_fault() {
+        // push {r0,r1} onto an unmapped stack: both engines must fault at the
+        // same address with the same post-instruction register state.
+        let code = thumb(&[0xb403, B_NEXT]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0xaaaa_aaaa;
+        regs[1] = 0xbbbb_bbbb;
+        regs[13] = 0x0005_0000; // unmapped
+        assert_same(&code, &regs, CODE + code.len() as u32);
+    }
+
+    // `b .+4` (branch to the following ARM instruction): gives an ARM trace a
+    // clean end so the ops before it are JIT-compiled.
+    const B_NEXT_ARM: u32 = 0xeaff_ffff;
+
+    #[test]
+    fn jit_arm_bl_return() {
+        // bl func; mov r1,#0x33; b next | func: mov r0,#0x42; mov pc,lr
+        let code = arm(&[
+            0xeb00_0002, // CODE+0: bl CODE+0x10
+            0xe3a0_1033, // CODE+4: mov r1,#0x33
+            B_NEXT_ARM,  // CODE+8 -> CODE+0xC (end)
+            0x0000_0000, // CODE+0xC pad
+            0xe3a0_0042, // CODE+0x10: mov r0,#0x42
+            0xe1a0_f00e, // CODE+0x14: mov pc,lr
+        ]);
+        let mut regs = [0u32; 15];
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0xc);
+    }
+
+    #[test]
+    fn jit_arm_conditional() {
+        // movs r0,#0 (Z=1); addeq r1 (taken); addne r2 (skipped); b next
+        let code = arm(&[0xe3b0_0000, 0x0281_1001, 0x1282_2001, B_NEXT_ARM]);
+        let mut regs = [0u32; 15];
+        regs[1] = 0x10;
+        regs[2] = 0x20;
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0x10);
+    }
+
+    #[test]
+    fn jit_arm_stm_ldm_pc_return() {
+        // stmfd sp!,{r4,lr}; ldmfd sp!,{r4,pc} (returns to lr); mov r5; b next
+        let code = arm(&[
+            0xe92d_4010, // CODE+0: stmfd sp!,{r4,lr}
+            0xe8bd_8010, // CODE+4: ldmfd sp!,{r4,pc}
+            0x0000_0000, // CODE+8 pad
+            0x0000_0000, // CODE+0xC pad
+            0xe3a0_5055, // CODE+0x10: mov r5,#0x55
+            B_NEXT_ARM,  // CODE+0x14 -> CODE+0x18
+        ]);
+        let mut regs = [0u32; 15];
+        regs[4] = 0xaaaa_aaaa;
+        regs[14] = CODE + 0x10; // return address (ARM)
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0x18);
+    }
+
+    #[test]
+    fn jit_arm_ldr_str() {
+        // str r0,[r4]; ldr r1,[r4]; str r2,[r4,#4]!; ldr r3,[r4],#-4; b next
+        let code = arm(&[
+            0xe584_0000, // str r0,[r4]
+            0xe594_1000, // ldr r1,[r4]
+            0xe5a4_2004, // str r2,[r4,#4]!  (pre, wb)
+            0xe414_3004, // ldr r3,[r4],#-4  (post, down)
+            B_NEXT_ARM,
+        ]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0x1234_5678;
+        regs[2] = 0x9abc_def0;
+        regs[4] = DATA + 0x400;
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 0x14);
+    }
+
+    #[test]
+    fn jit_arm_fuzz_straight_line() {
+        use super::arm_frontend::{arm_ends_trace, decode_arm};
+        // Random AL-condition ARM ops the JIT compiles (data-processing, single
+        // and block transfers), run linearly to a trailing branch that ends the
+        // block exactly at `end` so the trace is compiled rather than
+        // single-stepped. Any divergence from the interpreter fails.
+        const OPS: usize = 40;
+        const B_NEXT_ARM: u32 = 0xeaff_ffff; // b .+4 (the following instruction)
+        for seed in 1..=3000u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut words: Vec<u32> = Vec::with_capacity(OPS + 1);
+            while words.len() < OPS {
+                let w = (rng.u32() & 0x0fff_ffff) | 0xe000_0000; // force cond = AL
+                let pc = CODE + (words.len() as u32) * 4;
+                if let Some(op) = decode_arm(w, pc) {
+                    if !arm_ends_trace(&op) {
+                        words.push(w);
+                    }
+                }
+            }
+            words.push(B_NEXT_ARM);
+            let mut code = Vec::with_capacity(words.len() * 4);
+            for w in &words {
+                code.extend_from_slice(&w.to_le_bytes());
+            }
+            let mut regs = [0u32; 15];
+            for (i, r) in regs.iter_mut().enumerate().take(13) {
+                *r = match rng.u32() & 3 {
+                    0 => DATA + (rng.u32() & 0x3ff) * 4 + (i as u32) * 4,
+                    1 => rng.u32() & 0xff,
+                    2 => DATA + 0xfff8 + (rng.u32() & 0xf),
+                    _ => rng.u32(),
+                };
+            }
+            regs[13] = DATA + 0x8000;
+            let end = CODE + (words.len() as u32) * 4;
+            assert_same_arm(&code, &regs, end);
+        }
     }
 
     #[test]

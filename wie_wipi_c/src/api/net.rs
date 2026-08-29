@@ -13,7 +13,6 @@ use wie_util::{Result, WieError, read_null_terminated_string_bytes};
 
 use crate::{WIPICResult, context::WIPICContext, method::MethodBody};
 
-
 #[derive(Clone, Copy)]
 struct SocketCallbacks {
     socket_type: i32,
@@ -173,11 +172,7 @@ pub struct NetworkState {
 pub type SharedNetworkState = Arc<Mutex<NetworkState>>;
 
 impl NetworkState {
-    fn begin_connect(
-        &mut self,
-        callback: WIPICWord,
-        context: WIPICWord,
-    ) -> core::result::Result<u64, i32> {
+    fn begin_connect(&mut self, callback: WIPICWord, context: WIPICWord) -> core::result::Result<u64, i32> {
         match self.process_state {
             ProcessNetworkState::Available => return Err(-10),
             ProcessNetworkState::Connecting => return Err(-7),
@@ -191,13 +186,8 @@ impl NetworkState {
         Ok(self.process_generation)
     }
 
-    fn finish_connect(
-        &mut self,
-        generation: u64,
-    ) -> Option<(WIPICWord, WIPICWord)> {
-        if self.process_state != ProcessNetworkState::Connecting
-            || self.process_generation != generation
-        {
+    fn finish_connect(&mut self, generation: u64) -> Option<(WIPICWord, WIPICWord)> {
+        if self.process_state != ProcessNetworkState::Connecting || self.process_generation != generation {
             return None;
         }
 
@@ -267,12 +257,7 @@ impl NetworkState {
         self.http_objects.remove(&handle)
     }
 
-    fn register_socket(
-        &mut self,
-        socket: i32,
-        socket_type: i32,
-        billing_mode: u8,
-    ) {
+    fn register_socket(&mut self, socket: i32, socket_type: i32, billing_mode: u8) {
         let entry = self.sockets.entry(socket).or_default();
         entry.socket_type = socket_type;
         entry.billing_mode = billing_mode;
@@ -286,31 +271,16 @@ impl NetworkState {
         self.sockets.get(&socket).map(|entry| entry.billing_mode)
     }
 
-    fn queue_local_billing_response(
-        &mut self,
-        socket: i32,
-        response: [u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE],
-    ) {
-        let entry = self
-            .sockets
-            .get_mut(&socket)
-            .expect("socket metadata disappeared");
+    fn queue_local_billing_response(&mut self, socket: i32, response: [u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE]) {
+        let entry = self.sockets.get_mut(&socket).expect("socket metadata disappeared");
 
         entry.billing_local_response = response;
-        entry.billing_local_response_len =
-            LGT_LOCAL_PURCHASE_RESPONSE_SIZE as u8;
+        entry.billing_local_response_len = LGT_LOCAL_PURCHASE_RESPONSE_SIZE as u8;
         entry.billing_local_response_offset = 0;
     }
 
-    fn take_local_billing_response(
-        &mut self,
-        socket: i32,
-        output: &mut [u8],
-    ) -> Option<usize> {
-        let entry = self
-            .sockets
-            .get_mut(&socket)
-            .expect("socket metadata disappeared");
+    fn take_local_billing_response(&mut self, socket: i32, output: &mut [u8]) -> Option<usize> {
+        let entry = self.sockets.get_mut(&socket).expect("socket metadata disappeared");
 
         let length = entry.billing_local_response_len as usize;
         let offset = entry.billing_local_response_offset as usize;
@@ -323,9 +293,7 @@ impl NetworkState {
 
         let read = output.len().min(length - offset);
 
-        output[..read].copy_from_slice(
-            &entry.billing_local_response[offset..offset + read],
-        );
+        output[..read].copy_from_slice(&entry.billing_local_response[offset..offset + read]);
 
         let next = offset + read;
 
@@ -339,10 +307,7 @@ impl NetworkState {
         Some(read)
     }
 
-    fn install_billing_header(
-        &mut self,
-        header: [u8; LGT_BILL_HEADER_SIZE],
-    ) {
+    fn install_billing_header(&mut self, header: [u8; LGT_BILL_HEADER_SIZE]) {
         // Native WPBill_SetHeader writes the single global s_BillHeader.
         self.billing_header = Some(header);
 
@@ -354,10 +319,7 @@ impl NetworkState {
         self.billing_read = BillingReadState::default();
     }
 
-    fn update_billing_header(
-        &mut self,
-        header: [u8; LGT_BILL_HEADER_SIZE],
-    ) {
+    fn update_billing_header(&mut self, header: [u8; LGT_BILL_HEADER_SIZE]) {
         // Native WPBill_Write mutates the same global s_BillHeader but does
         // not reset any WPBill_Read state.
         self.billing_header = Some(header);
@@ -367,17 +329,11 @@ impl NetworkState {
         self.billing_header
     }
 
-
     fn remove_socket(&mut self, socket: i32) {
         self.sockets.remove(&socket);
     }
 
-    fn set_connect_callback(
-        &mut self,
-        socket: i32,
-        callback: WIPICWord,
-        context: WIPICWord,
-    ) {
+    fn set_connect_callback(&mut self, socket: i32, callback: WIPICWord, context: WIPICWord) {
         if let Some(entry) = self.sockets.get_mut(&socket) {
             entry.connect_callback = callback;
             entry.connect_context = context;
@@ -399,9 +355,7 @@ impl NetworkState {
     }
 
     fn connect_is_pending(&self, socket: i32) -> bool {
-        self.sockets
-            .get(&socket)
-            .is_some_and(|entry| entry.connect_pending)
+        self.sockets.get(&socket).is_some_and(|entry| entry.connect_pending)
     }
 
     fn set_connect_pending(&mut self, socket: i32, pending: bool) {
@@ -417,10 +371,7 @@ impl NetworkState {
         }
     }
 
-    fn take_callback_for_event(
-        &mut self,
-        event: wie_backend::NetworkEvent,
-    ) -> Option<(WIPICWord, [WIPICWord; 3])> {
+    fn take_callback_for_event(&mut self, event: wie_backend::NetworkEvent) -> Option<(WIPICWord, [WIPICWord; 3])> {
         let (socket, callback, result, callback_context) = match event {
             wie_backend::NetworkEvent::Connected(socket) => {
                 let entry = self.sockets.get_mut(&socket)?;
@@ -457,10 +408,7 @@ impl NetworkState {
             }
         };
 
-        (callback != 0).then_some((
-            callback,
-            [socket as WIPICWord, result, callback_context],
-        ))
+        (callback != 0).then_some((callback, [socket as WIPICWord, result, callback_context]))
     }
 
     fn begin_dns_query(&mut self, callback: WIPICWord, context: WIPICWord) -> u32 {
@@ -476,11 +424,10 @@ impl NetworkState {
 
     fn has_callbacks(&self) -> bool {
         !self.dns_queries.is_empty()
-            || self.sockets.values().any(|entry| {
-                entry.connect_callback != 0
-                    || entry.read_callback != 0
-                    || entry.write_callback != 0
-            })
+            || self
+                .sockets
+                .values()
+                .any(|entry| entry.connect_callback != 0 || entry.read_callback != 0 || entry.write_callback != 0)
     }
 
     fn start_dispatcher(&mut self) -> Option<u64> {
@@ -508,11 +455,7 @@ pub fn new_state() -> SharedNetworkState {
     Arc::new(Mutex::new(NetworkState::default()))
 }
 
-pub async fn legacy_connect_stub(
-    context: &mut dyn WIPICContext,
-    cb: WIPICWord,
-    param: WIPICWord,
-) -> Result<i32> {
+pub async fn legacy_connect_stub(context: &mut dyn WIPICContext, cb: WIPICWord, param: WIPICWord) -> Result<i32> {
     tracing::warn!("stub MC_netConnect({cb:#x}, {param:#x})");
 
     struct ConnectCallback {
@@ -523,15 +466,9 @@ pub async fn legacy_connect_stub(
     #[async_trait::async_trait]
     impl MethodBody<WieError> for ConnectCallback {
         #[tracing::instrument(name = "timer", skip_all)]
-        async fn call(
-            &self,
-            context: &mut dyn WIPICContext,
-            _: Box<[WIPICWord]>,
-        ) -> Result<WIPICResult> {
+        async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
             context.system().sleep(1).await;
-            context
-                .call_function(self.cb, &[u32::MAX, self.param])
-                .await?;
+            context.call_function(self.cb, &[u32::MAX, self.param]).await?;
 
             Ok(WIPICResult { results: Vec::new() })
         }
@@ -546,19 +483,12 @@ pub async fn legacy_close_stub(_context: &mut dyn WIPICContext) -> Result<()> {
     Ok(())
 }
 
-pub async fn legacy_socket_close_stub(
-    _context: &mut dyn WIPICContext,
-    fd: i32,
-) -> Result<i32> {
+pub async fn legacy_socket_close_stub(_context: &mut dyn WIPICContext, fd: i32) -> Result<i32> {
     tracing::warn!("stub MC_netSocketClose({fd})");
     Ok(-1)
 }
 
-pub async fn connect(
-    context: &mut dyn WIPICContext,
-    cb: WIPICWord,
-    param: WIPICWord,
-) -> Result<i32> {
+pub async fn connect(context: &mut dyn WIPICContext, cb: WIPICWord, param: WIPICWord) -> Result<i32> {
     let state = context.network_state();
     let generation = match state.lock().begin_connect(cb, param) {
         Ok(generation) => generation,
@@ -571,15 +501,8 @@ pub async fn connect(
 
     #[async_trait::async_trait]
     impl MethodBody<WieError> for ConnectCallback {
-        async fn call(
-            &self,
-            context: &mut dyn WIPICContext,
-            _: Box<[WIPICWord]>,
-        ) -> Result<WIPICResult> {
-            let callback = context
-                .network_state()
-                .lock()
-                .finish_connect(self.generation);
+        async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
+            let callback = context.network_state().lock().finish_connect(self.generation);
 
             if let Some((callback, param)) = callback {
                 if callback != 0 {
@@ -647,7 +570,6 @@ pub async fn socket_close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32
     })
 }
 
-
 /// Restored legacy `MC_netBillSocket` constructor.
 ///
 /// The reference LGT library's public entry is carrier-disabled and returns
@@ -657,11 +579,7 @@ pub async fn socket_close(context: &mut dyn WIPICContext, fd: i32) -> Result<i32
 ///
 /// Native socket object `+0x18` is set to 1 for `MC_netBillSocket`.
 /// Billing-aware connect/read/write behavior is implemented separately.
-pub async fn bill_socket(
-    context: &mut dyn WIPICContext,
-    family: i32,
-    socket_type: i32,
-) -> Result<i32> {
+pub async fn bill_socket(context: &mut dyn WIPICContext, family: i32, socket_type: i32) -> Result<i32> {
     // The preserved native body calls WPNet_IsAvailable before dsocket_open.
     // Unlike ordinary MC_netSocket, a merely-existing process network object
     // is therefore insufficient here.
@@ -675,10 +593,7 @@ pub async fn bill_socket(
 
     Ok(match network.socket(family, socket_type) {
         Ok(socket) => {
-            context
-                .network_state()
-                .lock()
-                .register_socket(socket, socket_type, 1);
+            context.network_state().lock().register_socket(socket, socket_type, 1);
             socket
         }
         Err(error) => map_network_error(error),
@@ -715,9 +630,7 @@ const LGT_LOCAL_PURCHASE_RESPONSE_SIZE: usize = 7;
 /// its carrier result.  Status zero is purchase success.  Returning the
 /// ordinary 0x69/status-zero frame lets the guest's own parser write its
 /// result enum zero; WIE never modifies guest billing state directly.
-fn lgt_local_purchase_success_response(
-    request: &[u8],
-) -> Option<[u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE]> {
+fn lgt_local_purchase_success_response(request: &[u8]) -> Option<[u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE]> {
     if request.len() < 6 {
         return None;
     }
@@ -726,14 +639,10 @@ fn lgt_local_purchase_success_response(
         return None;
     }
 
-    let declared_length =
-        u16::from_be_bytes([request[2], request[3]]) as usize;
-    let message_type =
-        u16::from_be_bytes([request[4], request[5]]);
+    let declared_length = u16::from_be_bytes([request[2], request[3]]) as usize;
+    let message_type = u16::from_be_bytes([request[4], request[5]]);
 
-    if declared_length != request.len()
-        || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE
-    {
+    if declared_length != request.len() || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE {
         return None;
     }
 
@@ -749,7 +658,6 @@ fn lgt_local_purchase_success_response(
         0x00,
     ])
 }
-
 
 const LGT_BILL_HEADER_SIZE: usize = 108;
 const LGT_BILL_READ_HEADER_SIZE: usize = 56;
@@ -772,11 +680,7 @@ const HTTP_HANDLE_BASE: i32 = 0x4000_0000;
 /// before abandoning a stalled socket, so a silent peer can never wedge the task.
 const HTTP_IDLE_POLL_LIMIT: u32 = 60_000;
 
-fn copy_lgt_bill_c_string(
-    header: &mut [u8; LGT_BILL_HEADER_SIZE],
-    offset: usize,
-    value: &[u8],
-) {
+fn copy_lgt_bill_c_string(header: &mut [u8; LGT_BILL_HEADER_SIZE], offset: usize, value: &[u8]) {
     if offset >= header.len() {
         return;
     }
@@ -787,8 +691,7 @@ fn copy_lgt_bill_c_string(
     let available = header.len() - offset;
     let copy_len = value.len().min(available.saturating_sub(1));
 
-    header[offset..offset + copy_len]
-        .copy_from_slice(&value[..copy_len]);
+    header[offset..offset + copy_len].copy_from_slice(&value[..copy_len]);
 
     if offset + copy_len < header.len() {
         header[offset + copy_len] = 0;
@@ -878,28 +781,18 @@ fn build_lgt_bill_header(
     header
 }
 
-fn lgt_bill_read_payload_length(
-    header: &[u8; LGT_BILL_READ_HEADER_SIZE],
-) -> u32 {
+fn lgt_bill_read_payload_length(header: &[u8; LGT_BILL_READ_HEADER_SIZE]) -> u32 {
     u32::from_be_bytes(
-        header[
-            LGT_BILL_READ_PAYLOAD_LENGTH_OFFSET
-                ..LGT_BILL_READ_PAYLOAD_LENGTH_OFFSET + 4
-        ]
-        .try_into()
-        .expect("billing payload length slice"),
+        header[LGT_BILL_READ_PAYLOAD_LENGTH_OFFSET..LGT_BILL_READ_PAYLOAD_LENGTH_OFFSET + 4]
+            .try_into()
+            .expect("billing payload length slice"),
     )
 }
 
-fn lgt_bill_read_tag(
-    header: &[u8; LGT_BILL_READ_HEADER_SIZE],
-) -> [u8; 4] {
-    header[
-        LGT_BILL_READ_TAG_OFFSET
-            ..LGT_BILL_READ_TAG_OFFSET + 4
-    ]
-    .try_into()
-    .expect("billing tag slice")
+fn lgt_bill_read_tag(header: &[u8; LGT_BILL_READ_HEADER_SIZE]) -> [u8; 4] {
+    header[LGT_BILL_READ_TAG_OFFSET..LGT_BILL_READ_TAG_OFFSET + 4]
+        .try_into()
+        .expect("billing tag slice")
 }
 
 fn lgt_bill_read_reject_tag(tag: [u8; 4]) -> bool {
@@ -915,33 +808,20 @@ fn lgt_bill_read_reject_tag(tag: [u8; 4]) -> bool {
     // Keep the actual predicate visible rather than inventing a carrier
     // meaning for an unreachable branch.
     [
-        *b"KCBD",
-        *b"KCSP",
-        *b"KCNB",
-        *b"KCEP",
-        *b"KCEN",
-        *b"UATO",
-        *b"UATT",
-        *b"UAFO",
-        *b"UAFT",
-        *b"UAFR",
+        *b"KCBD", *b"KCSP", *b"KCNB", *b"KCEP", *b"KCEN", *b"UATO", *b"UATT", *b"UAFO", *b"UAFT", *b"UAFR",
     ]
     .into_iter()
     .all(|candidate| tag == candidate)
 }
 
-fn build_lgt_bill_write_frame(
-    mut header: [u8; LGT_BILL_HEADER_SIZE],
-    payload: &[u8],
-) -> ([u8; LGT_BILL_HEADER_SIZE], Vec<u8>) {
+fn build_lgt_bill_write_frame(mut header: [u8; LGT_BILL_HEADER_SIZE], payload: &[u8]) -> ([u8; LGT_BILL_HEADER_SIZE], Vec<u8>) {
     // Native WPBill_Write:
     //   total = payload_len + 108
     //   s_BillHeader[0..4] = MC_utilHtonl(total)
     //
     // The converted 32-bit value is then stored by little-endian ARM STR,
     // leaving big-endian length bytes in the wire header.
-    let total = (payload.len() as u32)
-        .wrapping_add(LGT_BILL_HEADER_SIZE as u32);
+    let total = (payload.len() as u32).wrapping_add(LGT_BILL_HEADER_SIZE as u32);
     let network_total = total.swap_bytes();
 
     header[0..4].copy_from_slice(&network_total.to_le_bytes());
@@ -963,10 +843,7 @@ fn lgt_bill_write_public_result(written: usize) -> i32 {
     }
 }
 
-fn resolve_lgt_bill_gateway(
-    network: &dyn wie_backend::Network,
-    gateway: &str,
-) -> Option<(WIPICWord, u16)> {
+fn resolve_lgt_bill_gateway(network: &dyn wie_backend::Network, gateway: &str) -> Option<(WIPICWord, u16)> {
     // Native WPBill_SetGW accepts either host:port or http://host:port.
     // parse_http_url already implements those authority semantics.
     let (host, port, _) = parse_http_url(gateway);
@@ -994,14 +871,11 @@ fn map_network_error(error: wie_backend::NetworkError) -> i32 {
         NetworkError::Unsupported => M_E_NOTSUP,
         NetworkError::WouldBlock => M_E_WOULDBLOCK,
         NetworkError::TimedOut => M_E_TIMEOUT,
-        NetworkError::ConnectionRefused
-        | NetworkError::HostUnreachable
-        | NetworkError::Other => M_E_ERROR,
+        NetworkError::ConnectionRefused | NetworkError::HostUnreachable | NetworkError::Other => M_E_ERROR,
     }
 }
 
 pub async fn socket(context: &mut dyn WIPICContext, family: i32, socket_type: i32) -> Result<i32> {
-
     if family != 2 || !matches!(socket_type, 1 | 2) {
         return Ok(M_E_NOTSUP);
     }
@@ -1019,10 +893,7 @@ pub async fn socket(context: &mut dyn WIPICContext, family: i32, socket_type: i3
 
     Ok(match network.socket(family, socket_type) {
         Ok(socket) => {
-            context
-                .network_state()
-                .lock()
-                .register_socket(socket, socket_type, 0);
+            context.network_state().lock().register_socket(socket, socket_type, 0);
             socket
         }
         Err(error) => map_network_error(error),
@@ -1050,10 +921,7 @@ pub async fn socket_connect(
         return Ok(M_E_BADFD);
     };
 
-    let billing_mode = state
-        .lock()
-        .billing_mode(socket)
-        .expect("socket metadata disappeared");
+    let billing_mode = state.lock().billing_mode(socket).expect("socket metadata disappeared");
 
     if socket_type != 1 {
         return Ok(M_E_NOTSUP);
@@ -1094,13 +962,7 @@ pub async fn socket_connect(
         let aid = alloc::string::String::from(context.system().aid());
         let current_time = context.system().platform().now().raw();
 
-        let billing_header = build_lgt_bill_header(
-            context.system().platform(),
-            &aid,
-            current_time,
-            address,
-            port as u16,
-        );
+        let billing_header = build_lgt_bill_header(context.system().platform(), &aid, current_time, address, port as u16);
 
         {
             let mut state = state.lock();
@@ -1114,17 +976,11 @@ pub async fn socket_connect(
 
         #[async_trait::async_trait]
         impl MethodBody<WieError> for DeferredLocalBillConnect {
-            async fn call(
-                &self,
-                context: &mut dyn WIPICContext,
-                _: Box<[WIPICWord]>,
-            ) -> Result<WIPICResult> {
+            async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
                 let callback = context
                     .network_state()
                     .lock()
-                    .take_callback_for_event(
-                        wie_backend::NetworkEvent::Connected(self.socket),
-                    );
+                    .take_callback_for_event(wie_backend::NetworkEvent::Connected(self.socket));
 
                 if let Some((callback, args)) = callback {
                     context.call_function(callback, &args).await?;
@@ -1134,9 +990,7 @@ pub async fn socket_connect(
             }
         }
 
-        if let Err(error) =
-            context.spawn(Box::new(DeferredLocalBillConnect { socket }))
-        {
+        if let Err(error) = context.spawn(Box::new(DeferredLocalBillConnect { socket })) {
             let mut state = state.lock();
             state.set_connect_pending(socket, false);
             state.clear_connect_callback(socket);
@@ -1169,11 +1023,7 @@ pub async fn socket_connect(
     };
 
     let result = {
-        let network = context
-            .system()
-            .platform()
-            .network()
-            .expect("network backend disappeared");
+        let network = context.system().platform().network().expect("network backend disappeared");
         network.connect(socket, connect_address, connect_port)
     };
 
@@ -1187,17 +1037,9 @@ pub async fn socket_connect(
                 let aid = alloc::string::String::from(context.system().aid());
                 let current_time = context.system().platform().now().raw();
 
-                let billing_header = build_lgt_bill_header(
-                    context.system().platform(),
-                    &aid,
-                    current_time,
-                    address,
-                    port as u16,
-                );
+                let billing_header = build_lgt_bill_header(context.system().platform(), &aid, current_time, address, port as u16);
 
-                state
-                    .lock()
-                    .install_billing_header(billing_header);
+                state.lock().install_billing_header(billing_header);
             }
 
             // Native synchronous success posts event 205 and sets socket
@@ -1210,11 +1052,7 @@ pub async fn socket_connect(
 
             #[async_trait::async_trait]
             impl MethodBody<WieError> for DeferredConnect {
-                async fn call(
-                    &self,
-                    context: &mut dyn WIPICContext,
-                    _: Box<[WIPICWord]>,
-                ) -> Result<WIPICResult> {
+                async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
                     let callback = context
                         .network_state()
                         .lock()
@@ -1250,17 +1088,9 @@ pub async fn socket_connect(
                 let aid = alloc::string::String::from(context.system().aid());
                 let current_time = context.system().platform().now().raw();
 
-                let billing_header = build_lgt_bill_header(
-                    context.system().platform(),
-                    &aid,
-                    current_time,
-                    address,
-                    port as u16,
-                );
+                let billing_header = build_lgt_bill_header(context.system().platform(), &aid, current_time, address, port as u16);
 
-                state
-                    .lock()
-                    .install_billing_header(billing_header);
+                state.lock().install_billing_header(billing_header);
             }
 
             // Native maps the first dsocket_connect == -19 to public 0 and
@@ -1317,12 +1147,7 @@ pub async fn socket_connect(
 /// Updating the saved header before the backend write is intentional:
 /// native `WPBill_Write` updates global `s_BillHeader[0]` before allocation
 /// and `dsocket_send`, so even a later send failure leaves the new length.
-pub async fn socket_write(
-    context: &mut dyn WIPICContext,
-    socket: i32,
-    buffer: WIPICWord,
-    length: i32,
-) -> Result<i32> {
+pub async fn socket_write(context: &mut dyn WIPICContext, socket: i32, buffer: WIPICWord, length: i32) -> Result<i32> {
     if buffer == 0 || length < 0 {
         return Ok(M_E_INVALID);
     }
@@ -1341,22 +1166,15 @@ pub async fn socket_write(
         return Ok(M_E_NOTSUP);
     }
 
-    let billing_mode = state
-        .lock()
-        .billing_mode(socket)
-        .expect("socket metadata disappeared");
+    let billing_mode = state.lock().billing_mode(socket).expect("socket metadata disappeared");
 
     let mut data = alloc::vec![0u8; length as usize];
     context.read_bytes(buffer, &mut data)?;
 
     if billing_mode != 0 {
         if billing_mode == 1 {
-            if let Some(response) =
-                lgt_local_purchase_success_response(&data)
-            {
-                state
-                    .lock()
-                    .queue_local_billing_response(socket, response);
+            if let Some(response) = lgt_local_purchase_success_response(&data) {
+                state.lock().queue_local_billing_response(socket, response);
 
                 // Match a successful application-level socket write. The
                 // request is consumed locally, so no carrier/backend write
@@ -1367,10 +1185,7 @@ pub async fn socket_write(
 
         // Before WPBill_SetHeader has ever run, native s_BillHeader is BSS
         // zero. Use the same zero state rather than rejecting the write.
-        let header = state
-            .lock()
-            .billing_header()
-            .unwrap_or([0u8; LGT_BILL_HEADER_SIZE]);
+        let header = state.lock().billing_header().unwrap_or([0u8; LGT_BILL_HEADER_SIZE]);
 
         let (header, frame) = build_lgt_bill_write_frame(header, &data);
 
@@ -1397,7 +1212,6 @@ pub async fn socket_write(
         Err(error) => map_network_error(error),
     })
 }
-
 
 /// `MC_netSocketRead` (0x25d) @ native 0x1b3264.
 ///
@@ -1429,12 +1243,7 @@ pub async fn socket_write(
 /// A partial payload is continued on later calls through the shared remaining
 /// payload counter. If socket +0x1c is already set while no payload remains,
 /// native bypasses header parsing and performs one direct recv.
-pub async fn socket_read(
-    context: &mut dyn WIPICContext,
-    socket: i32,
-    buffer: WIPICWord,
-    length: i32,
-) -> Result<i32> {
+pub async fn socket_read(context: &mut dyn WIPICContext, socket: i32, buffer: WIPICWord, length: i32) -> Result<i32> {
     if buffer == 0 || length < 0 {
         return Ok(M_E_INVALID);
     }
@@ -1453,17 +1262,12 @@ pub async fn socket_read(
         return Ok(M_E_NOTSUP);
     }
 
-    let billing_mode = state
-        .lock()
-        .billing_mode(socket)
-        .expect("socket metadata disappeared");
+    let billing_mode = state.lock().billing_mode(socket).expect("socket metadata disappeared");
 
     let mut data = alloc::vec![0u8; length as usize];
 
     if billing_mode == 1 {
-        let local_read = state
-            .lock()
-            .take_local_billing_response(socket, &mut data);
+        let local_read = state.lock().take_local_billing_response(socket, &mut data);
 
         if let Some(read) = local_read {
             context.write_bytes(buffer, &data[..read])?;
@@ -1508,8 +1312,7 @@ pub async fn socket_read(
         return match result {
             Ok(read) => {
                 if read > 0 {
-                    state.lock().billing_read.remaining_payload =
-                        remaining_payload.saturating_sub(read);
+                    state.lock().billing_read.remaining_payload = remaining_payload.saturating_sub(read);
                     context.write_bytes(buffer, &data[..read])?;
                 }
 
@@ -1558,10 +1361,7 @@ pub async fn socket_read(
     for attempt in 0..3 {
         let (header_offset, remaining_header) = {
             let state = state.lock();
-            (
-                state.billing_read.header_offset,
-                state.billing_read.remaining_header,
-            )
+            (state.billing_read.header_offset, state.billing_read.remaining_header)
         };
 
         let mut chunk = alloc::vec![0u8; remaining_header];
@@ -1585,14 +1385,11 @@ pub async fn socket_read(
             let mut state = state.lock();
 
             if let Some(entry) = state.sockets.get_mut(&socket) {
-                entry.billing_read_header
-                    [header_offset..header_offset + read]
-                    .copy_from_slice(&chunk[..read]);
+                entry.billing_read_header[header_offset..header_offset + read].copy_from_slice(&chunk[..read]);
             }
 
             state.billing_read.header_offset = accumulated;
-            state.billing_read.remaining_header =
-                LGT_BILL_READ_HEADER_SIZE - accumulated;
+            state.billing_read.remaining_header = LGT_BILL_READ_HEADER_SIZE - accumulated;
 
             if attempt == 2 {
                 return Ok(0);
@@ -1614,14 +1411,9 @@ pub async fn socket_read(
         let header = {
             let mut state = state.lock();
 
-            let entry = state
-                .sockets
-                .get_mut(&socket)
-                .expect("socket metadata disappeared");
+            let entry = state.sockets.get_mut(&socket).expect("socket metadata disappeared");
 
-            entry.billing_read_header
-                [header_offset..header_offset + read]
-                .copy_from_slice(&chunk[..read]);
+            entry.billing_read_header[header_offset..header_offset + read].copy_from_slice(&chunk[..read]);
 
             entry.billing_read_direct = true;
 
@@ -1649,8 +1441,7 @@ pub async fn socket_read(
             return Ok(0);
         }
 
-        let requested =
-            data.len().min(payload_length as usize);
+        let requested = data.len().min(payload_length as usize);
 
         let result = {
             let Some(network) = context.system().platform().network() else {
@@ -1669,8 +1460,7 @@ pub async fn socket_read(
         return match result {
             Ok(read) => {
                 if read > 0 {
-                    state.lock().billing_read.remaining_payload =
-                        (payload_length as usize).saturating_sub(read);
+                    state.lock().billing_read.remaining_payload = (payload_length as usize).saturating_sub(read);
 
                     context.write_bytes(buffer, &data[..read])?;
                 }
@@ -1683,7 +1473,6 @@ pub async fn socket_read(
 
     Ok(0)
 }
-
 
 /// `MC_netSocketBind` (0x25f) @ native 0x1b2ef0.
 ///
@@ -1867,12 +1656,7 @@ pub async fn socket_recv_from(
 /// faithfully and reports -19 (would-block), the same result a real idle
 /// listener gives when nothing has connected yet. Returning a freshly accepted
 /// connection is deferred until a game needs server-side sockets.
-pub async fn socket_accept(
-    context: &mut dyn WIPICContext,
-    socket: i32,
-    _out_address: WIPICWord,
-    _out_port: WIPICWord,
-) -> Result<i32> {
+pub async fn socket_accept(context: &mut dyn WIPICContext, socket: i32, _out_address: WIPICWord, _out_port: WIPICWord) -> Result<i32> {
     let state = context.network_state();
 
     if !state.lock().has_process_network() {
@@ -1946,11 +1730,7 @@ fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {
 
     #[async_trait::async_trait]
     impl MethodBody<WieError> for NetworkEventDispatcher {
-        async fn call(
-            &self,
-            context: &mut dyn WIPICContext,
-            _: Box<[WIPICWord]>,
-        ) -> Result<WIPICResult> {
+        async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
             loop {
                 let state = context.network_state();
 
@@ -2005,12 +1785,7 @@ fn ensure_event_dispatcher(context: &mut dyn WIPICContext) -> Result<()> {
 /// (at socket +0x40) only when the socket exists and its network is available;
 /// a missing socket or unavailable network is silently skipped. It always
 /// returns 0 - there are no error codes.
-pub async fn set_read_callback(
-    context: &mut dyn WIPICContext,
-    socket: i32,
-    callback: WIPICWord,
-    callback_context: WIPICWord,
-) -> Result<i32> {
+pub async fn set_read_callback(context: &mut dyn WIPICContext, socket: i32, callback: WIPICWord, callback_context: WIPICWord) -> Result<i32> {
     let stored = {
         let state = context.network_state();
         let mut state = state.lock();
@@ -2035,12 +1810,7 @@ pub async fn set_read_callback(
 /// r2 = context. Like `MC_netSetReadCB`, the native stores the callback (at
 /// socket +0x30) and context (at socket +0x44) only when the socket exists and
 /// its network is available, and always returns 0.
-pub async fn set_write_callback(
-    context: &mut dyn WIPICContext,
-    socket: i32,
-    callback: WIPICWord,
-    callback_context: WIPICWord,
-) -> Result<i32> {
+pub async fn set_write_callback(context: &mut dyn WIPICContext, socket: i32, callback: WIPICWord, callback_context: WIPICWord) -> Result<i32> {
     let stored = {
         let state = context.network_state();
         let mut state = state.lock();
@@ -2252,12 +2022,7 @@ pub async fn http_set_request_method(
 /// already-connected object -> -1, a null buffer -> -9, and a method that would
 /// not fit (`len >= buffer length`) -> -9. On success it copies the method plus
 /// a NUL terminator and returns the method length.
-pub async fn http_get_request_method(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    out_ptr: WIPICWord,
-    out_len: i32,
-) -> Result<i32> {
+pub async fn http_get_request_method(context: &mut dyn WIPICContext, handle: i32, out_ptr: WIPICWord, out_len: i32) -> Result<i32> {
     match http_validate_config(context, handle) {
         Ok(()) => {}
         Err(code) => return Ok(code),
@@ -2288,12 +2053,7 @@ pub async fn http_get_request_method(
 /// or value -> -9. The native accumulates the headers as one growing string:
 /// the first property is stored as `"key: value"` and every later property is
 /// appended as `"\r\nkey: value"`.
-pub async fn http_set_request_property(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    key_ptr: WIPICWord,
-    value_ptr: WIPICWord,
-) -> Result<i32> {
+pub async fn http_set_request_property(context: &mut dyn WIPICContext, handle: i32, key_ptr: WIPICWord, value_ptr: WIPICWord) -> Result<i32> {
     match http_validate_config(context, handle) {
         Ok(()) => {}
         Err(code) => return Ok(code),
@@ -2381,11 +2141,7 @@ fn find_request_property(headers: &str, key: &str) -> Option<String> {
     let key = key.as_bytes();
     for line in headers.split("\r\n") {
         let bytes = line.as_bytes();
-        if bytes.len() >= key.len() + 2
-            && bytes[..key.len()].eq_ignore_ascii_case(key)
-            && bytes[key.len()] == b':'
-            && bytes[key.len() + 1] == b' '
-        {
+        if bytes.len() >= key.len() + 2 && bytes[..key.len()].eq_ignore_ascii_case(key) && bytes[key.len()] == b':' && bytes[key.len() + 1] == b' ' {
             return Some(line[key.len() + 2..].into());
         }
     }
@@ -2399,12 +2155,7 @@ fn find_request_property(headers: &str, key: &str) -> Option<String> {
 /// the address first - `0` and `0xFFFF_FFFF` are rejected with -9 - then gates a
 /// null/unknown object -> -2 and an already-connected object -> -1 before storing
 /// the address and 16-bit port. Returns 0 on success.
-pub async fn http_set_proxy(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    address: WIPICWord,
-    port: WIPICWord,
-) -> Result<i32> {
+pub async fn http_set_proxy(context: &mut dyn WIPICContext, handle: i32, address: WIPICWord, port: WIPICWord) -> Result<i32> {
     if address == 0 || address == 0xFFFF_FFFF {
         return Ok(M_E_INVALID);
     }
@@ -2430,12 +2181,7 @@ pub async fn http_set_proxy(
 /// object -> -1, and a null out-address or out-port pointer -> -9. On success it
 /// writes the stored address (32-bit) and port (16-bit) and returns 0; an object
 /// with no proxy set reports address 0 and port 0.
-pub async fn http_get_proxy(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    out_address: WIPICWord,
-    out_port: WIPICWord,
-) -> Result<i32> {
+pub async fn http_get_proxy(context: &mut dyn WIPICContext, handle: i32, out_address: WIPICWord, out_port: WIPICWord) -> Result<i32> {
     match http_validate_config(context, handle) {
         Ok(()) => {}
         Err(code) => return Ok(code),
@@ -2670,12 +2416,7 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// that observable flow on the async executor: it sets the committed flag,
 /// returns 0, and runs the resolve/connect/send/receive/parse sequence in a
 /// spawned task that finally invokes the same callback.
-pub async fn http_connect(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    callback: WIPICWord,
-    callback_context: WIPICWord,
-) -> Result<i32> {
+pub async fn http_connect(context: &mut dyn WIPICContext, handle: i32, callback: WIPICWord, callback_context: WIPICWord) -> Result<i32> {
     if !context.network_state().lock().has_process_network() {
         return Ok(M_E_NOTCONN);
     }
@@ -2715,11 +2456,7 @@ pub async fn http_connect(
 
     #[async_trait::async_trait]
     impl MethodBody<WieError> for HttpExchange {
-        async fn call(
-            &self,
-            context: &mut dyn WIPICContext,
-            _: Box<[WIPICWord]>,
-        ) -> Result<WIPICResult> {
+        async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
             let outcome = run_http_exchange(context, self.handle, &self.request).await?;
 
             let (socket, result) = match outcome {
@@ -2729,7 +2466,10 @@ pub async fn http_connect(
 
             if self.callback != 0 {
                 context
-                    .call_function(self.callback, &[self.handle as WIPICWord, socket as WIPICWord, result, self.callback_context])
+                    .call_function(
+                        self.callback,
+                        &[self.handle as WIPICWord, socket as WIPICWord, result, self.callback_context],
+                    )
                     .await?;
             }
 
@@ -2900,12 +2640,7 @@ pub async fn http_get_length(context: &mut dyn WIPICContext, handle: i32) -> Res
 /// r2 = buffer length. -2 for a null/unknown object, -1 before parsing, and -9
 /// when the buffer is null or too small; otherwise copies the message plus a NUL
 /// and returns its length.
-pub async fn http_get_response_message(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    out_ptr: WIPICWord,
-    out_len: i32,
-) -> Result<i32> {
+pub async fn http_get_response_message(context: &mut dyn WIPICContext, handle: i32, out_ptr: WIPICWord, out_len: i32) -> Result<i32> {
     let message = match http_response_field(context, handle) {
         Ok(object) => object.response_message.clone(),
         Err(code) => return Ok(code),
@@ -2917,12 +2652,7 @@ pub async fn http_get_response_message(
 ///
 /// Copies the response `Content-Type`. ABI matches `MC_netHttpGetResponseMessage`
 /// except a null or too-small buffer is -1, not -9.
-pub async fn http_get_type(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    out_ptr: WIPICWord,
-    out_len: i32,
-) -> Result<i32> {
+pub async fn http_get_type(context: &mut dyn WIPICContext, handle: i32, out_ptr: WIPICWord, out_len: i32) -> Result<i32> {
     let content_type = match http_response_field(context, handle) {
         Ok(object) => object.content_type.clone(),
         Err(code) => return Ok(code),
@@ -2934,12 +2664,7 @@ pub async fn http_get_type(
 ///
 /// Copies the response `Content-Encoding`. Identical gating to
 /// `MC_netHttpGetType`.
-pub async fn http_get_encoding(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    out_ptr: WIPICWord,
-    out_len: i32,
-) -> Result<i32> {
+pub async fn http_get_encoding(context: &mut dyn WIPICContext, handle: i32, out_ptr: WIPICWord, out_len: i32) -> Result<i32> {
     let encoding = match http_response_field(context, handle) {
         Ok(object) => object.content_encoding.clone(),
         Err(code) => return Ok(code),
@@ -2950,10 +2675,7 @@ pub async fn http_get_encoding(
 /// Shared response-getter gate: mirrors `WPNet_ParsePacket`, rejecting a
 /// null/unknown object with -2 and an object whose response has not yet been
 /// received and parsed with -1. Returns an owned copy for the caller to read.
-fn http_response_field(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-) -> core::result::Result<HttpObject, i32> {
+fn http_response_field(context: &mut dyn WIPICContext, handle: i32) -> core::result::Result<HttpObject, i32> {
     let state = context.network_state();
     let state = state.lock();
     match state.http_get(handle) {
@@ -2999,8 +2721,8 @@ mod network_state_tests {
 
     use test_utils::TestPlatform;
     use wie_backend::{
-        AudioSink, DatabaseRepository, DefaultTaskRunner, Filesystem, Instant, Network,
-        NetworkError, NetworkEvent, NetworkPoll, Platform, Screen, System,
+        AudioSink, DatabaseRepository, DefaultTaskRunner, Filesystem, Instant, Network, NetworkError, NetworkEvent, NetworkPoll, Platform, Screen,
+        System,
     };
     use wie_util::ByteWrite;
 
@@ -3019,55 +2741,27 @@ mod network_state_tests {
             }
         }
 
-        fn connect(
-            &self,
-            _socket: i32,
-            _address: u32,
-            _port: u16,
-        ) -> NetworkPoll<()> {
+        fn connect(&self, _socket: i32, _address: u32, _port: u16) -> NetworkPoll<()> {
             NetworkPoll::Ready(Err(NetworkError::Unsupported))
         }
 
-        fn bind(
-            &self,
-            _socket: i32,
-            _address: u32,
-            _port: u16,
-        ) -> core::result::Result<(), NetworkError> {
+        fn bind(&self, _socket: i32, _address: u32, _port: u16) -> core::result::Result<(), NetworkError> {
             Err(NetworkError::Unsupported)
         }
 
-        fn read(
-            &self,
-            _socket: i32,
-            _buf: &mut [u8],
-        ) -> core::result::Result<usize, NetworkError> {
+        fn read(&self, _socket: i32, _buf: &mut [u8]) -> core::result::Result<usize, NetworkError> {
             Err(NetworkError::Unsupported)
         }
 
-        fn write(
-            &self,
-            _socket: i32,
-            _buf: &[u8],
-        ) -> core::result::Result<usize, NetworkError> {
+        fn write(&self, _socket: i32, _buf: &[u8]) -> core::result::Result<usize, NetworkError> {
             Err(NetworkError::Unsupported)
         }
 
-        fn send_to(
-            &self,
-            _socket: i32,
-            _buf: &[u8],
-            _address: u32,
-            _port: u16,
-        ) -> core::result::Result<usize, NetworkError> {
+        fn send_to(&self, _socket: i32, _buf: &[u8], _address: u32, _port: u16) -> core::result::Result<usize, NetworkError> {
             Err(NetworkError::Unsupported)
         }
 
-        fn recv_from(
-            &self,
-            _socket: i32,
-            _buf: &mut [u8],
-        ) -> core::result::Result<(usize, u32, u16), NetworkError> {
+        fn recv_from(&self, _socket: i32, _buf: &mut [u8]) -> core::result::Result<(usize, u32, u16), NetworkError> {
             Err(NetworkError::Unsupported)
         }
 
@@ -3155,22 +2849,13 @@ mod network_state_tests {
         let mut state = NetworkState::default();
 
         let generation = state.begin_connect(0x1111, 0x2222).unwrap();
-        assert!(matches!(
-            state.process_state,
-            ProcessNetworkState::Connecting
-        ));
+        assert!(matches!(state.process_state, ProcessNetworkState::Connecting));
 
         // Reference MC_netConnect: state 2 -> -7.
         assert_eq!(state.begin_connect(0x3333, 0x4444), Err(-7));
 
-        assert_eq!(
-            state.finish_connect(generation),
-            Some((0x1111, 0x2222))
-        );
-        assert!(matches!(
-            state.process_state,
-            ProcessNetworkState::Available
-        ));
+        assert_eq!(state.finish_connect(generation), Some((0x1111, 0x2222)));
+        assert!(matches!(state.process_state, ProcessNetworkState::Available));
 
         // Reference MC_netConnect: state 1 -> -10.
         assert_eq!(state.begin_connect(0x3333, 0x4444), Err(-10));
@@ -3183,10 +2868,7 @@ mod network_state_tests {
         let generation = state.begin_connect(0, 0x2222).unwrap();
 
         assert_eq!(state.finish_connect(generation), None);
-        assert!(matches!(
-            state.process_state,
-            ProcessNetworkState::Connecting
-        ));
+        assert!(matches!(state.process_state, ProcessNetworkState::Connecting));
 
         // Native event subtype 2 ignores a null callback before changing
         // state 2 to state 1, so a subsequent MC_netConnect still sees
@@ -3206,19 +2888,10 @@ mod network_state_tests {
         assert_ne!(old_generation, new_generation);
 
         assert_eq!(state.finish_connect(old_generation), None);
-        assert!(matches!(
-            state.process_state,
-            ProcessNetworkState::Connecting
-        ));
+        assert!(matches!(state.process_state, ProcessNetworkState::Connecting));
 
-        assert_eq!(
-            state.finish_connect(new_generation),
-            Some((0x3333, 0x4444))
-        );
-        assert!(matches!(
-            state.process_state,
-            ProcessNetworkState::Available
-        ));
+        assert_eq!(state.finish_connect(new_generation), Some((0x3333, 0x4444)));
+        assert!(matches!(state.process_state, ProcessNetworkState::Available));
     }
 
     #[test]
@@ -3237,10 +2910,7 @@ mod network_state_tests {
         );
 
         assert!(!state.connect_is_pending(7));
-        assert_eq!(
-            state.take_callback_for_event(wie_backend::NetworkEvent::Connected(7)),
-            None
-        );
+        assert_eq!(state.take_callback_for_event(wie_backend::NetworkEvent::Connected(7)), None);
         assert!(!state.has_callbacks());
     }
 
@@ -3281,10 +2951,7 @@ mod network_state_tests {
         );
 
         assert!(!state.connect_is_pending(9));
-        assert_eq!(
-            state.take_callback_for_event(wie_backend::NetworkEvent::ConnectFailed(9)),
-            None
-        );
+        assert_eq!(state.take_callback_for_event(wie_backend::NetworkEvent::ConnectFailed(9)), None);
     }
 
     #[test]
@@ -3339,9 +3006,7 @@ mod network_state_tests {
         // MC_netClose is an int-returning API. Binding close(context) itself
         // to Future<Output = Result<i32>> prevents it from regressing to
         // Result<()>, whose generic WIPI-C conversion emits no r0 result word.
-        fn require_close_result<'a>(
-            context: &'a mut dyn WIPICContext,
-        ) {
+        fn require_close_result<'a>(context: &'a mut dyn WIPICContext) {
             fn require_i32_future<'a, F>(_: F)
             where
                 F: core::future::Future<Output = Result<i32>> + 'a,
@@ -3372,10 +3037,7 @@ mod network_state_tests {
         sockets.sort_unstable();
 
         assert_eq!(sockets, vec![3, 4]);
-        assert!(matches!(
-            state.process_state,
-            ProcessNetworkState::Closed
-        ));
+        assert!(matches!(state.process_state, ProcessNetworkState::Closed));
         assert!(!state.is_available());
         assert!(state.sockets.is_empty());
         assert!(!state.has_callbacks());
@@ -3389,10 +3051,7 @@ mod network_state_tests {
         assert!(!state.has_process_network());
 
         let generation = state.begin_connect(0, 0x2222).unwrap();
-        assert!(matches!(
-            state.process_state,
-            ProcessNetworkState::Connecting
-        ));
+        assert!(matches!(state.process_state, ProcessNetworkState::Connecting));
 
         // Native MC_netSocket checks only whether find_network_obj_ex
         // returns an object. It does not require state 1 (available).
@@ -3430,10 +3089,7 @@ mod network_state_tests {
             ("www.example.com".into(), 80, "/path/to?q=1".into())
         );
         // Explicit port.
-        assert_eq!(
-            parse_http_url("http://host.co.kr:8080/a"),
-            ("host.co.kr".into(), 8080, "/a".into())
-        );
+        assert_eq!(parse_http_url("http://host.co.kr:8080/a"), ("host.co.kr".into(), 8080, "/a".into()));
         // No path defaults to "/".
         assert_eq!(parse_http_url("http://host"), ("host".into(), 80, "/".into()));
         // Scheme is optional.
@@ -3458,10 +3114,7 @@ mod network_state_tests {
     fn find_request_property_is_case_insensitive_and_bounded() {
         let headers = "Accept: text/html\r\nContent-Length: 42";
         assert_eq!(find_request_property(headers, "accept").as_deref(), Some("text/html"));
-        assert_eq!(
-            find_request_property(headers, "CONTENT-LENGTH").as_deref(),
-            Some("42")
-        );
+        assert_eq!(find_request_property(headers, "CONTENT-LENGTH").as_deref(), Some("42"));
         // A key that is only a prefix of a header name must not match.
         assert_eq!(find_request_property(headers, "Content"), None);
         assert_eq!(find_request_property(headers, "Missing"), None);
@@ -3533,10 +3186,7 @@ mod network_state_tests {
             proxy_addr: 0x0100_007f,
             ..Default::default()
         };
-        assert_eq!(
-            build_http_request(&proxied),
-            b"GET http://example.com:8080/p HTTP/1.0\r\n\r\n".to_vec()
-        );
+        assert_eq!(build_http_request(&proxied), b"GET http://example.com:8080/p HTTP/1.0\r\n\r\n".to_vec());
     }
 
     #[test]
@@ -3551,7 +3201,11 @@ mod network_state_tests {
         assert_eq!(parsed.content_encoding, "gzip");
         assert_eq!(parsed.body, b"hello".to_vec());
         assert_eq!(
-            parsed.headers.iter().find(|(name, _)| name == "X-Custom").map(|(_, value)| value.as_str()),
+            parsed
+                .headers
+                .iter()
+                .find(|(name, _)| name == "X-Custom")
+                .map(|(_, value)| value.as_str()),
             Some("hi")
         );
 
@@ -3641,7 +3295,6 @@ mod network_state_tests {
         assert_eq!(state.billing_header(), Some(header));
     }
 
-
     #[test]
     fn test_bill_gateway_matches_native_mode_two_constant() {
         let (host, port, path) = parse_http_url(LGT_TEST_BILL_GATEWAY);
@@ -3665,13 +3318,7 @@ mod network_state_tests {
             .with_system_information(LGT_BILL_INFO_BASE_ID, "BASE")
             .with_system_information(LGT_BILL_INFO_BEST_PN, "BEST");
 
-        let header = build_lgt_bill_header(
-            &platform,
-            "000298AD",
-            0x11223344,
-            0x01020304,
-            0x3075,
-        );
+        let header = build_lgt_bill_header(&platform, "000298AD", 0x11223344, 0x01020304, 0x3075);
 
         assert_eq!(header.len(), 108);
         assert_eq!(&header[0x00..0x04], &[0, 0, 0, 0]);
@@ -3701,36 +3348,21 @@ mod network_state_tests {
 
         // Original WIPI destination words.
         assert_eq!(&header[0x52..0x54], &[0x75, 0x30]);
-        assert_eq!(
-            &header[0x54..0x58],
-            &[0x04, 0x03, 0x02, 0x01]
-        );
+        assert_eq!(&header[0x54..0x58], &[0x04, 0x03, 0x02, 0x01]);
 
         // Htonl(0x11223344) followed by little-endian ARM STR.
-        assert_eq!(
-            &header[0x58..0x5c],
-            &[0x11, 0x22, 0x33, 0x44]
-        );
+        assert_eq!(&header[0x58..0x5c], &[0x11, 0x22, 0x33, 0x44]);
 
         assert_eq!(&header[0x5c..0x6c], &[0; 16]);
     }
 
     #[test]
     fn bill_header_mdn_normalization_matches_native_lengths() {
-        assert_eq!(
-            normalize_lgt_bill_mdn(b"0101234567"),
-            b"010001234567"
-        );
+        assert_eq!(normalize_lgt_bill_mdn(b"0101234567"), b"010001234567");
 
-        assert_eq!(
-            normalize_lgt_bill_mdn(b"01012345678"),
-            b"010012345678"
-        );
+        assert_eq!(normalize_lgt_bill_mdn(b"01012345678"), b"010012345678");
 
-        assert_eq!(
-            normalize_lgt_bill_mdn(b"1234"),
-            b"1234"
-        );
+        assert_eq!(normalize_lgt_bill_mdn(b"1234"), b"1234");
     }
 
     #[test]
@@ -3766,18 +3398,13 @@ mod network_state_tests {
         state.billing_read.header_offset = 17;
         state.billing_read.remaining_header = 39;
 
-        state.update_billing_header(
-            [0x5au8; LGT_BILL_HEADER_SIZE],
-        );
+        state.update_billing_header([0x5au8; LGT_BILL_HEADER_SIZE]);
 
         assert_eq!(state.billing_read.remaining_payload, 123);
         assert_eq!(state.billing_read.header_offset, 17);
         assert_eq!(state.billing_read.remaining_header, 39);
 
-        assert_eq!(
-            state.billing_header(),
-            Some([0x5au8; LGT_BILL_HEADER_SIZE])
-        );
+        assert_eq!(state.billing_header(), Some([0x5au8; LGT_BILL_HEADER_SIZE]));
     }
 
     #[test]
@@ -3786,10 +3413,7 @@ mod network_state_tests {
 
         assert_eq!(initial.remaining_payload, 0);
         assert_eq!(initial.header_offset, 0);
-        assert_eq!(
-            initial.remaining_header,
-            LGT_BILL_READ_HEADER_SIZE
-        );
+        assert_eq!(initial.remaining_header, LGT_BILL_READ_HEADER_SIZE);
 
         let mut state = NetworkState::default();
         state.register_socket(71, 1, 1);
@@ -3798,46 +3422,28 @@ mod network_state_tests {
         state.billing_read.header_offset = 17;
         state.billing_read.remaining_header = 39;
 
-        state.install_billing_header(
-            [0u8; LGT_BILL_HEADER_SIZE],
-        );
+        state.install_billing_header([0u8; LGT_BILL_HEADER_SIZE]);
 
         assert_eq!(state.billing_read.remaining_payload, 0);
         assert_eq!(state.billing_read.header_offset, 0);
-        assert_eq!(
-            state.billing_read.remaining_header,
-            LGT_BILL_READ_HEADER_SIZE
-        );
+        assert_eq!(state.billing_read.remaining_header, LGT_BILL_READ_HEADER_SIZE);
     }
 
     #[test]
     fn bill_read_header_layout_decodes_native_payload_length_and_tag() {
         let mut header = [0u8; LGT_BILL_READ_HEADER_SIZE];
 
-        header[0x30..0x34]
-            .copy_from_slice(&0x1234_5678u32.to_be_bytes());
+        header[0x30..0x34].copy_from_slice(&0x1234_5678u32.to_be_bytes());
         header[0x34..0x38].copy_from_slice(b"KCBD");
 
-        assert_eq!(
-            lgt_bill_read_payload_length(&header),
-            0x1234_5678
-        );
+        assert_eq!(lgt_bill_read_payload_length(&header), 0x1234_5678);
         assert_eq!(lgt_bill_read_tag(&header), *b"KCBD");
     }
 
     #[test]
     fn bill_read_native_tag_chain_has_no_reachable_literal() {
         for tag in [
-            *b"KCBD",
-            *b"KCSP",
-            *b"KCNB",
-            *b"KCEP",
-            *b"KCEN",
-            *b"UATO",
-            *b"UATT",
-            *b"UAFO",
-            *b"UAFT",
-            *b"UAFR",
+            *b"KCBD", *b"KCSP", *b"KCNB", *b"KCEP", *b"KCEN", *b"UATO", *b"UATT", *b"UAFO", *b"UAFT", *b"UAFR",
         ] {
             assert!(!lgt_bill_read_reject_tag(tag));
         }
@@ -3851,18 +3457,14 @@ mod network_state_tests {
         header[0..4].fill(0);
 
         let payload = b"ABC";
-        let (updated, frame) =
-            build_lgt_bill_write_frame(header, payload);
+        let (updated, frame) = build_lgt_bill_write_frame(header, payload);
 
         // 108 + 3 = 111 = 0x0000006f, in network byte order on wire.
         assert_eq!(&updated[0..4], &[0x00, 0x00, 0x00, 0x6f]);
 
         assert_eq!(frame.len(), 111);
         assert_eq!(&frame[0..4], &[0x00, 0x00, 0x00, 0x6f]);
-        assert_eq!(
-            &frame[4..LGT_BILL_HEADER_SIZE],
-            &[0xa5; LGT_BILL_HEADER_SIZE - 4]
-        );
+        assert_eq!(&frame[4..LGT_BILL_HEADER_SIZE], &[0xa5; LGT_BILL_HEADER_SIZE - 4]);
         assert_eq!(&frame[LGT_BILL_HEADER_SIZE..], b"ABC");
     }
 
@@ -3870,22 +3472,10 @@ mod network_state_tests {
     fn bill_write_public_result_matches_native_header_accounting() {
         assert_eq!(lgt_bill_write_public_result(0), 0);
         assert_eq!(lgt_bill_write_public_result(1), 0);
-        assert_eq!(
-            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE - 1),
-            0
-        );
-        assert_eq!(
-            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE),
-            0
-        );
-        assert_eq!(
-            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE + 1),
-            1
-        );
-        assert_eq!(
-            lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE + 37),
-            37
-        );
+        assert_eq!(lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE - 1), 0);
+        assert_eq!(lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE), 0);
+        assert_eq!(lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE + 1), 1);
+        assert_eq!(lgt_bill_write_public_result(LGT_BILL_HEADER_SIZE + 37), 37);
     }
 
     #[test]
@@ -3893,12 +3483,10 @@ mod network_state_tests {
         let mut header = [0u8; LGT_BILL_HEADER_SIZE];
         header[0..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
 
-        let (first, _) =
-            build_lgt_bill_write_frame(header, b"12345");
+        let (first, _) = build_lgt_bill_write_frame(header, b"12345");
         assert_eq!(&first[0..4], &[0x00, 0x00, 0x00, 0x71]);
 
-        let (second, _) =
-            build_lgt_bill_write_frame(first, b"Z");
+        let (second, _) = build_lgt_bill_write_frame(first, b"Z");
         assert_eq!(&second[0..4], &[0x00, 0x00, 0x00, 0x6d]);
     }
 
@@ -3913,19 +3501,12 @@ mod network_state_tests {
         state.set_connect_pending(21, true);
 
         assert_eq!(
-            state.take_callback_for_event(
-                wie_backend::NetworkEvent::Connected(21)
-            ),
+            state.take_callback_for_event(wie_backend::NetworkEvent::Connected(21)),
             Some((0x1234, [21, 0, 0x5678]))
         );
 
         assert!(!state.connect_is_pending(21));
-        assert_eq!(
-            state.take_callback_for_event(
-                wie_backend::NetworkEvent::Connected(21)
-            ),
-            None
-        );
+        assert_eq!(state.take_callback_for_event(wie_backend::NetworkEvent::Connected(21)), None);
     }
 
     #[test]
@@ -3943,33 +3524,21 @@ mod network_state_tests {
         state.set_connect_callback(22, 0x3333, 0x4444);
 
         assert_eq!(
-            state.take_callback_for_event(
-                wie_backend::NetworkEvent::Connected(22)
-            ),
+            state.take_callback_for_event(wie_backend::NetworkEvent::Connected(22)),
             Some((0x3333, [22, 0, 0x4444]))
         );
     }
+
 
     #[futures_test::test]
     async fn local_lgt_purchase_bill_socket_to_write_real_path_returns_full_length_and_queues_success() {
         const REQUEST: u32 = 0x1000;
 
-        let system = System::new(
-            Box::new(LocalBillingTestPlatform::new()),
-            "test-pid",
-            "test-aid",
-            DefaultTaskRunner,
-        );
+        let system = System::new(Box::new(LocalBillingTestPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner);
         let mut context = TestContext::with_system(system);
 
         let request = [
-            0xff, 0xff,
-            0x00, 0x13,
-            0x00, 0x68,
-            0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
-            0x37, 0x38, 0x39, 0x30, 0x31,
-            0x02,
-            0x03,
+            0xff, 0xff, 0x00, 0x13, 0x00, 0x68, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x02, 0x03,
         ];
 
         context.write_bytes(REQUEST, &request).unwrap();
@@ -3983,97 +3552,47 @@ mod network_state_tests {
         assert_eq!(state.lock().billing_mode(socket), Some(1));
 
         assert_eq!(
-            socket_write(
-                &mut context,
-                socket,
-                REQUEST,
-                request.len() as i32,
-            )
-            .await
-            .unwrap(),
+            socket_write(&mut context, socket, REQUEST, request.len() as i32,).await.unwrap(),
             request.len() as i32
         );
 
         let mut response = [0u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE];
         assert_eq!(
-            state
-                .lock()
-                .take_local_billing_response(socket, &mut response),
+            state.lock().take_local_billing_response(socket, &mut response),
             Some(LGT_LOCAL_PURCHASE_RESPONSE_SIZE)
         );
-        assert_eq!(
-            response,
-            [
-                0xff, 0xff,
-                0x00, 0x07,
-                0x00, 0x69,
-                0x00,
-            ]
-        );
+        assert_eq!(response, [0xff, 0xff, 0x00, 0x07, 0x00, 0x69, 0x00,]);
     }
+
 
     #[test]
     fn local_lgt_purchase_68_builds_69_status_zero_response() {
         let request = [
-            0xff, 0xff,
-            0x00, 0x13,
-            0x00, 0x68,
-            0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
-            0x37, 0x38, 0x39, 0x30, 0x31,
-            0x02,
-            0x03,
+            0xff, 0xff, 0x00, 0x13, 0x00, 0x68, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x02, 0x03,
         ];
 
         assert_eq!(
             lgt_local_purchase_success_response(&request),
-            Some([
-                0xff, 0xff,
-                0x00, 0x07,
-                0x00, 0x69,
-                0x00,
-            ])
+            Some([0xff, 0xff, 0x00, 0x07, 0x00, 0x69, 0x00,])
         );
     }
 
     #[test]
     fn local_lgt_purchase_does_not_intercept_other_operations() {
-        let catalog = [
-            0xff, 0xff,
-            0x00, 0x07,
-            0x00, 0x66,
-            0x00,
-        ];
+        let catalog = [0xff, 0xff, 0x00, 0x07, 0x00, 0x66, 0x00];
 
-        let gift_or_other = [
-            0xff, 0xff,
-            0x00, 0x07,
-            0x00, 0x6a,
-            0x00,
-        ];
+        let gift_or_other = [0xff, 0xff, 0x00, 0x07, 0x00, 0x6a, 0x00];
 
-        assert_eq!(
-            lgt_local_purchase_success_response(&catalog),
-            None
-        );
-        assert_eq!(
-            lgt_local_purchase_success_response(&gift_or_other),
-            None
-        );
+        assert_eq!(lgt_local_purchase_success_response(&catalog), None);
+        assert_eq!(lgt_local_purchase_success_response(&gift_or_other), None);
     }
+
 
     #[test]
     fn local_lgt_purchase_rejects_malformed_length() {
-        let malformed = [
-            0xff, 0xff,
-            0x00, 0x02,
-            0x00, 0x68,
-            0x00,
-        ];
+        let malformed = [0xff, 0xff, 0x00, 0x02, 0x00, 0x68, 0x00];
 
-        assert_eq!(
-            lgt_local_purchase_success_response(&malformed),
-            None
-        );
+        assert_eq!(lgt_local_purchase_success_response(&malformed), None);
     }
 
     #[test]
@@ -4081,34 +3600,16 @@ mod network_state_tests {
         let mut state = NetworkState::default();
         state.register_socket(7, 1, 1);
 
-        state.queue_local_billing_response(
-            7,
-            [
-                0xff, 0xff,
-                0x00, 0x07,
-                0x00, 0x69,
-                0x00,
-            ],
-        );
+        state.queue_local_billing_response(7, [0xff, 0xff, 0x00, 0x07, 0x00, 0x69, 0x00]);
 
         let mut first = [0u8; 3];
-        assert_eq!(
-            state.take_local_billing_response(7, &mut first),
-            Some(3)
-        );
+        assert_eq!(state.take_local_billing_response(7, &mut first), Some(3));
         assert_eq!(first, [0xff, 0xff, 0x00]);
 
         let mut second = [0u8; 8];
-        assert_eq!(
-            state.take_local_billing_response(7, &mut second),
-            Some(4)
-        );
+        assert_eq!(state.take_local_billing_response(7, &mut second), Some(4));
         assert_eq!(&second[..4], &[0x07, 0x00, 0x69, 0x00]);
 
-        assert_eq!(
-            state.take_local_billing_response(7, &mut second),
-            None
-        );
+        assert_eq!(state.take_local_billing_response(7, &mut second), None);
     }
-
 }

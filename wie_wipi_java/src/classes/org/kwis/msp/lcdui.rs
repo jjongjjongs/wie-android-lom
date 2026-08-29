@@ -13,6 +13,7 @@ mod jlet_event_listener;
 mod main;
 
 pub use self::{
-    candidate_window::CandidateWindow, card::Card, display::Display, event_queue::EventQueue, font::Font, graphics::Graphics, image::Image, image_observer::ImageObserver,
-    input_method_handler::InputMethodHandler, input_method_listener::InputMethodListener, jlet::Jlet, jlet_event_listener::JletEventListener, main::Main,
+    candidate_window::CandidateWindow, card::Card, display::Display, event_queue::EventQueue, font::Font, graphics::Graphics, image::Image,
+    image_observer::ImageObserver, input_method_handler::InputMethodHandler, input_method_listener::InputMethodListener, jlet::Jlet,
+    jlet_event_listener::JletEventListener, main::Main,
 };

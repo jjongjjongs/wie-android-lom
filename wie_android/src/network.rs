@@ -93,17 +93,9 @@ impl AndroidNetwork {
         let interest = Event::all(handle as usize).with_interrupt();
 
         let result = match socket {
-            Socket::Tcp(TcpState::Connected(stream)) => unsafe {
-                self.poller
-                    .add_with_mode(stream, interest, PollMode::Edge)
-            },
-            Socket::Udp(socket) => unsafe {
-                self.poller
-                    .add_with_mode(socket, interest, PollMode::Edge)
-            },
-            Socket::Tcp(
-                TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_),
-            ) => return Ok(()),
+            Socket::Tcp(TcpState::Connected(stream)) => unsafe { self.poller.add_with_mode(stream, interest, PollMode::Edge) },
+            Socket::Udp(socket) => unsafe { self.poller.add_with_mode(socket, interest, PollMode::Edge) },
+            Socket::Tcp(TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_)) => return Ok(()),
         };
 
         result.map_err(|_| NetworkError::Other)
@@ -117,9 +109,7 @@ impl AndroidNetwork {
             Socket::Udp(socket) => {
                 let _ = self.poller.delete(socket);
             }
-            Socket::Tcp(
-                TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_),
-            ) => {}
+            Socket::Tcp(TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_)) => {}
         }
     }
 
@@ -155,11 +145,8 @@ impl Network for AndroidNetwork {
         let socket = match socket_type {
             1 => Socket::Tcp(TcpState::Disconnected),
             2 => {
-                let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-                    .map_err(|error| Self::map_io(&error))?;
-                socket
-                    .set_nonblocking(true)
-                    .map_err(|error| Self::map_io(&error))?;
+                let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).map_err(|error| Self::map_io(&error))?;
+                socket.set_nonblocking(true).map_err(|error| Self::map_io(&error))?;
                 Socket::Udp(socket)
             }
             _ => return Err(NetworkError::Unsupported),
@@ -289,9 +276,7 @@ impl Network for AndroidNetwork {
                 Socket::Tcp(TcpState::Connecting) => return NetworkPoll::Pending,
                 Socket::Tcp(TcpState::Connected(_)) => return NetworkPoll::Ready(Ok(())),
                 Socket::Udp(udp) => {
-                    return NetworkPoll::Ready(
-                        udp.connect(remote).map_err(|error| Self::map_io(&error)),
-                    );
+                    return NetworkPoll::Ready(udp.connect(remote).map_err(|error| Self::map_io(&error)));
                 }
             }
         }
@@ -301,11 +286,10 @@ impl Network for AndroidNetwork {
         let pending_events = self.pending_events.clone();
 
         thread::spawn(move || {
-            let result = TcpStream::connect_timeout(&remote, CONNECT_TIMEOUT)
-                .and_then(|stream| {
-                    stream.set_nonblocking(true)?;
-                    Ok(stream)
-                });
+            let result = TcpStream::connect_timeout(&remote, CONNECT_TIMEOUT).and_then(|stream| {
+                stream.set_nonblocking(true)?;
+                Ok(stream)
+            });
 
             let mut inner = inner.lock().unwrap_or_else(|x| x.into_inner());
             let Some(entry) = inner.sockets.get_mut(&socket) else {
@@ -320,11 +304,7 @@ impl Network for AndroidNetwork {
                 Ok(stream) => {
                     let interest = Event::all(socket as usize).with_interrupt();
 
-                    if unsafe {
-                        poller.add_with_mode(&stream, interest, PollMode::Edge)
-                    }
-                    .is_ok()
-                    {
+                    if unsafe { poller.add_with_mode(&stream, interest, PollMode::Edge) }.is_ok() {
                         pending_events
                             .lock()
                             .unwrap_or_else(|x| x.into_inner())
@@ -358,13 +338,9 @@ impl Network for AndroidNetwork {
         };
 
         match entry {
-            Socket::Tcp(TcpState::Connected(stream)) => {
-                stream.read(buf).map_err(|error| Self::map_io(&error))
-            }
+            Socket::Tcp(TcpState::Connected(stream)) => stream.read(buf).map_err(|error| Self::map_io(&error)),
             Socket::Udp(socket) => socket.recv(buf).map_err(|error| Self::map_io(&error)),
-            Socket::Tcp(TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_)) => {
-                Err(NetworkError::NotConnected)
-            }
+            Socket::Tcp(TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_)) => Err(NetworkError::NotConnected),
         }
     }
 
@@ -375,13 +351,9 @@ impl Network for AndroidNetwork {
         };
 
         match entry {
-            Socket::Tcp(TcpState::Connected(stream)) => {
-                stream.write(buf).map_err(|error| Self::map_io(&error))
-            }
+            Socket::Tcp(TcpState::Connected(stream)) => stream.write(buf).map_err(|error| Self::map_io(&error)),
             Socket::Udp(socket) => socket.send(buf).map_err(|error| Self::map_io(&error)),
-            Socket::Tcp(TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_)) => {
-                Err(NetworkError::NotConnected)
-            }
+            Socket::Tcp(TcpState::Disconnected | TcpState::Connecting | TcpState::Failed(_)) => Err(NetworkError::NotConnected),
         }
     }
 
@@ -395,28 +367,19 @@ impl Network for AndroidNetwork {
         self.unregister_socket(entry);
         inner.sockets.remove(&socket);
 
-        self.pending_events
-            .lock()
-            .unwrap_or_else(|x| x.into_inner())
-            .retain(|event| match event {
-                NetworkEvent::Connected(fd)
-                | NetworkEvent::ConnectFailed(fd)
-                | NetworkEvent::Readable(fd)
-                | NetworkEvent::Writable(fd) => *fd != socket,
-                // A host resolution is not tied to a socket, so closing one
-                // never drops it.
-                NetworkEvent::HostResolved { .. } => true,
-            });
+        self.pending_events.lock().unwrap_or_else(|x| x.into_inner()).retain(|event| match event {
+            NetworkEvent::Connected(fd) | NetworkEvent::ConnectFailed(fd) | NetworkEvent::Readable(fd) | NetworkEvent::Writable(fd) => *fd != socket,
+            // A host resolution is not tied to a socket, so closing one
+            // never drops it.
+            NetworkEvent::HostResolved { .. } => true,
+        });
 
         Ok(())
     }
 
     fn poll_event(&self) -> Option<NetworkEvent> {
         {
-            let mut pending = self
-                .pending_events
-                .lock()
-                .unwrap_or_else(|x| x.into_inner());
+            let mut pending = self.pending_events.lock().unwrap_or_else(|x| x.into_inner());
 
             if let Some(event) = pending.pop_front() {
                 return Some(event);
@@ -425,19 +388,11 @@ impl Network for AndroidNetwork {
 
         let mut events = Events::new();
 
-        if self
-            .poller
-            .wait(&mut events, Some(Duration::ZERO))
-            .ok()?
-            == 0
-        {
+        if self.poller.wait(&mut events, Some(Duration::ZERO)).ok()? == 0 {
             return None;
         }
 
-        let mut pending = self
-            .pending_events
-            .lock()
-            .unwrap_or_else(|x| x.into_inner());
+        let mut pending = self.pending_events.lock().unwrap_or_else(|x| x.into_inner());
 
         for event in events.iter() {
             let Ok(socket) = i32::try_from(event.key) else {
@@ -498,7 +453,10 @@ mod tests {
         let (n, _) = receiver.recv_from(&mut buf).expect("recv");
         assert_eq!(&buf[..n], payload);
 
-        assert!(matches!(net.send_to(0x7fff_ffff, payload, loopback, port), Err(NetworkError::InvalidSocket)));
+        assert!(matches!(
+            net.send_to(0x7fff_ffff, payload, loopback, port),
+            Err(NetworkError::InvalidSocket)
+        ));
     }
 
     // MC_netSocketRcvFrom (0x262): a datagram socket receives a packet and

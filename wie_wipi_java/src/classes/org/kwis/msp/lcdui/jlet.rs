@@ -3,7 +3,7 @@ use alloc::vec;
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_constants::{FieldAccessFlags, MethodAccessFlags};
 use java_runtime::classes::java::lang::String;
-use jvm::{runtime::JavaLangString, ClassInstanceRef, Jvm, Result as JvmResult};
+use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::javax::microedition::midlet::MIDlet;
@@ -127,22 +127,14 @@ impl Jlet {
         tracing::debug!("org.kwis.msp.lcdui.Jlet::getDisplay({this:?}, {name:?})");
 
         if name.is_null() {
-            return jvm
-                .get_field(&this, "dis", "Lorg/kwis/msp/lcdui/Display;")
-                .await;
+            return jvm.get_field(&this, "dis", "Lorg/kwis/msp/lcdui/Display;").await;
         }
 
         let name = JavaLangString::to_rust_string(jvm, &name).await?;
 
         match name.as_ref() {
-            "dual" => {
-                jvm.get_field(&this, "dualDis", "Lorg/kwis/msp/lcdui/Display;")
-                    .await
-            }
-            "rotated" => {
-                jvm.get_field(&this, "rotatedDis", "Lorg/kwis/msp/lcdui/Display;")
-                    .await
-            }
+            "dual" => jvm.get_field(&this, "dualDis", "Lorg/kwis/msp/lcdui/Display;").await,
+            "rotated" => jvm.get_field(&this, "rotatedDis", "Lorg/kwis/msp/lcdui/Display;").await,
             _ => Ok(None.into()),
         }
     }
@@ -153,17 +145,10 @@ impl Jlet {
         mut this: ClassInstanceRef<Self>,
         rotated_display: ClassInstanceRef<Display>,
     ) -> JvmResult<()> {
-        tracing::debug!(
-            "org.kwis.msp.lcdui.Jlet::setRotatedDisplay({this:?}, {rotated_display:?})"
-        );
+        tracing::debug!("org.kwis.msp.lcdui.Jlet::setRotatedDisplay({this:?}, {rotated_display:?})");
 
-        jvm.put_field(
-            &mut this,
-            "rotatedDis",
-            "Lorg/kwis/msp/lcdui/Display;",
-            rotated_display,
-        )
-        .await
+        jvm.put_field(&mut this, "rotatedDis", "Lorg/kwis/msp/lcdui/Display;", rotated_display)
+            .await
     }
 
     async fn get_app_property(

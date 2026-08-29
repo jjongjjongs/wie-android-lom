@@ -113,10 +113,7 @@ async fn sync_guest_fields_to_jvm(jvm: &Jvm, handles: &JavaHandles, handle: u32)
 
         match binding.descriptor.as_str() {
             "I" => {
-                if let Err(error) = jvm
-                    .put_field(&mut instance, &binding.name, &binding.descriptor, word as i32)
-                    .await
-                {
+                if let Err(error) = jvm.put_field(&mut instance, &binding.name, &binding.descriptor, word as i32).await {
                     return Err(JvmSupport::to_wie_err(jvm, error).await);
                 }
             }
@@ -146,10 +143,7 @@ async fn sync_jvm_fields_to_guest(jvm: &Jvm, handles: &JavaHandles, handle: u32)
 
         let word = match binding.descriptor.as_str() {
             "I" => {
-                let value: i32 = match jvm
-                    .get_field(&instance, &binding.name, &binding.descriptor)
-                    .await
-                {
+                let value: i32 = match jvm.get_field(&instance, &binding.name, &binding.descriptor).await {
                     Ok(value) => value,
                     Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
                 };

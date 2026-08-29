@@ -1,8 +1,8 @@
 use alloc::{collections::BTreeMap, sync::Arc};
 
 use spin::Mutex;
-use wipi_types::wipic::WIPICWord;
 use wie_util::{Result, read_null_terminated_string_bytes};
+use wipi_types::wipic::WIPICWord;
 
 use crate::WIPICContext;
 
@@ -92,12 +92,7 @@ impl SerialState {
         handle
     }
 
-    fn set_write_callback(
-        &mut self,
-        handle: i32,
-        callback: WIPICWord,
-        callback_context: WIPICWord,
-    ) -> i32 {
+    fn set_write_callback(&mut self, handle: i32, callback: WIPICWord, callback_context: WIPICWord) -> i32 {
         if handle < 0 {
             return -2;
         }
@@ -116,9 +111,7 @@ impl SerialState {
 
     #[cfg(test)]
     fn write_callback(&self, handle: i32) -> Option<(WIPICWord, WIPICWord)> {
-        self.entries
-            .get(&handle)
-            .map(|entry| (entry.write_callback, entry.write_context))
+        self.entries.get(&handle).map(|entry| (entry.write_callback, entry.write_context))
     }
 
     fn contains(&self, handle: i32) -> bool {
@@ -160,9 +153,7 @@ fn atoi(bytes: &[u8]) -> i32 {
         if !byte.is_ascii_digit() {
             break;
         }
-        value = value
-            .wrapping_mul(10)
-            .wrapping_add((byte - b'0') as i32);
+        value = value.wrapping_mul(10).wrapping_add((byte - b'0') as i32);
         index += 1;
     }
 
@@ -231,11 +222,7 @@ fn parse_config(bytes: &[u8]) -> SerialConfig {
 /// - flow maps no/hardware/other to 0/1/2.
 /// - the handset HAL open routine itself returns success unconditionally.
 /// - logical handles start at 1 and at most four serial records can coexist.
-pub async fn open(
-    context: &mut dyn WIPICContext,
-    port_id: i32,
-    config_string: WIPICWord,
-) -> Result<i32> {
+pub async fn open(context: &mut dyn WIPICContext, port_id: i32, config_string: WIPICWord) -> Result<i32> {
     let bytes = read_null_terminated_string_bytes(context, config_string)?;
     let config = parse_config(&bytes);
 
@@ -261,12 +248,7 @@ pub async fn open(
 /// The native wrapper also has a dormant asynchronous path: dsio -2011 sets
 /// the serial object's pending-write bit and returns -19. That path is not
 /// reachable with this LGT HAL because its write primitive always succeeds.
-pub async fn write(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    buffer: WIPICWord,
-    length: i32,
-) -> Result<i32> {
+pub async fn write(context: &mut dyn WIPICContext, handle: i32, buffer: WIPICWord, length: i32) -> Result<i32> {
     tracing::debug!("MC_srlWrite({handle}, {buffer:#x}, {length})");
 
     if buffer == 0 {
@@ -289,20 +271,10 @@ pub async fn write(
 ///   object +0x10, then returns 0.
 /// Callback and context values themselves are not validated, so zero clears
 /// either stored value just like the native implementation.
-pub async fn set_write_callback(
-    context: &mut dyn WIPICContext,
-    handle: i32,
-    callback: WIPICWord,
-    callback_context: WIPICWord,
-) -> Result<i32> {
-    tracing::debug!(
-        "MC_srlSetWriteCB({handle}, {callback:#x}, {callback_context:#x})"
-    );
+pub async fn set_write_callback(context: &mut dyn WIPICContext, handle: i32, callback: WIPICWord, callback_context: WIPICWord) -> Result<i32> {
+    tracing::debug!("MC_srlSetWriteCB({handle}, {callback:#x}, {callback_context:#x})");
 
-    Ok(context
-        .serial_state()
-        .lock()
-        .set_write_callback(handle, callback, callback_context))
+    Ok(context.serial_state().lock().set_write_callback(handle, callback, callback_context))
 }
 
 /// LGT MC_srlClose.
@@ -396,7 +368,6 @@ mod tests {
         // dsio_open returns -2024 when its four records are occupied.
         // MC_srlOpen has no dedicated mapping for -2024, so it returns -1.
         assert_eq!(open(&mut context, 0, ptr).await.unwrap(), -1);
-
     }
 
     #[futures_test::test]
@@ -424,54 +395,26 @@ mod tests {
         assert_eq!(write(&mut context, handle, 0x1234, i32::MAX).await.unwrap(), 0);
     }
 
-
     #[futures_test::test]
     async fn lgt_serial_set_write_callback_matches_native_object_updates() {
         let mut context = TestContext::new();
 
-        assert_eq!(
-            set_write_callback(&mut context, -1, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            -2
-        );
-        assert_eq!(
-            set_write_callback(&mut context, 77, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(set_write_callback(&mut context, -1, 0x1111, 0x2222).await.unwrap(), -2);
+        assert_eq!(set_write_callback(&mut context, 77, 0x1111, 0x2222).await.unwrap(), -1);
 
         let empty_config = context.alloc_raw(1).unwrap();
         wie_util::ByteWrite::write_bytes(&mut context, empty_config, &[0]).unwrap();
         let handle = open(&mut context, 0, empty_config).await.unwrap();
         assert_eq!(handle, 1);
 
-        assert_eq!(
-            set_write_callback(&mut context, handle, 0x1234, 0x5678)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            context.serial_state().lock().write_callback(handle),
-            Some((0x1234, 0x5678))
-        );
+        assert_eq!(set_write_callback(&mut context, handle, 0x1234, 0x5678).await.unwrap(), 0);
+        assert_eq!(context.serial_state().lock().write_callback(handle), Some((0x1234, 0x5678)));
 
         // Native performs no callback/context validation; zero values are
         // stored directly and therefore act as ordinary clears.
-        assert_eq!(
-            set_write_callback(&mut context, handle, 0, 0)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            context.serial_state().lock().write_callback(handle),
-            Some((0, 0))
-        );
+        assert_eq!(set_write_callback(&mut context, handle, 0, 0).await.unwrap(), 0);
+        assert_eq!(context.serial_state().lock().write_callback(handle), Some((0, 0)));
     }
-
 
     #[futures_test::test]
     async fn lgt_serial_close_releases_native_objects_and_preserves_fd_sequence() {
@@ -490,23 +433,13 @@ mod tests {
 
         let first = open(&mut context, 0, empty_config).await.unwrap();
         assert_eq!(first, 1);
-        assert_eq!(
-            set_write_callback(&mut context, first, 0x1234, 0x5678)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(set_write_callback(&mut context, first, 0x1234, 0x5678).await.unwrap(), 0);
 
         // HAL close succeeds, DSIO frees the port and MC_srlClose releases
         // the corresponding serial object.
         assert_eq!(close(&mut context, first).await.unwrap(), 0);
         assert_eq!(write(&mut context, first, 0x1234, 1).await.unwrap(), -2);
-        assert_eq!(
-            set_write_callback(&mut context, first, 0x1111, 0x2222)
-                .await
-                .unwrap(),
-            -1
-        );
+        assert_eq!(set_write_callback(&mut context, first, 0x1111, 0x2222).await.unwrap(), -1);
 
         // Closing it again reaches dsio_close and reports the missing fd.
         assert_eq!(close(&mut context, first).await.unwrap(), -2009);
@@ -516,5 +449,4 @@ mod tests {
         let second = open(&mut context, 0, empty_config).await.unwrap();
         assert_eq!(second, 2);
     }
-
 }

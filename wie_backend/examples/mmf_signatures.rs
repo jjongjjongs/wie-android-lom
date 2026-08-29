@@ -31,11 +31,11 @@ fn main() {
         let name = Path::new(&path).file_stem().unwrap().to_string_lossy();
         for (_, event) in parse_smaf(&bytes) {
             match event {
-                SmafEvent::Wave { channel, sampling_rate, data } => println!(
-                    "{name},wave,{channel},{sampling_rate},{},{:016x}",
-                    data.len(),
-                    fnv1a(&data)
-                ),
+                SmafEvent::Wave {
+                    channel,
+                    sampling_rate,
+                    data,
+                } => println!("{name},wave,{channel},{sampling_rate},{},{:016x}", data.len(), fnv1a(&data)),
                 SmafEvent::MidiSysEx(data) => {
                     println!("{name},sysex,{}", hex_prefix(&data, 16));
                 }

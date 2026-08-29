@@ -60,8 +60,7 @@ impl TestPlatform {
     }
 
     pub fn with_system_information(mut self, key: &str, value: &str) -> Self {
-        self.system_information
-            .insert(key.to_string(), value.to_string());
+        self.system_information.insert(key.to_string(), value.to_string());
         self
     }
 }

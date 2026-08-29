@@ -287,6 +287,45 @@ fn report_hot_regions() {
     tracing::info!("{line}");
 }
 
+/// Name the LGT SVC category, so the hot-syscall line is readable.
+fn svc_category_name(category: usize) -> &'static str {
+    match category {
+        1 => "init",
+        3 => "wipi-c",
+        5 => "stdlib",
+        6 => "libc",
+        7 => "mda",
+        8 => "jni",
+        _ => "?",
+    }
+}
+
+/// Log the SVCs-per-second broken down by category, so the dominant syscall
+/// (the frame-time cost, since the round-trip — not raw execution — is the wall)
+/// is identified by name. Counters are drained each period.
+fn report_hot_svc(dt_ms: u64) {
+    use core::fmt::Write;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let mut top: [(usize, u64); 4] = [(0, 0); 4];
+    for (category, slot) in wie_core_arm::SVC_CATEGORY_COUNT.iter().enumerate() {
+        let count = slot.swap(0, Relaxed);
+        if count > top[3].1 {
+            top[3] = (category, count);
+            top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        }
+    }
+    if top[0].1 == 0 {
+        return;
+    }
+    let mut line = String::from("[svc]");
+    for (category, count) in top.iter().filter(|(_, c)| *c > 0) {
+        let per_s = *count as f64 * 1000.0 / dt_ms as f64;
+        let _ = write!(line, " {}({category})={per_s:.0}/s", svc_category_name(*category));
+    }
+    tracing::info!("{line}");
+}
+
 impl Emulator for LgtEmulator {
     fn handle_event(&mut self, event: Event) {
         self.system.event_queue().push(event)
@@ -316,8 +355,20 @@ impl Emulator for LgtEmulator {
             let ticks = self.perf_ticks;
             let mips = executed as f64 / dt_ms as f64 / 1000.0;
             let tps = ticks as f64 * 1000.0 / dt_ms as f64;
-            tracing::info!("[perf] {mips:.1} MIPS, {tps:.1} tick/s ({executed} insn / {ticks} ticks in {dt_ms} ms)");
+            // SVCs and run() calls per second: a high SVC rate points the frame
+            // cost at the syscall round-trip rather than raw execution.
+            let svc = wie_core_arm::SVC_COUNT.swap(0, core::sync::atomic::Ordering::Relaxed);
+            let runs = wie_core_arm::RUN_CALLS.swap(0, core::sync::atomic::Ordering::Relaxed);
+            let fb = wie_core_arm::JIT_FALLBACKS.swap(0, core::sync::atomic::Ordering::Relaxed);
+            let svc_per_s = svc as f64 * 1000.0 / dt_ms as f64;
+            let runs_per_s = runs as f64 * 1000.0 / dt_ms as f64;
+            let fb_per_s = fb as f64 * 1000.0 / dt_ms as f64;
+            tracing::info!(
+                "[perf] {mips:.1} MIPS, {tps:.1} tick/s, {svc_per_s:.0} svc/s, {runs_per_s:.0} run/s, {fb_per_s:.0} fallback/s ({executed} insn / {ticks} ticks in {dt_ms} ms)"
+            );
             report_hot_regions();
+            report_hot_svc(dt_ms);
+            crate::runtime::wipi_c::report_hot_wipic(dt_ms);
             self.perf_last_ms = now_ms;
             self.perf_last_instr = instr;
             self.perf_ticks = 0;

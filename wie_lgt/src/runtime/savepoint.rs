@@ -44,13 +44,7 @@ impl SavePointState {
 
         let mut chains = self.chains.lock();
         let chain = chains.entry(thread_id).or_default();
-        chain.insert(
-            depth,
-            SavePoint {
-                address,
-                continuation: None,
-            },
-        );
+        chain.insert(depth, SavePoint { address, continuation: None });
 
         Ok(address)
     }
@@ -58,11 +52,9 @@ impl SavePointState {
     pub fn capture(&self, core: &ArmCore, address: u32, return_pc: u32) -> Result<()> {
         let thread_id = Self::thread_id(core);
         let mut chains = self.chains.lock();
-        let chain = chains.get_mut(&thread_id).ok_or_else(|| {
-            WieError::FatalError(alloc::format!(
-                "setjmp({address:#x}) has no save-point chain for thread {thread_id}"
-            ))
-        })?;
+        let chain = chains
+            .get_mut(&thread_id)
+            .ok_or_else(|| WieError::FatalError(alloc::format!("setjmp({address:#x}) has no save-point chain for thread {thread_id}")))?;
 
         let point = chain.iter_mut().find(|point| point.address == address).ok_or_else(|| {
             WieError::FatalError(alloc::format!(
@@ -91,11 +83,9 @@ impl SavePointState {
 
         let point = {
             let mut chains = self.chains.lock();
-            let chain = chains.get_mut(&thread_id).ok_or_else(|| {
-                WieError::FatalError(alloc::format!(
-                    "vm_free_save_point({depth}) has no chain for thread {thread_id}"
-                ))
-            })?;
+            let chain = chains
+                .get_mut(&thread_id)
+                .ok_or_else(|| WieError::FatalError(alloc::format!("vm_free_save_point({depth}) has no chain for thread {thread_id}")))?;
 
             if depth >= chain.len() {
                 return Err(WieError::FatalError(alloc::format!(
@@ -124,12 +114,9 @@ impl SavePointState {
     /// table 1 / function 0x32 and make setjmp appear to return `exception`.
     pub fn throw(&self, core: &mut ArmCore, exception: u32) -> Result<()> {
         let point = self.remove(core, 0)?;
-        let context = point.continuation.ok_or_else(|| {
-            WieError::FatalError(alloc::format!(
-                "longjmp target {:#x} has no captured setjmp continuation",
-                point.address
-            ))
-        })?;
+        let context = point
+            .continuation
+            .ok_or_else(|| WieError::FatalError(alloc::format!("longjmp target {:#x} has no captured setjmp continuation", point.address)))?;
 
         let return_pc = context.pc;
         core.restore_context(&context);
@@ -139,7 +126,6 @@ impl SavePointState {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {

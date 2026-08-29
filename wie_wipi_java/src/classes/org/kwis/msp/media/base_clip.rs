@@ -33,11 +33,7 @@ impl BaseClip {
             ],
             fields: vec![
                 JavaFieldProto::new("player", "Ljavax/microedition/media/Player;", Default::default()),
-                JavaFieldProto::new(
-                    "playListener",
-                    "Lorg/kwis/msp/media/PlayListener;",
-                    Default::default(),
-                ),
+                JavaFieldProto::new("playListener", "Lorg/kwis/msp/media/PlayListener;", Default::default()),
                 JavaFieldProto::new("__wieBufferSize", "I", Default::default()),
             ],
             access_flags: Default::default(),
@@ -55,17 +51,12 @@ impl BaseClip {
     async fn alloc_player(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.media.BaseClip::allocPlayer({this:?})");
 
-        let player: ClassInstanceRef<Player> =
-            jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
+        let player: ClassInstanceRef<Player> = jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
 
         // The native backend reports an invalid/unavailable clip as -9.
         // In WIE, putData/setBuffer creates the MIDP player eagerly, so a
         // non-null player represents an already allocated native player.
-        if player.is_null() {
-            Ok(-9)
-        } else {
-            Ok(0)
-        }
+        if player.is_null() { Ok(-9) } else { Ok(0) }
     }
 
     async fn set_buffer(
@@ -132,16 +123,10 @@ impl BaseClip {
         Ok(length)
     }
 
-    async fn media_play(
-        jvm: &Jvm,
-        context: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-        repeat: bool,
-    ) -> JvmResult<i32> {
+    async fn media_play(jvm: &Jvm, context: &mut WieJvmContext, this: ClassInstanceRef<Self>, repeat: bool) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.media.BaseClip::mediaPlay({this:?}, {repeat})");
 
-        let player: ClassInstanceRef<Player> =
-            jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
+        let player: ClassInstanceRef<Player> = jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
 
         if player.is_null() {
             return Ok(-9);
@@ -150,10 +135,7 @@ impl BaseClip {
         if player.class_definition().name() == "net/wie/SmafPlayer" {
             let audio_handle: i32 = jvm.get_field(&player, "audioHandle", "I").await?;
             let system = context.system();
-            let (completed, stopped) = system
-                .audio()
-                .play_with_completion(system, audio_handle as u32, repeat)
-                .unwrap();
+            let (completed, stopped) = system.audio().play_with_completion(system, audio_handle as u32, repeat).unwrap();
 
             context.spawn(
                 jvm,
@@ -173,8 +155,7 @@ impl BaseClip {
     async fn media_stop(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.media.BaseClip::mediaStop({this:?})");
 
-        let player: ClassInstanceRef<Player> =
-            jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
+        let player: ClassInstanceRef<Player> = jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
 
         if player.is_null() {
             return Ok(-9);
@@ -188,8 +169,7 @@ impl BaseClip {
     async fn media_get_volume(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.media.BaseClip::mediaGetVolume({this:?})");
 
-        let player: ClassInstanceRef<Player> =
-            jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
+        let player: ClassInstanceRef<Player> = jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
 
         if player.is_null() {
             return Ok(-9);
@@ -198,16 +178,10 @@ impl BaseClip {
         jvm.invoke_virtual(&player, "getVolume", "()I", ()).await
     }
 
-    async fn media_set_volume(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-        volume: i32,
-    ) -> JvmResult<i32> {
+    async fn media_set_volume(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, volume: i32) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.media.BaseClip::mediaSetVolume({this:?}, {volume})");
 
-        let player: ClassInstanceRef<Player> =
-            jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
+        let player: ClassInstanceRef<Player> = jvm.get_field(&this, "player", "Ljavax/microedition/media/Player;").await?;
 
         if player.is_null() {
             return Ok(-9);
@@ -240,12 +214,7 @@ struct ClipCompletionRunner {
 
 #[async_trait::async_trait]
 impl MethodBody<JavaError, WieJvmContext> for ClipCompletionRunner {
-    async fn call(
-        &self,
-        jvm: &Jvm,
-        context: &mut WieJvmContext,
-        _args: Box<[JavaValue]>,
-    ) -> Result<JavaValue, JavaError> {
+    async fn call(&self, jvm: &Jvm, context: &mut WieJvmContext, _args: Box<[JavaValue]>) -> Result<JavaValue, JavaError> {
         jvm.attach_thread(None).await?;
 
         while !self.completed.load(Ordering::Acquire) {
@@ -260,29 +229,17 @@ impl MethodBody<JavaError, WieJvmContext> for ClipCompletionRunner {
             return Ok(JavaValue::Void);
         }
 
-        let listener: ClassInstanceRef<PlayListener> = jvm
-            .get_field(
-                &self.clip,
-                "playListener",
-                "Lorg/kwis/msp/media/PlayListener;",
-            )
-            .await?;
+        let listener: ClassInstanceRef<PlayListener> = jvm.get_field(&self.clip, "playListener", "Lorg/kwis/msp/media/PlayListener;").await?;
 
         if !listener.is_null() {
             let _: () = jvm
-                .invoke_virtual(
-                    &listener,
-                    "playUpdate",
-                    "(Lorg/kwis/msp/media/Clip;II)V",
-                    (self.clip.clone(), 1i32, 0i32),
-                )
+                .invoke_virtual(&listener, "playUpdate", "(Lorg/kwis/msp/media/Clip;II)V", (self.clip.clone(), 1i32, 0i32))
                 .await?;
         }
 
         Ok(JavaValue::Void)
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -309,34 +266,20 @@ mod test {
                 interfaces: vec!["org/kwis/msp/media/PlayListener"],
                 methods: vec![
                     JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
-                    JavaMethodProto::new(
-                        "playUpdate",
-                        "(Lorg/kwis/msp/media/Clip;II)V",
-                        Self::play_update,
-                        Default::default(),
-                    ),
+                    JavaMethodProto::new("playUpdate", "(Lorg/kwis/msp/media/Clip;II)V", Self::play_update, Default::default()),
                 ],
                 fields: vec![
                     JavaFieldProto::new("count", "I", Default::default()),
                     JavaFieldProto::new("event", "I", Default::default()),
                     JavaFieldProto::new("param", "I", Default::default()),
-                    JavaFieldProto::new(
-                        "clip",
-                        "Lorg/kwis/msp/media/Clip;",
-                        Default::default(),
-                    ),
+                    JavaFieldProto::new("clip", "Lorg/kwis/msp/media/Clip;", Default::default()),
                 ],
                 access_flags: Default::default(),
             }
         }
 
-        async fn init(
-            jvm: &Jvm,
-            _: &mut WieJvmContext,
-            this: ClassInstanceRef<Self>,
-        ) -> JvmResult<()> {
-            jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ())
-                .await
+        async fn init(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+            jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await
         }
 
         async fn play_update(
@@ -351,13 +294,7 @@ mod test {
             jvm.put_field(&mut this, "count", "I", count + 1).await?;
             jvm.put_field(&mut this, "event", "I", event).await?;
             jvm.put_field(&mut this, "param", "I", param).await?;
-            jvm.put_field(
-                &mut this,
-                "clip",
-                "Lorg/kwis/msp/media/Clip;",
-                clip,
-            )
-            .await
+            jvm.put_field(&mut this, "clip", "Lorg/kwis/msp/media/Clip;", clip).await
         }
     }
 
@@ -390,28 +327,16 @@ mod test {
                 jvm.store_array(&mut data, 0, bytes).await?;
 
                 let clip: ClassInstanceRef<Clip> = jvm
-                    .new_class(
-                        "org/kwis/msp/media/Clip",
-                        "(Ljava/lang/String;[B)V",
-                        (r#type, data),
-                    )
+                    .new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;[B)V", (r#type, data))
                     .await?
                     .into();
 
-                let listener: ClassInstanceRef<PlayListener> = jvm
-                    .new_class("test/CompletionListener", "()V", ())
-                    .await?
-                    .into();
+                let listener: ClassInstanceRef<PlayListener> = jvm.new_class("test/CompletionListener", "()V", ()).await?.into();
 
                 let listener_state = listener.clone();
 
                 let _: () = jvm
-                    .invoke_virtual(
-                        &clip,
-                        "setListener",
-                        "(Lorg/kwis/msp/media/PlayListener;)V",
-                        (listener,),
-                    )
+                    .invoke_virtual(&clip, "setListener", "(Lorg/kwis/msp/media/PlayListener;)V", (listener,))
                     .await?;
 
                 let result: i32 = jvm.invoke_virtual(&clip, "mediaPlay", "(Z)I", (false,)).await?;
@@ -422,21 +347,13 @@ mod test {
                     if count != 0 {
                         break;
                     }
-                    let _: () = jvm
-                        .invoke_static("java/lang/Thread", "yield", "()V", ())
-                        .await?;
+                    let _: () = jvm.invoke_static("java/lang/Thread", "yield", "()V", ()).await?;
                 }
 
                 let count: i32 = jvm.get_field(&listener_state, "count", "I").await?;
                 let event: i32 = jvm.get_field(&listener_state, "event", "I").await?;
                 let param: i32 = jvm.get_field(&listener_state, "param", "I").await?;
-                let callback_clip: ClassInstanceRef<Clip> = jvm
-                    .get_field(
-                        &listener_state,
-                        "clip",
-                        "Lorg/kwis/msp/media/Clip;",
-                    )
-                    .await?;
+                let callback_clip: ClassInstanceRef<Clip> = jvm.get_field(&listener_state, "clip", "Lorg/kwis/msp/media/Clip;").await?;
 
                 assert_eq!(count, 1);
                 assert_eq!(event, 1);
@@ -447,5 +364,4 @@ mod test {
             },
         )
     }
-
 }

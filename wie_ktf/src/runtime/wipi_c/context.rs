@@ -11,11 +11,7 @@ use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{ByteRead, ByteWrite, Result, read_generic, write_generic};
 use wie_wipi_c::{
     WIPICContext, WIPICMethodBody,
-    api::{
-        filesystem::SharedFilesystemState,
-        net::SharedNetworkState,
-        serial::SharedSerialState,
-    },
+    api::{filesystem::SharedFilesystemState, net::SharedNetworkState, serial::SharedSerialState},
 };
 
 #[derive(Clone)]

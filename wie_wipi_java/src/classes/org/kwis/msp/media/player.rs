@@ -73,9 +73,7 @@ impl Player {
 
         match play_result {
             0 => Ok(true),
-            -16 | -9 | -7 | -6 | -1 => {
-                Err(jvm.exception("org/kwis/msp/media/MediaUnavailableException", "").await)
-            }
+            -16 | -9 | -7 | -6 | -1 => Err(jvm.exception("org/kwis/msp/media/MediaUnavailableException", "").await),
             _ => Ok(false),
         }
     }
@@ -160,8 +158,7 @@ mod test {
                 )
                 .await;
 
-            let JavaError::JavaException(exception) =
-                play_result.expect_err("unbuffered Clip play must throw");
+            let JavaError::JavaException(exception) = play_result.expect_err("unbuffered Clip play must throw");
             assert!(jvm.is_instance(&*exception, "org/kwis/msp/media/MediaUnavailableException"));
             assert!(jvm.is_instance(&*exception, "java/lang/RuntimeException"));
 

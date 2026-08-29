@@ -7,11 +7,6 @@ mod vibrator;
 mod volume;
 
 pub use self::{
-    base_clip::BaseClip,
-    clip::Clip,
-    media_unavailable_exception::MediaUnavailableException,
-    play_listener::PlayListener,
-    player::Player,
-    vibrator::Vibrator,
-    volume::Volume,
+    base_clip::BaseClip, clip::Clip, media_unavailable_exception::MediaUnavailableException, play_listener::PlayListener, player::Player,
+    vibrator::Vibrator, volume::Volume,
 };

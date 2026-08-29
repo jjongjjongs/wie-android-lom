@@ -88,37 +88,17 @@ impl Image {
             fields: vec![
                 JavaFieldProto::new("midpImage", "Ljavax/microedition/lcdui/Image;", Default::default()),
                 JavaFieldProto::new("mutable", "Z", Default::default()),
-                JavaFieldProto::new(
-                    "cachedGraphics",
-                    "Lorg/kwis/msp/lcdui/Graphics;",
-                    Default::default(),
-                ),
+                JavaFieldProto::new("cachedGraphics", "Lorg/kwis/msp/lcdui/Graphics;", Default::default()),
                 JavaFieldProto::new("transparentColor", "I", Default::default()),
                 JavaFieldProto::new("source", "Ljava/lang/String;", Default::default()),
-                JavaFieldProto::new(
-                    "animationFrames",
-                    "[Ljavax/microedition/lcdui/Image;",
-                    Default::default(),
-                ),
+                JavaFieldProto::new("animationFrames", "[Ljavax/microedition/lcdui/Image;", Default::default()),
                 JavaFieldProto::new("animationDelays", "[I", Default::default()),
                 JavaFieldProto::new("frameCount", "I", Default::default()),
                 JavaFieldProto::new("currentFrame", "I", Default::default()),
                 JavaFieldProto::new("animationGeneration", "I", Default::default()),
-                JavaFieldProto::new(
-                    "animationObserver",
-                    "Lorg/kwis/msp/lcdui/ImageObserver;",
-                    Default::default(),
-                ),
-                JavaFieldProto::new(
-                    "activeAnimations",
-                    "Ljava/util/Vector;",
-                    FieldAccessFlags::STATIC,
-                ),
-                JavaFieldProto::new(
-                    "defaultObserver",
-                    "Lorg/kwis/msp/lcdui/ImageObserver;",
-                    FieldAccessFlags::STATIC,
-                ),
+                JavaFieldProto::new("animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", Default::default()),
+                JavaFieldProto::new("activeAnimations", "Ljava/util/Vector;", FieldAccessFlags::STATIC),
+                JavaFieldProto::new("defaultObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", FieldAccessFlags::STATIC),
             ],
             access_flags: Default::default(),
         }
@@ -130,34 +110,17 @@ impl Image {
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", None).await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
-        jvm.put_field(
-            &mut this,
-            "cachedGraphics",
-            "Lorg/kwis/msp/lcdui/Graphics;",
-            None,
-        )
-        .await?;
+        jvm.put_field(&mut this, "cachedGraphics", "Lorg/kwis/msp/lcdui/Graphics;", None).await?;
         jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
         jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await?;
-        jvm.put_field(
-            &mut this,
-            "animationFrames",
-            "[Ljavax/microedition/lcdui/Image;",
-            None,
-        )
-        .await?;
+        jvm.put_field(&mut this, "animationFrames", "[Ljavax/microedition/lcdui/Image;", None)
+            .await?;
         jvm.put_field(&mut this, "animationDelays", "[I", None).await?;
         jvm.put_field(&mut this, "frameCount", "I", 0).await?;
         jvm.put_field(&mut this, "currentFrame", "I", 0).await?;
-        jvm.put_field(&mut this, "animationGeneration", "I", 0)
-            .await?;
-        jvm.put_field(
-            &mut this,
-            "animationObserver",
-            "Lorg/kwis/msp/lcdui/ImageObserver;",
-            None,
-        )
-        .await
+        jvm.put_field(&mut this, "animationGeneration", "I", 0).await?;
+        jvm.put_field(&mut this, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", None)
+            .await
     }
 
     async fn init(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Image>, image: ClassInstanceRef<MidpImage>) -> JvmResult<()> {
@@ -165,42 +128,19 @@ impl Image {
 
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
         jvm.put_field(&mut this, "midpImage", "Ljavax/microedition/lcdui/Image;", image).await?;
-        jvm.put_field(
-            &mut this,
-            "cachedGraphics",
-            "Lorg/kwis/msp/lcdui/Graphics;",
-            None,
-        )
-        .await?;
+        jvm.put_field(&mut this, "cachedGraphics", "Lorg/kwis/msp/lcdui/Graphics;", None).await?;
         jvm.put_field(&mut this, "mutable", "Z", false).await?;
-        jvm.put_field(
-            &mut this,
-            "cachedGraphics",
-            "Lorg/kwis/msp/lcdui/Graphics;",
-            None,
-        )
-        .await?;
+        jvm.put_field(&mut this, "cachedGraphics", "Lorg/kwis/msp/lcdui/Graphics;", None).await?;
         jvm.put_field(&mut this, "transparentColor", "I", -1).await?;
         jvm.put_field(&mut this, "source", "Ljava/lang/String;", None).await?;
-        jvm.put_field(
-            &mut this,
-            "animationFrames",
-            "[Ljavax/microedition/lcdui/Image;",
-            None,
-        )
-        .await?;
+        jvm.put_field(&mut this, "animationFrames", "[Ljavax/microedition/lcdui/Image;", None)
+            .await?;
         jvm.put_field(&mut this, "animationDelays", "[I", None).await?;
         jvm.put_field(&mut this, "frameCount", "I", 0).await?;
         jvm.put_field(&mut this, "currentFrame", "I", 0).await?;
-        jvm.put_field(&mut this, "animationGeneration", "I", 0)
+        jvm.put_field(&mut this, "animationGeneration", "I", 0).await?;
+        jvm.put_field(&mut this, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", None)
             .await?;
-        jvm.put_field(
-            &mut this,
-            "animationObserver",
-            "Lorg/kwis/msp/lcdui/ImageObserver;",
-            None,
-        )
-        .await?;
 
         Ok(())
     }
@@ -237,18 +177,9 @@ impl Image {
 
         // Native WipiPlayer Plus returns an empty Image immediately and lets
         // ImageReader populate it asynchronously.
-        let mut image: ClassInstanceRef<Image> = jvm
-            .new_class("org/kwis/msp/lcdui/Image", "()V", ())
-            .await?
-            .into();
+        let mut image: ClassInstanceRef<Image> = jvm.new_class("org/kwis/msp/lcdui/Image", "()V", ()).await?.into();
 
-        jvm.put_field(
-            &mut image,
-            "source",
-            "Ljava/lang/String;",
-            source.clone(),
-        )
-        .await?;
+        jvm.put_field(&mut image, "source", "Ljava/lang/String;", source.clone()).await?;
 
         context.spawn(
             jvm,
@@ -276,17 +207,10 @@ impl Image {
 
             let java_name = JavaLangString::from_rust_string(jvm, &resource_name).await?;
             let probe = jvm.new_class("org/kwis/msp/lcdui/Image", "()V", ()).await?;
-            let class = jvm
-                .invoke_virtual(&probe, "getClass", "()Ljava/lang/Class;", ())
-                .await?;
+            let class = jvm.invoke_virtual(&probe, "getClass", "()Ljava/lang/Class;", ()).await?;
 
             let resource_stream: ClassInstanceRef<java_runtime::classes::java::io::InputStream> = jvm
-                .invoke_virtual(
-                    &class,
-                    "getResourceAsStream",
-                    "(Ljava/lang/String;)Ljava/io/InputStream;",
-                    (java_name,),
-                )
+                .invoke_virtual(&class, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;", (java_name,))
                 .await?;
 
             if resource_stream.is_null() {
@@ -297,14 +221,8 @@ impl Image {
             let data_len = data.len();
             let mut data_array = jvm.instantiate_array("B", data_len).await?;
 
-            jvm.store_array(
-                &mut data_array,
-                0,
-                data.iter().copied()
-                    .map(|x| x as i8)
-                    .collect::<alloc::vec::Vec<_>>(),
-            )
-            .await?;
+            jvm.store_array(&mut data_array, 0, data.iter().copied().map(|x| x as i8).collect::<alloc::vec::Vec<_>>())
+                .await?;
 
             let midp_image: ClassInstanceRef<MidpImage> = jvm
                 .invoke_static(
@@ -316,17 +234,13 @@ impl Image {
                 .await?;
 
             let mut image: ClassInstanceRef<Image> = jvm
-                .new_class(
-                    "org/kwis/msp/lcdui/Image",
-                    "(Ljavax/microedition/lcdui/Image;)V",
-                    (midp_image,),
-                )
+                .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
                 .await?
                 .into();
 
             Self::attach_gif_animation(jvm, &mut image, &data).await?;
 
-        return Ok(Some(image));
+            return Ok(Some(image));
         }
 
         match Self::create_image_from_name(jvm, context, name).await {
@@ -405,33 +319,18 @@ impl Image {
 
         if let Some(file_name) = resource_name.strip_prefix("file://") {
             let file_name = JavaLangString::from_rust_string(jvm, file_name).await?;
-            let file = jvm
-                .new_class(
-                    "org/kwis/msp/io/File",
-                    "(Ljava/lang/String;I)V",
-                    (file_name, 1),
-                )
-                .await?;
+            let file = jvm.new_class("org/kwis/msp/io/File", "(Ljava/lang/String;I)V", (file_name, 1)).await?;
 
             let size: i32 = jvm.invoke_virtual(&file, "sizeOf", "()I", ()).await?;
             let data_array = jvm.instantiate_array("B", size as usize).await?;
-            let read: i32 = jvm
-                .invoke_virtual(
-                    &file,
-                    "read",
-                    "([BII)I",
-                    (data_array.clone(), 0, size),
-                )
-                .await?;
+            let read: i32 = jvm.invoke_virtual(&file, "read", "([BII)I", (data_array.clone(), 0, size)).await?;
 
             let _: () = jvm.invoke_virtual(&file, "close", "()V", ()).await?;
 
             let image_length = if read < 0 { 0 } else { read };
 
-            let raw_data: alloc::vec::Vec<i8> =
-                jvm.load_array(&data_array, 0, image_length as usize).await?;
-            let raw_data: alloc::vec::Vec<u8> =
-                raw_data.into_iter().map(|value| value as u8).collect();
+            let raw_data: alloc::vec::Vec<i8> = jvm.load_array(&data_array, 0, image_length as usize).await?;
+            let raw_data: alloc::vec::Vec<u8> = raw_data.into_iter().map(|value| value as u8).collect();
             let midp_image: ClassInstanceRef<MidpImage> = jvm
                 .invoke_static(
                     "javax/microedition/lcdui/Image",
@@ -442,11 +341,7 @@ impl Image {
                 .await?;
 
             let mut instance: ClassInstanceRef<Image> = jvm
-                .new_class(
-                    "org/kwis/msp/lcdui/Image",
-                    "(Ljavax/microedition/lcdui/Image;)V",
-                    (midp_image,),
-                )
+                .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
                 .await?
                 .into();
 
@@ -486,10 +381,8 @@ impl Image {
             // distribute each source pixel over the destination using
             // cumulative integer division.
             for source_index in 0..source {
-                let previous_end =
-                    ((u64::from(target) * u64::from(source_index)) / u64::from(source)) as u32;
-                let end = ((u64::from(target) * u64::from(source_index + 1))
-                    / u64::from(source)) as u32;
+                let previous_end = ((u64::from(target) * u64::from(source_index)) / u64::from(source)) as u32;
+                let end = ((u64::from(target) * u64::from(source_index + 1)) / u64::from(source)) as u32;
 
                 for _ in previous_end..end {
                     table.push(source_index);
@@ -504,10 +397,7 @@ impl Image {
         } else {
             // Native get_scale_down_pixel_table() non-integral path.
             for destination_index in 0..target {
-                table.push(
-                    ((u64::from(source) * u64::from(destination_index + 1))
-                        / u64::from(target + 1)) as u32,
-                );
+                table.push(((u64::from(source) * u64::from(destination_index + 1)) / u64::from(target + 1)) as u32);
             }
         }
 
@@ -530,43 +420,27 @@ impl Image {
         let y_table = Self::native_scale_table(source_height, target_height);
         let bytes_per_pixel = bytes_per_pixel as usize;
 
-        let target_len =
-            target_width as usize * target_height as usize * bytes_per_pixel;
+        let target_len = target_width as usize * target_height as usize * bytes_per_pixel;
         let mut resized = alloc::vec![0; target_len];
 
         for (destination_y, &source_y) in y_table.iter().enumerate() {
             for (destination_x, &source_x) in x_table.iter().enumerate() {
-                let source_offset =
-                    (source_y as usize * source_width as usize + source_x as usize)
-                        * bytes_per_pixel;
-                let destination_offset =
-                    (destination_y * target_width as usize + destination_x)
-                        * bytes_per_pixel;
+                let source_offset = (source_y as usize * source_width as usize + source_x as usize) * bytes_per_pixel;
+                let destination_offset = (destination_y * target_width as usize + destination_x) * bytes_per_pixel;
 
                 resized[destination_offset..destination_offset + bytes_per_pixel]
-                    .copy_from_slice(
-                        &raw[source_offset..source_offset + bytes_per_pixel],
-                    );
+                    .copy_from_slice(&raw[source_offset..source_offset + bytes_per_pixel]);
             }
         }
 
         resized
     }
 
-    async fn attach_gif_animation(
-        jvm: &Jvm,
-        image: &mut ClassInstanceRef<Image>,
-        data: &[u8],
-    ) -> JvmResult<()> {
+    async fn attach_gif_animation(jvm: &Jvm, image: &mut ClassInstanceRef<Image>, data: &[u8]) -> JvmResult<()> {
         Self::attach_gif_animation_resized(jvm, image, data, None).await
     }
 
-    async fn attach_gif_animation_resized(
-        jvm: &Jvm,
-        image: &mut ClassInstanceRef<Image>,
-        data: &[u8],
-        resize: Option<(u32, u32)>,
-    ) -> JvmResult<()> {
+    async fn attach_gif_animation_resized(jvm: &Jvm, image: &mut ClassInstanceRef<Image>, data: &[u8], resize: Option<(u32, u32)>) -> JvmResult<()> {
         let animation = match decode_gif_animation(data) {
             Ok(animation) => animation,
             Err(_) => return Ok(()),
@@ -577,9 +451,7 @@ impl Image {
         };
 
         let frame_count = animation.frames.len();
-        let mut frames = jvm
-            .instantiate_array("Ljavax/microedition/lcdui/Image;", frame_count)
-            .await?;
+        let mut frames = jvm.instantiate_array("Ljavax/microedition/lcdui/Image;", frame_count).await?;
         let mut delays = jvm.instantiate_array("I", frame_count).await?;
 
         for (index, frame) in animation.frames.into_iter().enumerate() {
@@ -592,54 +464,27 @@ impl Image {
                 Some((target_width, target_height)) => (
                     target_width,
                     target_height,
-                    Self::resize_raw_pixels(
-                        source_width,
-                        source_height,
-                        bytes_per_pixel,
-                        &raw,
-                        target_width,
-                        target_height,
-                    ),
+                    Self::resize_raw_pixels(source_width, source_height, bytes_per_pixel, &raw, target_width, target_height),
                 ),
                 None => (source_width, source_height, raw.into_owned()),
             };
 
-            let midp_frame = MidpImage::create_image_instance(
-                jvm,
-                width,
-                height,
-                &frame_data,
-                bytes_per_pixel,
-            )
-            .await?;
+            let midp_frame = MidpImage::create_image_instance(jvm, width, height, &frame_data, bytes_per_pixel).await?;
 
-            jvm.store_array(&mut frames, index, [midp_frame.clone()])
-                .await?;
+            jvm.store_array(&mut frames, index, [midp_frame.clone()]).await?;
 
             let delay = frame.delay_ms.min(i32::MAX as u32) as i32;
             jvm.store_array(&mut delays, index, [delay]).await?;
 
             if index == 0 {
-                jvm.put_field(
-                    image,
-                    "midpImage",
-                    "Ljavax/microedition/lcdui/Image;",
-                    midp_frame,
-                )
-                .await?;
+                jvm.put_field(image, "midpImage", "Ljavax/microedition/lcdui/Image;", midp_frame).await?;
             }
         }
 
-        jvm.put_field(
-            image,
-            "animationFrames",
-            "[Ljavax/microedition/lcdui/Image;",
-            frames,
-        )
-        .await?;
-        jvm.put_field(image, "animationDelays", "[I", delays).await?;
-        jvm.put_field(image, "frameCount", "I", frame_count as i32)
+        jvm.put_field(image, "animationFrames", "[Ljavax/microedition/lcdui/Image;", frames)
             .await?;
+        jvm.put_field(image, "animationDelays", "[I", delays).await?;
+        jvm.put_field(image, "frameCount", "I", frame_count as i32).await?;
         jvm.put_field(image, "currentFrame", "I", 0).await?;
 
         Ok(())
@@ -654,15 +499,8 @@ impl Image {
     ) -> JvmResult<ClassInstanceRef<Image>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::createImage({data:?}, {image_offset}, {image_length})");
 
-        let raw_data: alloc::vec::Vec<i8> = jvm
-            .load_array(
-                &data,
-                image_offset as usize,
-                image_length as usize,
-            )
-            .await?;
-        let raw_data: alloc::vec::Vec<u8> =
-            raw_data.into_iter().map(|value| value as u8).collect();
+        let raw_data: alloc::vec::Vec<i8> = jvm.load_array(&data, image_offset as usize, image_length as usize).await?;
+        let raw_data: alloc::vec::Vec<u8> = raw_data.into_iter().map(|value| value as u8).collect();
 
         let midp_image: ClassInstanceRef<MidpImage> = jvm
             .invoke_static(
@@ -674,11 +512,7 @@ impl Image {
             .await?;
 
         let mut instance: ClassInstanceRef<Image> = jvm
-            .new_class(
-                "org/kwis/msp/lcdui/Image",
-                "(Ljavax/microedition/lcdui/Image;)V",
-                (midp_image,),
-            )
+            .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
             .await?
             .into();
 
@@ -696,48 +530,26 @@ impl Image {
         resize_x: i32,
         resize_y: i32,
     ) -> JvmResult<ClassInstanceRef<Image>> {
-        tracing::debug!(
-            "org.kwis.msp.lcdui.Image::createImage({data:?}, {image_offset}, {image_length}, {resize_x}, {resize_y})"
-        );
+        tracing::debug!("org.kwis.msp.lcdui.Image::createImage({data:?}, {image_offset}, {image_length}, {resize_x}, {resize_y})");
 
         if data.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
         }
 
         let data_length = jvm.array_length(&data).await? as i32;
 
         // Native s4 rejects offset == data.length as well as all other
         // invalid offset/length ranges.
-        if image_offset < 0
-            || image_offset >= data_length
-            || image_length < 0
-            || image_length > data_length - image_offset
-        {
-            return Err(
-                jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "")
-                    .await,
-            );
+        if image_offset < 0 || image_offset >= data_length || image_length < 0 || image_length > data_length - image_offset {
+            return Err(jvm.exception("java/lang/ArrayIndexOutOfBoundsException", "").await);
         }
 
         if resize_x < 0 || resize_y < 0 {
-            return Err(
-                jvm.exception("java/lang/IllegalArgumentException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/IllegalArgumentException", "").await);
         }
 
-        let raw_data: alloc::vec::Vec<i8> = jvm
-            .load_array(
-                &data,
-                image_offset as usize,
-                image_length as usize,
-            )
-            .await?;
-        let raw_data: alloc::vec::Vec<u8> =
-            raw_data.into_iter().map(|value| value as u8).collect();
+        let raw_data: alloc::vec::Vec<i8> = jvm.load_array(&data, image_offset as usize, image_length as usize).await?;
+        let raw_data: alloc::vec::Vec<u8> = raw_data.into_iter().map(|value| value as u8).collect();
 
         // Keep MIDP decoding on the normal path as the format validator and
         // as the exact non-resizing implementation.
@@ -752,11 +564,7 @@ impl Image {
 
         if resize_x == 0 || resize_y == 0 {
             let mut instance: ClassInstanceRef<Image> = jvm
-                .new_class(
-                    "org/kwis/msp/lcdui/Image",
-                    "(Ljavax/microedition/lcdui/Image;)V",
-                    (midp_image,),
-                )
+                .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (midp_image,))
                 .await?
                 .into();
 
@@ -768,10 +576,7 @@ impl Image {
         let decoded = match decode_image(&raw_data) {
             Ok(decoded) => decoded,
             Err(_) => {
-                return Err(
-                    jvm.exception("java/lang/IllegalArgumentException", "")
-                        .await,
-                );
+                return Err(jvm.exception("java/lang/IllegalArgumentException", "").await);
             }
         };
 
@@ -789,40 +594,19 @@ impl Image {
             target_height,
         );
 
-        let resized_midp = MidpImage::create_image_instance(
-            jvm,
-            target_width,
-            target_height,
-            &resized,
-            bytes_per_pixel,
-        )
-        .await?;
+        let resized_midp = MidpImage::create_image_instance(jvm, target_width, target_height, &resized, bytes_per_pixel).await?;
 
         let mut instance: ClassInstanceRef<Image> = jvm
-            .new_class(
-                "org/kwis/msp/lcdui/Image",
-                "(Ljavax/microedition/lcdui/Image;)V",
-                (resized_midp,),
-            )
+            .new_class("org/kwis/msp/lcdui/Image", "(Ljavax/microedition/lcdui/Image;)V", (resized_midp,))
             .await?
             .into();
 
-        Self::attach_gif_animation_resized(
-            jvm,
-            &mut instance,
-            &raw_data,
-            Some((target_width, target_height)),
-        )
-        .await?;
+        Self::attach_gif_animation_resized(jvm, &mut instance, &raw_data, Some((target_width, target_height))).await?;
 
         Ok(instance)
     }
 
-    async fn create_image_from_image(
-        jvm: &Jvm,
-        context: &mut WieJvmContext,
-        image: ClassInstanceRef<Image>,
-    ) -> JvmResult<ClassInstanceRef<Image>> {
+    async fn create_image_from_image(jvm: &Jvm, context: &mut WieJvmContext, image: ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<Image>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::createImage({image:?})");
 
         if image.is_null() {
@@ -835,31 +619,17 @@ impl Image {
         let instance = Self::create_image(jvm, context, width, height).await?;
 
         let graphics: ClassInstanceRef<Graphics> = jvm
-            .invoke_virtual(
-                &instance,
-                "getGraphics",
-                "()Lorg/kwis/msp/lcdui/Graphics;",
-                (),
-            )
+            .invoke_virtual(&instance, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ())
             .await?;
 
         let _: () = jvm
-            .invoke_virtual(
-                &graphics,
-                "drawImage",
-                "(Lorg/kwis/msp/lcdui/Image;III)V",
-                (image, 0, 0, 4),
-            )
+            .invoke_virtual(&graphics, "drawImage", "(Lorg/kwis/msp/lcdui/Image;III)V", (image, 0, 0, 4))
             .await?;
 
         Ok(instance)
     }
 
-    async fn get_graphics(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Image>,
-    ) -> JvmResult<ClassInstanceRef<Graphics>> {
+    async fn get_graphics(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Image>) -> JvmResult<ClassInstanceRef<Graphics>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::getGraphics({this:?})");
 
         let mutable: bool = jvm.get_field(&this, "mutable", "Z").await?;
@@ -867,34 +637,19 @@ impl Image {
             return Ok(None.into());
         }
 
-        let cached: ClassInstanceRef<Graphics> = jvm
-            .get_field(
-                &this,
-                "cachedGraphics",
-                "Lorg/kwis/msp/lcdui/Graphics;",
-            )
-            .await?;
+        let cached: ClassInstanceRef<Graphics> = jvm.get_field(&this, "cachedGraphics", "Lorg/kwis/msp/lcdui/Graphics;").await?;
 
         if !cached.is_null() {
             return Ok(cached);
         }
 
         let graphics: ClassInstanceRef<Graphics> = jvm
-            .new_class(
-                "org/kwis/msp/lcdui/Graphics",
-                "(Lorg/kwis/msp/lcdui/Image;)V",
-                (this.clone(),),
-            )
+            .new_class("org/kwis/msp/lcdui/Graphics", "(Lorg/kwis/msp/lcdui/Image;)V", (this.clone(),))
             .await?
             .into();
 
-        jvm.put_field(
-            &mut this,
-            "cachedGraphics",
-            "Lorg/kwis/msp/lcdui/Graphics;",
-            graphics.clone(),
-        )
-        .await?;
+        jvm.put_field(&mut this, "cachedGraphics", "Lorg/kwis/msp/lcdui/Graphics;", graphics.clone())
+            .await?;
 
         Ok(graphics)
     }
@@ -930,47 +685,27 @@ impl Image {
 
     async fn active_animations(jvm: &Jvm) -> JvmResult<ClassInstanceRef<()>> {
         let active: ClassInstanceRef<()> = jvm
-            .get_static_field(
-                "org/kwis/msp/lcdui/Image",
-                "activeAnimations",
-                "Ljava/util/Vector;",
-            )
+            .get_static_field("org/kwis/msp/lcdui/Image", "activeAnimations", "Ljava/util/Vector;")
             .await?;
 
         if !active.is_null() {
             return Ok(active);
         }
 
-        let active: ClassInstanceRef<()> =
-            jvm.new_class("java/util/Vector", "()V", ()).await?.into();
+        let active: ClassInstanceRef<()> = jvm.new_class("java/util/Vector", "()V", ()).await?.into();
 
-        jvm.put_static_field(
-            "org/kwis/msp/lcdui/Image",
-            "activeAnimations",
-            "Ljava/util/Vector;",
-            active.clone(),
-        )
-        .await?;
+        jvm.put_static_field("org/kwis/msp/lcdui/Image", "activeAnimations", "Ljava/util/Vector;", active.clone())
+            .await?;
 
         Ok(active)
     }
 
-    async fn add_active_animation(
-        jvm: &Jvm,
-        image: &ClassInstanceRef<Image>,
-    ) -> JvmResult<()> {
+    async fn add_active_animation(jvm: &Jvm, image: &ClassInstanceRef<Image>) -> JvmResult<()> {
         let active = Self::active_animations(jvm).await?;
         let size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
 
         for index in 0..size {
-            let current: ClassInstanceRef<Image> = jvm
-                .invoke_virtual(
-                    &active,
-                    "elementAt",
-                    "(I)Ljava/lang/Object;",
-                    (index,),
-                )
-                .await?;
+            let current: ClassInstanceRef<Image> = jvm.invoke_virtual(&active, "elementAt", "(I)Ljava/lang/Object;", (index,)).await?;
 
             if !current.is_null() && current.identity() == image.identity() {
                 return Ok(());
@@ -978,43 +713,21 @@ impl Image {
         }
 
         let _: () = jvm
-            .invoke_virtual(
-                &active,
-                "addElement",
-                "(Ljava/lang/Object;)V",
-                (image.clone(),),
-            )
+            .invoke_virtual(&active, "addElement", "(Ljava/lang/Object;)V", (image.clone(),))
             .await?;
 
         Ok(())
     }
 
-    async fn remove_active_animation(
-        jvm: &Jvm,
-        image: &ClassInstanceRef<Image>,
-    ) -> JvmResult<()> {
+    async fn remove_active_animation(jvm: &Jvm, image: &ClassInstanceRef<Image>) -> JvmResult<()> {
         let active = Self::active_animations(jvm).await?;
         let size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
 
         for index in 0..size {
-            let current: ClassInstanceRef<Image> = jvm
-                .invoke_virtual(
-                    &active,
-                    "elementAt",
-                    "(I)Ljava/lang/Object;",
-                    (index,),
-                )
-                .await?;
+            let current: ClassInstanceRef<Image> = jvm.invoke_virtual(&active, "elementAt", "(I)Ljava/lang/Object;", (index,)).await?;
 
             if !current.is_null() && current.identity() == image.identity() {
-                let _: bool = jvm
-                    .invoke_virtual(
-                        &active,
-                        "removeElement",
-                        "(Ljava/lang/Object;)Z",
-                        (current,),
-                    )
-                    .await?;
+                let _: bool = jvm.invoke_virtual(&active, "removeElement", "(Ljava/lang/Object;)Z", (current,)).await?;
                 break;
             }
         }
@@ -1022,24 +735,15 @@ impl Image {
         Ok(())
     }
 
-    async fn play(
-        jvm: &Jvm,
-        context: &mut WieJvmContext,
-        this: ClassInstanceRef<Image>,
-        observer: ClassInstanceRef<ImageObserver>,
-    ) -> JvmResult<()> {
+    async fn play(jvm: &Jvm, context: &mut WieJvmContext, this: ClassInstanceRef<Image>, observer: ClassInstanceRef<ImageObserver>) -> JvmResult<()> {
         let frame_count: i32 = jvm.get_field(&this, "frameCount", "I").await?;
         if frame_count <= 1 {
             return Ok(());
         }
 
         let observer = if observer.is_null() {
-            jvm.get_static_field(
-                "org/kwis/msp/lcdui/Image",
-                "defaultObserver",
-                "Lorg/kwis/msp/lcdui/ImageObserver;",
-            )
-            .await?
+            jvm.get_static_field("org/kwis/msp/lcdui/Image", "defaultObserver", "Lorg/kwis/msp/lcdui/ImageObserver;")
+                .await?
         } else {
             observer
         };
@@ -1047,146 +751,69 @@ impl Image {
         // Native Image.play removes an existing ImageElement for this Image
         // before adding a new one. A generation token gives the same effect
         // for already sleeping runner tasks.
-        let generation: i32 = jvm
-            .get_field::<i32>(&this, "animationGeneration", "I")
-            .await?
-            .wrapping_add(1);
+        let generation: i32 = jvm.get_field::<i32>(&this, "animationGeneration", "I").await?.wrapping_add(1);
 
         let mut image = this.clone();
-        jvm.put_field(
-            &mut image,
-            "animationGeneration",
-            "I",
-            generation,
-        )
-        .await?;
-        jvm.put_field(
-            &mut image,
-            "animationObserver",
-            "Lorg/kwis/msp/lcdui/ImageObserver;",
-            observer.clone(),
-        )
-        .await?;
+        jvm.put_field(&mut image, "animationGeneration", "I", generation).await?;
+        jvm.put_field(&mut image, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", observer.clone())
+            .await?;
 
         Self::add_active_animation(jvm, &image).await?;
 
-        context.spawn(
-            jvm,
-            Box::new(ImageAnimationRunner {
-                image,
-                observer,
-                generation,
-            }),
-        )?;
+        context.spawn(jvm, Box::new(ImageAnimationRunner { image, observer, generation }))?;
 
         Ok(())
     }
 
-    async fn stop(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Image>,
-    ) -> JvmResult<()> {
+    async fn stop(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<()> {
         let frame_count: i32 = jvm.get_field(&this, "frameCount", "I").await?;
         if frame_count <= 1 {
             return Ok(());
         }
 
-        let generation: i32 = jvm
-            .get_field::<i32>(&this, "animationGeneration", "I")
-            .await?
-            .wrapping_add(1);
+        let generation: i32 = jvm.get_field::<i32>(&this, "animationGeneration", "I").await?.wrapping_add(1);
 
         let mut image = this.clone();
-        jvm.put_field(
-            &mut image,
-            "animationGeneration",
-            "I",
-            generation,
-        )
-        .await?;
-        jvm.put_field(
-            &mut image,
-            "animationObserver",
-            "Lorg/kwis/msp/lcdui/ImageObserver;",
-            None,
-        )
-        .await?;
+        jvm.put_field(&mut image, "animationGeneration", "I", generation).await?;
+        jvm.put_field(&mut image, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", None)
+            .await?;
 
         Self::remove_active_animation(jvm, &image).await
     }
 
-    async fn stop_image(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        observer: ClassInstanceRef<ImageObserver>,
-    ) -> JvmResult<()> {
+    async fn stop_image(jvm: &Jvm, _: &mut WieJvmContext, observer: ClassInstanceRef<ImageObserver>) -> JvmResult<()> {
         let active = Self::active_animations(jvm).await?;
         let size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
 
         // Iterate backwards because matching entries are removed in place.
         for index in (0..size).rev() {
-            let image: ClassInstanceRef<Image> = jvm
-                .invoke_virtual(
-                    &active,
-                    "elementAt",
-                    "(I)Ljava/lang/Object;",
-                    (index,),
-                )
-                .await?;
+            let image: ClassInstanceRef<Image> = jvm.invoke_virtual(&active, "elementAt", "(I)Ljava/lang/Object;", (index,)).await?;
 
             if image.is_null() {
                 continue;
             }
 
-            let current_observer: ClassInstanceRef<ImageObserver> = jvm
-                .get_field(
-                    &image,
-                    "animationObserver",
-                    "Lorg/kwis/msp/lcdui/ImageObserver;",
-                )
-                .await?;
+            let current_observer: ClassInstanceRef<ImageObserver> =
+                jvm.get_field(&image, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;").await?;
 
             let matches = if observer.is_null() {
                 current_observer.is_null()
             } else {
-                !current_observer.is_null()
-                    && current_observer.identity() == observer.identity()
+                !current_observer.is_null() && current_observer.identity() == observer.identity()
             };
 
             if !matches {
                 continue;
             }
 
-            let generation: i32 = jvm
-                .get_field::<i32>(&image, "animationGeneration", "I")
-                .await?
-                .wrapping_add(1);
+            let generation: i32 = jvm.get_field::<i32>(&image, "animationGeneration", "I").await?.wrapping_add(1);
 
             let mut image_mut = image.clone();
-            jvm.put_field(
-                &mut image_mut,
-                "animationGeneration",
-                "I",
-                generation,
-            )
-            .await?;
-            jvm.put_field(
-                &mut image_mut,
-                "animationObserver",
-                "Lorg/kwis/msp/lcdui/ImageObserver;",
-                None,
-            )
-            .await?;
-
-            let _: ClassInstanceRef<()> = jvm
-                .invoke_virtual(
-                    &active,
-                    "remove",
-                    "(I)Ljava/lang/Object;",
-                    (index,),
-                )
+            jvm.put_field(&mut image_mut, "animationGeneration", "I", generation).await?;
+            jvm.put_field(&mut image_mut, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", None)
                 .await?;
+
+            let _: ClassInstanceRef<()> = jvm.invoke_virtual(&active, "remove", "(I)Ljava/lang/Object;", (index,)).await?;
         }
 
         Ok(())
@@ -1255,41 +882,23 @@ impl Image {
         let source_width: i32 = jvm.invoke_virtual(&this, "getWidth", "()I", ()).await?;
         let source_height: i32 = jvm.invoke_virtual(&this, "getHeight", "()I", ()).await?;
 
-        if x < 0
-            || y < 0
-            || width < 0
-            || height < 0
-            || x + width > source_width
-            || y + height > source_height
-        {
-            return Err(jvm
-                .exception("java/lang/IllegalArgumentException", "")
-                .await);
+        if x < 0 || y < 0 || width < 0 || height < 0 || x + width > source_width || y + height > source_height {
+            return Err(jvm.exception("java/lang/IllegalArgumentException", "").await);
         }
 
         let animated: bool = jvm.invoke_virtual(&this, "isAnimated", "()Z", ()).await?;
         if animated {
             return Err(jvm
-                .exception(
-                    "java/lang/IllegalArgumentException",
-                    "Animation image cannot be editable",
-                )
+                .exception("java/lang/IllegalArgumentException", "Animation image cannot be editable")
                 .await);
         }
 
         let mut result = Self::create_image(jvm, context, width, height).await?;
 
-        let target: ClassInstanceRef<MidpImage> =
-            jvm.get_field(&result, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
-        let source: ClassInstanceRef<MidpImage> =
-            jvm.get_field(&this, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
+        let target: ClassInstanceRef<MidpImage> = jvm.get_field(&result, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
+        let source: ClassInstanceRef<MidpImage> = jvm.get_field(&this, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
         let target_graphics: ClassInstanceRef<MidpGraphics> = jvm
-            .invoke_virtual(
-                &target,
-                "getGraphics",
-                "()Ljavax/microedition/lcdui/Graphics;",
-                (),
-            )
+            .invoke_virtual(&target, "getGraphics", "()Ljavax/microedition/lcdui/Graphics;", ())
             .await?;
 
         // Native dimage_create_sub_image copies the source pixels directly.
@@ -1313,15 +922,8 @@ impl Image {
             )
             .await?;
 
-        let transparent_color: i32 =
-            jvm.get_field(&this, "transparentColor", "I").await?;
-        jvm.put_field(
-            &mut result,
-            "transparentColor",
-            "I",
-            transparent_color,
-        )
-        .await?;
+        let transparent_color: i32 = jvm.get_field(&this, "transparentColor", "I").await?;
+        jvm.put_field(&mut result, "transparentColor", "I", transparent_color).await?;
 
         if !mutable {
             jvm.put_field(&mut result, "mutable", "Z", false).await?;
@@ -1330,30 +932,20 @@ impl Image {
         Ok(result)
     }
 
-    async fn set_transparent_color(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Image>,
-        rgb: i32,
-    ) -> JvmResult<()> {
+    async fn set_transparent_color(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Image>, rgb: i32) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lcdui.Image::setTransparentColor({this:?}, {rgb})");
 
         // Native dimage_set_trans_color stores the Java int unchanged.
         jvm.put_field(&mut this, "transparentColor", "I", rgb).await
     }
 
-    async fn get_play_time(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Image>,
-    ) -> JvmResult<i32> {
+    async fn get_play_time(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<i32> {
         let frame_count: i32 = jvm.get_field(&this, "frameCount", "I").await?;
         if frame_count <= 0 {
             return Ok(0);
         }
 
-        let delays: ClassInstanceRef<Array<i32>> =
-            jvm.get_field(&this, "animationDelays", "[I").await?;
+        let delays: ClassInstanceRef<Array<i32>> = jvm.get_field(&this, "animationDelays", "[I").await?;
         if delays.is_null() {
             return Ok(0);
         }
@@ -1375,7 +967,6 @@ impl Image {
     }
 }
 
-
 struct ImageAnimationRunner {
     image: ClassInstanceRef<Image>,
     observer: ClassInstanceRef<ImageObserver>,
@@ -1384,50 +975,34 @@ struct ImageAnimationRunner {
 
 #[async_trait::async_trait]
 impl MethodBody<JavaError, WieJvmContext> for ImageAnimationRunner {
-    async fn call(
-        &self,
-        jvm: &Jvm,
-        context: &mut WieJvmContext,
-        _args: Box<[JavaValue]>,
-    ) -> Result<JavaValue, JavaError> {
+    async fn call(&self, jvm: &Jvm, context: &mut WieJvmContext, _args: Box<[JavaValue]>) -> Result<JavaValue, JavaError> {
         const FRAME_END: i32 = 0;
         const IMAGE_END: i32 = 1;
 
         jvm.attach_thread(None).await?;
 
         loop {
-            let active_generation: i32 = jvm
-                .get_field(&self.image, "animationGeneration", "I")
-                .await?;
+            let active_generation: i32 = jvm.get_field(&self.image, "animationGeneration", "I").await?;
             if active_generation != self.generation {
                 break;
             }
 
-            let frame_count: i32 =
-                jvm.get_field(&self.image, "frameCount", "I").await?;
+            let frame_count: i32 = jvm.get_field(&self.image, "frameCount", "I").await?;
             if frame_count <= 1 {
                 break;
             }
 
-            let cursor: i32 =
-                jvm.get_field(&self.image, "currentFrame", "I").await?;
+            let cursor: i32 = jvm.get_field(&self.image, "currentFrame", "I").await?;
 
-            let delay_index = if cursor <= 0 {
-                0usize
-            } else {
-                ((cursor - 1) % frame_count) as usize
-            };
+            let delay_index = if cursor <= 0 { 0usize } else { ((cursor - 1) % frame_count) as usize };
 
-            let delays: ClassInstanceRef<Array<i32>> = jvm
-                .get_field(&self.image, "animationDelays", "[I")
-                .await?;
+            let delays: ClassInstanceRef<Array<i32>> = jvm.get_field(&self.image, "animationDelays", "[I").await?;
 
             if delays.is_null() {
                 break;
             }
 
-            let delay_values: alloc::vec::Vec<i32> =
-                jvm.load_array(&delays, delay_index, 1).await?;
+            let delay_values: alloc::vec::Vec<i32> = jvm.load_array(&delays, delay_index, 1).await?;
             let delay = delay_values[0].max(0) as u64;
 
             if delay != 0 {
@@ -1436,9 +1011,7 @@ impl MethodBody<JavaError, WieJvmContext> for ImageAnimationRunner {
 
             // stop(), stopImage(), or a later play() may have invalidated
             // this runner while it was sleeping.
-            let active_generation: i32 = jvm
-                .get_field(&self.image, "animationGeneration", "I")
-                .await?;
+            let active_generation: i32 = jvm.get_field(&self.image, "animationGeneration", "I").await?;
             if active_generation != self.generation {
                 break;
             }
@@ -1449,70 +1022,36 @@ impl MethodBody<JavaError, WieJvmContext> for ImageAnimationRunner {
             let next_cursor = cursor.rem_euclid(frame_count) + 1;
             let frame_index = (next_cursor - 1) as usize;
 
-            let frames: ClassInstanceRef<Array<ClassInstanceRef<MidpImage>>> = jvm
-                .get_field(
-                    &self.image,
-                    "animationFrames",
-                    "[Ljavax/microedition/lcdui/Image;",
-                )
-                .await?;
+            let frames: ClassInstanceRef<Array<ClassInstanceRef<MidpImage>>> =
+                jvm.get_field(&self.image, "animationFrames", "[Ljavax/microedition/lcdui/Image;").await?;
 
             if frames.is_null() {
                 break;
             }
 
-            let frame_values: alloc::vec::Vec<ClassInstanceRef<MidpImage>> =
-                jvm.load_array(&frames, frame_index, 1).await?;
+            let frame_values: alloc::vec::Vec<ClassInstanceRef<MidpImage>> = jvm.load_array(&frames, frame_index, 1).await?;
             let frame = frame_values[0].clone();
 
             let mut image = self.image.clone();
-            jvm.put_field(
-                &mut image,
-                "midpImage",
-                "Ljavax/microedition/lcdui/Image;",
-                frame,
-            )
-            .await?;
-            jvm.put_field(
-                &mut image,
-                "currentFrame",
-                "I",
-                next_cursor,
-            )
-            .await?;
+            jvm.put_field(&mut image, "midpImage", "Ljavax/microedition/lcdui/Image;", frame).await?;
+            jvm.put_field(&mut image, "currentFrame", "I", next_cursor).await?;
 
-            let status = if next_cursor == frame_count {
-                IMAGE_END
-            } else {
-                FRAME_END
-            };
+            let status = if next_cursor == frame_count { IMAGE_END } else { FRAME_END };
 
             if !self.observer.is_null() {
                 let _: () = jvm
-                    .invoke_virtual(
-                        &self.observer,
-                        "notify",
-                        "(Lorg/kwis/msp/lcdui/Image;I)V",
-                        (self.image.clone(), status),
-                    )
+                    .invoke_virtual(&self.observer, "notify", "(Lorg/kwis/msp/lcdui/Image;I)V", (self.image.clone(), status))
                     .await?;
             }
 
             if status == IMAGE_END {
                 Image::remove_active_animation(jvm, &self.image).await?;
 
-                let active_generation: i32 = jvm
-                    .get_field(&self.image, "animationGeneration", "I")
-                    .await?;
+                let active_generation: i32 = jvm.get_field(&self.image, "animationGeneration", "I").await?;
                 if active_generation == self.generation {
                     let mut image = self.image.clone();
-                    jvm.put_field(
-                        &mut image,
-                        "animationObserver",
-                        "Lorg/kwis/msp/lcdui/ImageObserver;",
-                        None,
-                    )
-                    .await?;
+                    jvm.put_field(&mut image, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;", None)
+                        .await?;
                 }
 
                 break;
@@ -1531,12 +1070,7 @@ struct ImageLoadRunner {
 
 #[async_trait::async_trait]
 impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
-    async fn call(
-        &self,
-        jvm: &Jvm,
-        context: &mut WieJvmContext,
-        _args: Box<[JavaValue]>,
-    ) -> Result<JavaValue, JavaError> {
+    async fn call(&self, jvm: &Jvm, context: &mut WieJvmContext, _args: Box<[JavaValue]>) -> Result<JavaValue, JavaError> {
         const FRAME_END: i32 = 0;
         const IMAGE_END: i32 = 1;
         const NOT_EXIST: i32 = -1;
@@ -1549,52 +1083,20 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
 
         let status = match Image::load_image_for_runner(jvm, context, self.name.clone()).await {
             Ok(Some(loaded)) => {
-                let midp_image: ClassInstanceRef<MidpImage> = jvm
-                    .get_field(
-                        &loaded,
-                        "midpImage",
-                        "Ljavax/microedition/lcdui/Image;",
-                    )
-                    .await?;
-                let animation_frames: ClassInstanceRef<Array<ClassInstanceRef<MidpImage>>> = jvm
-                    .get_field(
-                        &loaded,
-                        "animationFrames",
-                        "[Ljavax/microedition/lcdui/Image;",
-                    )
-                    .await?;
-                let animation_delays: ClassInstanceRef<Array<i32>> = jvm
-                    .get_field(&loaded, "animationDelays", "[I")
-                    .await?;
-                let frame_count: i32 =
-                    jvm.get_field(&loaded, "frameCount", "I").await?;
-                let current_frame: i32 =
-                    jvm.get_field(&loaded, "currentFrame", "I").await?;
+                let midp_image: ClassInstanceRef<MidpImage> = jvm.get_field(&loaded, "midpImage", "Ljavax/microedition/lcdui/Image;").await?;
+                let animation_frames: ClassInstanceRef<Array<ClassInstanceRef<MidpImage>>> =
+                    jvm.get_field(&loaded, "animationFrames", "[Ljavax/microedition/lcdui/Image;").await?;
+                let animation_delays: ClassInstanceRef<Array<i32>> = jvm.get_field(&loaded, "animationDelays", "[I").await?;
+                let frame_count: i32 = jvm.get_field(&loaded, "frameCount", "I").await?;
+                let current_frame: i32 = jvm.get_field(&loaded, "currentFrame", "I").await?;
 
                 let mut image = self.image.clone();
-                jvm.put_field(
-                    &mut image,
-                    "midpImage",
-                    "Ljavax/microedition/lcdui/Image;",
-                    midp_image,
-                )
-                .await?;
-                jvm.put_field(
-                    &mut image,
-                    "animationFrames",
-                    "[Ljavax/microedition/lcdui/Image;",
-                    animation_frames,
-                )
-                .await?;
-                jvm.put_field(
-                    &mut image,
-                    "animationDelays",
-                    "[I",
-                    animation_delays,
-                )
-                .await?;
-                jvm.put_field(&mut image, "frameCount", "I", frame_count)
+                jvm.put_field(&mut image, "midpImage", "Ljavax/microedition/lcdui/Image;", midp_image)
                     .await?;
+                jvm.put_field(&mut image, "animationFrames", "[Ljavax/microedition/lcdui/Image;", animation_frames)
+                    .await?;
+                jvm.put_field(&mut image, "animationDelays", "[I", animation_delays).await?;
+                jvm.put_field(&mut image, "frameCount", "I", frame_count).await?;
 
                 if frame_count > 1 {
                     // Native Image.decodeNextFrame() performs the first animated
@@ -1606,25 +1108,15 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
                     //
                     // attach_gif_animation() already installed frame 1 as
                     // midpImage, so only the native cursor transition remains.
-                    jvm.put_field(&mut image, "currentFrame", "I", 1)
-                        .await?;
+                    jvm.put_field(&mut image, "currentFrame", "I", 1).await?;
 
                     // ImageReader.addElement() re-registers the ImageElement
                     // before observer.notify(). Register equivalent removable
                     // animation state before invoking the observer so stop() or
                     // stopImage() from inside notify() can cancel this cycle.
-                    let generation: i32 = jvm
-                        .get_field::<i32>(&image, "animationGeneration", "I")
-                        .await?
-                        .wrapping_add(1);
+                    let generation: i32 = jvm.get_field::<i32>(&image, "animationGeneration", "I").await?.wrapping_add(1);
 
-                    jvm.put_field(
-                        &mut image,
-                        "animationGeneration",
-                        "I",
-                        generation,
-                    )
-                    .await?;
+                    jvm.put_field(&mut image, "animationGeneration", "I", generation).await?;
                     jvm.put_field(
                         &mut image,
                         "animationObserver",
@@ -1638,8 +1130,7 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
 
                     FRAME_END
                 } else {
-                    jvm.put_field(&mut image, "currentFrame", "I", current_frame)
-                        .await?;
+                    jvm.put_field(&mut image, "currentFrame", "I", current_frame).await?;
 
                     IMAGE_END
                 }
@@ -1650,9 +1141,7 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
                     OUT_OF_MEMORY
                 } else if jvm.is_instance(&*exception, "java/lang/IllegalArgumentException") {
                     DECODE_ERROR
-                } else if jvm.is_instance(&*exception, "java/io/IOException")
-                    || jvm.is_instance(&*exception, "java/io/FileNotFoundException")
-                {
+                } else if jvm.is_instance(&*exception, "java/io/IOException") || jvm.is_instance(&*exception, "java/io/FileNotFoundException") {
                     NOT_EXIST
                 } else {
                     DECODE_ERROR
@@ -1662,12 +1151,7 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
 
         if !self.observer.is_null() {
             let _: () = jvm
-                .invoke_virtual(
-                    &self.observer,
-                    "notify",
-                    "(Lorg/kwis/msp/lcdui/Image;I)V",
-                    (self.image.clone(), status),
-                )
+                .invoke_virtual(&self.observer, "notify", "(Lorg/kwis/msp/lcdui/Image;I)V", (self.image.clone(), status))
                 .await?;
         }
 
@@ -1676,9 +1160,7 @@ impl MethodBody<JavaError, WieJvmContext> for ImageLoadRunner {
             // FRAME_END. Both invalidate this generation, matching native
             // ImageReader removal of the element that was re-added before
             // notify().
-            let active_generation: i32 = jvm
-                .get_field(&self.image, "animationGeneration", "I")
-                .await?;
+            let active_generation: i32 = jvm.get_field(&self.image, "animationGeneration", "I").await?;
 
             if active_generation == generation {
                 context.spawn(
@@ -1707,7 +1189,6 @@ mod test {
     use wie_midp::classes::javax::microedition::lcdui::Image as MidpImage;
     use wie_util::Result;
 
-
     struct TestImageObserver;
 
     impl TestImageObserver {
@@ -1717,42 +1198,20 @@ mod test {
                 parent_class: Some("java/lang/Object"),
                 interfaces: vec!["org/kwis/msp/lcdui/ImageObserver"],
                 methods: vec![
-                    JavaMethodProto::new(
-                        "<init>",
-                        "()V",
-                        Self::init,
-                        Default::default(),
-                    ),
-                    JavaMethodProto::new(
-                        "notify",
-                        "(Lorg/kwis/msp/lcdui/Image;I)V",
-                        Self::notify,
-                        Default::default(),
-                    ),
+                    JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
+                    JavaMethodProto::new("notify", "(Lorg/kwis/msp/lcdui/Image;I)V", Self::notify, Default::default()),
                 ],
                 fields: vec![],
                 access_flags: Default::default(),
             }
         }
 
-        async fn init(
-            jvm: &Jvm,
-            _: &mut WieJvmContext,
-            this: ClassInstanceRef<Self>,
-        ) -> JvmResult<()> {
-            let _: () = jvm
-                .invoke_special(&this, "java/lang/Object", "<init>", "()V", ())
-                .await?;
+        async fn init(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+            let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
             Ok(())
         }
 
-        async fn notify(
-            _: &Jvm,
-            _: &mut WieJvmContext,
-            _: ClassInstanceRef<Self>,
-            _: ClassInstanceRef<Image>,
-            _: i32,
-        ) -> JvmResult<()> {
+        async fn notify(_: &Jvm, _: &mut WieJvmContext, _: ClassInstanceRef<Self>, _: ClassInstanceRef<Image>, _: i32) -> JvmResult<()> {
             Ok(())
         }
     }
@@ -1766,17 +1225,9 @@ mod test {
                 Box::new([TestImageObserver::as_proto()]),
             ]),
             |jvm| async move {
-                let observer: ClassInstanceRef<ImageObserver> = jvm
-                    .new_class("test/ImageObserverImpl", "()V", ())
-                    .await?
-                    .into();
+                let observer: ClassInstanceRef<ImageObserver> = jvm.new_class("test/ImageObserverImpl", "()V", ()).await?.into();
 
-                let name =
-                    JavaLangString::from_rust_string(
-                        &jvm,
-                        "/missing-default-observer.gif",
-                    )
-                    .await?;
+                let name = JavaLangString::from_rust_string(&jvm, "/missing-default-observer.gif").await?;
 
                 let _: ClassInstanceRef<Image> = jvm
                     .invoke_static(
@@ -1788,28 +1239,18 @@ mod test {
                     .await?;
 
                 let stored: ClassInstanceRef<ImageObserver> = jvm
-                    .get_static_field(
-                        "org/kwis/msp/lcdui/Image",
-                        "defaultObserver",
-                        "Lorg/kwis/msp/lcdui/ImageObserver;",
-                    )
+                    .get_static_field("org/kwis/msp/lcdui/Image", "defaultObserver", "Lorg/kwis/msp/lcdui/ImageObserver;")
                     .await?;
                 assert_eq!(stored.identity(), observer.identity());
 
                 const GIF: &[u8] = &[
-                    71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 255, 0, 0, 0, 255, 0,
-                    33, 249, 4, 0, 2, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1,
-                    0, 33, 249, 4, 0, 4, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68,
-                    1, 0, 59,
+                    71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 255, 0, 0, 0, 255, 0, 33, 249, 4, 0, 2, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2,
+                    2, 68, 1, 0, 33, 249, 4, 0, 4, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1, 0, 59,
                 ];
 
                 let mut data = jvm.instantiate_array("B", GIF.len()).await?;
-                jvm.store_array(
-                    &mut data,
-                    0,
-                    GIF.iter().copied().map(|x| x as i8).collect::<Vec<_>>(),
-                )
-                .await?;
+                jvm.store_array(&mut data, 0, GIF.iter().copied().map(|x| x as i8).collect::<Vec<_>>())
+                    .await?;
 
                 let image: ClassInstanceRef<Image> = jvm
                     .invoke_static(
@@ -1820,25 +1261,14 @@ mod test {
                     )
                     .await?;
 
-                let null_observer: ClassInstanceRef<ImageObserver> =
-                    ClassInstanceRef::new(None);
+                let null_observer: ClassInstanceRef<ImageObserver> = ClassInstanceRef::new(None);
 
                 let _: () = jvm
-                    .invoke_virtual(
-                        &image,
-                        "play",
-                        "(Lorg/kwis/msp/lcdui/ImageObserver;)V",
-                        (null_observer,),
-                    )
+                    .invoke_virtual(&image, "play", "(Lorg/kwis/msp/lcdui/ImageObserver;)V", (null_observer,))
                     .await?;
 
-                let effective: ClassInstanceRef<ImageObserver> = jvm
-                    .get_field(
-                        &image,
-                        "animationObserver",
-                        "Lorg/kwis/msp/lcdui/ImageObserver;",
-                    )
-                    .await?;
+                let effective: ClassInstanceRef<ImageObserver> =
+                    jvm.get_field(&image, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;").await?;
                 assert_eq!(effective.identity(), observer.identity());
 
                 let _: () = jvm
@@ -1850,13 +1280,8 @@ mod test {
                     )
                     .await?;
 
-                let effective_after_stop: ClassInstanceRef<ImageObserver> = jvm
-                    .get_field(
-                        &image,
-                        "animationObserver",
-                        "Lorg/kwis/msp/lcdui/ImageObserver;",
-                    )
-                    .await?;
+                let effective_after_stop: ClassInstanceRef<ImageObserver> =
+                    jvm.get_field(&image, "animationObserver", "Lorg/kwis/msp/lcdui/ImageObserver;").await?;
                 assert!(effective_after_stop.is_null());
 
                 Ok(())
@@ -1866,126 +1291,64 @@ mod test {
 
     #[test]
     fn test_transparent_color_draw_and_subimage_preservation() -> Result<()> {
-        run_jvm_test(
-            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
-            |jvm| async move {
-                let source: ClassInstanceRef<Image> = jvm
-                    .invoke_static(
-                        "org/kwis/msp/lcdui/Image",
-                        "createImage",
-                        "(II)Lorg/kwis/msp/lcdui/Image;",
-                        (2, 1),
-                    )
-                    .await?;
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let source: ClassInstanceRef<Image> = jvm
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (2, 1))
+                .await?;
 
-                let source_graphics: ClassInstanceRef<
-                    crate::classes::org::kwis::msp::lcdui::Graphics,
-                > = jvm
-                    .invoke_virtual(
-                        &source,
-                        "getGraphics",
-                        "()Lorg/kwis/msp/lcdui/Graphics;",
-                        (),
-                    )
-                    .await?;
+            let source_graphics: ClassInstanceRef<crate::classes::org::kwis::msp::lcdui::Graphics> =
+                jvm.invoke_virtual(&source, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
-                // x0 = 0x123456, x1 = green.
-                let _: () = jvm
-                    .invoke_virtual(&source_graphics, "setColor", "(I)V", (0x123456,))
-                    .await?;
-                let _: () = jvm
-                    .invoke_virtual(&source_graphics, "setPixel", "(II)V", (0, 0))
-                    .await?;
+            // x0 = 0x123456, x1 = green.
+            let _: () = jvm.invoke_virtual(&source_graphics, "setColor", "(I)V", (0x123456,)).await?;
+            let _: () = jvm.invoke_virtual(&source_graphics, "setPixel", "(II)V", (0, 0)).await?;
 
-                let _: () = jvm
-                    .invoke_virtual(&source_graphics, "setColor", "(I)V", (0x00ff00,))
-                    .await?;
-                let _: () = jvm
-                    .invoke_virtual(&source_graphics, "setPixel", "(II)V", (1, 0))
-                    .await?;
+            let _: () = jvm.invoke_virtual(&source_graphics, "setColor", "(I)V", (0x00ff00,)).await?;
+            let _: () = jvm.invoke_virtual(&source_graphics, "setPixel", "(II)V", (1, 0)).await?;
 
-                let _: () = jvm
-                    .invoke_virtual(
-                        &source,
-                        "setTransparentColor",
-                        "(I)V",
-                        (0x123456,),
-                    )
-                    .await?;
+            let _: () = jvm.invoke_virtual(&source, "setTransparentColor", "(I)V", (0x123456,)).await?;
 
-                // Sub-image must preserve raw pixels and inherit the key.
-                let sub: ClassInstanceRef<Image> = jvm
-                    .invoke_virtual(
-                        &source,
-                        "createSubImage",
-                        "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
-                        (0, 0, 2, 1, false),
-                    )
-                    .await?;
+            // Sub-image must preserve raw pixels and inherit the key.
+            let sub: ClassInstanceRef<Image> = jvm
+                .invoke_virtual(&source, "createSubImage", "(IIIIZ)Lorg/kwis/msp/lcdui/Image;", (0, 0, 2, 1, false))
+                .await?;
 
-                let sub_key: i32 =
-                    jvm.get_field(&sub, "transparentColor", "I").await?;
-                assert_eq!(sub_key, 0x123456);
+            let sub_key: i32 = jvm.get_field(&sub, "transparentColor", "I").await?;
+            assert_eq!(sub_key, 0x123456);
 
-                let sub_midp = Image::midp_image(&jvm, &sub).await?;
-                let sub_backend = MidpImage::image(&jvm, &sub_midp).await?;
+            let sub_midp = Image::midp_image(&jvm, &sub).await?;
+            let sub_backend = MidpImage::image(&jvm, &sub_midp).await?;
 
-                let preserved = sub_backend.get_pixel(0, 0);
-                assert_eq!(
-                    (preserved.r, preserved.g, preserved.b),
-                    (0x12, 0x34, 0x56)
-                );
+            let preserved = sub_backend.get_pixel(0, 0);
+            assert_eq!((preserved.r, preserved.g, preserved.b), (0x12, 0x34, 0x56));
 
-                // Drawing the source must treat the key pixel as transparent.
-                let target: ClassInstanceRef<Image> = jvm
-                    .invoke_static(
-                        "org/kwis/msp/lcdui/Image",
-                        "createImage",
-                        "(II)Lorg/kwis/msp/lcdui/Image;",
-                        (2, 1),
-                    )
-                    .await?;
+            // Drawing the source must treat the key pixel as transparent.
+            let target: ClassInstanceRef<Image> = jvm
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (2, 1))
+                .await?;
 
-                let target_graphics: ClassInstanceRef<
-                    crate::classes::org::kwis::msp::lcdui::Graphics,
-                > = jvm
-                    .invoke_virtual(
-                        &target,
-                        "getGraphics",
-                        "()Lorg/kwis/msp/lcdui/Graphics;",
-                        (),
-                    )
-                    .await?;
+            let target_graphics: ClassInstanceRef<crate::classes::org::kwis::msp::lcdui::Graphics> =
+                jvm.invoke_virtual(&target, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
-                // Blue background makes the skipped key pixel observable.
-                let _: () = jvm
-                    .invoke_virtual(&target_graphics, "setColor", "(I)V", (0x0000ff,))
-                    .await?;
-                let _: () = jvm
-                    .invoke_virtual(&target_graphics, "fillRect", "(IIII)V", (0, 0, 2, 1))
-                    .await?;
+            // Blue background makes the skipped key pixel observable.
+            let _: () = jvm.invoke_virtual(&target_graphics, "setColor", "(I)V", (0x0000ff,)).await?;
+            let _: () = jvm.invoke_virtual(&target_graphics, "fillRect", "(IIII)V", (0, 0, 2, 1)).await?;
 
-                let _: () = jvm
-                    .invoke_virtual(
-                        &target_graphics,
-                        "drawImage",
-                        "(Lorg/kwis/msp/lcdui/Image;III)V",
-                        (source, 0, 0, 20),
-                    )
-                    .await?;
+            let _: () = jvm
+                .invoke_virtual(&target_graphics, "drawImage", "(Lorg/kwis/msp/lcdui/Image;III)V", (source, 0, 0, 20))
+                .await?;
 
-                let target_midp = Image::midp_image(&jvm, &target).await?;
-                let target_backend = MidpImage::image(&jvm, &target_midp).await?;
+            let target_midp = Image::midp_image(&jvm, &target).await?;
+            let target_backend = MidpImage::image(&jvm, &target_midp).await?;
 
-                let skipped = target_backend.get_pixel(0, 0);
-                assert_eq!((skipped.r, skipped.g, skipped.b), (0x00, 0x00, 0xff));
+            let skipped = target_backend.get_pixel(0, 0);
+            assert_eq!((skipped.r, skipped.g, skipped.b), (0x00, 0x00, 0xff));
 
-                let drawn = target_backend.get_pixel(1, 0);
-                assert_eq!((drawn.r, drawn.g, drawn.b), (0x00, 0xff, 0x00));
+            let drawn = target_backend.get_pixel(1, 0);
+            assert_eq!((drawn.r, drawn.g, drawn.b), (0x00, 0xff, 0x00));
 
-                Ok(())
-            },
-        )
+            Ok(())
+        })
     }
 
     use crate::{
@@ -1993,140 +1356,91 @@ mod test {
         get_protos,
     };
 
-
     #[test]
     fn test_get_play_time_uses_current_frame_delay() -> Result<()> {
-        run_jvm_test(
-            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
-            |jvm| async move {
-                const GIF: &[u8] = &[
-                    71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 255, 0, 0, 0, 255, 0,
-                    33, 249, 4, 0, 2, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1,
-                    0, 33, 249, 4, 0, 4, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68,
-                    1, 0, 59,
-                ];
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            const GIF: &[u8] = &[
+                71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 128, 0, 0, 255, 0, 0, 0, 255, 0, 33, 249, 4, 0, 2, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2,
+                68, 1, 0, 33, 249, 4, 0, 4, 0, 0, 0, 44, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 68, 1, 0, 59,
+            ];
 
-                let mut data = jvm.instantiate_array("B", GIF.len()).await?;
-                jvm.store_array(
-                    &mut data,
-                    0,
-                    GIF.iter().copied().map(|x| x as i8).collect::<Vec<_>>(),
+            let mut data = jvm.instantiate_array("B", GIF.len()).await?;
+            jvm.store_array(&mut data, 0, GIF.iter().copied().map(|x| x as i8).collect::<Vec<_>>())
+                .await?;
+
+            let mut image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "([BII)Lorg/kwis/msp/lcdui/Image;",
+                    (data, 0, GIF.len() as i32),
                 )
                 .await?;
 
-                let mut image: ClassInstanceRef<Image> = jvm
-                    .invoke_static(
-                        "org/kwis/msp/lcdui/Image",
-                        "createImage",
-                        "([BII)Lorg/kwis/msp/lcdui/Image;",
-                        (data, 0, GIF.len() as i32),
-                    )
-                    .await?;
+            let initial: i32 = jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
+            assert_eq!(initial, 40);
 
-                let initial: i32 =
-                    jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
-                assert_eq!(initial, 40);
+            jvm.put_field(&mut image, "currentFrame", "I", 1).await?;
+            let first: i32 = jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
+            assert_eq!(first, 40);
 
-                jvm.put_field(&mut image, "currentFrame", "I", 1).await?;
-                let first: i32 =
-                    jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
-                assert_eq!(first, 40);
+            jvm.put_field(&mut image, "currentFrame", "I", 2).await?;
+            let second: i32 = jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
+            assert_eq!(second, 80);
 
-                jvm.put_field(&mut image, "currentFrame", "I", 2).await?;
-                let second: i32 =
-                    jvm.invoke_virtual(&image, "getPlayTime", "()I", ()).await?;
-                assert_eq!(second, 80);
-
-                Ok(())
-            },
-        )
+            Ok(())
+        })
     }
 
     #[test]
     fn test_animated_gif_storage_and_state() -> Result<()> {
-        run_jvm_test(
-            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
-            |jvm| async move {
-                use jvm::Array;
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            use jvm::Array;
 
-                // Two-frame 1x1 GIF89a.
-                // Frame 0: red, 20 ms
-                // Frame 1: green, 40 ms
-                let gif: &[u8] = &[
-                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x80, 0x00, 0x00,
-                    0xff, 0x00, 0x00,
-                    0x00, 0xff, 0x00,
+            // Two-frame 1x1 GIF89a.
+            // Frame 0: red, 20 ms
+            // Frame 1: green, 40 ms
+            let gif: &[u8] = &[
+                0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0xff, 0x00, 0x21, 0xf9, 0x04,
+                0x00, 0x02, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x21, 0xf9,
+                0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x4c, 0x01, 0x00, 0x3b,
+            ];
 
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x02, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x44, 0x01, 0x00,
+            let mut data = jvm.instantiate_array("B", gif.len()).await?;
+            jvm.store_array(&mut data, 0, gif.iter().map(|&value| value as i8).collect::<alloc::vec::Vec<_>>())
+                .await?;
 
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x04, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x4c, 0x01, 0x00,
-
-                    0x3b,
-                ];
-
-                let mut data = jvm.instantiate_array("B", gif.len()).await?;
-                jvm.store_array(
-                    &mut data,
-                    0,
-                    gif.iter().map(|&value| value as i8).collect::<alloc::vec::Vec<_>>(),
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "([BII)Lorg/kwis/msp/lcdui/Image;",
+                    (data, 0, gif.len() as i32),
                 )
                 .await?;
 
-                let image: ClassInstanceRef<Image> = jvm
-                    .invoke_static(
-                        "org/kwis/msp/lcdui/Image",
-                        "createImage",
-                        "([BII)Lorg/kwis/msp/lcdui/Image;",
-                        (data, 0, gif.len() as i32),
-                    )
-                    .await?;
+            let animated: bool = jvm.invoke_virtual(&image, "isAnimated", "()Z", ()).await?;
+            assert!(animated);
 
-                let animated: bool =
-                    jvm.invoke_virtual(&image, "isAnimated", "()Z", ()).await?;
-                assert!(animated);
+            let frame_count: i32 = jvm.get_field(&image, "frameCount", "I").await?;
+            let current_frame: i32 = jvm.get_field(&image, "currentFrame", "I").await?;
 
-                let frame_count: i32 =
-                    jvm.get_field(&image, "frameCount", "I").await?;
-                let current_frame: i32 =
-                    jvm.get_field(&image, "currentFrame", "I").await?;
+            assert_eq!(frame_count, 2);
+            assert_eq!(current_frame, 0);
 
-                assert_eq!(frame_count, 2);
-                assert_eq!(current_frame, 0);
+            let width: i32 = jvm.invoke_virtual(&image, "getWidth", "()I", ()).await?;
+            let height: i32 = jvm.invoke_virtual(&image, "getHeight", "()I", ()).await?;
 
-                let width: i32 =
-                    jvm.invoke_virtual(&image, "getWidth", "()I", ()).await?;
-                let height: i32 =
-                    jvm.invoke_virtual(&image, "getHeight", "()I", ()).await?;
+            assert_eq!(width, 1);
+            assert_eq!(height, 1);
 
-                assert_eq!(width, 1);
-                assert_eq!(height, 1);
+            let delays: ClassInstanceRef<Array<i32>> = jvm.get_field(&image, "animationDelays", "[I").await?;
+            let delay_values: alloc::vec::Vec<i32> = jvm.load_array(&delays, 0, 2).await?;
 
-                let delays: ClassInstanceRef<Array<i32>> =
-                    jvm.get_field(&image, "animationDelays", "[I").await?;
-                let delay_values: alloc::vec::Vec<i32> =
-                    jvm.load_array(&delays, 0, 2).await?;
+            assert_eq!(delay_values, [20, 40]);
 
-                assert_eq!(delay_values, [20, 40]);
-
-                Ok(())
-            },
-        )
+            Ok(())
+        })
     }
 
     #[test]
@@ -2144,32 +1458,13 @@ mod test {
                 // Frame 0: 20 ms
                 // Frame 1: 40 ms
                 let gif: &[u8] = &[
-                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x80, 0x00, 0x00,
-                    0xff, 0x00, 0x00,
-                    0x00, 0xff, 0x00,
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x02, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x44, 0x01, 0x00,
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x04, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x4c, 0x01, 0x00,
-                    0x3b,
+                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0xff, 0x00, 0x21, 0xf9,
+                    0x04, 0x00, 0x02, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+                    0x21, 0xf9, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x4c,
+                    0x01, 0x00, 0x3b,
                 ];
 
-                let filename =
-                    JavaLangString::from_rust_string(&jvm, "async-load.gif").await?;
+                let filename = JavaLangString::from_rust_string(&jvm, "async-load.gif").await?;
 
                 let file: ClassInstanceRef<File> = jvm
                     .new_class(
@@ -2181,28 +1476,17 @@ mod test {
                     .into();
 
                 let mut data = jvm.instantiate_array("B", gif.len()).await?;
-                jvm.store_array(
-                    &mut data,
-                    0,
-                    gif.iter()
-                        .map(|&value| value as i8)
-                        .collect::<alloc::vec::Vec<_>>(),
-                )
-                .await?;
+                jvm.store_array(&mut data, 0, gif.iter().map(|&value| value as i8).collect::<alloc::vec::Vec<_>>())
+                    .await?;
 
-                let written: i32 =
-                    jvm.invoke_virtual(&file, "write", "([B)I", (data,)).await?;
+                let written: i32 = jvm.invoke_virtual(&file, "write", "([B)I", (data,)).await?;
                 assert_eq!(written, 0);
 
                 let _: () = jvm.invoke_virtual(&file, "close", "()V", ()).await?;
 
-                let observer: ClassInstanceRef<ImageObserver> = jvm
-                    .new_class("test/ImageObserverImpl", "()V", ())
-                    .await?
-                    .into();
+                let observer: ClassInstanceRef<ImageObserver> = jvm.new_class("test/ImageObserverImpl", "()V", ()).await?.into();
 
-                let source =
-                    JavaLangString::from_rust_string(&jvm, "file://async-load.gif").await?;
+                let source = JavaLangString::from_rust_string(&jvm, "file://async-load.gif").await?;
 
                 let image: ClassInstanceRef<Image> = jvm
                     .invoke_static(
@@ -2214,46 +1498,29 @@ mod test {
                     .await?;
 
                 // loadImage returns before ImageLoadRunner performs the decode.
-                let initial_frame_count: i32 =
-                    jvm.get_field(&image, "frameCount", "I").await?;
+                let initial_frame_count: i32 = jvm.get_field(&image, "frameCount", "I").await?;
                 assert_eq!(initial_frame_count, 0);
 
                 // Allow ImageLoadRunner to decode frame 1 and the animation
                 // runner to advance through the final frame.
-                let _: () = jvm
-                    .invoke_static(
-                        "java/lang/Thread",
-                        "sleep",
-                        "(J)V",
-                        (120i64,),
-                    )
-                    .await?;
+                let _: () = jvm.invoke_static("java/lang/Thread", "sleep", "(J)V", (120i64,)).await?;
 
                 for _ in 0..4 {
-                    let _: () = jvm
-                        .invoke_static("java/lang/Thread", "yield", "()V", ())
-                        .await?;
+                    let _: () = jvm.invoke_static("java/lang/Thread", "yield", "()V", ()).await?;
                 }
 
-                let frame_count: i32 =
-                    jvm.get_field(&image, "frameCount", "I").await?;
-                let current_frame: i32 =
-                    jvm.get_field(&image, "currentFrame", "I").await?;
+                let frame_count: i32 = jvm.get_field(&image, "frameCount", "I").await?;
+                let current_frame: i32 = jvm.get_field(&image, "currentFrame", "I").await?;
 
                 assert_eq!(frame_count, 2);
                 assert_eq!(current_frame, 2);
 
                 let active: ClassInstanceRef<()> = jvm
-                    .get_static_field(
-                        "org/kwis/msp/lcdui/Image",
-                        "activeAnimations",
-                        "Ljava/util/Vector;",
-                    )
+                    .get_static_field("org/kwis/msp/lcdui/Image", "activeAnimations", "Ljava/util/Vector;")
                     .await?;
                 assert!(!active.is_null());
 
-                let active_size: i32 =
-                    jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+                let active_size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
                 assert_eq!(active_size, 0);
 
                 Ok(())
@@ -2263,224 +1530,119 @@ mod test {
 
     #[test]
     fn test_animated_gif_play_and_stop_lifecycle() -> Result<()> {
-        run_jvm_test(
-            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
-            |jvm| async move {
-                // Two-frame 1x1 GIF89a.
-                // Frame 0: red, 20 ms
-                // Frame 1: green, 40 ms
-                let gif: &[u8] = &[
-                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x80, 0x00, 0x00,
-                    0xff, 0x00, 0x00,
-                    0x00, 0xff, 0x00,
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            // Two-frame 1x1 GIF89a.
+            // Frame 0: red, 20 ms
+            // Frame 1: green, 40 ms
+            let gif: &[u8] = &[
+                0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0xff, 0x00, 0x21, 0xf9, 0x04,
+                0x00, 0x02, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x21, 0xf9,
+                0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x4c, 0x01, 0x00, 0x3b,
+            ];
 
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x02, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x44, 0x01, 0x00,
+            let mut data = jvm.instantiate_array("B", gif.len()).await?;
+            jvm.store_array(&mut data, 0, gif.iter().map(|&value| value as i8).collect::<alloc::vec::Vec<_>>())
+                .await?;
 
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x04, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x4c, 0x01, 0x00,
-
-                    0x3b,
-                ];
-
-                let mut data = jvm.instantiate_array("B", gif.len()).await?;
-                jvm.store_array(
-                    &mut data,
-                    0,
-                    gif.iter()
-                        .map(|&value| value as i8)
-                        .collect::<alloc::vec::Vec<_>>(),
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "([BII)Lorg/kwis/msp/lcdui/Image;",
+                    (data, 0, gif.len() as i32),
                 )
                 .await?;
 
-                let image: ClassInstanceRef<Image> = jvm
-                    .invoke_static(
-                        "org/kwis/msp/lcdui/Image",
-                        "createImage",
-                        "([BII)Lorg/kwis/msp/lcdui/Image;",
-                        (data, 0, gif.len() as i32),
-                    )
-                    .await?;
+            let observer: ClassInstanceRef<ImageObserver> = ClassInstanceRef::new(None);
 
-                let observer: ClassInstanceRef<ImageObserver> =
-                    ClassInstanceRef::new(None);
+            let initial_cursor: i32 = jvm.get_field(&image, "currentFrame", "I").await?;
+            assert_eq!(initial_cursor, 0);
 
-                let initial_cursor: i32 =
-                    jvm.get_field(&image, "currentFrame", "I").await?;
-                assert_eq!(initial_cursor, 0);
+            let _: () = jvm
+                .invoke_virtual(&image, "play", "(Lorg/kwis/msp/lcdui/ImageObserver;)V", (observer.clone(),))
+                .await?;
 
-                let _: () = jvm
-                    .invoke_virtual(
-                        &image,
-                        "play",
-                        "(Lorg/kwis/msp/lcdui/ImageObserver;)V",
-                        (observer.clone(),),
-                    )
-                    .await?;
+            // Keep the test task alive while the spawned animation runner
+            // advances through both native-style frame delays.
+            let _: () = jvm.invoke_static("java/lang/Thread", "sleep", "(J)V", (120i64,)).await?;
 
-                // Keep the test task alive while the spawned animation runner
-                // advances through both native-style frame delays.
-                let _: () = jvm
-                    .invoke_static(
-                        "java/lang/Thread",
-                        "sleep",
-                        "(J)V",
-                        (120i64,),
-                    )
-                    .await?;
+            // TestPlatform uses one global synthetic clock across parallel
+            // tests. Give spawned animation work explicit scheduling turns
+            // after the sleep deadline instead of assuming one wakeup is
+            // enough for the runner to be polled.
+            for _ in 0..4 {
+                let _: () = jvm.invoke_static("java/lang/Thread", "yield", "()V", ()).await?;
+            }
 
-                // TestPlatform uses one global synthetic clock across parallel
-                // tests. Give spawned animation work explicit scheduling turns
-                // after the sleep deadline instead of assuming one wakeup is
-                // enough for the runner to be polled.
-                for _ in 0..4 {
-                    let _: () = jvm
-                        .invoke_static("java/lang/Thread", "yield", "()V", ())
-                        .await?;
-                }
+            let completed_cursor: i32 = jvm.get_field(&image, "currentFrame", "I").await?;
+            assert_eq!(completed_cursor, 2);
 
-                let completed_cursor: i32 =
-                    jvm.get_field(&image, "currentFrame", "I").await?;
-                assert_eq!(completed_cursor, 2);
+            let active: ClassInstanceRef<()> = jvm
+                .get_static_field("org/kwis/msp/lcdui/Image", "activeAnimations", "Ljava/util/Vector;")
+                .await?;
+            assert!(!active.is_null());
 
-                let active: ClassInstanceRef<()> = jvm
-                    .get_static_field(
-                        "org/kwis/msp/lcdui/Image",
-                        "activeAnimations",
-                        "Ljava/util/Vector;",
-                    )
-                    .await?;
-                assert!(!active.is_null());
+            let active_size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+            assert_eq!(active_size, 0);
 
-                let active_size: i32 =
-                    jvm.invoke_virtual(&active, "size", "()I", ()).await?;
-                assert_eq!(active_size, 0);
+            // A new play() starts another generation. stop() immediately
+            // invalidates that generation before its sleeping runner can
+            // change the frame cursor.
+            let _: () = jvm
+                .invoke_virtual(&image, "play", "(Lorg/kwis/msp/lcdui/ImageObserver;)V", (observer,))
+                .await?;
 
-                // A new play() starts another generation. stop() immediately
-                // invalidates that generation before its sleeping runner can
-                // change the frame cursor.
-                let _: () = jvm
-                    .invoke_virtual(
-                        &image,
-                        "play",
-                        "(Lorg/kwis/msp/lcdui/ImageObserver;)V",
-                        (observer,),
-                    )
-                    .await?;
+            let cursor_before_stop: i32 = jvm.get_field(&image, "currentFrame", "I").await?;
 
-                let cursor_before_stop: i32 =
-                    jvm.get_field(&image, "currentFrame", "I").await?;
+            let _: () = jvm.invoke_virtual(&image, "stop", "()V", ()).await?;
 
-                let _: () =
-                    jvm.invoke_virtual(&image, "stop", "()V", ()).await?;
+            let generation_after_stop: i32 = jvm.get_field(&image, "animationGeneration", "I").await?;
 
-                let generation_after_stop: i32 =
-                    jvm.get_field(&image, "animationGeneration", "I").await?;
+            let _: () = jvm.invoke_static("java/lang/Thread", "sleep", "(J)V", (120i64,)).await?;
 
-                let _: () = jvm
-                    .invoke_static(
-                        "java/lang/Thread",
-                        "sleep",
-                        "(J)V",
-                        (120i64,),
-                    )
-                    .await?;
+            for _ in 0..4 {
+                let _: () = jvm.invoke_static("java/lang/Thread", "yield", "()V", ()).await?;
+            }
 
-                for _ in 0..4 {
-                    let _: () = jvm
-                        .invoke_static("java/lang/Thread", "yield", "()V", ())
-                        .await?;
-                }
+            let cursor_after_wait: i32 = jvm.get_field(&image, "currentFrame", "I").await?;
+            assert_eq!(cursor_after_wait, cursor_before_stop);
 
-                let cursor_after_wait: i32 =
-                    jvm.get_field(&image, "currentFrame", "I").await?;
-                assert_eq!(cursor_after_wait, cursor_before_stop);
+            let generation_final: i32 = jvm.get_field(&image, "animationGeneration", "I").await?;
+            assert_eq!(generation_final, generation_after_stop);
 
-                let generation_final: i32 =
-                    jvm.get_field(&image, "animationGeneration", "I").await?;
-                assert_eq!(generation_final, generation_after_stop);
+            let active_size: i32 = jvm.invoke_virtual(&active, "size", "()I", ()).await?;
+            assert_eq!(active_size, 0);
 
-                let active_size: i32 =
-                    jvm.invoke_virtual(&active, "size", "()I", ()).await?;
-                assert_eq!(active_size, 0);
-
-                Ok(())
-            },
-        )
+            Ok(())
+        })
     }
 
     #[test]
     fn test_get_graphics_is_cached_for_mutable_images() -> Result<()> {
-        run_jvm_test(
-            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
-            |jvm| async move {
-                let image: ClassInstanceRef<Image> = jvm
-                    .invoke_static(
-                        "org/kwis/msp/lcdui/Image",
-                        "createImage",
-                        "(II)Lorg/kwis/msp/lcdui/Image;",
-                        (2, 2),
-                    )
-                    .await?;
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (2, 2))
+                .await?;
 
-                let first: ClassInstanceRef<Graphics> = jvm
-                    .invoke_virtual(
-                        &image,
-                        "getGraphics",
-                        "()Lorg/kwis/msp/lcdui/Graphics;",
-                        (),
-                    )
-                    .await?;
+            let first: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
-                let second: ClassInstanceRef<Graphics> = jvm
-                    .invoke_virtual(
-                        &image,
-                        "getGraphics",
-                        "()Lorg/kwis/msp/lcdui/Graphics;",
-                        (),
-                    )
-                    .await?;
+            let second: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
 
-                assert!(!first.is_null());
-                assert_eq!(first.identity(), second.identity());
+            assert!(!first.is_null());
+            assert_eq!(first.identity(), second.identity());
 
-                let immutable: ClassInstanceRef<Image> = jvm
-                    .invoke_virtual(
-                        &image,
-                        "createSubImage",
-                        "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
-                        (0, 0, 1, 1, false),
-                    )
-                    .await?;
+            let immutable: ClassInstanceRef<Image> = jvm
+                .invoke_virtual(&image, "createSubImage", "(IIIIZ)Lorg/kwis/msp/lcdui/Image;", (0, 0, 1, 1, false))
+                .await?;
 
-                let immutable_graphics: ClassInstanceRef<Graphics> = jvm
-                    .invoke_virtual(
-                        &immutable,
-                        "getGraphics",
-                        "()Lorg/kwis/msp/lcdui/Graphics;",
-                        (),
-                    )
-                    .await?;
+            let immutable_graphics: ClassInstanceRef<Graphics> = jvm
+                .invoke_virtual(&immutable, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ())
+                .await?;
 
-                assert!(immutable_graphics.is_null());
+            assert!(immutable_graphics.is_null());
 
-                Ok(())
-            },
-        )
+            Ok(())
+        })
     }
 
     #[test]
@@ -2506,24 +1668,14 @@ mod test {
             assert!(!jvm.invoke_virtual::<_, bool>(&source, "isAnimated", "()Z", ()).await?);
 
             let mutable_sub: ClassInstanceRef<Image> = jvm
-                .invoke_virtual(
-                    &source,
-                    "createSubImage",
-                    "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
-                    (0, 0, 1, 1, true),
-                )
+                .invoke_virtual(&source, "createSubImage", "(IIIIZ)Lorg/kwis/msp/lcdui/Image;", (0, 0, 1, 1, true))
                 .await?;
             assert!(jvm.invoke_virtual::<_, bool>(&mutable_sub, "isMutable", "()Z", ()).await?);
             assert_eq!(jvm.invoke_virtual::<_, i32>(&mutable_sub, "getWidth", "()I", ()).await?, 1);
             assert_eq!(jvm.invoke_virtual::<_, i32>(&mutable_sub, "getHeight", "()I", ()).await?, 1);
 
             let immutable_sub: ClassInstanceRef<Image> = jvm
-                .invoke_virtual(
-                    &source,
-                    "createSubImage",
-                    "(IIIIZ)Lorg/kwis/msp/lcdui/Image;",
-                    (0, 0, 1, 1, false),
-                )
+                .invoke_virtual(&source, "createSubImage", "(IIIIZ)Lorg/kwis/msp/lcdui/Image;", (0, 0, 1, 1, false))
                 .await?;
             assert!(!jvm.invoke_virtual::<_, bool>(&immutable_sub, "isMutable", "()Z", ()).await?);
 
@@ -2567,133 +1719,62 @@ mod test {
 
         // Two 4-byte pixels. Keep the byte layout opaque here: native
         // stretching copies complete pixels without channel interpolation.
-        let source = [
-            0x10, 0x20, 0x30, 0x40,
-            0x50, 0x60, 0x70, 0x80,
-        ];
+        let source = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80];
 
-        let resized = Image::resize_raw_pixels(
-            2,
-            1,
-            4,
-            &source,
-            3,
-            1,
-        );
+        let resized = Image::resize_raw_pixels(2, 1, 4, &source, 3, 1);
 
-        assert_eq!(
-            resized,
-            [
-                0x10, 0x20, 0x30, 0x40,
-                0x50, 0x60, 0x70, 0x80,
-                0x50, 0x60, 0x70, 0x80,
-            ]
-        );
+        assert_eq!(resized, [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x50, 0x60, 0x70, 0x80,]);
     }
 
     #[test]
     fn test_create_image_resized_preserves_gif_animation() -> Result<()> {
-        run_jvm_test(
-            Box::new([wie_midp::get_protos().into(), get_protos().into()]),
-            |jvm| async move {
-                use jvm::Array;
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            use jvm::Array;
 
-                // Same known-good two-frame 1x1 GIF used by the existing
-                // animation tests. Frame delays are 20 ms and 40 ms.
-                let gif: &[u8] = &[
-                    0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x80, 0x00, 0x00,
-                    0xff, 0x00, 0x00,
-                    0x00, 0xff, 0x00,
+            // Same known-good two-frame 1x1 GIF used by the existing
+            // animation tests. Frame delays are 20 ms and 40 ms.
+            let gif: &[u8] = &[
+                0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0xff, 0x00, 0x21, 0xf9, 0x04,
+                0x00, 0x02, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x21, 0xf9,
+                0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x4c, 0x01, 0x00, 0x3b,
+            ];
 
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x02, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x44, 0x01, 0x00,
+            let mut data = jvm.instantiate_array("B", gif.len()).await?;
+            jvm.store_array(&mut data, 0, gif.iter().map(|&value| value as i8).collect::<Vec<_>>())
+                .await?;
 
-                    0x21, 0xf9, 0x04, 0x00,
-                    0x04, 0x00,
-                    0x00, 0x00,
-                    0x2c,
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00, 0x01, 0x00,
-                    0x00,
-                    0x02, 0x02, 0x4c, 0x01, 0x00,
-
-                    0x3b,
-                ];
-
-                let mut data = jvm.instantiate_array("B", gif.len()).await?;
-                jvm.store_array(
-                    &mut data,
-                    0,
-                    gif.iter()
-                        .map(|&value| value as i8)
-                        .collect::<Vec<_>>(),
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "org/kwis/msp/lcdui/Image",
+                    "createImage",
+                    "([BIIII)Lorg/kwis/msp/lcdui/Image;",
+                    (data, 0, gif.len() as i32, 2, 3),
                 )
                 .await?;
 
-                let image: ClassInstanceRef<Image> = jvm
-                    .invoke_static(
-                        "org/kwis/msp/lcdui/Image",
-                        "createImage",
-                        "([BIIII)Lorg/kwis/msp/lcdui/Image;",
-                        (data, 0, gif.len() as i32, 2, 3),
-                    )
-                    .await?;
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&image, "getWidth", "()I", ()).await?, 2);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&image, "getHeight", "()I", ()).await?, 3);
+            assert!(jvm.invoke_virtual::<_, bool>(&image, "isAnimated", "()Z", ()).await?);
 
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&image, "getWidth", "()I", ())
-                        .await?,
-                    2
-                );
-                assert_eq!(
-                    jvm.invoke_virtual::<_, i32>(&image, "getHeight", "()I", ())
-                        .await?,
-                    3
-                );
-                assert!(
-                    jvm.invoke_virtual::<_, bool>(&image, "isAnimated", "()Z", ())
-                        .await?
-                );
+            let frame_count: i32 = jvm.get_field(&image, "frameCount", "I").await?;
+            assert_eq!(frame_count, 2);
 
-                let frame_count: i32 =
-                    jvm.get_field(&image, "frameCount", "I").await?;
-                assert_eq!(frame_count, 2);
+            let frames: ClassInstanceRef<Array<ClassInstanceRef<MidpImage>>> =
+                jvm.get_field(&image, "animationFrames", "[Ljavax/microedition/lcdui/Image;").await?;
 
-                let frames: ClassInstanceRef<
-                    Array<ClassInstanceRef<MidpImage>>
-                > = jvm
-                    .get_field(
-                        &image,
-                        "animationFrames",
-                        "[Ljavax/microedition/lcdui/Image;",
-                    )
-                    .await?;
+            let frame_values: Vec<ClassInstanceRef<MidpImage>> = jvm.load_array(&frames, 0, 2).await?;
 
-                let frame_values: Vec<ClassInstanceRef<MidpImage>> =
-                    jvm.load_array(&frames, 0, 2).await?;
+            for frame in frame_values {
+                let backend = MidpImage::image(&jvm, &frame).await?;
+                assert_eq!(backend.width(), 2);
+                assert_eq!(backend.height(), 3);
+            }
 
-                for frame in frame_values {
-                    let backend = MidpImage::image(&jvm, &frame).await?;
-                    assert_eq!(backend.width(), 2);
-                    assert_eq!(backend.height(), 3);
-                }
+            let delays: ClassInstanceRef<Array<i32>> = jvm.get_field(&image, "animationDelays", "[I").await?;
+            let delay_values: Vec<i32> = jvm.load_array(&delays, 0, 2).await?;
+            assert_eq!(delay_values, [20, 40]);
 
-                let delays: ClassInstanceRef<Array<i32>> =
-                    jvm.get_field(&image, "animationDelays", "[I").await?;
-                let delay_values: Vec<i32> =
-                    jvm.load_array(&delays, 0, 2).await?;
-                assert_eq!(delay_values, [20, 40]);
-
-                Ok(())
-            },
-        )
+            Ok(())
+        })
     }
-
 }

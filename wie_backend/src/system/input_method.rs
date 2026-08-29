@@ -117,14 +117,62 @@ impl InputMethod {
         let chars: &[u8] = match key {
             48 => b".,?!",
             49 => b"@:/",
-            50 => if upper { b"ABC" } else { b"abc" },
-            51 => if upper { b"DEF" } else { b"def" },
-            52 => if upper { b"GHI" } else { b"ghi" },
-            53 => if upper { b"JKL" } else { b"jkl" },
-            54 => if upper { b"MNO" } else { b"mno" },
-            55 => if upper { b"PQRS" } else { b"pqrs" },
-            56 => if upper { b"TUV" } else { b"tuv" },
-            57 => if upper { b"WXYZ" } else { b"wxyz" },
+            50 => {
+                if upper {
+                    b"ABC"
+                } else {
+                    b"abc"
+                }
+            }
+            51 => {
+                if upper {
+                    b"DEF"
+                } else {
+                    b"def"
+                }
+            }
+            52 => {
+                if upper {
+                    b"GHI"
+                } else {
+                    b"ghi"
+                }
+            }
+            53 => {
+                if upper {
+                    b"JKL"
+                } else {
+                    b"jkl"
+                }
+            }
+            54 => {
+                if upper {
+                    b"MNO"
+                } else {
+                    b"mno"
+                }
+            }
+            55 => {
+                if upper {
+                    b"PQRS"
+                } else {
+                    b"pqrs"
+                }
+            }
+            56 => {
+                if upper {
+                    b"TUV"
+                } else {
+                    b"tuv"
+                }
+            }
+            57 => {
+                if upper {
+                    b"WXYZ"
+                } else {
+                    b"wxyz"
+                }
+            }
             42 => b"*",
             35 => b"#",
             _ => return InputMethodOutput::default(),
@@ -396,16 +444,16 @@ impl InputMethod {
 
     fn initial_korean_scan(key: i8) -> Option<u8> {
         match key {
-            49 => Some(2),   // 1 -> ㄱ
-            50 => Some(4),   // 2 -> ㄴ
-            51 => Some(21),  // 3 -> ㅏ-series
-            52 => Some(7),   // 4 -> ㄹ
-            53 => Some(8),   // 5 -> ㅁ
-            54 => Some(23),  // 6 -> ㅗ-series
-            55 => Some(11),  // 7 -> ㅅ
-            56 => Some(13),  // 8 -> ㅇ
-            57 => Some(25),  // 9 -> ㅡ-series
-            48 => Some(26),  // 0 -> ㅣ
+            49 => Some(2),  // 1 -> ㄱ
+            50 => Some(4),  // 2 -> ㄴ
+            51 => Some(21), // 3 -> ㅏ-series
+            52 => Some(7),  // 4 -> ㄹ
+            53 => Some(8),  // 5 -> ㅁ
+            54 => Some(23), // 6 -> ㅗ-series
+            55 => Some(11), // 7 -> ㅅ
+            56 => Some(13), // 8 -> ㅇ
+            57 => Some(25), // 9 -> ㅡ-series
+            48 => Some(26), // 0 -> ㅣ
             _ => None,
         }
     }
@@ -515,20 +563,14 @@ impl InputMethod {
 
     fn current_korean_char(&self) -> Option<char> {
         match (self.ko_cho, self.ko_jung) {
-            (Some(cho), Some(jung)) => {
-                Self::compose_korean_syllable(cho, jung, self.ko_jong.unwrap_or(1))
-            }
+            (Some(cho), Some(jung)) => Self::compose_korean_syllable(cho, jung, self.ko_jong.unwrap_or(1)),
             (Some(cho), None) => Self::korean_cho_char(cho),
             (None, Some(jung)) => Self::korean_jung_char(jung),
             (None, None) => None,
         }
     }
 
-    fn put_korean_char(
-        output: &mut [u8; 8],
-        output_len: &mut usize,
-        ch: char,
-    ) -> bool {
+    fn put_korean_char(output: &mut [u8; 8], output_len: &mut usize, ch: char) -> bool {
         let Some((bytes, len)) = Self::encode_korean_char(ch) else {
             return false;
         };
@@ -578,11 +620,7 @@ impl InputMethod {
         };
 
         if let Some(ch) = self.current_korean_char() {
-            Self::put_korean_char(
-                &mut output.output1,
-                &mut output.output1_len,
-                ch,
-            );
+            Self::put_korean_char(&mut output.output1, &mut output.output1_len, ch);
         }
 
         output
@@ -603,10 +641,7 @@ impl InputMethod {
 
     fn scan_korean_key(&mut self, key: i8) -> Option<(u8, bool)> {
         if matches!(key, 42 | 35) {
-            if key == 42
-                && self.ko_vowel_state != 0
-                && matches!(self.ko_last_key, Some(48 | 51 | 54 | 57))
-            {
+            if key == 42 && self.ko_vowel_state != 0 && matches!(self.ko_last_key, Some(48 | 51 | 54 | 57)) {
                 self.ko_last_key = Some(key);
                 return Some((27, false));
             }
@@ -668,11 +703,7 @@ impl InputMethod {
         if key == -99 {
             let mut output = InputMethodOutput::default();
             if let Some(ch) = self.current_korean_char() {
-                Self::put_korean_char(
-                    &mut output.output0,
-                    &mut output.output0_len,
-                    ch,
-                );
+                Self::put_korean_char(&mut output.output0, &mut output.output0_len, ch);
             }
             self.reset_korean_composition();
             self.ko_last_key = None;
@@ -712,11 +743,7 @@ impl InputMethod {
                 }
 
                 if let Some(ch) = self.current_korean_char() {
-                    Self::put_korean_char(
-                        &mut output.output1,
-                        &mut output.output1_len,
-                        ch,
-                    );
+                    Self::put_korean_char(&mut output.output1, &mut output.output1_len, ch);
                 }
                 self.ko_undo.push(before);
                 return output;
@@ -731,11 +758,7 @@ impl InputMethod {
                 }
                 (Some(_), None, None) => {
                     if let Some(ch) = self.current_korean_char() {
-                        Self::put_korean_char(
-                            &mut output.output0,
-                            &mut output.output0_len,
-                            ch,
-                        );
+                        Self::put_korean_char(&mut output.output0, &mut output.output0_len, ch);
                     }
                     self.reset_korean_composition();
                     self.ko_cho = Some(scan);
@@ -746,11 +769,7 @@ impl InputMethod {
                         self.ko_jong = Some(jong);
                     } else {
                         if let Some(ch) = self.current_korean_char() {
-                            Self::put_korean_char(
-                                &mut output.output0,
-                                &mut output.output0_len,
-                                ch,
-                            );
+                            Self::put_korean_char(&mut output.output0, &mut output.output0_len, ch);
                         }
                         self.reset_korean_composition();
                         self.ko_cho = Some(scan);
@@ -763,11 +782,7 @@ impl InputMethod {
                             self.ko_jong = Some(combined);
                         } else {
                             if let Some(ch) = self.current_korean_char() {
-                                Self::put_korean_char(
-                                    &mut output.output0,
-                                    &mut output.output0_len,
-                                    ch,
-                                );
+                                Self::put_korean_char(&mut output.output0, &mut output.output0_len, ch);
                             }
                             self.reset_korean_composition();
                             self.ko_cho = Some(scan);
@@ -775,11 +790,7 @@ impl InputMethod {
                         }
                     } else {
                         if let Some(ch) = self.current_korean_char() {
-                            Self::put_korean_char(
-                                &mut output.output0,
-                                &mut output.output0_len,
-                                ch,
-                            );
+                            Self::put_korean_char(&mut output.output0, &mut output.output0_len, ch);
                         }
                         self.reset_korean_composition();
                         self.ko_cho = Some(scan);
@@ -794,11 +805,7 @@ impl InputMethod {
             }
 
             if let Some(ch) = self.current_korean_char() {
-                Self::put_korean_char(
-                    &mut output.output1,
-                    &mut output.output1_len,
-                    ch,
-                );
+                Self::put_korean_char(&mut output.output1, &mut output.output1_len, ch);
             }
 
             if output.output0_len != 0 {
@@ -823,14 +830,8 @@ impl InputMethod {
             };
 
             if let Some((first, second)) = Self::split_korean_jong(jong) {
-                if let Some(committed) =
-                    Self::compose_korean_syllable(old_cho, old_jung, first)
-                {
-                    Self::put_korean_char(
-                        &mut output.output0,
-                        &mut output.output0_len,
-                        committed,
-                    );
+                if let Some(committed) = Self::compose_korean_syllable(old_cho, old_jung, first) {
+                    Self::put_korean_char(&mut output.output0, &mut output.output0_len, committed);
                 }
 
                 self.reset_korean_composition();
@@ -840,14 +841,8 @@ impl InputMethod {
                 commit_baseline.last_key = before.last_key;
                 commit_baseline.vowel_toggle = before.vowel_toggle;
             } else {
-                if let Some(committed) =
-                    Self::compose_korean_syllable(old_cho, old_jung, 1)
-                {
-                    Self::put_korean_char(
-                        &mut output.output0,
-                        &mut output.output0_len,
-                        committed,
-                    );
+                if let Some(committed) = Self::compose_korean_syllable(old_cho, old_jung, 1) {
+                    Self::put_korean_char(&mut output.output0, &mut output.output0_len, committed);
                 }
 
                 self.reset_korean_composition();
@@ -862,18 +857,12 @@ impl InputMethod {
                 return output;
             }
         } else if self.ko_jung.is_some() {
-            if let Some((state, _)) =
-                Self::korean_vowel_transition(self.ko_vowel_state, scan)
-            {
+            if let Some((state, _)) = Self::korean_vowel_transition(self.ko_vowel_state, scan) {
                 self.ko_vowel_state = state;
                 self.ko_jung = Self::korean_vowel_jung(state);
             } else {
                 if let Some(ch) = self.current_korean_char() {
-                    Self::put_korean_char(
-                        &mut output.output0,
-                        &mut output.output0_len,
-                        ch,
-                    );
+                    Self::put_korean_char(&mut output.output0, &mut output.output0_len, ch);
                 }
 
                 self.reset_korean_composition();
@@ -886,11 +875,7 @@ impl InputMethod {
         }
 
         if let Some(ch) = self.current_korean_char() {
-            Self::put_korean_char(
-                &mut output.output1,
-                &mut output.output1_len,
-                ch,
-            );
+            Self::put_korean_char(&mut output.output1, &mut output.output1_len, ch);
         }
 
         if output.output0_len != 0 {
@@ -984,7 +969,6 @@ mod english_tests {
         assert_eq!(&upper.output1[..upper.output1_len], b"P");
     }
 }
-
 
 #[cfg(test)]
 mod korean_input_tests {
@@ -1131,9 +1115,22 @@ mod korean_scan_tests {
     #[test]
     fn korean_jong_to_cho_matches_native_conversion() {
         let expected = [
-            (2, 2), (3, 3), (5, 4), (8, 5), (9, 7), (17, 8), (19, 9),
-            (21, 11), (22, 12), (23, 13), (24, 14), (25, 16), (26, 17),
-            (27, 18), (28, 19), (29, 20),
+            (2, 2),
+            (3, 3),
+            (5, 4),
+            (8, 5),
+            (9, 7),
+            (17, 8),
+            (19, 9),
+            (21, 11),
+            (22, 12),
+            (23, 13),
+            (24, 14),
+            (25, 16),
+            (26, 17),
+            (27, 18),
+            (28, 19),
+            (29, 20),
         ];
 
         for (jong, cho) in expected {
@@ -1173,9 +1170,22 @@ mod korean_scan_tests {
     #[test]
     fn korean_consonant_scans_match_native_jong_codes() {
         let expected = [
-            (2, 2), (3, 3), (4, 5), (5, 8), (7, 9), (8, 17), (9, 19),
-            (11, 21), (12, 22), (13, 23), (14, 24), (16, 25), (17, 26),
-            (18, 27), (19, 28), (20, 29),
+            (2, 2),
+            (3, 3),
+            (4, 5),
+            (5, 8),
+            (7, 9),
+            (8, 17),
+            (9, 19),
+            (11, 21),
+            (12, 22),
+            (13, 23),
+            (14, 24),
+            (16, 25),
+            (17, 26),
+            (18, 27),
+            (19, 28),
+            (20, 29),
         ];
 
         for (scan, jong) in expected {
@@ -1190,10 +1200,27 @@ mod korean_scan_tests {
     #[test]
     fn korean_vowel_states_match_native_jung_codes() {
         let expected = [
-            (1, 3), (2, 5), (3, 6), (4, 4), (5, 7), (6, 11), (7, 12),
-            (8, 10), (9, 13), (10, 19), (11, 18), (12, 14), (13, 15),
-            (14, 20), (15, 26), (16, 21), (17, 22), (18, 23), (19, 27),
-            (20, 28), (21, 29),
+            (1, 3),
+            (2, 5),
+            (3, 6),
+            (4, 4),
+            (5, 7),
+            (6, 11),
+            (7, 12),
+            (8, 10),
+            (9, 13),
+            (10, 19),
+            (11, 18),
+            (12, 14),
+            (13, 15),
+            (14, 20),
+            (15, 26),
+            (16, 21),
+            (17, 22),
+            (18, 23),
+            (19, 27),
+            (20, 28),
+            (21, 29),
         ];
 
         for (state, jung) in expected {

@@ -5,7 +5,7 @@ mod context;
 use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use jvm_rust::ClassDefinitionImpl;
 use wipi_types::lgt::CletFunctions;
-use wipi_types::wipic::WIPICIndirectPtr;
+use wipi_types::wipic::{WIPICFramebuffer, WIPICIndirectPtr};
 
 use wie_backend::System;
 use wie_core_arm::{ArmCore, EmulatedFunction, EmulatedFunctionParam, ResultWriter, SvcId};
@@ -23,6 +23,43 @@ use crate::runtime::{SVC_CATEGORY_WIPIC, svc_ids::WIPICSvcId};
 
 const TIME_VALUE_PTR: u32 = 0x7fff1004;
 const IME_SUPPORTED_MODES_PTR: u32 = 0x7fff1008;
+
+/// Per-WIPI-C-function call counts (indexed by the raw svc id), so the perf
+/// meter can name which API dominates the ~half-million calls per second.
+const WIPIC_ID_MAX: usize = 0x600;
+pub(crate) static WIPIC_SVC_COUNT: [core::sync::atomic::AtomicU64; WIPIC_ID_MAX] = [const { core::sync::atomic::AtomicU64::new(0) }; WIPIC_ID_MAX];
+
+/// Log the top WIPI-C functions by call rate (names via `WIPICSvcId`), draining
+/// the counters. Identifies the exact hot syscall behind the frame cost.
+pub(crate) fn report_hot_wipic(dt_ms: u64) {
+    use core::fmt::Write;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let mut top: [(usize, u64); 6] = [(0, 0); 6];
+    for (id, slot) in WIPIC_SVC_COUNT.iter().enumerate() {
+        let count = slot.swap(0, Relaxed);
+        if count > top[5].1 {
+            top[5] = (id, count);
+            top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        }
+    }
+    if top[0].1 == 0 {
+        return;
+    }
+    let mut line = alloc::string::String::from("[wipic]");
+    for (id, count) in top.iter().filter(|(_, c)| *c > 0) {
+        let per_s = *count as f64 * 1000.0 / dt_ms as f64;
+        match WIPICSvcId::try_from(SvcId(*id as u32)) {
+            Ok(name) => {
+                let _ = write!(line, " {name:?}({id:#x})={per_s:.0}/s");
+            }
+            Err(_) => {
+                let _ = write!(line, " {id:#x}={per_s:.0}/s");
+            }
+        }
+    }
+    tracing::info!("{line}");
+}
 
 struct WIPICMethodResult {
     result: WIPICResult,
@@ -53,6 +90,38 @@ async fn handle_wipic_svc(
     ),
     id: SvcId,
 ) -> Result<()> {
+    WIPIC_SVC_COUNT[(id.0 as usize).min(WIPIC_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let (_, lr) = core.read_pc_lr()?;
+
+    // Fast path for the two getters that dominate software-rendering loops
+    // (hundreds of thousands of calls per second, together ~all WIPI-C traffic).
+    // They do almost no work, so skip the context construction, method boxing,
+    // argument-slice allocation and async dispatch that cost far more than the
+    // call itself.
+    const ID_GET_FRAMEBUFFER_POINTER: u32 = WIPICSvcId::GetFramebufferPointer as u32;
+    const ID_GET_IMAGE_FRAMEBUFFER: u32 = WIPICSvcId::GetImageFramebuffer as u32;
+    match id.0 {
+        ID_GET_FRAMEBUFFER_POINTER => {
+            // MC_grpGetFrameBufferPointer: return WIPICFramebuffer.buf. The handle
+            // is the struct's guest address (data_ptr is identity); read the struct
+            // and return `buf`, exactly as the generic handler does.
+            let handle = core.read_param(0)?;
+            let framebuffer: WIPICFramebuffer = read_generic(core, handle)?;
+            core.write_return_value(&[framebuffer.buf.0])?;
+            core.set_next_pc(lr)?;
+            return Ok(());
+        }
+        ID_GET_IMAGE_FRAMEBUFFER => {
+            // MC_grpGetImageFrameBuffer: WIPICImage begins with its framebuffer, so
+            // the image handle doubles as a framebuffer handle — return it as is.
+            let arg = core.read_param(0)?;
+            core.write_return_value(&[arg])?;
+            core.set_next_pc(lr)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let wipic_context = LgtWIPICContext::new(
         core.clone(),
         system.clone(),
@@ -61,7 +130,6 @@ async fn handle_wipic_svc(
         serial_state.clone(),
         filesystem_state.clone(),
     );
-    let (_, lr) = core.read_pc_lr()?;
     // An unimplemented WIPI-C function is reported and skipped rather than
     // ending the run. Stopping on the first one hides everything a title does
     // afterwards, and the calls that turn up are usually peripheral - Xenogia
@@ -333,7 +401,13 @@ pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm
     core.register_svc_handler(
         SVC_CATEGORY_WIPIC,
         handle_wipic_svc,
-        &(system.clone(), jvm.clone(), net::new_state(), serial::new_state(), filesystem::new_state()),
+        &(
+            system.clone(),
+            jvm.clone(),
+            net::new_state(),
+            serial::new_state(),
+            filesystem::new_state(),
+        ),
     )
 }
 
@@ -439,11 +513,7 @@ async fn im_get_supported_modes(context: &mut dyn WIPICContext, a0: u32, a1: u32
     const N123: &[u8] = b"N123";
     const KO: &[u8] = b"KO";
 
-    let total_size = TABLE_SIZE
-        + (EN_S.len() + 1) as u32
-        + (EN_L.len() + 1) as u32
-        + (N123.len() + 1) as u32
-        + (KO.len() + 1) as u32;
+    let total_size = TABLE_SIZE + (EN_S.len() + 1) as u32 + (EN_L.len() + 1) as u32 + (N123.len() + 1) as u32 + (KO.len() + 1) as u32;
 
     let memory = context.alloc(total_size)?;
     let table = context.data_ptr(memory)?;
@@ -487,13 +557,7 @@ async fn unk5(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
 /// LGTH_fileTotalSpace / AND_fileTotalSpace compute `f_bsize * f_blocks`.
 /// The native common helper saturates values above signed 32-bit range to
 /// `INT_MAX`; a dfs_df failure becomes `-1`.
-async fn fs_total_space(
-    context: &mut dyn WIPICContext,
-    _a0: u32,
-    _a1: u32,
-    _a2: u32,
-    _a3: u32,
-) -> Result<u32> {
+async fn fs_total_space(context: &mut dyn WIPICContext, _a0: u32, _a1: u32, _a2: u32, _a3: u32) -> Result<u32> {
     let Some(total) = context.system().filesystem().total_space().await else {
         tracing::debug!("MC_fsTotalSpace() -> -1");
         return Ok(u32::MAX);
@@ -526,10 +590,7 @@ fn is_native_fs_space_ex_access(access: i32) -> bool {
 /// WIE exposes one logical backing filesystem rather than the native physical
 /// mount/device split, so every valid native access selector maps to that same
 /// backing filesystem capacity.
-async fn fs_total_space_ex(
-    context: &mut dyn WIPICContext,
-    access: i32,
-) -> Result<u32> {
+async fn fs_total_space_ex(context: &mut dyn WIPICContext, access: i32) -> Result<u32> {
     if !is_native_fs_space_ex_access(access) {
         tracing::debug!("MC_fsTotalSpaceEx({access}) -> -24");
         return Ok((-24i32) as u32);
@@ -556,10 +617,7 @@ async fn fs_total_space_ex(
 /// WIE exposes one logical backing filesystem rather than the native physical
 /// mount/device split, so every valid native access selector maps to that same
 /// backing filesystem's available capacity.
-async fn fs_available_ex(
-    context: &mut dyn WIPICContext,
-    access: i32,
-) -> Result<u32> {
+async fn fs_available_ex(context: &mut dyn WIPICContext, access: i32) -> Result<u32> {
     if !is_native_fs_space_ex_access(access) {
         tracing::debug!("MC_fsAvailableEx({access}) -> -24");
         return Ok((-24i32) as u32);
@@ -586,13 +644,7 @@ async fn fs_available_ex(
 /// LGTH_fileAvailable / AND_fileAvailable compute `f_bsize * f_bavail`.
 /// The native common helper saturates values above signed 32-bit range to
 /// `INT_MAX`; a dfs_df failure becomes `-1`.
-async fn fs_available(
-    context: &mut dyn WIPICContext,
-    _a0: u32,
-    _a1: u32,
-    _a2: u32,
-    _a3: u32,
-) -> Result<u32> {
+async fn fs_available(context: &mut dyn WIPICContext, _a0: u32, _a1: u32, _a2: u32, _a3: u32) -> Result<u32> {
     let Some(available) = context.system().filesystem().available_space().await else {
         tracing::debug!("MC_fsAvailable() -> -1");
         return Ok(u32::MAX);
@@ -625,18 +677,11 @@ fn im_provider_key(key: u32) -> i8 {
 
     let normalized = if signed == -3 {
         -16i32
-    } else if signed == 42
-        || signed == 35
-        || (48..=57).contains(&signed)
-    {
+    } else if signed == 42 || signed == 35 || (48..=57).contains(&signed) {
         signed
     } else {
         let range_value = key.wrapping_sub(32);
-        if range_value > 65_499 {
-            -99
-        } else {
-            signed
-        }
+        if range_value > 65_499 { -99 } else { signed }
     };
 
     normalized as u8 as i8
@@ -657,9 +702,7 @@ async fn im_handle_input(
     output1: u32,
     output1_len: u32,
 ) -> Result<u32> {
-    tracing::debug!(
-        "MC_imHandleInput({key:#x}, {event:#x}, {output0:#x}, {output0_len:#x}, {output1:#x}, {output1_len:#x})"
-    );
+    tracing::debug!("MC_imHandleInput({key:#x}, {event:#x}, {output0:#x}, {output0_len:#x}, {output1:#x}, {output1_len:#x})");
 
     let provider_event = match event {
         502 => 2,
@@ -672,9 +715,7 @@ async fn im_handle_input(
     context.write_bytes(output1, &[0])?;
     write_generic(context, output1_len, 0u32)?;
 
-    let output = context
-        .system()
-        .handle_input_method(im_provider_key(key), provider_event);
+    let output = context.system().handle_input_method(im_provider_key(key), provider_event);
 
     if output.output0_len != 0 {
         context.write_bytes(output0, &output.output0[..output.output0_len])?;

@@ -1,16 +1,11 @@
 use alloc::vec;
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use jvm::{
-    runtime::JavaLangString, ClassInstanceRef, Jvm, Result as JvmResult,
-};
+use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
-use crate::classes::org::kwis::msp::{
-    lcdui::Display,
-    lwc::AnnunciatorComponent,
-};
+use crate::classes::org::kwis::msp::{lcdui::Display, lwc::AnnunciatorComponent};
 
 // class org.kwis.msp.lwc.AnnunciatorComponent$AnnunciatorEventListener
 pub struct AnnunciatorComponentEventListener;
@@ -22,32 +17,20 @@ impl AnnunciatorComponentEventListener {
             parent_class: Some("java/lang/Object"),
             interfaces: vec!["org/kwis/msp/lcdui/JletEventListener"],
             methods: vec![
-                JavaMethodProto::new(
-                    "<init>",
-                    "(Lorg/kwis/msp/lwc/AnnunciatorComponent;)V",
-                    Self::init,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("<init>", "(Lorg/kwis/msp/lwc/AnnunciatorComponent;)V", Self::init, Default::default()),
                 JavaMethodProto::new(
                     "<init>",
                     "(Lorg/kwis/msp/lwc/AnnunciatorComponent;Lorg/kwis/msp/lwc/AnnunciatorComponent$1;)V",
                     Self::init_synthetic,
                     Default::default(),
                 ),
-                JavaMethodProto::new(
-                    "notifyEvent",
-                    "(III)V",
-                    Self::notify_event,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("notifyEvent", "(III)V", Self::notify_event, Default::default()),
             ],
-            fields: vec![
-                JavaFieldProto::new(
-                    "__wieOuter",
-                    "Lorg/kwis/msp/lwc/AnnunciatorComponent;",
-                    Default::default(),
-                ),
-            ],
+            fields: vec![JavaFieldProto::new(
+                "__wieOuter",
+                "Lorg/kwis/msp/lwc/AnnunciatorComponent;",
+                Default::default(),
+            )],
             access_flags: Default::default(),
         }
     }
@@ -59,13 +42,8 @@ impl AnnunciatorComponentEventListener {
         outer: ClassInstanceRef<AnnunciatorComponent>,
     ) -> JvmResult<()> {
         // Native private ctor @ 0x20f504 stores the synthetic outer reference.
-        jvm.put_field(
-            &mut this,
-            "__wieOuter",
-            "Lorg/kwis/msp/lwc/AnnunciatorComponent;",
-            outer,
-        )
-        .await?;
+        jvm.put_field(&mut this, "__wieOuter", "Lorg/kwis/msp/lwc/AnnunciatorComponent;", outer)
+            .await?;
 
         Ok(())
     }
@@ -104,14 +82,7 @@ impl AnnunciatorComponentEventListener {
             return Ok(());
         }
 
-        let activated_index: i32 = jvm
-            .invoke_static(
-                "org/kwis/msp/lcdui/Display",
-                "getActivatedIndex",
-                "()I",
-                (),
-            )
-            .await?;
+        let activated_index: i32 = jvm.invoke_static("org/kwis/msp/lcdui/Display", "getActivatedIndex", "()I", ()).await?;
 
         let selected_display: ClassInstanceRef<Display> = if activated_index == 3 {
             let rotated = JavaLangString::from_rust_string(jvm, "rotated").await?;
@@ -124,53 +95,26 @@ impl AnnunciatorComponentEventListener {
             )
             .await?
         } else {
-            jvm.invoke_static(
-                "org/kwis/msp/lcdui/Display",
-                "getDefaultDisplay",
-                "()Lorg/kwis/msp/lcdui/Display;",
-                (),
-            )
-            .await?
+            jvm.invoke_static("org/kwis/msp/lcdui/Display", "getDefaultDisplay", "()Lorg/kwis/msp/lcdui/Display;", ())
+                .await?
         };
 
-        let outer: ClassInstanceRef<AnnunciatorComponent> = jvm
-            .get_field(
-                &this,
-                "__wieOuter",
-                "Lorg/kwis/msp/lwc/AnnunciatorComponent;",
-            )
-            .await?;
+        let outer: ClassInstanceRef<AnnunciatorComponent> = jvm.get_field(&this, "__wieOuter", "Lorg/kwis/msp/lwc/AnnunciatorComponent;").await?;
 
         if outer.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
         }
 
-        let outer_display: ClassInstanceRef<Display> = jvm
-            .get_field(
-                &outer,
-                "display",
-                "Lorg/kwis/msp/lcdui/Display;",
-            )
-            .await?;
+        let outer_display: ClassInstanceRef<Display> = jvm.get_field(&outer, "display", "Lorg/kwis/msp/lcdui/Display;").await?;
 
         // Native compares the two object pointers directly.
-        if selected_display.is_null()
-            || outer_display.is_null()
-            || selected_display.identity() != outer_display.identity()
-        {
+        if selected_display.is_null() || outer_display.is_null() || selected_display.identity() != outer_display.identity() {
             return Ok(());
         }
 
-        let _: () = jvm
-            .invoke_virtual(&outer, "repaint", "()V", ())
-            .await?;
+        let _: () = jvm.invoke_virtual(&outer, "repaint", "()V", ()).await?;
 
-        let _: () = jvm
-            .invoke_virtual(&outer, "serviceRepaints", "()V", ())
-            .await?;
+        let _: () = jvm.invoke_virtual(&outer, "serviceRepaints", "()V", ()).await?;
 
         Ok(())
     }

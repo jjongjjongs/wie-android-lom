@@ -21,30 +21,10 @@ impl Component {
                 JavaMethodProto::new("getHeight", "()I", Self::get_height, Default::default()),
                 JavaMethodProto::new("getXOnScreen", "()I", Self::get_x_on_screen, Default::default()),
                 JavaMethodProto::new("getYOnScreen", "()I", Self::get_y_on_screen, Default::default()),
-                JavaMethodProto::new(
-                    "getPreferredWidth",
-                    "()I",
-                    Self::get_preferred_width,
-                    Default::default(),
-                ),
-                JavaMethodProto::new(
-                    "getPreferredHeight",
-                    "(I)I",
-                    Self::get_preferred_height_with_width,
-                    Default::default(),
-                ),
-                JavaMethodProto::new(
-                    "getPreferredHeight",
-                    "()I",
-                    Self::get_preferred_height,
-                    Default::default(),
-                ),
-                JavaMethodProto::new(
-                    "calcPreferredSize",
-                    "(I)V",
-                    Self::calc_preferred_size,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("getPreferredWidth", "()I", Self::get_preferred_width, Default::default()),
+                JavaMethodProto::new("getPreferredHeight", "(I)I", Self::get_preferred_height_with_width, Default::default()),
+                JavaMethodProto::new("getPreferredHeight", "()I", Self::get_preferred_height, Default::default()),
+                JavaMethodProto::new("calcPreferredSize", "(I)V", Self::calc_preferred_size, Default::default()),
                 JavaMethodProto::new("canHandleInput", "()Z", Self::can_handle_input, Default::default()),
                 JavaMethodProto::new("hasFocus", "()Z", Self::has_focus, Default::default()),
                 JavaMethodProto::new("setBackground", "(I)V", Self::set_background, Default::default()),
@@ -66,28 +46,13 @@ impl Component {
                 JavaMethodProto::new("layout", "()V", Self::layout, Default::default()),
                 JavaMethodProto::new("validate", "()V", Self::validate, Default::default()),
                 JavaMethodProto::new("setFocus", "()V", Self::set_focus, Default::default()),
-                JavaMethodProto::new(
-                    "getCard",
-                    "()Lorg/kwis/msp/lcdui/Card;",
-                    Self::get_card,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("getCard", "()Lorg/kwis/msp/lcdui/Card;", Self::get_card, Default::default()),
                 JavaMethodProto::new("isValid", "()Z", Self::is_valid, Default::default()),
                 JavaMethodProto::new("invalidate", "()V", Self::invalidate, Default::default()),
                 JavaMethodProto::new("isShown", "()Z", Self::is_shown, Default::default()),
                 JavaMethodProto::new("repaint", "()V", Self::repaint, Default::default()),
-                JavaMethodProto::new(
-                    "repaint",
-                    "(IIII)V",
-                    Self::repaint_with_area,
-                    Default::default(),
-                ),
-                JavaMethodProto::new(
-                    "serviceRepaints",
-                    "()V",
-                    Self::service_repaints,
-                    Default::default(),
-                ),
+                JavaMethodProto::new("repaint", "(IIII)V", Self::repaint_with_area, Default::default()),
+                JavaMethodProto::new("serviceRepaints", "()V", Self::service_repaints, Default::default()),
             ],
             // The real Component is a state-bearing class: position, size,
             // colours, parent, event listener, preferred size and a status mask.
@@ -158,22 +123,13 @@ impl Component {
         Ok(())
     }
 
-
-    async fn layout(
-        _: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<()> {
+    async fn layout(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
         // Native Component.layout() is the default no-op.
         tracing::debug!("org.kwis.msp.lwc.Component::layout({this:?})");
         Ok(())
     }
 
-    async fn validate(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<()> {
+    async fn validate(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
         // WipiPlayer Plus Component.validate():
         //   if (!(mask & VALID)) {
         //       layout();
@@ -247,63 +203,33 @@ impl Component {
     async fn set_focus(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lwc.Component::setFocus({this:?})");
 
-        let parent: ClassInstanceRef<()> =
-            jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
+        let parent: ClassInstanceRef<()> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         if !parent.is_null() {
             let _: () = jvm
-                .invoke_virtual(
-                    &parent,
-                    "setFocus",
-                    "(Lorg/kwis/msp/lwc/Component;)V",
-                    (this,),
-                )
+                .invoke_virtual(&parent, "setFocus", "(Lorg/kwis/msp/lwc/Component;)V", (this,))
                 .await?;
         }
 
         Ok(())
     }
 
-    async fn get_card(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<ClassInstanceRef<()>> {
-        let parent: ClassInstanceRef<()> = jvm
-            .get_field(
-                &this,
-                "parent",
-                "Lorg/kwis/msp/lwc/ContainerComponent;",
-            )
-            .await?;
+    async fn get_card(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<ClassInstanceRef<()>> {
+        let parent: ClassInstanceRef<()> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         if parent.is_null() {
             return Ok(ClassInstanceRef::new(None));
         }
 
-        jvm.invoke_virtual(
-            &parent,
-            "getCard",
-            "()Lorg/kwis/msp/lcdui/Card;",
-            (),
-        )
-        .await
+        jvm.invoke_virtual(&parent, "getCard", "()Lorg/kwis/msp/lcdui/Card;", ()).await
     }
 
-    async fn is_valid(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<bool> {
+    async fn is_valid(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<bool> {
         let mask: i32 = jvm.get_field(&this, "mask", "I").await?;
         Ok(mask & 0x1 != 0)
     }
 
-    async fn invalidate(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Self>,
-    ) -> JvmResult<()> {
+    async fn invalidate(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> JvmResult<()> {
         jvm.put_field(&mut this, "prefW", "I", -1).await?;
         jvm.put_field(&mut this, "prefH", "I", -1).await?;
 
@@ -311,56 +237,30 @@ impl Component {
         mask &= !0x1;
         jvm.put_field(&mut this, "mask", "I", mask).await?;
 
-        let parent: ClassInstanceRef<()> = jvm
-            .get_field(
-                &this,
-                "parent",
-                "Lorg/kwis/msp/lwc/ContainerComponent;",
-            )
-            .await?;
+        let parent: ClassInstanceRef<()> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         if parent.is_null() {
             return Ok(());
         }
 
-        let parent_valid: bool = jvm
-            .invoke_virtual(&parent, "isValid", "()Z", ())
-            .await?;
+        let parent_valid: bool = jvm.invoke_virtual(&parent, "isValid", "()Z", ()).await?;
 
         if parent_valid {
-            let _: () = jvm
-                .invoke_virtual(&parent, "invalidate", "()V", ())
-                .await?;
+            let _: () = jvm.invoke_virtual(&parent, "invalidate", "()V", ()).await?;
         }
 
         Ok(())
     }
 
-    async fn is_shown(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<bool> {
-        let mut current: ClassInstanceRef<()> = jvm
-            .get_field(
-                &this,
-                "parent",
-                "Lorg/kwis/msp/lwc/ContainerComponent;",
-            )
-            .await?;
+    async fn is_shown(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<bool> {
+        let mut current: ClassInstanceRef<()> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         if current.is_null() {
             return Ok(false);
         }
 
         loop {
-            let parent: ClassInstanceRef<()> = jvm
-                .get_field(
-                    &current,
-                    "parent",
-                    "Lorg/kwis/msp/lwc/ContainerComponent;",
-                )
-                .await?;
+            let parent: ClassInstanceRef<()> = jvm.get_field(&current, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
             if parent.is_null() {
                 break;
@@ -369,86 +269,41 @@ impl Component {
             current = parent;
         }
 
-        jvm.invoke_virtual(
-            &current,
-            "isShown",
-            "()Z",
-            (),
-        )
-        .await
+        jvm.invoke_virtual(&current, "isShown", "()Z", ()).await
     }
 
-    async fn get_preferred_width(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
+    async fn get_preferred_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         let pref_w: i32 = jvm.get_field(&this, "prefW", "I").await?;
 
         if pref_w < 0 {
-            let _: () = jvm
-                .invoke_virtual(
-                    &this,
-                    "calcPreferredSize",
-                    "(I)V",
-                    (-1,),
-                )
-                .await?;
+            let _: () = jvm.invoke_virtual(&this, "calcPreferredSize", "(I)V", (-1,)).await?;
         }
 
         jvm.get_field(&this, "prefW", "I").await
     }
 
-    async fn get_preferred_height_with_width(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-        width: i32,
-    ) -> JvmResult<i32> {
+    async fn get_preferred_height_with_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, width: i32) -> JvmResult<i32> {
         let pref_h: i32 = jvm.get_field(&this, "prefH", "I").await?;
         let pref_w: i32 = jvm.get_field(&this, "prefW", "I").await?;
 
         if pref_h < 0 || pref_w != width {
-            let _: () = jvm
-                .invoke_virtual(
-                    &this,
-                    "calcPreferredSize",
-                    "(I)V",
-                    (width,),
-                )
-                .await?;
+            let _: () = jvm.invoke_virtual(&this, "calcPreferredSize", "(I)V", (width,)).await?;
         }
 
         jvm.get_field(&this, "prefH", "I").await
     }
 
-    async fn get_preferred_height(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
+    async fn get_preferred_height(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         let pref_h: i32 = jvm.get_field(&this, "prefH", "I").await?;
 
         if pref_h < 0 {
-            let _: () = jvm
-                .invoke_virtual(
-                    &this,
-                    "calcPreferredSize",
-                    "(I)V",
-                    (-1,),
-                )
-                .await?;
+            let _: () = jvm.invoke_virtual(&this, "calcPreferredSize", "(I)V", (-1,)).await?;
         }
 
         jvm.get_field(&this, "prefH", "I").await
     }
 
-    async fn calc_preferred_size(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Self>,
-        width: i32,
-    ) -> JvmResult<()> {
+    async fn calc_preferred_size(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, width: i32) -> JvmResult<()> {
         let height: i32 = jvm.get_field(&this, "h", "I").await?;
 
         jvm.put_field(&mut this, "prefW", "I", width).await?;
@@ -461,77 +316,41 @@ impl Component {
         jvm.get_field(&this, "w", "I").await
     }
 
-    async fn get_x_on_screen(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
+    async fn get_x_on_screen(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         let mut x: i32 = jvm.invoke_virtual(&this, "getX", "()I", ()).await?;
 
-        let mut parent: ClassInstanceRef<()> = jvm
-            .get_field(
-                &this,
-                "parent",
-                "Lorg/kwis/msp/lwc/ContainerComponent;",
-            )
-            .await?;
+        let mut parent: ClassInstanceRef<()> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         while !parent.is_null() {
             let parent_x: i32 = jvm.invoke_virtual(&parent, "getX", "()I", ()).await?;
             x += parent_x;
 
-            if jvm
-                .is_instance(&**parent, "org/kwis/msp/lwc/ContainerComponent")
-            {
+            if jvm.is_instance(&**parent, "org/kwis/msp/lwc/ContainerComponent") {
                 let offset_x: i32 = jvm.get_field(&parent, "offsetX", "I").await?;
                 x += offset_x;
             }
 
-            parent = jvm
-                .get_field(
-                    &parent,
-                    "parent",
-                    "Lorg/kwis/msp/lwc/ContainerComponent;",
-                )
-                .await?;
+            parent = jvm.get_field(&parent, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
         }
 
         Ok(x)
     }
 
-    async fn get_y_on_screen(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
+    async fn get_y_on_screen(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         let mut y: i32 = jvm.invoke_virtual(&this, "getY", "()I", ()).await?;
 
-        let mut parent: ClassInstanceRef<()> = jvm
-            .get_field(
-                &this,
-                "parent",
-                "Lorg/kwis/msp/lwc/ContainerComponent;",
-            )
-            .await?;
+        let mut parent: ClassInstanceRef<()> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         while !parent.is_null() {
             let parent_y: i32 = jvm.invoke_virtual(&parent, "getY", "()I", ()).await?;
             y += parent_y;
 
-            if jvm
-                .is_instance(&**parent, "org/kwis/msp/lwc/ContainerComponent")
-            {
+            if jvm.is_instance(&**parent, "org/kwis/msp/lwc/ContainerComponent") {
                 let offset_y: i32 = jvm.get_field(&parent, "offsetY", "I").await?;
                 y += offset_y;
             }
 
-            parent = jvm
-                .get_field(
-                    &parent,
-                    "parent",
-                    "Lorg/kwis/msp/lwc/ContainerComponent;",
-                )
-                .await?;
+            parent = jvm.get_field(&parent, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
         }
 
         Ok(y)
@@ -554,63 +373,32 @@ impl Component {
         Ok(mask & 0x2 != 0)
     }
 
-    async fn set_background(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Self>,
-        value: i32,
-    ) -> JvmResult<()> {
+    async fn set_background(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, value: i32) -> JvmResult<()> {
         jvm.put_field(&mut this, "bg", "I", value).await?;
 
-        let _: () = jvm
-            .invoke_virtual(&this, "repaint", "()V", ())
-            .await?;
+        let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
 
         Ok(())
     }
 
-    async fn set_foreground(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        mut this: ClassInstanceRef<Self>,
-        value: i32,
-    ) -> JvmResult<()> {
+    async fn set_foreground(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, value: i32) -> JvmResult<()> {
         jvm.put_field(&mut this, "fg", "I", value).await?;
 
-        let _: () = jvm
-            .invoke_virtual(&this, "repaint", "()V", ())
-            .await?;
+        let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
 
         Ok(())
     }
 
-    async fn get_background(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
+    async fn get_background(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         jvm.get_field(&this, "bg", "I").await
     }
 
-    async fn get_foreground(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<i32> {
+    async fn get_foreground(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         jvm.get_field(&this, "fg", "I").await
     }
 
-    async fn pointer_notify(
-        _: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-        r#type: i32,
-        x: i32,
-        y: i32,
-    ) -> JvmResult<bool> {
-        tracing::debug!(
-            "org.kwis.msp.lwc.Component::pointerNotify({this:?}, {type:?}, {x:?}, {y:?})"
-        );
+    async fn pointer_notify(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, r#type: i32, x: i32, y: i32) -> JvmResult<bool> {
+        tracing::debug!("org.kwis.msp.lwc.Component::pointerNotify({this:?}, {type:?}, {x:?}, {y:?})");
 
         Ok(false)
     }
@@ -624,16 +412,12 @@ impl Component {
         param2: i32,
         param3: i32,
     ) -> JvmResult<bool> {
-        tracing::debug!(
-            "org.kwis.msp.lwc.Component::processEvent({this:?}, {event}, {param1}, {param2}, {param3})"
-        );
+        tracing::debug!("org.kwis.msp.lwc.Component::processEvent({this:?}, {event}, {param1}, {param2}, {param3})");
 
-        let listener: ClassInstanceRef<()> =
-            jvm.get_field(&this, "evtListener", "Lorg/kwis/msp/lwc/EventListener;").await?;
+        let listener: ClassInstanceRef<()> = jvm.get_field(&this, "evtListener", "Lorg/kwis/msp/lwc/EventListener;").await?;
 
         if !listener.is_null() {
-            let listener_obj: ClassInstanceRef<()> =
-                jvm.get_field(&this, "evtListenerObj", "Ljava/lang/Object;").await?;
+            let listener_obj: ClassInstanceRef<()> = jvm.get_field(&this, "evtListenerObj", "Ljava/lang/Object;").await?;
 
             let handled: bool = jvm
                 .invoke_virtual(
@@ -653,68 +437,32 @@ impl Component {
             1 => {
                 let focus = param2 != 0;
 
-                let _: () = jvm
-                    .invoke_virtual(&this, "focusNotify", "(Z)V", (focus,))
-                    .await?;
+                let _: () = jvm.invoke_virtual(&this, "focusNotify", "(Z)V", (focus,)).await?;
 
                 if !focus {
-                    let mut parent: ClassInstanceRef<()> = jvm
-                        .get_field(
-                            &this,
-                            "parent",
-                            "Lorg/kwis/msp/lwc/ContainerComponent;",
-                        )
-                        .await?;
+                    let mut parent: ClassInstanceRef<()> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
                     if !parent.is_null() {
                         let no_focus = ClassInstanceRef::<Component>::new(None);
-                        jvm.put_field(
-                            &mut parent,
-                            "focusComponent",
-                            "Lorg/kwis/msp/lwc/Component;",
-                            no_focus,
-                        )
-                        .await?;
+                        jvm.put_field(&mut parent, "focusComponent", "Lorg/kwis/msp/lwc/Component;", no_focus)
+                            .await?;
                     }
                 }
 
                 Ok(true)
             }
             2 => {
-                let _: () = jvm
-                    .invoke_virtual(&this, "showNotify", "(Z)V", (param2 != 0,))
-                    .await?;
+                let _: () = jvm.invoke_virtual(&this, "showNotify", "(Z)V", (param2 != 0,)).await?;
 
                 Ok(true)
             }
-            3 => {
-                jvm.invoke_virtual(
-                    &this,
-                    "keyNotify",
-                    "(II)Z",
-                    (param1, param2),
-                )
-                .await
-            }
-            4 => {
-                jvm.invoke_virtual(
-                    &this,
-                    "pointerNotify",
-                    "(III)Z",
-                    (param1, param2, param3),
-                )
-                .await
-            }
+            3 => jvm.invoke_virtual(&this, "keyNotify", "(II)Z", (param1, param2)).await,
+            4 => jvm.invoke_virtual(&this, "pointerNotify", "(III)Z", (param1, param2, param3)).await,
             _ => Ok(true),
         }
     }
 
-    async fn paint_content(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-        graphics: ClassInstanceRef<()>,
-    ) -> JvmResult<()> {
+    async fn paint_content(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, graphics: ClassInstanceRef<()>) -> JvmResult<()> {
         // WipiPlayer Plus Component.paintContent(Graphics)
         //
         // if (!isValid())
@@ -726,75 +474,40 @@ impl Component {
         // g.setColor(background);
         // g.fillRect(0, 0, width, height);
 
-        let valid: bool = jvm
-            .invoke_virtual(&this, "isValid", "()Z", ())
-            .await?;
+        let valid: bool = jvm.invoke_virtual(&this, "isValid", "()Z", ()).await?;
 
         if !valid {
-            let _: () = jvm
-                .invoke_virtual(&this, "validate", "()V", ())
-                .await?;
+            let _: () = jvm.invoke_virtual(&this, "validate", "()V", ()).await?;
         }
 
-        let background: i32 =
-            jvm.get_field(&this, "bg", "I").await?;
+        let background: i32 = jvm.get_field(&this, "bg", "I").await?;
 
         if background < 0 {
             return Ok(());
         }
 
         if graphics.is_null() {
-            return Err(
-                jvm.exception("java/lang/NullPointerException", "")
-                    .await,
-            );
+            return Err(jvm.exception("java/lang/NullPointerException", "").await);
         }
 
-        let _: () = jvm
-            .invoke_virtual(
-                &graphics,
-                "setColor",
-                "(I)V",
-                (background,),
-            )
-            .await?;
+        let _: () = jvm.invoke_virtual(&graphics, "setColor", "(I)V", (background,)).await?;
 
-        let width: i32 =
-            jvm.get_field(&this, "w", "I").await?;
-        let height: i32 =
-            jvm.get_field(&this, "h", "I").await?;
+        let width: i32 = jvm.get_field(&this, "w", "I").await?;
+        let height: i32 = jvm.get_field(&this, "h", "I").await?;
 
-        let _: () = jvm
-            .invoke_virtual(
-                &graphics,
-                "fillRect",
-                "(IIII)V",
-                (0, 0, width, height),
-            )
-            .await?;
+        let _: () = jvm.invoke_virtual(&graphics, "fillRect", "(IIII)V", (0, 0, width, height)).await?;
 
         Ok(())
     }
 
-    async fn repaint(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<()> {
+    async fn repaint(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lwc.Component::repaint({this:?})");
 
         let width: i32 = jvm.get_field(&this, "w", "I").await?;
         let height: i32 = jvm.get_field(&this, "h", "I").await?;
 
         // Equivalent to the native full-component repaint path.
-        let _: () = jvm
-            .invoke_virtual(
-                &this,
-                "repaint",
-                "(IIII)V",
-                (0, 0, width, height),
-            )
-            .await?;
+        let _: () = jvm.invoke_virtual(&this, "repaint", "(IIII)V", (0, 0, width, height)).await?;
 
         Ok(())
     }
@@ -809,21 +522,13 @@ impl Component {
         repaint_height: i32,
     ) -> JvmResult<()> {
         // Native Component.repaint(IIII)
-        let parent: ClassInstanceRef<Component> = jvm
-            .get_field(
-                &this,
-                "parent",
-                "Lorg/kwis/msp/lwc/ContainerComponent;",
-            )
-            .await?;
+        let parent: ClassInstanceRef<Component> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         if parent.is_null() {
             return Ok(());
         }
 
-        let shown: bool = jvm
-            .invoke_virtual(&this, "isShown", "()Z", ())
-            .await?;
+        let shown: bool = jvm.invoke_virtual(&this, "isShown", "()Z", ()).await?;
 
         if !shown {
             return Ok(());
@@ -832,10 +537,8 @@ impl Component {
         let this_x: i32 = jvm.get_field(&this, "x", "I").await?;
         let this_y: i32 = jvm.get_field(&this, "y", "I").await?;
 
-        let parent_offset_x: i32 =
-            jvm.get_field(&parent, "offsetX", "I").await?;
-        let parent_offset_y: i32 =
-            jvm.get_field(&parent, "offsetY", "I").await?;
+        let parent_offset_x: i32 = jvm.get_field(&parent, "offsetX", "I").await?;
+        let parent_offset_y: i32 = jvm.get_field(&parent, "offsetY", "I").await?;
 
         let mut x = parent_offset_x + this_x + repaint_x;
         let mut y = parent_offset_y + this_y + repaint_y;
@@ -846,27 +549,17 @@ impl Component {
         let mut current = parent;
 
         loop {
-            let next: ClassInstanceRef<Component> = jvm
-                .get_field(
-                    &current,
-                    "parent",
-                    "Lorg/kwis/msp/lwc/ContainerComponent;",
-                )
-                .await?;
+            let next: ClassInstanceRef<Component> = jvm.get_field(&current, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
             if next.is_null() {
                 break;
             }
 
-            let current_x: i32 =
-                jvm.get_field(&current, "x", "I").await?;
-            let current_y: i32 =
-                jvm.get_field(&current, "y", "I").await?;
+            let current_x: i32 = jvm.get_field(&current, "x", "I").await?;
+            let current_y: i32 = jvm.get_field(&current, "y", "I").await?;
 
-            let next_offset_x: i32 =
-                jvm.get_field(&next, "offsetX", "I").await?;
-            let next_offset_y: i32 =
-                jvm.get_field(&next, "offsetY", "I").await?;
+            let next_offset_x: i32 = jvm.get_field(&next, "offsetX", "I").await?;
+            let next_offset_y: i32 = jvm.get_field(&next, "offsetY", "I").await?;
 
             x += next_offset_x + current_x;
             y += next_offset_y + current_y;
@@ -875,38 +568,21 @@ impl Component {
         }
 
         let _: () = jvm
-            .invoke_virtual(
-                &current,
-                "repaint",
-                "(IIII)V",
-                (x, y, repaint_width, repaint_height),
-            )
+            .invoke_virtual(&current, "repaint", "(IIII)V", (x, y, repaint_width, repaint_height))
             .await?;
 
         Ok(())
     }
 
-    async fn service_repaints(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-    ) -> JvmResult<()> {
+    async fn service_repaints(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
         // Native Component.serviceRepaints()
-        let parent: ClassInstanceRef<Component> = jvm
-            .get_field(
-                &this,
-                "parent",
-                "Lorg/kwis/msp/lwc/ContainerComponent;",
-            )
-            .await?;
+        let parent: ClassInstanceRef<Component> = jvm.get_field(&this, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
         if parent.is_null() {
             return Ok(());
         }
 
-        let shown: bool = jvm
-            .invoke_virtual(&this, "isShown", "()Z", ())
-            .await?;
+        let shown: bool = jvm.invoke_virtual(&this, "isShown", "()Z", ()).await?;
 
         if !shown {
             return Ok(());
@@ -915,13 +591,7 @@ impl Component {
         let mut current = parent;
 
         loop {
-            let next: ClassInstanceRef<Component> = jvm
-                .get_field(
-                    &current,
-                    "parent",
-                    "Lorg/kwis/msp/lwc/ContainerComponent;",
-                )
-                .await?;
+            let next: ClassInstanceRef<Component> = jvm.get_field(&current, "parent", "Lorg/kwis/msp/lwc/ContainerComponent;").await?;
 
             if next.is_null() {
                 break;
@@ -930,11 +600,8 @@ impl Component {
             current = next;
         }
 
-        let _: () = jvm
-            .invoke_virtual(&current, "serviceRepaints", "()V", ())
-            .await?;
+        let _: () = jvm.invoke_virtual(&current, "serviceRepaints", "()V", ()).await?;
 
         Ok(())
     }
-
 }

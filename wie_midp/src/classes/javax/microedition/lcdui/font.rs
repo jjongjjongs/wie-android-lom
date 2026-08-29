@@ -59,9 +59,9 @@ impl Font {
 
     pub(crate) fn pixel_height(size: i32) -> i32 {
         match size {
-            8 => 10,      // SIZE_SMALL
-            0 => 12,      // SIZE_MEDIUM
-            16 => 14,     // SIZE_LARGE
+            8 => 10,  // SIZE_SMALL
+            0 => 12,  // SIZE_MEDIUM
+            16 => 14, // SIZE_LARGE
             4096 => 16,
             8192 => 20,
             16384 => 22,
@@ -72,9 +72,9 @@ impl Font {
 
     pub(crate) fn baseline(size: i32) -> i32 {
         match size {
-            8 => 8,       // SIZE_SMALL
-            0 => 9,       // SIZE_MEDIUM
-            16 => 10,     // SIZE_LARGE
+            8 => 8,   // SIZE_SMALL
+            0 => 9,   // SIZE_MEDIUM
+            16 => 10, // SIZE_LARGE
             4096 => 12,
             8192 => 14,
             16384 => 15,
@@ -129,8 +129,7 @@ impl Font {
     async fn get_font(jvm: &Jvm, _: &mut WieJvmContext, face: i32, style: i32, size: i32) -> JvmResult<ClassInstanceRef<Font>> {
         tracing::debug!("javax.microedition.lcdui.Font::getFont({face:?}, {style:?}, {size:?})");
 
-        let mut instance: ClassInstanceRef<Font> =
-            jvm.new_class("javax/microedition/lcdui/Font", "()V", []).await?.into();
+        let mut instance: ClassInstanceRef<Font> = jvm.new_class("javax/microedition/lcdui/Font", "()V", []).await?.into();
 
         jvm.put_field(&mut instance, "face", "I", face).await?;
         jvm.put_field(&mut instance, "style", "I", style).await?;

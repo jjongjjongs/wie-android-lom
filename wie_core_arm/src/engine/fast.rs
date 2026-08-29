@@ -76,12 +76,39 @@ pub(crate) enum FastOp {
     CondBranch { cond: u8, target: u32, next: u32 },
     /// Unconditional short branch.
     Branch { target: u32 },
+    /// `push`/`pop` (`PushPop`). `extra` is the R bit: LR for a push, PC for a
+    /// pop. A pop that includes PC (`load && extra`) writes a dynamic PC and so
+    /// ends the trace. Produced only by the JIT frontend (`decode` declines it).
+    PushPop { load: bool, extra: bool, rlist: u8 },
+    /// `bx`/`blx` register (`HiRegBx` op 3): jump to `rm`, switching ARM/Thumb
+    /// from bit 0; `link` (BLX) also sets LR. Dynamic PC, so it ends the trace.
+    /// Produced only by the JIT frontend.
+    BranchExchange { link: bool, rm: u8 },
+    /// Long branch with link (`bl`/`blx` immediate). `target`/`ret` are the
+    /// pre-computed jump target and return address; `exchange` (BLX) clears the
+    /// Thumb bit. A 32-bit instruction, so it advances PC by 4. Ends the trace.
+    /// Produced only by the JIT frontend.
+    BranchLink { exchange: bool, target: u32, ret: u32 },
+    /// `ldmia`/`stmia rb!, {rlist}` (`BlockXfer`). Multi-register transfer with
+    /// writeback to `rb`; `rlist` covers r0..r7 only (no PC), so it is
+    /// straight-line. Produced only by the JIT frontend.
+    BlockXfer { load: bool, rb: u8, rlist: u8 },
 }
 
 /// Whether a decoded op continues the block or ends it (a branch).
 pub(crate) enum Decoded {
     Straight(FastOp),
     Terminator(FastOp),
+}
+
+/// Whether a compiled op writes a non-linear (dynamic or far) PC and so must be
+/// the last op in a JIT trace. `CondBranch` is excluded: it has a fall-through
+/// and an in-range target can be linked inside the trace.
+pub(crate) fn ends_trace(op: &FastOp) -> bool {
+    matches!(
+        op,
+        FastOp::Branch { .. } | FastOp::BranchExchange { .. } | FastOp::BranchLink { .. } | FastOp::PushPop { load: true, extra: true, .. }
+    )
 }
 
 /// Number of direct-mapped block-cache slots (power of two). A guest PC hashes
@@ -393,7 +420,14 @@ impl Ctx<'_> {
                     self.w32(addr, self.r[rd as usize]);
                 }
             }
-            FastOp::CondBranch { .. } | FastOp::Branch { .. } => unreachable!("branch in straight-line slot"),
+            FastOp::CondBranch { .. }
+            | FastOp::Branch { .. }
+            // The JIT-only control-flow ops are never produced by `decode` (used
+            // by this engine), so they never reach here.
+            | FastOp::PushPop { .. }
+            | FastOp::BranchExchange { .. }
+            | FastOp::BranchLink { .. }
+            | FastOp::BlockXfer { .. } => unreachable!("branch in straight-line slot"),
         }
     }
 }

@@ -6,7 +6,7 @@ use std::{
 use jni::{
     JNIEnv,
     objects::{JByteArray, JClass},
-    sys::{jbyteArray, JNI_FALSE, JNI_TRUE},
+    sys::{JNI_FALSE, JNI_TRUE, jbyteArray},
 };
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 
@@ -29,10 +29,7 @@ fn initialize() -> Option<MidiState> {
     let sound_font = Arc::new(SoundFont::new(&mut reader).ok()?);
     let settings = SynthesizerSettings::new(SAMPLE_RATE);
     let synthesizer = Synthesizer::new(&sound_font, &settings).ok()?;
-    Some(MidiState {
-        synthesizer,
-        started: false,
-    })
+    Some(MidiState { synthesizer, started: false })
 }
 
 fn render_block(state: &mut MidiState, milliseconds: i32) -> Option<Vec<u8>> {
@@ -73,23 +70,11 @@ fn apply_event(synthesizer: &mut Synthesizer, command: &[u8]) {
             synthesizer.note_on(command[1] as i32, command[2] as i32, velocity)
         }
         3 if command.len() >= 4 => synthesizer.note_off(command[1] as i32, command[2] as i32),
-        4 if command.len() >= 3 => {
-            synthesizer.process_midi_message(command[1] as i32, 0xC0, command[2] as i32, 0)
-        }
-        5 if command.len() >= 4 => synthesizer.process_midi_message(
-            command[1] as i32,
-            0xB0,
-            command[2] as i32,
-            command[3] as i32,
-        ),
+        4 if command.len() >= 3 => synthesizer.process_midi_message(command[1] as i32, 0xC0, command[2] as i32, 0),
+        5 if command.len() >= 4 => synthesizer.process_midi_message(command[1] as i32, 0xB0, command[2] as i32, command[3] as i32),
         6 if command.len() >= 4 => {
             let value = u16::from_le_bytes([command[2], command[3]]);
-            synthesizer.process_midi_message(
-                command[1] as i32,
-                0xE0,
-                (value & 0x7F) as i32,
-                ((value >> 7) & 0x7F) as i32,
-            );
+            synthesizer.process_midi_message(command[1] as i32, 0xE0, (value & 0x7F) as i32, ((value >> 7) & 0x7F) as i32);
         }
         _ => {}
     }
@@ -100,11 +85,7 @@ fn float_to_pcm16(value: f32) -> i16 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeHandle(
-    env: JNIEnv,
-    _class: JClass,
-    command: JByteArray,
-) -> jbyteArray {
+pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeHandle(env: JNIEnv, _class: JClass, command: JByteArray) -> jbyteArray {
     let Ok(command) = env.convert_byte_array(command) else {
         return std::ptr::null_mut();
     };
@@ -124,11 +105,7 @@ pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeHand
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeRender(
-    env: JNIEnv,
-    _class: JClass,
-    milliseconds: i32,
-) -> jbyteArray {
+pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeRender(env: JNIEnv, _class: JClass, milliseconds: i32) -> jbyteArray {
     let mut guard = state().lock().unwrap();
     let Some(state) = guard.as_mut() else {
         return std::ptr::null_mut();
@@ -141,17 +118,11 @@ pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeRend
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeReset(
-    _env: JNIEnv,
-    _class: JClass,
-) {
+pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeReset(_env: JNIEnv, _class: JClass) {
     *state().lock().unwrap() = None;
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeAvailable(
-    _env: JNIEnv,
-    _class: JClass,
-) -> u8 {
+pub extern "system" fn Java_com_jjongjjongs_wiemobile_MidiSynthBridge_nativeAvailable(_env: JNIEnv, _class: JClass) -> u8 {
     if initialize().is_some() { JNI_TRUE } else { JNI_FALSE }
 }

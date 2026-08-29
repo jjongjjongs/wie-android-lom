@@ -22,8 +22,7 @@ static INIT: Once = Once::new();
 /// cache-maintenance writes are silenced, so the full-log capture stays complete
 /// where it matters without a title's render loop flooding it. Setting `RUST_LOG`
 /// overrides this entirely.
-const DEFAULT_LOG_DIRECTIVE: &str =
-    "info,wie_wipi_c=debug,wie_wipi_c::api::graphics=info,wie_wipi_c::api::uic=info,arm32_cpu::arm=warn";
+const DEFAULT_LOG_DIRECTIVE: &str = "info,wie_wipi_c=debug,wie_wipi_c::api::graphics=info,wie_wipi_c::api::uic=info,arm32_cpu::arm=warn";
 
 /// Installs the subscriber once. Safe to call from every entry point.
 pub fn init() {

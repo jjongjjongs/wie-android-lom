@@ -32,22 +32,11 @@ impl MediaUnavailableException {
         Ok(())
     }
 
-    async fn init_with_message(
-        jvm: &Jvm,
-        _: &mut WieJvmContext,
-        this: ClassInstanceRef<Self>,
-        message: ClassInstanceRef<String>,
-    ) -> Result<()> {
+    async fn init_with_message(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, message: ClassInstanceRef<String>) -> Result<()> {
         tracing::debug!("org.kwis.msp.media.MediaUnavailableException::<init>({this:?}, {message:?})");
 
         let _: () = jvm
-            .invoke_special(
-                &this,
-                "java/lang/RuntimeException",
-                "<init>",
-                "(Ljava/lang/String;)V",
-                (message,),
-            )
+            .invoke_special(&this, "java/lang/RuntimeException", "<init>", "(Ljava/lang/String;)V", (message,))
             .await?;
 
         Ok(())

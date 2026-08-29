@@ -157,6 +157,26 @@ impl RegFile {
     pub fn get(&self, bank: usize, reg: Reg) -> u32 {
         self.reg[REG_MAP[bank][reg as usize]]
     }
+
+    /// The currently selected register bank.
+    #[inline]
+    pub fn cur_bank(&self) -> usize {
+        self.bank
+    }
+
+    /// Raw register storage. In the User/System bank (`cur_bank() == 0`), guest
+    /// r0..r15 occupy `[0..16]` and CPSR is at `[16]`, so a run of guest state
+    /// can be exchanged with a slice copy instead of per-register banked
+    /// accesses. CPSR is at index 16 regardless of bank.
+    #[inline]
+    pub fn raw(&self) -> &[u32] {
+        &self.reg
+    }
+
+    #[inline]
+    pub fn raw_mut(&mut self) -> &mut [u32] {
+        &mut self.reg
+    }
 }
 
 impl Index<Reg> for RegFile {

@@ -4,7 +4,10 @@ use jvm::Jvm;
 use wie_backend::System;
 use wie_core_arm::{ArmCore, EmulatedFunction, EmulatedFunctionParam, ResultWriter, SvcId};
 use wie_util::{Result, WieError};
-use wie_wipi_c::{WIPICMethodBody, WIPICResult, api::{filesystem, net, serial}};
+use wie_wipi_c::{
+    WIPICMethodBody, WIPICResult,
+    api::{filesystem, net, serial},
+};
 
 use crate::runtime::SVC_CATEGORY_WIPIC;
 use crate::runtime::svc_ids::{WIPICKernelMethodId, WIPICTableId};
@@ -81,8 +84,8 @@ async fn handle_wipic_svc(
                 filesystem_state.clone(),
             ),
         )
-            .await?
-            .write(core, lr);
+        .await?
+        .write(core, lr);
     }
 
     let body = method_table::get_method_body(table_id, function_id)
@@ -111,6 +114,12 @@ pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm
     core.register_svc_handler(
         SVC_CATEGORY_WIPIC,
         handle_wipic_svc,
-        &(system.clone(), jvm.clone(), net::new_state(), serial::new_state(), filesystem::new_state()),
+        &(
+            system.clone(),
+            jvm.clone(),
+            net::new_state(),
+            serial::new_state(),
+            filesystem::new_state(),
+        ),
     )
 }

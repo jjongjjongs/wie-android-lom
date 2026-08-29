@@ -147,13 +147,7 @@ pub struct AndroidPlatform {
 }
 
 impl AndroidPlatform {
-    pub fn new(
-        runtime_dir: PathBuf,
-        width: u32,
-        height: u32,
-        shared: Shared,
-        handset_information: AndroidHandsetInformation,
-    ) -> Self {
+    pub fn new(runtime_dir: PathBuf, width: u32, height: u32, shared: Shared, handset_information: AndroidHandsetInformation) -> Self {
         Self {
             screen: AndroidScreen {
                 width,
@@ -278,26 +272,17 @@ impl Screen for AndroidScreen {
     }
 }
 
-
 #[cfg(test)]
 mod handset_information_tests {
     use super::AndroidHandsetInformation;
 
     #[test]
     fn android_handset_information_exposes_only_supplied_hal_values() {
-        let configured =
-            AndroidHandsetInformation::new("SM-S948N".to_owned());
+        let configured = AndroidHandsetInformation::new("SM-S948N".to_owned());
 
         assert_eq!(configured.get("PHONEMODEL").as_deref(), Some("SM-S948N"));
 
-        for unavailable in [
-            "MDN",
-            "CURRENTCH",
-            "SID",
-            "NID",
-            "BASEID",
-            "BESTPN",
-        ] {
+        for unavailable in ["MDN", "CURRENTCH", "SID", "NID", "BASEID", "BESTPN"] {
             assert_eq!(configured.get(unavailable), None, "{unavailable}");
         }
     }

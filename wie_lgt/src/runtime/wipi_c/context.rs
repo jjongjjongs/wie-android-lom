@@ -11,11 +11,7 @@ use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
 use wie_wipi_c::{
     WIPICContext, WIPICMethodBody,
-    api::{
-        filesystem::SharedFilesystemState,
-        net::SharedNetworkState,
-        serial::SharedSerialState,
-    },
+    api::{filesystem::SharedFilesystemState, net::SharedNetworkState, serial::SharedSerialState},
 };
 
 // mostly same as ktf's one, can we merge those?

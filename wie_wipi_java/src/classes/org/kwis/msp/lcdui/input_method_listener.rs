@@ -14,11 +14,7 @@ impl InputMethodListener {
             name: "org/kwis/msp/lcdui/InputMethodListener",
             parent_class: None,
             interfaces: vec![],
-            methods: vec![JavaMethodProto::new_abstract(
-                "notifyTextChanged",
-                "([CII)V",
-                Default::default(),
-            )],
+            methods: vec![JavaMethodProto::new_abstract("notifyTextChanged", "([CII)V", Default::default())],
             fields: vec![],
             access_flags: ClassAccessFlags::INTERFACE,
         }

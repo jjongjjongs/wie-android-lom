@@ -10,22 +10,14 @@ use crate::context::WIPICContext;
 /// WipiPlayer.callPlace(String). Its Android host implementation launches
 /// ACTION_CALL with a `tel:` URI. A host-dispatch failure is reported as -1;
 /// successful dispatch returns 0.
-pub async fn call_place(
-    context: &mut dyn WIPICContext,
-    phone_number: WIPICWord,
-) -> Result<i32> {
+pub async fn call_place(context: &mut dyn WIPICContext, phone_number: WIPICWord) -> Result<i32> {
     let bytes = read_null_terminated_string_bytes(context, phone_number)?;
     let number = encoding_rs::EUC_KR.decode(&bytes).0.into_owned();
 
     tracing::debug!("MC_phnCallPlace({number})");
 
-    Ok(if context.system().platform().call_place(&number) {
-        0
-    } else {
-        -1
-    })
+    Ok(if context.system().platform().call_place(&number) { 0 } else { -1 })
 }
-
 
 /// LGT `MC_phnSmsSend`.
 ///

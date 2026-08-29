@@ -18,12 +18,7 @@ use crate::context::WIPICContext;
 /// `MMSSEND` and `APPCALL` have permission checks in the outer native wrapper.
 /// WIE does not model that per-DLET APM permission state, so these commands
 /// follow the native permission-allowed path and ultimately return -16.
-pub async fn execute(
-    context: &mut dyn WIPICContext,
-    _ignored: WIPICWord,
-    command: WIPICWord,
-    argv: WIPICWord,
-) -> Result<i32> {
+pub async fn execute(context: &mut dyn WIPICContext, _ignored: WIPICWord, command: WIPICWord, argv: WIPICWord) -> Result<i32> {
     let command = read_null_terminated_string_bytes(context, command)?;
 
     tracing::debug!("MC_sysExecute({})", String::from_utf8_lossy(&command));
@@ -36,11 +31,7 @@ pub async fn execute(
     let url_bytes = read_null_terminated_string_bytes(context, url_ptr)?;
     let url = encoding_rs::EUC_KR.decode(&url_bytes).0.into_owned();
 
-    Ok(if context.system().platform().open_url(&url) {
-        0
-    } else {
-        -1
-    })
+    Ok(if context.system().platform().open_url(&url) { 0 } else { -1 })
 }
 
 #[cfg(test)]
@@ -62,12 +53,7 @@ mod tests {
                 events.lock().push(url);
             }
         });
-        let system = System::new(
-            Box::new(platform),
-            "test-pid",
-            "test-aid",
-            DefaultTaskRunner,
-        );
+        let system = System::new(Box::new(platform), "test-pid", "test-aid", DefaultTaskRunner);
         TestContext::with_system(system)
     }
 
@@ -81,10 +67,7 @@ mod tests {
         context.write_bytes(0x1200, b"https://example.com/a?b=c\0").unwrap();
 
         assert_eq!(execute(&mut context, 0xdead_beef, 0x1000, 0x1100).await.unwrap(), 0);
-        assert_eq!(
-            events.lock().as_slice(),
-            ["https://example.com/a?b=c"]
-        );
+        assert_eq!(events.lock().as_slice(), ["https://example.com/a?b=c"]);
     }
 
     #[futures_test::test]

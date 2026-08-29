@@ -28,7 +28,10 @@ fn drives_firmware_init_when_supplied() {
     };
 
     // Print the firmware log (including the init trace) to stderr.
-    let _ = tracing_subscriber::fmt().with_test_writer().with_max_level(tracing::Level::INFO).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
 
     let firmware = std::fs::read(&path).expect("read firmware file");
 
@@ -72,5 +75,8 @@ fn drives_firmware_init_when_supplied() {
         ticks += 1;
     }
 
-    eprintln!("firmware init harness finished after {ticks} ticks (game exited={})", exited.load(Ordering::SeqCst));
+    eprintln!(
+        "firmware init harness finished after {ticks} ticks (game exited={})",
+        exited.load(Ordering::SeqCst)
+    );
 }

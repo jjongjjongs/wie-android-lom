@@ -154,13 +154,8 @@ impl Clip {
     ) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.media.Clip::setListener({this:?}, {listener:?})");
 
-        jvm.put_field(
-            &mut this,
-            "playListener",
-            "Lorg/kwis/msp/media/PlayListener;",
-            listener,
-        )
-        .await
+        jvm.put_field(&mut this, "playListener", "Lorg/kwis/msp/media/PlayListener;", listener)
+            .await
     }
 
     async fn get_type(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<ClassInstanceRef<String>> {
@@ -232,95 +227,43 @@ mod test {
                 name: "test/TestPlayListener",
                 parent_class: Some("java/lang/Object"),
                 interfaces: vec!["org/kwis/msp/media/PlayListener"],
-                methods: vec![JavaMethodProto::new(
-                    "<init>",
-                    "()V",
-                    Self::init,
-                    Default::default(),
-                )],
+                methods: vec![JavaMethodProto::new("<init>", "()V", Self::init, Default::default())],
                 fields: vec![],
                 access_flags: Default::default(),
             }
         }
 
-        async fn init(
-            jvm: &Jvm,
-            _: &mut WieJvmContext,
-            this: ClassInstanceRef<Self>,
-        ) -> JvmResult<()> {
-            jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ())
-                .await
+        async fn init(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+            jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await
         }
     }
 
     #[test]
     fn test_set_listener_stores_and_clears_play_listener() -> Result<()> {
         run_jvm_test(
-            Box::new([
-                wie_midp::get_protos().into(),
-                get_protos().into(),
-                [TestPlayListener::as_proto()].into(),
-            ]),
+            Box::new([wie_midp::get_protos().into(), get_protos().into(), [TestPlayListener::as_proto()].into()]),
             |jvm| async move {
                 let r#type = JavaLangString::from_rust_string(&jvm, "audio/test").await?;
-                let clip: ClassInstanceRef<Clip> = jvm
-                    .new_class(
-                        "org/kwis/msp/media/Clip",
-                        "(Ljava/lang/String;)V",
-                        (r#type,),
-                    )
-                    .await?
-                    .into();
+                let clip: ClassInstanceRef<Clip> = jvm.new_class("org/kwis/msp/media/Clip", "(Ljava/lang/String;)V", (r#type,)).await?.into();
 
-                let listener: ClassInstanceRef<PlayListener> = jvm
-                    .new_class("test/TestPlayListener", "()V", ())
-                    .await?
-                    .into();
+                let listener: ClassInstanceRef<PlayListener> = jvm.new_class("test/TestPlayListener", "()V", ()).await?.into();
 
-                let initial: ClassInstanceRef<PlayListener> = jvm
-                    .get_field(
-                        &clip,
-                        "playListener",
-                        "Lorg/kwis/msp/media/PlayListener;",
-                    )
-                    .await?;
+                let initial: ClassInstanceRef<PlayListener> = jvm.get_field(&clip, "playListener", "Lorg/kwis/msp/media/PlayListener;").await?;
                 assert!(initial.is_null());
 
                 let _: () = jvm
-                    .invoke_virtual(
-                        &clip,
-                        "setListener",
-                        "(Lorg/kwis/msp/media/PlayListener;)V",
-                        (listener,),
-                    )
+                    .invoke_virtual(&clip, "setListener", "(Lorg/kwis/msp/media/PlayListener;)V", (listener,))
                     .await?;
 
-                let stored: ClassInstanceRef<PlayListener> = jvm
-                    .get_field(
-                        &clip,
-                        "playListener",
-                        "Lorg/kwis/msp/media/PlayListener;",
-                    )
-                    .await?;
+                let stored: ClassInstanceRef<PlayListener> = jvm.get_field(&clip, "playListener", "Lorg/kwis/msp/media/PlayListener;").await?;
                 assert!(!stored.is_null());
 
                 let null_listener = ClassInstanceRef::<PlayListener>::new(None);
                 let _: () = jvm
-                    .invoke_virtual(
-                        &clip,
-                        "setListener",
-                        "(Lorg/kwis/msp/media/PlayListener;)V",
-                        (null_listener,),
-                    )
+                    .invoke_virtual(&clip, "setListener", "(Lorg/kwis/msp/media/PlayListener;)V", (null_listener,))
                     .await?;
 
-                let cleared: ClassInstanceRef<PlayListener> = jvm
-                    .get_field(
-                        &clip,
-                        "playListener",
-                        "Lorg/kwis/msp/media/PlayListener;",
-                    )
-                    .await?;
+                let cleared: ClassInstanceRef<PlayListener> = jvm.get_field(&clip, "playListener", "Lorg/kwis/msp/media/PlayListener;").await?;
                 assert!(cleared.is_null());
 
                 Ok(())
@@ -378,9 +321,7 @@ mod test {
             let mut second_data = jvm.instantiate_array("B", 2).await?;
             jvm.store_array(&mut second_data, 0, [4i8, 5]).await?;
 
-            let second_set: bool = jvm
-                .invoke_virtual(&data_clip, "setBuffer", "([BI)Z", (second_data, 2))
-                .await?;
+            let second_set: bool = jvm.invoke_virtual(&data_clip, "setBuffer", "([BI)Z", (second_data, 2)).await?;
             assert!(!second_set);
 
             let string_type = JavaLangString::from_rust_string(&jvm, "audio/oversize").await?;
@@ -392,9 +333,7 @@ mod test {
             let mut short_data = jvm.instantiate_array("B", 2).await?;
             jvm.store_array(&mut short_data, 0, [6i8, 7]).await?;
 
-            let oversize_set: bool = jvm
-                .invoke_virtual(&oversize_clip, "setBuffer", "([BI)Z", (short_data, 5))
-                .await?;
+            let oversize_set: bool = jvm.invoke_virtual(&oversize_clip, "setBuffer", "([BI)Z", (short_data, 5)).await?;
             assert!(oversize_set);
 
             let stored_size: i32 = jvm.get_field(&oversize_clip, "__wieBufferSize", "I").await?;
