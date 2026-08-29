@@ -8,8 +8,10 @@
 use std::{
     collections::VecDeque,
     io,
-    sync::{LazyLock, Mutex, Once},
+    sync::{LazyLock, Mutex, Once, OnceLock},
 };
+
+use tracing_subscriber::{EnvFilter, Registry, prelude::*, reload};
 
 static INIT: Once = Once::new();
 
@@ -24,18 +26,60 @@ static INIT: Once = Once::new();
 /// overrides this entirely.
 const DEFAULT_LOG_DIRECTIVE: &str = "info,wie_wipi_c=debug,wie_wipi_c::api::graphics=info,wie_wipi_c::api::uic=info,arm32_cpu::arm=warn";
 
+/// Lets the player swap the log filter at runtime, so capturing a module's
+/// debug/trace detail no longer means editing the default above and rebuilding.
+static RELOAD_HANDLE: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::new();
+
+/// The directive the filter is currently running, so the UI can show it.
+static CURRENT_DIRECTIVE: Mutex<String> = Mutex::new(String::new());
+
 /// Installs the subscriber once. Safe to call from every entry point.
 pub fn init() {
     INIT.call_once(|| {
-        let filter =
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_LOG_DIRECTIVE));
+        // Honour `RUST_LOG` when it is set and non-empty; otherwise the default.
+        let directive = std::env::var(EnvFilter::DEFAULT_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_LOG_DIRECTIVE.to_owned());
 
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_ansi(false)
-            .with_writer(make_writer)
+        // `EnvFilter::new` is lenient, matching the previous startup behaviour:
+        // a bad directive here degrades rather than dropping logging entirely.
+        let (filter, handle) = reload::Layer::new(EnvFilter::new(&directive));
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(make_writer))
             .init();
+
+        let _ = RELOAD_HANDLE.set(handle);
+        *current_directive() = directive;
     });
+}
+
+fn current_directive() -> std::sync::MutexGuard<'static, String> {
+    CURRENT_DIRECTIVE.lock().unwrap_or_else(|x| x.into_inner())
+}
+
+/// The log filter the capture is currently running.
+pub fn filter() -> String {
+    current_directive().clone()
+}
+
+/// Swaps the live log filter without a rebuild. An empty directive restores the
+/// built-in default, so the caller has a single source of truth for it. Returns
+/// the reason parsing rejected the directive, so it can be shown. Parsing is
+/// strict here (unlike startup) so a typo is reported instead of silently
+/// dropped.
+pub fn set_filter(directive: &str) -> core::result::Result<(), String> {
+    let directive = if directive.trim().is_empty() { DEFAULT_LOG_DIRECTIVE } else { directive };
+
+    let parsed = EnvFilter::builder().parse(directive).map_err(|error| error.to_string())?;
+
+    let handle = RELOAD_HANDLE.get().ok_or_else(|| "logging is not initialised yet".to_owned())?;
+    handle.reload(parsed).map_err(|error| error.to_string())?;
+
+    *current_directive() = directive.to_owned();
+    Ok(())
 }
 
 /// Lines kept, and bytes. A run that overruns either drops its oldest, which

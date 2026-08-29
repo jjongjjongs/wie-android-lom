@@ -460,34 +460,105 @@ public final class MainActivity extends Activity {
      * what a title that hangs rather than stops needs.
      */
     private void saveLog() {
-        String title = currentGameName != null ? currentGameName : "wie";
-
         withDownloadPermission(() -> {
             Toast.makeText(this, "로그를 저장하는 중...", Toast.LENGTH_SHORT).show();
-
-            emulatorThread.execute(() -> {
-                try {
-                    // The message shown in the title bar is cut off at one
-                    // line, so the whole of it goes at the top of the file.
-                    String error = NativeBridge.nativeLastError();
-                    String header = "wie " + NativeBridge.nativeVersion() + "\n"
-                            + "game: " + title + "\n"
-                            + "running: " + (NativeBridge.nativeRunning() != 0) + "\n"
-                            + (error.isEmpty() ? "" : "last error: " + error + "\n")
-                            + "\n";
-
-                    byte[] contents = (header + NativeBridge.nativeLog()).getBytes("UTF-8");
-                    String name = Downloads.safeName(title) + " 로그.txt";
-                    Downloads.write(this, name, "text/plain", contents);
-
-                    runOnUiThread(() -> Toast.makeText(this,
-                            "다운로드 폴더에 저장: " + name + " (" + (contents.length / 1024) + "KB)",
-                            Toast.LENGTH_LONG).show());
-                } catch (Exception e) {
-                    runOnUiThread(() -> Toast.makeText(this, "로그 저장 실패: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                }
-            });
+            emulatorThread.execute(() -> writeLogToDownloads(null, true));
         });
+    }
+
+    /**
+     * Lets the person change the {@code tracing} log filter while the app runs,
+     * so capturing a module's debug/trace detail no longer needs a new APK.
+     * Reached by long-pressing the log button.
+     */
+    private void showLogFilterDialog() {
+        EditText input = new EditText(this);
+        input.setText(NativeBridge.nativeLogFilter());
+        input.setSingleLine(true);
+        input.setSelection(input.getText().length());
+
+        int pad = dp(16);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(pad, pad / 2, pad, 0);
+        wrap.addView(input);
+
+        new AlertDialog.Builder(this)
+                .setTitle("로그 필터")
+                .setMessage("RUST_LOG 형식으로 무엇을 로그에 담을지 정합니다.\n예: wie_lgt=trace,wie_wipi_c=debug")
+                .setView(wrap)
+                .setPositiveButton("적용", (dialog, which) -> {
+                    String directive = input.getText().toString().trim();
+                    String error = NativeBridge.nativeSetLogFilter(directive);
+                    Toast.makeText(this,
+                            error.isEmpty() ? "로그 필터 적용됨" : "필터 오류: " + error,
+                            Toast.LENGTH_LONG).show();
+                })
+                .setNeutralButton("기본값", (dialog, which) -> {
+                    // An empty directive tells the native side to restore its
+                    // built-in default, so the value lives in one place.
+                    String error = NativeBridge.nativeSetLogFilter("");
+                    Toast.makeText(this,
+                            error.isEmpty() ? "기본 로그 필터로 되돌림" : "필터 오류: " + error,
+                            Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("취소", null)
+                .show();
+    }
+
+    /**
+     * Writes the current run's log to Downloads. Runs on the emulator thread so
+     * the native reads happen off the UI thread.
+     *
+     * @param suffix   appended to the file name (before ".txt") to tell an
+     *                 auto-saved crash log apart from a manual save, or null
+     * @param announce whether to toast the result; an auto-save that the person
+     *                 did not ask for stays quiet on failure
+     */
+    private void writeLogToDownloads(String suffix, boolean announce) {
+        String title = currentGameName != null ? currentGameName : "wie";
+        try {
+            // The message shown in the title bar is cut off at one line, so the
+            // whole of it goes at the top of the file.
+            String error = NativeBridge.nativeLastError();
+            String header = "wie " + NativeBridge.nativeVersion() + "\n"
+                    + "game: " + title + "\n"
+                    + "running: " + (NativeBridge.nativeRunning() != 0) + "\n"
+                    + "filter: " + NativeBridge.nativeLogFilter() + "\n"
+                    + (error.isEmpty() ? "" : "last error: " + error + "\n")
+                    + "\n";
+
+            byte[] contents = (header + NativeBridge.nativeLog()).getBytes("UTF-8");
+            String name = Downloads.safeName(title) + " 로그" + (suffix == null ? "" : suffix) + ".txt";
+            Downloads.write(this, name, "text/plain", contents);
+
+            if (announce) {
+                runOnUiThread(() -> Toast.makeText(this,
+                        "다운로드 폴더에 저장: " + name + " (" + (contents.length / 1024) + "KB)",
+                        Toast.LENGTH_LONG).show());
+            }
+        } catch (Exception e) {
+            if (announce) {
+                runOnUiThread(() -> Toast.makeText(this, "로그 저장 실패: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }
+    }
+
+    /**
+     * Saves the log by itself when a game stops, so a title that crashes or ends
+     * before the person can reach the log button still leaves one behind. Best
+     * effort: on pre-Android 10 without the storage permission it is skipped
+     * silently rather than prompting mid-crash.
+     */
+    private void autoSaveLogOnStop() {
+        if (Downloads.needsPermission()
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        // A timestamp so successive crashes do not clobber one another and the
+        // auto-saved file is easy to tell from a manual save.
+        String stamp = new java.text.SimpleDateFormat("MMdd_HHmmss", java.util.Locale.US).format(new java.util.Date());
+        writeLogToDownloads(" 자동 " + stamp, true);
     }
 
     /**
@@ -765,6 +836,11 @@ public final class MainActivity extends Activity {
 
         Button log = navyButton("로그");
         log.setOnClickListener(v -> saveLog());
+        // Long-press to change what the log captures, without a rebuild.
+        log.setOnLongClickListener(v -> {
+            showLogFilterDialog();
+            return true;
+        });
         LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(dp(56), dp(34));
         logParams.rightMargin = dp(8);
         bar.addView(log, logParams);
@@ -905,6 +981,8 @@ public final class MainActivity extends Activity {
             running = false;
             String error = NativeBridge.nativeLastError();
             runOnUiThread(() -> playerStatus.setText(error.isEmpty() ? "게임 실행이 중단되었습니다." : "실행 중단: " + error));
+            // Already on the emulator thread; save before the log can be lost.
+            autoSaveLogOnStop();
             return;
         }
 

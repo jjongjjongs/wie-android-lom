@@ -101,6 +101,18 @@ final class NativeBridge {
      */
     static native String nativeLog();
 
+    /** The {@code tracing} filter directive the log capture is running now. */
+    static native String nativeLogFilter();
+
+    /**
+     * Swaps the live log filter without a rebuild, so a module's debug/trace
+     * detail can be captured on the spot.
+     *
+     * @param directive a {@code RUST_LOG}-style filter, e.g. {@code "wie_lgt=trace"}
+     * @return empty on success, otherwise why the directive was rejected
+     */
+    static native String nativeSetLogFilter(String directive);
+
     /** Version of the native library. */
     static native String nativeVersion();
 }

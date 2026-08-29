@@ -370,6 +370,47 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     guard_string(&env, logging::snapshot)
 }
 
+/// `nativeLogFilter() -> String`
+///
+/// The `tracing` filter directive the capture is currently running, so the
+/// player can show and edit it.
+///
+/// # Safety
+/// Called by the JVM with a valid `env` reference.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeLogFilter(env: JNIEnv, _class: JClass) -> jstring {
+    logging::init();
+
+    guard_string(&env, logging::filter)
+}
+
+/// `nativeSetLogFilter(String directive) -> String`
+///
+/// Swaps the live log filter without a rebuild, so capturing a module's
+/// debug/trace detail no longer needs a new APK. Returns an empty string on
+/// success, otherwise the reason the directive was rejected.
+///
+/// # Safety
+/// Called by the JVM with valid `env` and `directive` references.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeSetLogFilter(
+    mut env: JNIEnv,
+    _class: JClass,
+    directive: JString,
+) -> jstring {
+    logging::init();
+
+    let directive: String = match env.get_string(&directive) {
+        Ok(value) => value.into(),
+        Err(error) => return to_java_string(&env, &format!("필터를 읽을 수 없습니다: {error}")),
+    };
+
+    guard_string(&env, || match logging::set_filter(directive.trim()) {
+        Ok(()) => String::new(),
+        Err(reason) => reason,
+    })
+}
+
 /// `nativeVersion() -> String`
 ///
 /// # Safety
