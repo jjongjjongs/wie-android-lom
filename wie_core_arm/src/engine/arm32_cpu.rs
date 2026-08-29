@@ -237,6 +237,18 @@ impl EmulatedMemory {
         self.pages[(addr >> 16) as usize].as_deref_mut()
     }
 
+    /// Base of the page table, for the JIT's inline load/store fast path: the
+    /// `pages` array reinterpreted as one `*const u8` per 64 KiB page (null =
+    /// unmapped), indexed by `addr >> 16`. Sound because
+    /// `Option<Box<[u8; PAGE_SIZE]>>` is a single nullable pointer
+    /// (null-pointer optimization). The pointer is valid while `self` lives and
+    /// its pages are not remapped, which holds for a JIT run (maps happen
+    /// between runs).
+    #[inline(always)]
+    pub(crate) fn pages_base(&self) -> *const *const u8 {
+        self.pages.as_ptr() as *const *const u8
+    }
+
     // Fault-signalling accessors used by the fast engine. They return `None`
     // when the page is unmapped (mirroring `Arm32CpuMemory`'s memory-error
     // path) rather than erroring, so the caller decides how to abort. Callers

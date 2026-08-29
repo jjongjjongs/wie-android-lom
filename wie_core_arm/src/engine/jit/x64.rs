@@ -40,6 +40,8 @@ const FAULTED: i32 = 72;
 const SMC: i32 = 76;
 const BUDGET: i32 = 96;
 const SCRATCH: i32 = 100;
+/// Offset of `JitCtx::pages` (base of the guest page table).
+const PAGES: i32 = 104;
 
 type Asm = dynasmrt::x64::Assembler;
 
@@ -1283,8 +1285,34 @@ fn emit_load(a: &mut Asm, size: u8, signed: bool, rd: u8, addr: impl FnOnce(&mut
         _ => jit_load32 as *const () as i64,
     };
     dynasm!(a ; mov rdi, rbx);
-    addr(a);
+    addr(a); // sets esi = effective address
+    // Inline fast path: a mapped, naturally aligned access reads the guest page
+    // directly (host is little-endian, like the guest), skipping the helper call.
+    // A null page (unmapped) or a misaligned access takes the slow path, whose
+    // helper reproduces the fault / unaligned-rotate semantics exactly.
     dynasm!(a
+        ; mov ecx, esi
+        ; shr ecx, 16                     // 64 KiB page index
+        ; mov rdx, [rbx + PAGES]
+        ; mov rdx, [rdx + rcx*8]          // page base (null = unmapped)
+        ; test rdx, rdx
+        ; jz >slow
+    );
+    if size != 8 {
+        let align = (size as i32 / 8) - 1; // 16->1, 32->3
+        dynasm!(a ; test esi, align ; jnz >slow);
+    }
+    dynasm!(a ; mov ecx, esi ; and ecx, 0xffff); // in-page offset
+    match (size, signed) {
+        (8, true) => dynasm!(a ; movsx r8d, BYTE [rdx + rcx]),
+        (8, false) => dynasm!(a ; movzx r8d, BYTE [rdx + rcx]),
+        (16, true) => dynasm!(a ; movsx r8d, WORD [rdx + rcx]),
+        (16, false) => dynasm!(a ; movzx r8d, WORD [rdx + rcx]),
+        _ => dynasm!(a ; mov r8d, [rdx + rcx]),
+    }
+    dynasm!(a ; jmp >done);
+    dynasm!(a
+        ; slow:
         ; mov rax, QWORD helper
         ; call rax
         ; mov r8d, eax                    // loaded value (0 on fault)
@@ -1296,9 +1324,11 @@ fn emit_load(a: &mut Asm, size: u8, signed: bool, rd: u8, addr: impl FnOnce(&mut
             _ => {}
         }
     }
+    dynasm!(a ; done:);
     // Write the destination *before* checking for a fault: the interpreter's
     // load path stores the (dummy 0) value into rd even when the access faults,
-    // then aborts, so we must too.
+    // then aborts, so we must too. The fast path never faults (page is mapped),
+    // so it leaves FAULTED at 0 and skips the exit.
     dynasm!(a
         ; mov [rbx + ro(rd)], r8d
         ; mov ecx, [rbx + FAULTED]

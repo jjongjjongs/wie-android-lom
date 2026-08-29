@@ -88,6 +88,11 @@ pub(crate) struct JitCtx {
     /// (the base address of an ldm/stm, whose base register may be overwritten
     /// mid-transfer). Offset 100.
     pub scratch: u32,
+    /// Base of the guest page table: an array of one `*const u8` per 64 KiB of
+    /// address space (null = unmapped), indexed by `addr >> 16`. Compiled code
+    /// reads it to service the common in-bounds, aligned load/store inline
+    /// instead of calling a helper. Offset 104.
+    pub pages: *const *const u8,
 }
 
 impl JitCtx {
@@ -102,6 +107,7 @@ impl JitCtx {
             code_pages: core::ptr::null(),
             budget: 0,
             scratch: 0,
+            pages: core::ptr::null(),
         }
     }
 }
@@ -587,6 +593,7 @@ impl ArmEngine for JitEngine {
         // Point the context at this engine's memory / SMC flags for the run.
         self.ctx.mem = &mut *self.mem as *mut EmulatedMemory;
         self.ctx.code_pages = self.code_pages.as_ptr();
+        self.ctx.pages = self.mem.pages_base();
 
         let result = loop {
             let pc = self.ctx.regs[15];

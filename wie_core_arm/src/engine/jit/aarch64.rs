@@ -58,6 +58,8 @@ const FAULTED: u32 = 72;
 const SMC: u32 = 76;
 const BUDGET: u32 = 96;
 const SCRATCH: u32 = 100;
+/// Offset of `JitCtx::pages` (base of the guest page table).
+const PAGES: u32 = 104;
 
 type Asm = dynasmrt::aarch64::Assembler;
 
@@ -1133,7 +1135,32 @@ fn emit_load(a: &mut Asm, size: u8, signed: bool, rd: u8, addr: impl FnOnce(&mut
         _ => jit_load32 as *const () as u64,
     };
     a64!(a ; mov x0, x19);
-    addr(a);
+    addr(a); // sets w1 = effective address
+    // Inline fast path: a mapped, naturally aligned access reads the guest page
+    // directly (host is little-endian, like the guest), skipping the helper call.
+    // A null page (unmapped) or a misaligned access takes the slow path, whose
+    // helper reproduces the fault / unaligned-rotate semantics exactly.
+    a64!(a
+        ; lsr w9, w1, #16          // 64 KiB page index
+        ; lsl w9, w9, #3           // *8 bytes per page pointer
+        ; ldr x10, [x19, #PAGES]
+        ; ldr x10, [x10, w9, uxtw] // page base (null = unmapped)
+        ; cbz x10, >slow
+    );
+    match size {
+        16 => a64!(a ; tst w1, #1 ; b.ne >slow),
+        32 => a64!(a ; tst w1, #3 ; b.ne >slow),
+        _ => {}
+    }
+    a64!(a ; and w9, w1, #0xffff); // in-page offset
+    match (size, signed) {
+        (8, true) => a64!(a ; ldrsb w8, [x10, w9, uxtw]),
+        (8, false) => a64!(a ; ldrb w8, [x10, w9, uxtw]),
+        (16, true) => a64!(a ; ldrsh w8, [x10, w9, uxtw]),
+        (16, false) => a64!(a ; ldrh w8, [x10, w9, uxtw]),
+        _ => a64!(a ; ldr w8, [x10, w9, uxtw]),
+    }
+    a64!(a ; b >done ; slow:);
     emit_call(a, helper);
     a64!(a ; mov w8, w0);
     if signed {
@@ -1143,7 +1170,9 @@ fn emit_load(a: &mut Asm, size: u8, signed: bool, rd: u8, addr: impl FnOnce(&mut
             _ => {}
         }
     }
-    // Write the destination before the fault check (interpreter parity).
+    a64!(a ; done:);
+    // Write the destination before the fault check (interpreter parity). The
+    // fast path never faults (page mapped), so FAULTED stays 0 and it skips out.
     a64!(a
         ; str w8, [x19, #ro(rd)]
         ; ldr w9, [x19, #FAULTED]
