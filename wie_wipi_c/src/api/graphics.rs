@@ -20,35 +20,6 @@ use self::{framebuffer::FrameBuffer, grp_context::WIPICGraphicsContextIdx, image
 
 const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
 const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
-
-/// Diagnostic: the distinct destination framebuffer handles a title has drawn
-/// to, so a title whose output never reaches the screen can be characterised
-/// (does it draw to a screen-sized target it then never presents, or to
-/// offscreen buffers it never blits?). First use of each handle is logged with
-/// its geometry, which is naturally rate-limited since framebuffers are few.
-static SEEN_DRAW_TARGETS: [core::sync::atomic::AtomicU32; 32] = [const { core::sync::atomic::AtomicU32::new(0) }; 32];
-static SEEN_DRAW_TARGET_N: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-
-fn note_draw_target(handle: u32, fb: &WIPICFramebuffer) {
-    use core::sync::atomic::Ordering::Relaxed;
-    let n = SEEN_DRAW_TARGET_N.load(Relaxed);
-    for slot in SEEN_DRAW_TARGETS.iter().take(n.min(SEEN_DRAW_TARGETS.len())) {
-        if slot.load(Relaxed) == handle {
-            return;
-        }
-    }
-    if n < SEEN_DRAW_TARGETS.len() {
-        SEEN_DRAW_TARGETS[n].store(handle, Relaxed);
-        SEEN_DRAW_TARGET_N.store(n + 1, Relaxed);
-        tracing::info!(
-            "[draw-target] handle={handle:#x} {}x{} bpp={} buf={:#x}",
-            fb.width,
-            fb.height,
-            fb.bpp,
-            fb.buf.0
-        );
-    }
-}
 /// Read a WIPI-C string. `length == -1` means NUL-terminated; `length > 0`
 /// reads exactly that many bytes; `length == 0` and other negatives yield
 /// an empty string.
@@ -72,7 +43,7 @@ fn read_wipi_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32)
 }
 
 pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWord) -> Result<WIPICIndirectPtr> {
-    tracing::info!("[present] MC_grpGetScreenFrameBuffer({a0:#x})");
+    tracing::debug!("MC_grpGetScreenFrameBuffer({a0:#x})");
 
     let framebuffer_ptr: u32 = read_generic(context, SCREEN_FRAMEBUFFER_PTR)?;
     if framebuffer_ptr != 0 {
@@ -170,7 +141,6 @@ pub async fn fill_rect(context: &mut dyn WIPICContext, dst_fb: WIPICIndirectPtr,
     }
 
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst_fb)?)?);
-    note_draw_target(dst_fb.0, &framebuffer.0);
     let gctx: WIPICGraphicsContext = read_generic(context, p_gctx)?;
     let mut canvas = framebuffer.canvas(context)?;
 
@@ -440,9 +410,7 @@ pub async fn draw_image(
         image.0
     );
 
-    let dst_handle = framebuffer.0;
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
-    note_draw_target(dst_handle, &framebuffer.0);
     let image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
 
     // An image that carries alpha keeps the full colour in the mask plane, and
@@ -480,43 +448,11 @@ pub async fn flush_lcd(
     w: WIPICWord,
     h: WIPICWord,
 ) -> Result<()> {
-    let fb_handle = framebuffer.0;
+    tracing::debug!("MC_grpFlushLcd({i:#x}, {:#x}, {x:#x}, {y:#x}, {w:#x}, {h:#x})", framebuffer.0);
+
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
 
     let src_canvas = framebuffer.image(context)?;
-
-    // Diagnostic (rate-limited): is the buffer we present actually non-blank?
-    // A varied buffer here but a blank display points at the platform paint
-    // path; an all-one-colour buffer points at the draws not reaching it.
-    {
-        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
-        static FLUSHES: AtomicU32 = AtomicU32::new(0);
-        if FLUSHES.fetch_add(1, Relaxed) % 30 == 0 {
-            let raw = src_canvas.raw();
-            let mut distinct = [0u16; 8];
-            let mut n_distinct = 0usize;
-            let mut nonzero = 0usize;
-            for px in raw.chunks_exact(2) {
-                let v = u16::from_le_bytes([px[0], px[1]]);
-                if v != 0 {
-                    nonzero += 1;
-                }
-                if n_distinct < distinct.len() && !distinct[..n_distinct].contains(&v) {
-                    distinct[n_distinct] = v;
-                    n_distinct += 1;
-                }
-            }
-            let total = raw.len() / 2;
-            tracing::info!(
-                "[present] flush fb={fb_handle:#x} {}x{} nonzero={nonzero}/{total} first_pixels={:04x?}",
-                framebuffer.0.width,
-                framebuffer.0.height,
-                &distinct[..n_distinct]
-            );
-        }
-    }
-
-    tracing::info!("[present] MC_grpFlushLcd({i:#x}, {fb_handle:#x}, {x:#x}, {y:#x}, {w:#x}, {h:#x})");
 
     let platform = context.system().platform();
     let screen = platform.screen();
@@ -772,7 +708,7 @@ pub async fn draw_string(
 }
 
 pub async fn repaint(context: &mut dyn WIPICContext, lcd: i32, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
-    tracing::info!("[present] MC_grpRepaint({lcd}, {x}, {y}, {width}, {height})");
+    tracing::debug!("MC_grpRepaint({lcd}, {x}, {y}, {width}, {height})");
 
     let platform = context.system().platform();
     let screen = platform.screen();

@@ -176,22 +176,6 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     guard(|| with_runner(|runner| runner.key(index, pressed != 0)));
 }
 
-/// `nativeUiLog(String message)`
-///
-/// Routes a Java-side diagnostic line into the emulator's tracing, so UI-thread
-/// traces land in the same capture as the Rust ones.
-///
-/// # Safety
-/// Called by the JVM with valid `env` and `message` references.
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeUiLog(mut env: JNIEnv, _class: JClass, message: JString) {
-    let message: String = match env.get_string(&message) {
-        Ok(value) => value.into(),
-        Err(_) => return,
-    };
-    tracing::info!("[java] {message}");
-}
-
 /// `nativeFrame() -> short[]`
 ///
 /// Returns `null` when nothing new has been painted, otherwise
@@ -209,26 +193,6 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
             return std::ptr::null_mut();
         }
     };
-
-    // Diagnostic (rate-limited): confirm frames are actually handed to Java.
-    // Continuous hand-off here with a black display isolates the fault to the
-    // Android UI (setFrame/onDraw), not the emulator or this bridge.
-    {
-        use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
-        static HANDED: AtomicU32 = AtomicU32::new(0);
-        if HANDED.fetch_add(1, Relaxed) % 30 == 0 {
-            // Count non-zero pixels in the frame actually handed to Java: if this
-            // is blank while flush_lcd sampled content, the game flushes both
-            // content and blank frames and Java keeps latching the blank ones.
-            let nonzero = frame.pixels.iter().filter(|&&p| p != 0).count();
-            tracing::info!(
-                "[present] nativeFrame -> Java {}x{} ({} px, nonzero={nonzero})",
-                frame.width,
-                frame.height,
-                frame.pixels.len()
-            );
-        }
-    }
 
     let length = frame.pixels.len() + 2;
     let array = match env.new_short_array(length as jint) {

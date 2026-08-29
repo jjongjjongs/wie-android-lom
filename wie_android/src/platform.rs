@@ -34,6 +34,11 @@ pub struct Shared {
     /// it is asked, and the voices have to outlive any one of them.
     mixer: Arc<Mutex<SynthMixer>>,
     redraw_requested: Arc<AtomicBool>,
+    /// Whether the previous painted frame was all-black. Some titles present
+    /// each frame as a content flush immediately followed by a screen-clear
+    /// (blank) flush, so a lone blank between content frames is dropped rather
+    /// than shown (see `Screen::paint`).
+    prev_paint_blank: Arc<AtomicBool>,
     exited: Arc<AtomicBool>,
     backlight_mode: Arc<AtomicU8>,
     phone_call: Arc<Mutex<Option<String>>>,
@@ -253,21 +258,16 @@ impl Screen for AndroidScreen {
                 .collect::<Vec<_>>()
         };
 
-        // Diagnostic: record the content/blank pattern of successive paints, so
-        // a title that alternates a real frame with a cleared one (and whose
-        // blank half we keep) shows up as e.g. "CBCBCB". Logged in blocks of 48.
-        {
-            use std::sync::Mutex as StdMutex;
-            use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-            static SEQ: StdMutex<String> = StdMutex::new(String::new());
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let blank = !pixels.iter().any(|&p| p != 0);
-            let mut seq = SEQ.lock().unwrap_or_else(|x| x.into_inner());
-            seq.push(if blank { 'B' } else { 'C' });
-            if N.fetch_add(1, Relaxed) % 48 == 47 {
-                tracing::info!("[present] paint seq: {seq}");
-                seq.clear();
-            }
+        // Some titles present each frame as a content flush immediately followed
+        // by a blank screen-clear flush - a strict C,B,C,B stream. Java collects
+        // frames at its own (slower) rate, so it can systematically land on the
+        // blank halves and show a black screen. Drop a blank frame that follows a
+        // non-blank one; a genuinely black screen still appears once the blanks
+        // persist (two in a row).
+        let blank = !pixels.iter().any(|&p| p != 0);
+        let prev_blank = self.shared.prev_paint_blank.swap(blank, Ordering::SeqCst);
+        if blank && !prev_blank {
+            return;
         }
 
         let frame = Frame {
