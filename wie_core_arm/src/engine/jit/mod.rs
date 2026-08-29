@@ -400,6 +400,47 @@ impl JitEngine {
         hit
     }
 
+    /// Invalidate every cached block that overlaps the byte range
+    /// `[start, start+len)`, for a host-side write into guest memory. Fast-
+    /// rejects when no page the range touches holds compiled code — the usual
+    /// case, since almost every such write (a syscall filling a framebuffer, a
+    /// copy, a file read) lands in data, not code.
+    fn invalidate_range(&mut self, start: u32, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let end = start.saturating_add(len as u32);
+        let first_pg = (start >> CODE_PAGE_BITS) as usize;
+        let last_pg = ((end - 1) >> CODE_PAGE_BITS) as usize;
+        if !(first_pg..=last_pg).any(|p| self.code_pages.get(p).copied().unwrap_or(false)) {
+            return;
+        }
+
+        let cur_gen = self.generation;
+        // A block overlapping the range starts at most one block span before it.
+        let lo = start.saturating_sub(MAX_BLOCK_LEN as u32 * 4);
+
+        let mut pc = lo & !1;
+        while pc < end {
+            let idx = Self::slot_index(pc);
+            let slot = &self.cache[idx];
+            if slot.gen_tag == cur_gen && slot.pc == pc && slot.block.as_ref().is_some_and(|b| start < b.end_pc) {
+                self.cache[idx] = Slot::default();
+            }
+            pc = pc.wrapping_add(2);
+        }
+
+        let mut pc = lo & !3;
+        while pc < end {
+            let idx = Self::slot_index(pc);
+            let slot = &self.arm_cache[idx];
+            if slot.gen_tag == cur_gen && slot.pc == pc && slot.block.as_ref().is_some_and(|b| start < b.end_pc) {
+                self.arm_cache[idx] = Slot::default();
+            }
+            pc = pc.wrapping_add(4);
+        }
+    }
+
     #[inline(always)]
     fn slot_index(pc: u32) -> usize {
         ((pc >> 1) & CACHE_MASK) as usize
@@ -863,7 +904,10 @@ impl ArmEngine for JitEngine {
 
     fn mem_write(&mut self, address: u32, data: &[u8]) -> Result<()> {
         self.mem.write_range(address, data)?;
-        self.flush_blocks();
+        // A host-side write (loader, or a syscall handler filling guest memory)
+        // only needs to drop blocks it actually overwrites. Flushing everything
+        // here made every memory-writing syscall recompile the whole cache.
+        self.invalidate_range(address, data.len());
         Ok(())
     }
 
@@ -1316,6 +1360,34 @@ mod tests {
         // block rather than being single-stepped — which is what exercises the
         // stale-block invalidation.
         assert_same(&code, &regs, CODE + 10);
+    }
+
+    #[test]
+    fn jit_host_write_invalidates_code() {
+        // A host-side `mem_write` (loader / syscall handler) into a region that
+        // holds a compiled block must drop it, so a later run sees the new bytes.
+        fn go<E: ArmEngine>(mut e: E) -> u32 {
+            e.mem_map(0, 0x10000, MemoryPermission::ReadExecute);
+            e.mem_map(DATA, DATA_SIZE, MemoryPermission::ReadWrite);
+            let end = CODE + 4;
+            e.mem_write(CODE, &thumb(&[0x2011, B_NEXT])).unwrap(); // movs r0,#0x11 ; b end
+            let run_to_end = |e: &mut E| {
+                for _ in 0..1000 {
+                    match e.run(end, 1000) {
+                        Ok(EngineRunResult::CountExhausted) => continue,
+                        _ => break,
+                    }
+                }
+            };
+            e.reg_write(ArmRegister::PC, CODE | 1);
+            run_to_end(&mut e); // compiles + caches the block; r0 = 0x11
+            e.mem_write(CODE, &thumb(&[0x2022])).unwrap(); // host patches -> movs r0,#0x22
+            e.reg_write(ArmRegister::PC, CODE | 1);
+            run_to_end(&mut e); // must recompile from the patched byte
+            e.reg_read(ArmRegister::R0)
+        }
+        assert_eq!(go(JitEngine::new()), go(Arm32CpuEngine::new()));
+        assert_eq!(go(JitEngine::new()), 0x22);
     }
 
     #[test]
