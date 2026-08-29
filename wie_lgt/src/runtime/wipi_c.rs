@@ -24,6 +24,43 @@ use crate::runtime::{SVC_CATEGORY_WIPIC, svc_ids::WIPICSvcId};
 const TIME_VALUE_PTR: u32 = 0x7fff1004;
 const IME_SUPPORTED_MODES_PTR: u32 = 0x7fff1008;
 
+/// Per-WIPI-C-function call counts (indexed by the raw svc id), so the perf
+/// meter can name which API dominates the ~half-million calls per second.
+const WIPIC_ID_MAX: usize = 0x600;
+pub(crate) static WIPIC_SVC_COUNT: [core::sync::atomic::AtomicU64; WIPIC_ID_MAX] = [const { core::sync::atomic::AtomicU64::new(0) }; WIPIC_ID_MAX];
+
+/// Log the top WIPI-C functions by call rate (names via `WIPICSvcId`), draining
+/// the counters. Identifies the exact hot syscall behind the frame cost.
+pub(crate) fn report_hot_wipic(dt_ms: u64) {
+    use core::fmt::Write;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let mut top: [(usize, u64); 6] = [(0, 0); 6];
+    for (id, slot) in WIPIC_SVC_COUNT.iter().enumerate() {
+        let count = slot.swap(0, Relaxed);
+        if count > top[5].1 {
+            top[5] = (id, count);
+            top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        }
+    }
+    if top[0].1 == 0 {
+        return;
+    }
+    let mut line = alloc::string::String::from("[wipic]");
+    for (id, count) in top.iter().filter(|(_, c)| *c > 0) {
+        let per_s = *count as f64 * 1000.0 / dt_ms as f64;
+        match WIPICSvcId::try_from(SvcId(*id as u32)) {
+            Ok(name) => {
+                let _ = write!(line, " {name:?}({id:#x})={per_s:.0}/s");
+            }
+            Err(_) => {
+                let _ = write!(line, " {id:#x}={per_s:.0}/s");
+            }
+        }
+    }
+    tracing::info!("{line}");
+}
+
 struct WIPICMethodResult {
     result: WIPICResult,
 }
@@ -53,6 +90,7 @@ async fn handle_wipic_svc(
     ),
     id: SvcId,
 ) -> Result<()> {
+    WIPIC_SVC_COUNT[(id.0 as usize).min(WIPIC_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let wipic_context = LgtWIPICContext::new(
         core.clone(),
         system.clone(),

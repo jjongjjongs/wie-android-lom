@@ -7,7 +7,7 @@ mod java;
 mod savepoint;
 mod stdlib;
 mod svc_ids;
-mod wipi_c;
+pub(crate) mod wipi_c;
 
 const SVC_CATEGORY_INIT: u32 = 1;
 const SVC_CATEGORY_WIPIC: u32 = 3;
