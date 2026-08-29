@@ -253,6 +253,23 @@ impl Screen for AndroidScreen {
                 .collect::<Vec<_>>()
         };
 
+        // Diagnostic: record the content/blank pattern of successive paints, so
+        // a title that alternates a real frame with a cleared one (and whose
+        // blank half we keep) shows up as e.g. "CBCBCB". Logged in blocks of 48.
+        {
+            use std::sync::Mutex as StdMutex;
+            use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+            static SEQ: StdMutex<String> = StdMutex::new(String::new());
+            static N: AtomicUsize = AtomicUsize::new(0);
+            let blank = !pixels.iter().any(|&p| p != 0);
+            let mut seq = SEQ.lock().unwrap_or_else(|x| x.into_inner());
+            seq.push(if blank { 'B' } else { 'C' });
+            if N.fetch_add(1, Relaxed) % 48 == 47 {
+                tracing::info!("[present] paint seq: {seq}");
+                seq.clear();
+            }
+        }
+
         let frame = Frame {
             width: image.width(),
             height: image.height(),
