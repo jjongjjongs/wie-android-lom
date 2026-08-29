@@ -93,13 +93,20 @@ pub(crate) struct JitCtx {
     /// reads it to service the common in-bounds, aligned load/store inline
     /// instead of calling a helper. Offset 104.
     pub pages: *const *const u8,
-    /// The address of a store that hit a code page (see `smc`), used to
-    /// invalidate only the block(s) that actually cover it. `smc == 2` means two
-    /// distinct such addresses were seen in one run and the exact one is unknown,
-    /// so the dispatcher flushes everything to stay correct. Offset 112 (only the
-    /// Rust helpers touch it; the code generator needs no offset for it).
-    pub smc_addr: u32,
+    /// Addresses of the stores that hit a code page in the current block (see
+    /// `smc`), so the dispatcher can invalidate only the block(s) that actually
+    /// cover them. A multi-register store (`push`/`stm`) writes several distinct
+    /// words before its single SMC check, so more than one is buffered. `smc_n`
+    /// is how many are valid; `smc_n > SMC_ADDR_MAX` means the buffer overflowed
+    /// and the dispatcher flushes everything. Only the Rust helpers touch these,
+    /// so the code generator needs no offsets for them.
+    pub smc_addrs: [u32; SMC_ADDR_MAX],
+    pub smc_n: u32,
 }
+
+/// Capacity of `JitCtx::smc_addrs`: enough for the widest multi-register store
+/// (`push`/`pop`/`ldm`/`stm`, at most 16 registers).
+pub(crate) const SMC_ADDR_MAX: usize = 16;
 
 impl JitCtx {
     fn new() -> Self {
@@ -114,7 +121,8 @@ impl JitCtx {
             budget: 0,
             scratch: 0,
             pages: core::ptr::null(),
-            smc_addr: 0,
+            smc_addrs: [0; SMC_ADDR_MAX],
+            smc_n: 0,
         }
     }
 }
@@ -337,9 +345,21 @@ impl JitEngine {
     /// written address — a store to data that merely shares a page with code
     /// (the common case) then invalidates nothing and the hot blocks survive.
     fn handle_smc(&mut self) {
-        if self.ctx.smc >= 2 {
+        let n = self.ctx.smc_n as usize;
+        if n > SMC_ADDR_MAX {
             self.flush_blocks();
-        } else if self.invalidate_at(self.ctx.smc_addr) {
+            return;
+        }
+        // Precisely invalidate the block(s) covering each flagged store. A store
+        // to data that merely shares a page with code matches nothing and leaves
+        // the hot blocks intact; this is the common case for a `push`/`stm` to a
+        // stack that happens to sit in the code's page.
+        let addrs = self.ctx.smc_addrs;
+        let mut any = false;
+        for &addr in &addrs[..n] {
+            any |= self.invalidate_at(addr);
+        }
+        if any {
             self.smc_invalidations += 1;
         }
     }
@@ -689,6 +709,7 @@ impl ArmEngine for JitEngine {
                     crate::PC_SAMPLES[(pc >> 16) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
                     self.ctx.faulted = 0;
                     self.ctx.smc = 0;
+                    self.ctx.smc_n = 0;
                     let start_budget = budget.min(i32::MAX as u64) as i32;
                     self.ctx.budget = start_budget;
                     let reason = {
@@ -776,6 +797,7 @@ impl ArmEngine for JitEngine {
                 crate::PC_SAMPLES[(pc >> 16) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
                 self.ctx.faulted = 0;
                 self.ctx.smc = 0;
+                self.ctx.smc_n = 0;
                 // The compiled trace decrements `budget` per basic block and
                 // yields when it reaches zero, so the delta is the retired count.
                 let start_budget = budget.min(i32::MAX as u64) as i32;
@@ -958,12 +980,15 @@ unsafe fn note_store(ctx: &mut JitCtx, addr: u32) {
     if !ctx.code_pages.is_null() {
         let page = (addr >> CODE_PAGE_BITS) as usize;
         if unsafe { *ctx.code_pages.add(page) } {
-            if ctx.smc == 0 {
-                ctx.smc = 1;
-                ctx.smc_addr = addr;
-            } else if ctx.smc_addr != addr {
-                ctx.smc = 2;
+            ctx.smc = 1;
+            let n = ctx.smc_n as usize;
+            if n < SMC_ADDR_MAX {
+                ctx.smc_addrs[n] = addr;
             }
+            // Saturates past the buffer; the dispatcher reads `smc_n > MAX` as
+            // "overflowed, flush everything" (a store op wider than 16 words,
+            // which the ARM/Thumb encodings cannot produce, so never in practice).
+            ctx.smc_n += 1;
         }
     }
 }
@@ -1291,6 +1316,25 @@ mod tests {
         // block rather than being single-stepped — which is what exercises the
         // stale-block invalidation.
         assert_same(&code, &regs, CODE + 10);
+    }
+
+    #[test]
+    fn jit_push_into_code_page_is_not_smc() {
+        // A `push` whose stack sits in the same page as code writes several words
+        // to code-page addresses, flagging SMC for each. None overlap a compiled
+        // block's instruction bytes, so nothing must be invalidated and execution
+        // must match the interpreter. This exercises the multi-address SMC buffer.
+        let code = thumb(&[
+            0xb407, // CODE+0: push {r0,r1,r2}  (three code-page stack writes)
+            0x2342, // CODE+2: movs r3, #0x42
+            B_NEXT, // CODE+4 -> CODE+6
+        ]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0x1111;
+        regs[1] = 0x2222;
+        regs[2] = 0x3333;
+        regs[13] = CODE + 0x800; // stack in the code's 64 KiB region, above the code
+        assert_same(&code, &regs, CODE + 6);
     }
 
     #[test]
