@@ -39,6 +39,10 @@ pub static RUN_CALLS: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic::At
 /// still misses compiled code.
 pub static JIT_FALLBACKS: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic::AtomicU64::new(0);
 
+/// Per-category SVC counts (the SWI number, 0..255), so the perf meter can name
+/// which syscall category dominates the round-trip cost.
+pub static SVC_CATEGORY_COUNT: [::core::sync::atomic::AtomicU64; 256] = [const { ::core::sync::atomic::AtomicU64::new(0) }; 256];
+
 pub use self::{
     allocator::Allocator,
     binary_patches::install_binary_patches,

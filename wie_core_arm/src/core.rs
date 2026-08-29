@@ -347,6 +347,7 @@ impl ArmCore {
                 EngineRunResult::CountExhausted => {}
                 EngineRunResult::Svc { category, lr, spsr } => {
                     crate::SVC_COUNT.fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
+                    crate::SVC_CATEGORY_COUNT[(category & 0xff) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
                     {
                         let mut inner = self.inner.lock();
                         // Restore the pre-exception execution state before running the Rust SVC handler.
