@@ -2,9 +2,18 @@ use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
 use spin::Mutex;
 use wie_core_arm::{Allocator, ArmCore, ArmCoreContext, ThreadId};
-use wie_util::{ByteWrite, Result, WieError};
+use wie_util::{ByteWrite, Result, WieError, read_generic};
 
 const SAVE_POINT_SIZE: u32 = 0x10c;
+
+/// A real save-point chain is a handful of frames deep. A "depth" far above this
+/// is not a chain index at all - on some titles the import slot that resolves to
+/// `vm_alloc_save_point` here (table `0x64` function `0x03`) is a different
+/// function whose pointer/size argument lands in the same register. Rather than
+/// end the run on it - which hides everything the game does next, the very thing
+/// that reveals what the slot really is - such a call is logged and allowed to
+/// continue with an appended save point.
+const IMPLAUSIBLE_SAVE_POINT_DEPTH: usize = 0x1000;
 
 #[derive(Clone)]
 struct SavePoint {
@@ -27,24 +36,47 @@ impl SavePointState {
 
     pub fn alloc(&self, core: &mut ArmCore, depth: u32) -> Result<u32> {
         let thread_id = Self::thread_id(core);
+        let raw_depth = depth;
         let depth = depth as usize;
 
-        {
+        let insert_at = {
             let chains = self.chains.lock();
             let len = chains.get(&thread_id).map_or(0, Vec::len);
-            if depth > len {
+
+            if depth > IMPLAUSIBLE_SAVE_POINT_DEPTH {
+                // Not a chain index - dump what the game actually passed so the
+                // slot's real meaning can be identified, then append and carry on.
+                let mut words = alloc::string::String::new();
+                for i in 0..8u32 {
+                    match read_generic::<u32, _>(core, raw_depth.wrapping_add(i * 4)) {
+                        Ok(value) => words.push_str(&alloc::format!(" {value:#010x}")),
+                        Err(_) => {
+                            words.push_str(" <unmapped>");
+                            break;
+                        }
+                    }
+                }
+                tracing::warn!(
+                    "vm_alloc_save_point depth {raw_depth:#x} is a pointer, not a chain index (thread {thread_id}, chain len {len}); \
+                     slot (0x64,0x03) may not be vm_alloc_save_point on this title. Appending and continuing. [{raw_depth:#x}]:{words}"
+                );
+                len
+            } else if depth > len {
                 return Err(WieError::FatalError(alloc::format!(
                     "vm_alloc_save_point depth {depth} exceeds thread {thread_id} chain length {len}"
                 )));
+            } else {
+                depth
             }
-        }
+        };
 
         let address = Allocator::alloc(core, SAVE_POINT_SIZE)?;
         core.write_bytes(address, &[0; SAVE_POINT_SIZE as usize])?;
 
         let mut chains = self.chains.lock();
         let chain = chains.entry(thread_id).or_default();
-        chain.insert(depth, SavePoint { address, continuation: None });
+        let insert_at = insert_at.min(chain.len());
+        chain.insert(insert_at, SavePoint { address, continuation: None });
 
         Ok(address)
     }
@@ -195,6 +227,23 @@ mod tests {
         assert_eq!(after.lr, 0x1234_5678);
         assert_eq!(after.pc, continuation & !1);
         assert_ne!(after.cpsr & 0x20, 0);
+    }
+
+    #[test]
+    fn pointer_sized_depth_is_appended_rather_than_fatal() {
+        // A title whose (0x64,0x03) slot is not vm_alloc_save_point passes a
+        // pointer here. It must not end the run: the call appends a save point
+        // and returns it, so the game runs on and reveals the slot's real use.
+        let mut core = core();
+        let state = SavePointState::default();
+
+        let head = state.alloc(&mut core, 0).unwrap();
+        let bogus = state.alloc(&mut core, 0x735d4).unwrap();
+        assert_ne!(bogus, 0);
+
+        // The bogus call landed at the end, leaving the real head reachable.
+        assert_eq!(state.free(&mut core, 1).unwrap(), bogus);
+        assert_eq!(state.free(&mut core, 0).unwrap(), head);
     }
 
     #[test]
