@@ -40,12 +40,21 @@ struct ProfileState {
     callback: ProfileCallback,
 }
 
+/// A synchronous SVC fast path, tried before the generic async handler dispatch.
+/// Called with the core, the SVC category and the caller's return address; it
+/// returns `Ok(true)` if it fully handled the SVC (set the result and return
+/// PC), or `Ok(false)` to fall through to the normal handler. It lets a few
+/// extremely hot, trivial syscalls skip the context clone, method boxing and
+/// async-trait future allocation the generic path pays on every call.
+pub type FastSvcHandler = Arc<dyn Fn(&mut ArmCore, u32, u32) -> Result<bool> + Send + Sync>;
+
 pub(crate) struct ArmCoreInner {
     pub(crate) engine: Box<dyn ArmEngine>,
     last_thread_id: ThreadId,
     current_thread_id: Option<ThreadId>,
     threads: BTreeMap<ThreadId, ThreadState>,
     svc_handlers: BTreeMap<u32, Arc<Box<dyn RegisteredFunction>>>,
+    fast_svc: Option<FastSvcHandler>,
     svc_stubs: BTreeMap<(u32, u32), u32>,
     next_stub_address: u32,
     profile: Option<ProfileState>,
@@ -121,6 +130,7 @@ impl ArmCore {
             current_thread_id: None,
             threads: BTreeMap::new(),
             svc_handlers: BTreeMap::new(),
+            fast_svc: None,
             svc_stubs: BTreeMap::new(),
             next_stub_address: FUNCTIONS_BASE,
             profile,
@@ -348,11 +358,21 @@ impl ArmCore {
                 EngineRunResult::Svc { category, lr, spsr } => {
                     crate::SVC_COUNT.fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
                     crate::SVC_CATEGORY_COUNT[(category & 0xff) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
-                    {
+                    let fast_svc = {
                         let mut inner = self.inner.lock();
                         // Restore the pre-exception execution state before running the Rust SVC handler.
                         inner.engine.reg_write(ArmRegister::Cpsr, spsr);
                         inner.engine.reg_write(ArmRegister::PC, lr);
+                        inner.fast_svc.clone()
+                    };
+
+                    // Synchronous fast path for a few extremely hot syscalls,
+                    // skipping the async handler dispatch and its allocations.
+                    if let Some(fast_svc) = fast_svc {
+                        let mut core = self.clone();
+                        if fast_svc(&mut core, category, lr)? {
+                            continue;
+                        }
                     }
 
                     let function = {
@@ -518,6 +538,19 @@ impl ArmCore {
         let pc = inner.engine.reg_read(ArmRegister::PC);
 
         Ok((pc, lr))
+    }
+
+    /// Install the synchronous SVC fast path (see [`FastSvcHandler`]). Only one
+    /// handler is kept; a later call replaces the previous one.
+    pub fn set_fast_svc_handler(&self, handler: FastSvcHandler) {
+        self.inner.lock().fast_svc = Some(handler);
+    }
+
+    /// Read the SVC id the stub left in `IP`/`r12` (see `make_svc_stub`, which
+    /// writes the id into `r12` right before the `svc`). Used by the fast SVC
+    /// path to identify the call without going through the async handler.
+    pub fn read_svc_id(&self) -> u32 {
+        self.inner.lock().engine.reg_read(ArmRegister::IP)
     }
 
     pub fn write_return_value(&mut self, result: &[u32]) -> Result<()> {

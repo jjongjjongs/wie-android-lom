@@ -5,7 +5,7 @@ pub mod firmware_link;
 pub mod init;
 mod java;
 mod savepoint;
-mod stdlib;
+pub(crate) mod stdlib;
 mod svc_ids;
 pub(crate) mod wipi_c;
 
