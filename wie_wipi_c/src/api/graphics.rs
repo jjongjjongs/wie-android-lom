@@ -480,11 +480,43 @@ pub async fn flush_lcd(
     w: WIPICWord,
     h: WIPICWord,
 ) -> Result<()> {
-    tracing::info!("[present] MC_grpFlushLcd({i:#x}, {:#x}, {x:#x}, {y:#x}, {w:#x}, {h:#x})", framebuffer.0);
-
+    let fb_handle = framebuffer.0;
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
 
     let src_canvas = framebuffer.image(context)?;
+
+    // Diagnostic (rate-limited): is the buffer we present actually non-blank?
+    // A varied buffer here but a blank display points at the platform paint
+    // path; an all-one-colour buffer points at the draws not reaching it.
+    {
+        use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        static FLUSHES: AtomicU32 = AtomicU32::new(0);
+        if FLUSHES.fetch_add(1, Relaxed) % 30 == 0 {
+            let raw = src_canvas.raw();
+            let mut distinct = [0u16; 8];
+            let mut n_distinct = 0usize;
+            let mut nonzero = 0usize;
+            for px in raw.chunks_exact(2) {
+                let v = u16::from_le_bytes([px[0], px[1]]);
+                if v != 0 {
+                    nonzero += 1;
+                }
+                if n_distinct < distinct.len() && !distinct[..n_distinct].contains(&v) {
+                    distinct[n_distinct] = v;
+                    n_distinct += 1;
+                }
+            }
+            let total = raw.len() / 2;
+            tracing::info!(
+                "[present] flush fb={fb_handle:#x} {}x{} nonzero={nonzero}/{total} first_pixels={:04x?}",
+                framebuffer.0.width,
+                framebuffer.0.height,
+                &distinct[..n_distinct]
+            );
+        }
+    }
+
+    tracing::info!("[present] MC_grpFlushLcd({i:#x}, {fb_handle:#x}, {x:#x}, {y:#x}, {w:#x}, {h:#x})");
 
     let platform = context.system().platform();
     let screen = platform.screen();
