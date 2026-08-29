@@ -47,6 +47,17 @@ const MAX_BLOCK_LEN: usize = 256;
 const CACHE_SLOTS: usize = 1 << 13;
 const CACHE_MASK: u32 = (CACHE_SLOTS - 1) as u32;
 
+/// Granularity of self-modifying-code tracking, as `log2(bytes)`. A store into a
+/// region that holds compiled code invalidates every block, so this must be fine
+/// enough that a title's data/stack writes do not alias its code: at the guest's
+/// own 4 KiB page size, code and data (which the loader maps in separate pages)
+/// no longer collide. A coarse 64 KiB granularity made a hot render loop whose
+/// stack shared the code's 64 KiB region flush and recompile the whole cache on
+/// every store, collapsing throughput to interpreter levels.
+const CODE_PAGE_BITS: u32 = 12;
+/// One flag per `2^CODE_PAGE_BITS` bytes of the 32-bit address space.
+const CODE_PAGE_COUNT: usize = 1 << (32 - CODE_PAGE_BITS);
+
 /// Flat guest state a compiled block operates on. `#[repr(C)]` with a fixed
 /// layout the code generator hard-codes offsets into (see `backend::off`).
 #[repr(C)]
@@ -65,7 +76,8 @@ pub(crate) struct JitCtx {
     /// Guest memory (borrowed from the engine for the duration of a run).
     /// Offset 80.
     pub mem: *mut EmulatedMemory,
-    /// Per-64 KiB-region "has cached code" flags, for SMC detection. Offset 88.
+    /// Per-`2^CODE_PAGE_BITS`-region "has cached code" flags, for SMC detection.
+    /// Offset 88.
     pub code_pages: *const bool,
     /// Remaining instruction budget for this run. Compiled traces decrement it
     /// per basic block and yield to the dispatcher when it reaches zero; the
@@ -185,11 +197,15 @@ pub struct JitEngine {
     /// is only ever one ISA never aliases the other.
     arm_cache: Box<[Slot; CACHE_SLOTS]>,
     generation: u32,
-    code_pages: Box<[bool; 65536]>,
+    code_pages: Box<[bool]>,
     /// Per-category count of interpreter fallbacks, and the running total, for
     /// the periodic fallback profile (see `note_fallback`).
     fallbacks: [u64; NUM_FALLBACK],
     fallback_total: u64,
+    /// Count of full block-cache flushes caused by self-modifying-code hits, for
+    /// the periodic profile. A high rate means a title's data stores keep
+    /// aliasing its code region and forcing recompilation.
+    smc_flushes: u64,
     /// Histogram of the un-compilable Thumb opcodes that land in the catch-all
     /// `other` category, keyed by the instruction's high byte (`inst >> 8`),
     /// which selects the Thumb opcode group. When `other` dominates the profile
@@ -212,10 +228,12 @@ impl JitEngine {
             cache: Box::new(core::array::from_fn(|_| Slot::default())),
             arm_cache: Box::new(core::array::from_fn(|_| Slot::default())),
             generation: 1,
-            code_pages: Box::new([false; 65536]),
+            // Heap-built (a 1 MiB array must not go through the stack).
+            code_pages: alloc::vec![false; CODE_PAGE_COUNT].into_boxed_slice(),
             fallbacks: [0; NUM_FALLBACK],
             fallback_total: 0,
             other_hist: [0; 256],
+            smc_flushes: 0,
         }
     }
 
@@ -253,9 +271,20 @@ impl JitEngine {
                 }
             }
             if other_top.is_empty() {
-                tracing::info!("[jit] {} fallbacks; top: {}", self.fallback_total, top.trim_end());
+                tracing::info!(
+                    "[jit] {} fallbacks (smc-flushes={}); top: {}",
+                    self.fallback_total,
+                    self.smc_flushes,
+                    top.trim_end()
+                );
             } else {
-                tracing::info!("[jit] {} fallbacks; top: {}; other:{}", self.fallback_total, top.trim_end(), other_top);
+                tracing::info!(
+                    "[jit] {} fallbacks (smc-flushes={}); top: {}; other:{}",
+                    self.fallback_total,
+                    self.smc_flushes,
+                    top.trim_end(),
+                    other_top
+                );
             }
         }
     }
@@ -271,6 +300,7 @@ impl JitEngine {
     }
 
     fn flush_blocks(&mut self) {
+        self.smc_flushes += 1;
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
             for slot in self.cache.iter_mut() {
@@ -431,7 +461,7 @@ impl JitEngine {
         } else {
             pc.wrapping_add(2 * compiled_ops as u32)
         };
-        self.code_pages[(pc >> 16) as usize] = true;
+        self.code_pages[(pc >> CODE_PAGE_BITS) as usize] = true;
         let cur_gen = self.generation;
         let slot = &mut self.cache[idx];
         slot.gen_tag = cur_gen;
@@ -483,7 +513,7 @@ impl JitEngine {
         } else {
             pc.wrapping_add(4 * compiled_ops as u32)
         };
-        self.code_pages[(pc >> 16) as usize] = true;
+        self.code_pages[(pc >> CODE_PAGE_BITS) as usize] = true;
         let cur_gen = self.generation;
         let slot = &mut self.arm_cache[idx];
         slot.gen_tag = cur_gen;
@@ -854,7 +884,7 @@ pub(crate) unsafe extern "C" fn jit_load32(ctx: *mut JitCtx, addr: u32) -> u32 {
 unsafe fn note_store(ctx: &mut JitCtx, addr: u32) {
     // Flag self-modifying code: a store into a page that holds compiled blocks.
     if !ctx.code_pages.is_null() {
-        let page = (addr >> 16) as usize;
+        let page = (addr >> CODE_PAGE_BITS) as usize;
         if unsafe { *ctx.code_pages.add(page) } {
             ctx.smc = 1;
         }
