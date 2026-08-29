@@ -642,12 +642,18 @@ fn lgt_local_purchase_success_response(request: &[u8]) -> Option<[u8; LGT_LOCAL_
     let declared_length = u16::from_be_bytes([request[2], request[3]]) as usize;
     let message_type = u16::from_be_bytes([request[4], request[5]]);
 
+<<<<<<< HEAD
     // Native LGT clients may expose only the current socket-write slice even
     // though the application header declares the complete frame length.
     // Red Gem builds a 19-byte 0x68 frame but calls MC_netSocketWrite with
     // its first 10 bytes. Accept a header-complete prefix, while rejecting
     // malformed slices that exceed the declared frame.
     if declared_length < 6 || request.len() > declared_length || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE {
+=======
+    if declared_length != request.len()
+        || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE
+    {
+>>>>>>> parent of 54b34ba (Accept native LGT billing write prefixes)
         return None;
     }
 
@@ -2722,6 +2728,7 @@ fn http_validate_config(context: &mut dyn WIPICContext, handle: i32) -> core::re
 
 #[cfg(test)]
 mod network_state_tests {
+<<<<<<< HEAD
     use alloc::{boxed::Box, vec};
 
     use test_utils::TestPlatform;
@@ -2849,6 +2856,12 @@ mod network_state_tests {
         }
     }
 
+=======
+    use alloc::vec;
+
+    use super::*;
+
+>>>>>>> parent of 54b34ba (Accept native LGT billing write prefixes)
     #[test]
     fn process_connect_lifecycle_matches_reference_states() {
         let mut state = NetworkState::default();
@@ -3534,6 +3547,7 @@ mod network_state_tests {
         );
     }
 
+<<<<<<< HEAD
     #[futures_test::test]
     async fn local_lgt_purchase_bill_socket_accepts_native_ten_byte_write_prefix() {
         const REQUEST: u32 = 0x1000;
@@ -3612,6 +3626,8 @@ mod network_state_tests {
         );
     }
 
+=======
+>>>>>>> parent of 54b34ba (Accept native LGT billing write prefixes)
     #[test]
     fn local_lgt_purchase_68_builds_69_status_zero_response() {
         let request = [
@@ -3635,6 +3651,7 @@ mod network_state_tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn local_lgt_purchase_rejects_write_longer_than_declared_frame() {
         let malformed = [0xff, 0xff, 0x00, 0x07, 0x00, 0x68, 0x00, 0x00];
 
@@ -3642,6 +3659,8 @@ mod network_state_tests {
     }
 
     #[test]
+=======
+>>>>>>> parent of 54b34ba (Accept native LGT billing write prefixes)
     fn local_lgt_purchase_rejects_malformed_length() {
         let malformed = [0xff, 0xff, 0x00, 0x02, 0x00, 0x68, 0x00];
 
