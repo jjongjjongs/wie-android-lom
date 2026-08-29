@@ -190,6 +190,12 @@ pub struct JitEngine {
     /// the periodic fallback profile (see `note_fallback`).
     fallbacks: [u64; NUM_FALLBACK],
     fallback_total: u64,
+    /// Histogram of the un-compilable Thumb opcodes that land in the catch-all
+    /// `other` category, keyed by the instruction's high byte (`inst >> 8`),
+    /// which selects the Thumb opcode group. When `other` dominates the profile
+    /// this pinpoints the exact instruction the compiler should learn next,
+    /// without another guess-and-check round trip on device.
+    other_hist: [u64; 256],
 }
 
 // The raw pointers in `JitCtx` are refreshed at the start of every `run` and
@@ -209,6 +215,7 @@ impl JitEngine {
             code_pages: Box::new([false; 65536]),
             fallbacks: [0; NUM_FALLBACK],
             fallback_total: 0,
+            other_hist: [0; 256],
         }
     }
 
@@ -230,7 +237,26 @@ impl JitEngine {
                 use core::fmt::Write;
                 let _ = write!(top, "{}={} ", FALLBACK_NAMES[i], self.fallbacks[i]);
             }
-            tracing::info!("[jit] {} fallbacks; top: {}", self.fallback_total, top.trim_end());
+            // When the catch-all `other` bucket is significant, name the Thumb
+            // opcode groups behind it (by high byte) so the next log says exactly
+            // which instruction to teach the compiler.
+            let mut other_top = alloc::string::String::new();
+            if self.fallbacks[11] > 0 {
+                let mut hi: [usize; 256] = core::array::from_fn(|i| i);
+                hi.sort_unstable_by_key(|&i| core::cmp::Reverse(self.other_hist[i]));
+                use core::fmt::Write;
+                for &h in hi.iter().take(4) {
+                    if self.other_hist[h] == 0 {
+                        break;
+                    }
+                    let _ = write!(other_top, " {:#04x}xx={}", h, self.other_hist[h]);
+                }
+            }
+            if other_top.is_empty() {
+                tracing::info!("[jit] {} fallbacks; top: {}", self.fallback_total, top.trim_end());
+            } else {
+                tracing::info!("[jit] {} fallbacks; top: {}; other:{}", self.fallback_total, top.trim_end(), other_top);
+            }
         }
     }
 
@@ -238,6 +264,9 @@ impl JitEngine {
     fn note_fallback(&mut self, pc: u32) {
         let inst = self.mem.peek_u16(pc).unwrap_or(0);
         let category = fallback_category(inst);
+        if category == 11 {
+            self.other_hist[(inst >> 8) as usize] += 1;
+        }
         self.record_fallback(category);
     }
 

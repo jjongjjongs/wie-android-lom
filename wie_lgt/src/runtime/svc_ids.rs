@@ -551,7 +551,7 @@ impl From<WIPICSvcId> for u32 {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[repr(u32)]
 pub enum StdlibSvcId {
     Printf = 0x3f6,
@@ -576,5 +576,32 @@ pub enum StdlibSvcId {
 impl From<StdlibSvcId> for u32 {
     fn from(value: StdlibSvcId) -> Self {
         value as u32
+    }
+}
+
+impl TryFrom<SvcId> for StdlibSvcId {
+    type Error = wie_util::WieError;
+
+    fn try_from(value: SvcId) -> Result<Self, Self::Error> {
+        Ok(match value.0 {
+            0x3f6 => Self::Printf,
+            0x3f7 => Self::Sprintf,
+            0x3fb => Self::Atoi,
+            0x405 => Self::Strcpy,
+            0x406 => Self::Strncpy,
+            0x407 => Self::Strcat,
+            0x409 => Self::Strcmp,
+            0x40a => Self::Strncmp,
+            0x410 => Self::Strstr,
+            0x411 => Self::Strlen,
+            0x414 => Self::Memcpy,
+            0x415 => Self::Memmove,
+            0x416 => Self::Memcmp,
+            0x418 => Self::Memset,
+            0x41a => Self::Time,
+            0x420 => Self::Localtime,
+            0x424 => Self::Atexit,
+            _ => return Err(wie_util::WieError::FatalError(alloc::format!("Unknown stdlib svc id: {:#x}", value.0))),
+        })
     }
 }

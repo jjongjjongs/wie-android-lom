@@ -10,6 +10,45 @@ use wie_wipi_c::api::kernel::format_varargs;
 
 use crate::runtime::{SVC_CATEGORY_STDLIB, savepoint::SavePointState, svc_ids::StdlibSvcId};
 
+/// Per-stdlib-function call counts (indexed by raw svc id), so the perf meter
+/// can name which C-runtime import dominates when the `stdlib` category is the
+/// hot syscall category. Stdlib ids sit below `0x600`.
+const STDLIB_ID_MAX: usize = 0x600;
+pub(crate) static STDLIB_SVC_COUNT: [core::sync::atomic::AtomicU64; STDLIB_ID_MAX] = [const { core::sync::atomic::AtomicU64::new(0) }; STDLIB_ID_MAX];
+
+/// Log the top stdlib functions by call rate (names via `StdlibSvcId`), draining
+/// the counters. Identifies the exact hot C-runtime import behind the frame cost
+/// for titles whose bottleneck is the `stdlib` syscall round-trip.
+pub(crate) fn report_hot_stdlib(dt_ms: u64) {
+    use core::fmt::Write;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let mut top: [(usize, u64); 6] = [(0, 0); 6];
+    for (id, slot) in STDLIB_SVC_COUNT.iter().enumerate() {
+        let count = slot.swap(0, Relaxed);
+        if count > top[5].1 {
+            top[5] = (id, count);
+            top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        }
+    }
+    if top[0].1 == 0 {
+        return;
+    }
+    let mut line = String::from("[stdlib]");
+    for (id, count) in top.iter().filter(|(_, c)| *c > 0) {
+        let per_s = *count as f64 * 1000.0 / dt_ms as f64;
+        match StdlibSvcId::try_from(SvcId(*id as u32)) {
+            Ok(name) => {
+                let _ = write!(line, " {name:?}({id:#x})={per_s:.0}/s");
+            }
+            Err(_) => {
+                let _ = write!(line, " {id:#x}={per_s:.0}/s");
+            }
+        }
+    }
+    tracing::info!("{line}");
+}
+
 #[derive(Clone)]
 struct StdlibSvcContext {
     system: System,
@@ -18,6 +57,7 @@ struct StdlibSvcContext {
 
 pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System, save_points: &SavePointState) -> Result<()> {
     async fn handle_stdlib_svc(core: &mut ArmCore, context: &mut StdlibSvcContext, id: SvcId) -> Result<()> {
+        STDLIB_SVC_COUNT[(id.0 as usize).min(STDLIB_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let (_, lr) = core.read_pc_lr()?;
 
         // Kernel table 1 / function 0x32 is libc setjmp. The guest passes the
