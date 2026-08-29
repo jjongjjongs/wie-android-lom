@@ -217,8 +217,12 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
         use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
         static HANDED: AtomicU32 = AtomicU32::new(0);
         if HANDED.fetch_add(1, Relaxed) % 30 == 0 {
+            // Count non-zero pixels in the frame actually handed to Java: if this
+            // is blank while flush_lcd sampled content, the game flushes both
+            // content and blank frames and Java keeps latching the blank ones.
+            let nonzero = frame.pixels.iter().filter(|&&p| p != 0).count();
             tracing::info!(
-                "[present] nativeFrame -> Java {}x{} ({} px)",
+                "[present] nativeFrame -> Java {}x{} ({} px, nonzero={nonzero})",
                 frame.width,
                 frame.height,
                 frame.pixels.len()
