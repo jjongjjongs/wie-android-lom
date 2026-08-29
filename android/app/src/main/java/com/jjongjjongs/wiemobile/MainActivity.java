@@ -1053,7 +1053,7 @@ public final class MainActivity extends Activity {
             if (width <= 0 || height <= 0 || frame.length != width * height + 2) {
                 // Diagnostic: a malformed frame is dropped, which freezes the LCD.
                 if ((frameLog++ % 30) == 0) {
-                    Log.w(TAG, "setFrame drop: w=" + width + " h=" + height + " len=" + frame.length);
+                    NativeBridge.nativeUiLog("setFrame drop w=" + width + " h=" + height + " len=" + frame.length);
                 }
                 return;
             }
@@ -1064,8 +1064,8 @@ public final class MainActivity extends Activity {
 
             bitmap.copyPixelsFromBuffer(ShortBuffer.wrap(frame, 2, width * height));
             if ((frameLog++ % 30) == 0) {
-                Log.i(TAG, "setFrame ok: " + width + "x" + height + " view=" + getWidth() + "x" + getHeight()
-                        + " shown=" + isShown() + " vis=" + getVisibility());
+                NativeBridge.nativeUiLog("setFrame ok " + width + "x" + height + " view=" + getWidth() + "x" + getHeight()
+                        + " shown=" + isShown() + " vis=" + getVisibility() + " attached=" + isAttachedToWindow());
             }
             invalidate();
         }
@@ -1075,11 +1075,14 @@ public final class MainActivity extends Activity {
             super.onDraw(canvas);
 
             if (bitmap == null) {
+                if ((drawLog++ % 30) == 0) {
+                    NativeBridge.nativeUiLog("onDraw: bitmap=null view=" + getWidth() + "x" + getHeight());
+                }
                 return;
             }
 
             if ((drawLog++ % 30) == 0) {
-                Log.i(TAG, "onDraw: view=" + getWidth() + "x" + getHeight() + " bitmap=" + bitmap.getWidth() + "x" + bitmap.getHeight());
+                NativeBridge.nativeUiLog("onDraw view=" + getWidth() + "x" + getHeight() + " bitmap=" + bitmap.getWidth() + "x" + bitmap.getHeight());
             }
 
             float scale = Math.min((float) getWidth() / bitmap.getWidth(), (float) getHeight() / bitmap.getHeight());

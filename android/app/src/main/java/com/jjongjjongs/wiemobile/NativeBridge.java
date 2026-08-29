@@ -72,6 +72,12 @@ final class NativeBridge {
      */
     static native byte[] nativeRenderAudio(int frames);
 
+    /**
+     * Routes a Java-side diagnostic line into the emulator's own log, so UI
+     * traces appear in the same capture as the Rust ones.
+     */
+    static native void nativeUiLog(String message);
+
     /** Returns a pending handset backlight mode, or zero when unchanged. */
     static native int nativePollBacklightMode();
 

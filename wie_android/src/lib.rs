@@ -176,6 +176,22 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
     guard(|| with_runner(|runner| runner.key(index, pressed != 0)));
 }
 
+/// `nativeUiLog(String message)`
+///
+/// Routes a Java-side diagnostic line into the emulator's tracing, so UI-thread
+/// traces land in the same capture as the Rust ones.
+///
+/// # Safety
+/// Called by the JVM with valid `env` and `message` references.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeUiLog(mut env: JNIEnv, _class: JClass, message: JString) {
+    let message: String = match env.get_string(&message) {
+        Ok(value) => value.into(),
+        Err(_) => return,
+    };
+    tracing::info!("[java] {message}");
+}
+
 /// `nativeFrame() -> short[]`
 ///
 /// Returns `null` when nothing new has been painted, otherwise
