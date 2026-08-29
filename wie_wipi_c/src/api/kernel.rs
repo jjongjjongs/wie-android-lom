@@ -95,8 +95,6 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
 async fn subscriber_number(context: &mut dyn WIPICContext) -> String {
     const FALLBACK: &str = "01046119269";
 
-    // Offline DRM: recover the exact number cert.c2s was issued for. Checked
-    // first because it is the precise, verified number for those titles.
     if let Ok(cert) = context.read_resource("cert.c2s").await
         && let Some(number) = lgt_cert::recover_phone_number(&cert)
     {
@@ -104,31 +102,7 @@ async fn subscriber_number(context: &mut dyn WIPICContext) -> String {
         return number;
     }
 
-    // Online-billing titles instead ship a "certification" resource holding the
-    // number they are already certified for and, at start-up, compare it against
-    // PHONENUMBER — a mismatch drives them into a billing handshake that cannot
-    // complete offline (they spin retrying). Reporting the stored number makes
-    // that check agree and skips billing.
-    if let Ok(stored) = context.read_resource("certification").await
-        && let Some(number) = phone_from_bytes(&stored)
-    {
-        tracing::info!("using certified subscriber number from certification resource: {number:?}");
-        return number;
-    }
-
     FALLBACK.to_string()
-}
-
-/// Interpret a stored certification blob as a NUL/space-terminated subscriber
-/// number, returning it only when it is a plausible all-digit number.
-fn phone_from_bytes(bytes: &[u8]) -> Option<String> {
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    let text = core::str::from_utf8(&bytes[..end]).ok()?.trim();
-    if (10..=15).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_digit()) {
-        Some(text.to_string())
-    } else {
-        None
-    }
 }
 
 pub async fn set_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, ptr_value: WIPICWord) -> Result<()> {
