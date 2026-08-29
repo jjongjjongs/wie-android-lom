@@ -806,11 +806,36 @@ pub async fn vm_run_main_class(
     argv: u32,
 ) -> Result<u32> {
     let argc = argc.min(MAX_MAIN_ARGUMENTS);
+    tracing::debug!("vm_run_main_class: argc={argc}, argv={argv:#x}");
 
+    // Reading the argument vector must not end the run. Not every ABI passes
+    // argc/argv in the registers the classic one does, so a title can reach
+    // here with a bogus vector; an unreadable entry stops collection and the
+    // main class still runs (with the arguments gathered so far), rather than
+    // the whole title dying before it starts.
     let mut arguments = Vec::with_capacity(argc as usize);
     for index in 0..argc {
-        let pointer: u32 = read_generic(core, argv + index * 4)?;
-        let bytes = read_null_terminated_string_bytes(core, pointer)?;
+        let pointer: u32 = match read_generic(core, argv + index * 4) {
+            Ok(pointer) => pointer,
+            Err(error) => {
+                tracing::warn!(
+                    "vm_run_main_class: argv[{index}] at {:#x} unreadable ({error:?}); using {} argument(s)",
+                    argv + index * 4,
+                    arguments.len()
+                );
+                break;
+            }
+        };
+        let bytes = match read_null_terminated_string_bytes(core, pointer) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(
+                    "vm_run_main_class: argv[{index}] string at {pointer:#x} unreadable ({error:?}); using {} argument(s)",
+                    arguments.len()
+                );
+                break;
+            }
+        };
 
         arguments.push(String::from_utf8_lossy(&bytes).into_owned());
     }

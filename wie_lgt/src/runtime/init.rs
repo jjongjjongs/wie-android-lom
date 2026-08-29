@@ -736,6 +736,20 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // parameters name the class, which is `org/kwis/msp/lcdui/Main`; the
         // argument vector selects the application's Jlet.
         InitSvcId::VmRunMainClass => {
+            // Log every argument register: on the classic ABI param2/param3 are
+            // argc/argv, but titles that reach here through a different table-0x64
+            // ABI may carry them elsewhere, and this shows which.
+            let raw: Vec<u32> = (0..6).map(|index| core.read_param(index)).collect::<Result<_>>()?;
+            tracing::debug!(
+                "vm_run_main_class raw params: p0={:#x} p1={:#x} p2={:#x} p3={:#x} p4={:#x} p5={:#x}",
+                raw[0],
+                raw[1],
+                raw[2],
+                raw[3],
+                raw[4],
+                raw[5]
+            );
+
             let argc = core.read_param(2)?;
             let argv = core.read_param(3)?;
 
