@@ -17,14 +17,19 @@ static INIT: Once = Once::new();
 
 /// Default log directive used when `RUST_LOG` is unset.
 ///
-/// Everything at info, plus debug for the WIPI-C API layer - the property,
-/// filesystem, network and media calls that explain why a title behaves as it
-/// does, which are otherwise debug-level and invisible in a normal capture. The
-/// high-frequency graphics and UI drawing services stay at info, and the CPU's
-/// cache-maintenance writes are silenced, so the full-log capture stays complete
-/// where it matters without a title's render loop flooding it. Setting `RUST_LOG`
-/// overrides this entirely.
-const DEFAULT_LOG_DIRECTIVE: &str = "info,wie_wipi_c=debug,wie_wipi_c::api::graphics=info,wie_wipi_c::api::uic=info,arm32_cpu::arm=warn";
+/// Captures as much as is useful with a single press of the log button, so most
+/// debugging needs no filter change: everything at debug, plus trace for the
+/// platform and loader crates - the low-frequency lifecycle, resource and
+/// class-loading detail that explains why a title fails to start or misbehaves.
+///
+/// Only the two known floods are held back, because at debug/trace they bury the
+/// rest and slow the game: the ARM interpreter's per-instruction trace
+/// (`arm32_cpu`) and the JIT's per-block bookkeeping (`wie_core_arm`) drop to
+/// info/warn, and the graphics service's per-frame drawing stays at info. Faults
+/// and unimplemented calls in those crates log at warn/error, so they still
+/// show. Setting `RUST_LOG`, or the in-app log filter, overrides this entirely.
+const DEFAULT_LOG_DIRECTIVE: &str =
+    "debug,wie_lgt=trace,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,arm32_cpu=warn";
 
 /// Lets the player swap the log filter at runtime, so capturing a module's
 /// debug/trace detail no longer means editing the default above and rebuilding.
