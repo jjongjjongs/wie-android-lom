@@ -731,13 +731,7 @@ fn lgt_local_purchase_success_response(
     let message_type =
         u16::from_be_bytes([request[4], request[5]]);
 
-    // Native LGT clients may expose only the current socket-write slice even
-    // though the application header declares the complete frame length.
-    // Red Gem builds a 19-byte 0x68 frame but calls MC_netSocketWrite with
-    // its first 10 bytes. Accept a header-complete prefix, while rejecting
-    // malformed slices that exceed the declared frame.
-    if declared_length < 6
-        || request.len() > declared_length
+    if declared_length != request.len()
         || message_type != LGT_LOCAL_PURCHASE_REQUEST_TYPE
     {
         return None;
@@ -3957,65 +3951,6 @@ mod network_state_tests {
     }
 
     #[futures_test::test]
-    async fn local_lgt_purchase_bill_socket_accepts_native_ten_byte_write_prefix() {
-        const REQUEST: u32 = 0x1000;
-
-        let system = System::new(
-            Box::new(LocalBillingTestPlatform::new()),
-            "test-pid",
-            "test-aid",
-            DefaultTaskRunner,
-        );
-        let mut context = TestContext::with_system(system);
-
-        let request_prefix = [
-            0xff, 0xff,
-            0x00, 0x13,
-            0x00, 0x68,
-            0x31, 0x32, 0x33, 0x34,
-        ];
-
-        context.write_bytes(REQUEST, &request_prefix).unwrap();
-
-        let state = context.network_state();
-        state.lock().process_state = ProcessNetworkState::Available;
-
-        let socket = bill_socket(&mut context, 2, 1).await.unwrap();
-        assert_eq!(socket, 31);
-        assert_eq!(state.lock().socket_type(socket), Some(1));
-        assert_eq!(state.lock().billing_mode(socket), Some(1));
-
-        assert_eq!(
-            socket_write(
-                &mut context,
-                socket,
-                REQUEST,
-                request_prefix.len() as i32,
-            )
-            .await
-            .unwrap(),
-            request_prefix.len() as i32
-        );
-
-        let mut response = [0u8; LGT_LOCAL_PURCHASE_RESPONSE_SIZE];
-        assert_eq!(
-            state
-                .lock()
-                .take_local_billing_response(socket, &mut response),
-            Some(LGT_LOCAL_PURCHASE_RESPONSE_SIZE)
-        );
-        assert_eq!(
-            response,
-            [
-                0xff, 0xff,
-                0x00, 0x07,
-                0x00, 0x69,
-                0x00,
-            ]
-        );
-    }
-
-    #[futures_test::test]
     async fn local_lgt_purchase_bill_socket_to_write_real_path_returns_full_length_and_queues_success() {
         const REQUEST: u32 = 0x1000;
 
@@ -4078,28 +4013,6 @@ mod network_state_tests {
     }
 
     #[test]
-    fn local_lgt_purchase_accepts_header_complete_native_write_prefix() {
-        // Red Gem declares a 19-byte 0x68 application frame, while its
-        // native write wrapper passes only the first 10 bytes.
-        let request_prefix = [
-            0xff, 0xff,
-            0x00, 0x13,
-            0x00, 0x68,
-            0x31, 0x32, 0x33, 0x34,
-        ];
-
-        assert_eq!(
-            lgt_local_purchase_success_response(&request_prefix),
-            Some([
-                0xff, 0xff,
-                0x00, 0x07,
-                0x00, 0x69,
-                0x00,
-            ])
-        );
-    }
-
-    #[test]
     fn local_lgt_purchase_68_builds_69_status_zero_response() {
         let request = [
             0xff, 0xff,
@@ -4144,21 +4057,6 @@ mod network_state_tests {
         );
         assert_eq!(
             lgt_local_purchase_success_response(&gift_or_other),
-            None
-        );
-    }
-
-    #[test]
-    fn local_lgt_purchase_rejects_write_longer_than_declared_frame() {
-        let malformed = [
-            0xff, 0xff,
-            0x00, 0x07,
-            0x00, 0x68,
-            0x00, 0x00,
-        ];
-
-        assert_eq!(
-            lgt_local_purchase_success_response(&malformed),
             None
         );
     }
