@@ -1064,8 +1064,16 @@ public final class MainActivity extends Activity {
 
             bitmap.copyPixelsFromBuffer(ShortBuffer.wrap(frame, 2, width * height));
             if ((frameLog++ % 30) == 0) {
+                // Read a few source shorts and the resulting bitmap pixels back:
+                // if the source is non-black but the bitmap reads black, the copy
+                // (buffer offset / format) is the fault, not the display.
+                int mid = 2 + (height / 2) * width + width / 2;
+                int center = bitmap.getPixel(width / 2, height / 2);
+                int p00 = bitmap.getPixel(0, 0);
                 NativeBridge.nativeUiLog("setFrame ok " + width + "x" + height + " view=" + getWidth() + "x" + getHeight()
-                        + " shown=" + isShown() + " vis=" + getVisibility() + " attached=" + isAttachedToWindow());
+                        + " shown=" + isShown() + " vis=" + getVisibility() + " attached=" + isAttachedToWindow()
+                        + " src[mid]=" + (frame[mid] & 0xFFFF) + " bmp.center=" + Integer.toHexString(center) + " bmp.00=" + Integer.toHexString(p00)
+                        + " hw=" + isHardwareAccelerated());
             }
             invalidate();
         }
