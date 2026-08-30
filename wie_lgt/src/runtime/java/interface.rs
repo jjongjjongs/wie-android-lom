@@ -933,6 +933,13 @@ pub async fn bridge_class_chain(
     image_ranges: &[(u32, u32)],
     name: &str,
 ) -> bool {
+    // argv hands the main class in binary (dotted) form - `atdata.JimaeMD` - but
+    // the image indexes classes in JVM internal (slash) form - `atdata/JimaeMD`.
+    // Normalise so a packaged main class is found; a name already in slash form
+    // (or a bare class with no package) is unchanged.
+    let normalized = name.replace('.', "/");
+    let name = normalized.as_str();
+
     let mut visited = Vec::new();
     let mut order = Vec::new();
     if !collect_app_class_dependencies(core, app_classes, image_ranges, name, &mut visited, &mut order, 0) {

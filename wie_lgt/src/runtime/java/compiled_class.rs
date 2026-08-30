@@ -267,7 +267,13 @@ pub fn as_proto(class: &AppClass) -> JavaClassProto<CompiledContext> {
 /// The proto is built separately so the caller can hold whatever lock guards
 /// the class list while building it, and let go before the JVM runs.
 pub async fn register(jvm: &Jvm, context: &CompiledContext, name: &str, proto: JavaClassProto<CompiledContext>) -> bool {
-    if jvm.resolve_class(name).await.is_ok() {
+    // A registry lookup, not `resolve_class`: an unregistered name sent to
+    // `resolve_class` is handed to the application class loader, which searches
+    // the jar for `<name>.class`. A compiled class is ARM code with no class
+    // file in the jar, so that search throws NoClassDefFoundError - the exact
+    // class this bridge is about to define. `has_class` only reports whether the
+    // definition already exists, without triggering that load.
+    if jvm.has_class(name) {
         return true;
     }
 
