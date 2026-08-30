@@ -18,6 +18,11 @@ struct Captured {
     height: u32,
     colors: BTreeMap<u32, u32>,
     best_pixels: Vec<u8>,
+    // The *last* painted frame's signature, so a screen that advances to a
+    // simpler view is not masked by the busiest-frame heuristic.
+    last_sig: u64,
+    last_colors: usize,
+    last_pixels: Vec<u8>,
 }
 
 #[derive(Default, Clone)]
@@ -43,6 +48,7 @@ impl Screen for CaptureScreen {
 
         let mut colors = BTreeMap::new();
         let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+        let mut sig: u64 = 1469598103934665603;
 
         for color in image.colors() {
             let packed = ((color.r as u32) << 16) | ((color.g as u32) << 8) | color.b as u32;
@@ -51,7 +57,15 @@ impl Screen for CaptureScreen {
             pixels.push(color.r);
             pixels.push(color.g);
             pixels.push(color.b);
+
+            // FNV-1a over the pixels: a cheap fingerprint of the exact frame.
+            sig ^= packed as u64;
+            sig = sig.wrapping_mul(1099511628211);
         }
+
+        captured.last_sig = sig;
+        captured.last_colors = colors.len();
+        captured.last_pixels = pixels.clone();
 
         // Keep the busiest frame, not the last: a screen that draws and then
         // clears would otherwise look like it never rendered.
@@ -122,6 +136,36 @@ impl Platform for CapturePlatform {
     }
 }
 
+/// Maps a `WIE_KEY` name to a backend key code, so a probe can target any key.
+fn key_by_name(name: &str) -> Option<wie_backend::KeyCode> {
+    use wie_backend::KeyCode::*;
+    Some(match name.to_ascii_uppercase().as_str() {
+        "UP" => UP,
+        "DOWN" => DOWN,
+        "LEFT" => LEFT,
+        "RIGHT" => RIGHT,
+        "OK" | "FIRE" => OK,
+        "LEFT_SOFT" | "LSK" => LEFT_SOFT_KEY,
+        "RIGHT_SOFT" | "RSK" => RIGHT_SOFT_KEY,
+        "CLEAR" | "CLR" => CLEAR,
+        "CALL" | "SEND" => CALL,
+        "HANGUP" | "END" => HANGUP,
+        "NUM0" => NUM0,
+        "NUM1" => NUM1,
+        "NUM2" => NUM2,
+        "NUM3" => NUM3,
+        "NUM4" => NUM4,
+        "NUM5" => NUM5,
+        "NUM6" => NUM6,
+        "NUM7" => NUM7,
+        "NUM8" => NUM8,
+        "NUM9" => NUM9,
+        "HASH" | "POUND" => HASH,
+        "STAR" => STAR,
+        _ => return None,
+    })
+}
+
 /// Runs an archive for a while and reports the frames it painted.
 fn run(label: &str, archive: &[u8], ticks_limit: u32) {
     // Diagnosing a blank screen means reading the runtime's own log, so honour
@@ -175,65 +219,78 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         }
     };
 
+    // Press OK once past the initial "press any key" notice. `WIE_INTRO_TICK`
+    // overrides when that key lands (default 300).
+    let intro_tick: u32 = std::env::var("WIE_INTRO_TICK").ok().and_then(|x| x.parse().ok()).unwrap_or(300);
+    // A single probe key pressed at `WIE_PRESS_TICK`, named by `WIE_KEY`. This
+    // is how we find which key a specific screen actually reacts to.
+    let probe_key = std::env::var("WIE_KEY").ok().and_then(|name| key_by_name(&name));
+    let press_tick: u32 = std::env::var("WIE_PRESS_TICK").ok().and_then(|x| x.parse().ok()).unwrap_or(u32::MAX);
+
     let mut ticks = 0;
     while !exited.load(Ordering::SeqCst) && ticks < ticks_limit {
         if ticks % 40 == 0 {
             emulator.handle_event(Event::Redraw);
         }
-        // Press OK once after the initial notice has had time to render.
-        if ticks == 300 {
-            eprintln!("[{label}] pressing OK at tick {ticks}");
+        if ticks == intro_tick {
+            eprintln!("[{label}] pressing OK (intro) at tick {ticks}");
             emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
         }
-        if ticks == 320 {
-            eprintln!("[{label}] releasing OK at tick {ticks}");
+        if ticks == intro_tick + 20 {
             emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
         }
 
-        // Advance past the title screen after it has fully appeared.
-        if ticks == 8000 {
-            eprintln!("[{label}] pressing OK at title tick {ticks}");
+        // Leave the title screen with OK so probes land on the screen after it.
+        let title_tick: u32 = std::env::var("WIE_TITLE_TICK").ok().and_then(|x| x.parse().ok()).unwrap_or(u32::MAX);
+        if ticks == title_tick {
+            eprintln!("[{label}] pressing OK (title) at tick {ticks}");
             emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
         }
-        if ticks == 8020 {
-            eprintln!("[{label}] releasing OK at title tick {ticks}");
+        if ticks == title_tick + 20 {
             emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
         }
 
-        if ticks == 9500 {
-            eprintln!("[{label}] pressing OK at menu tick {ticks}");
-            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
-        }
-        if ticks == 9520 {
-            eprintln!("[{label}] releasing OK at menu tick {ticks}");
-            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
-        }
-
-        if ticks == 17000 {
-            eprintln!("[{label}] pressing OK at slot tick {ticks}");
-            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
-        }
-        if ticks == 17020 {
-            eprintln!("[{label}] releasing OK at slot tick {ticks}");
-            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+        if let Some(key) = probe_key {
+            if ticks == press_tick {
+                eprintln!("[{label}] pressing probe key {:?} at tick {ticks}", key);
+                emulator.handle_event(Event::Keydown(key));
+            }
+            if ticks == press_tick + 20 {
+                emulator.handle_event(Event::Keyup(key));
+            }
         }
 
-        if ticks == 22000 {
-            eprintln!("[{label}] pressing RIGHT at class tick {ticks}");
-            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::RIGHT));
-        }
-        if ticks == 22020 {
-            eprintln!("[{label}] releasing RIGHT at class tick {ticks}");
-            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::RIGHT));
+        // Optional repeated scroll: press DOWN `WIE_SCROLL_N` times, spaced 25
+        // ticks apart, starting at `press_tick`, before any confirm probe.
+        let scroll_n: u32 = std::env::var("WIE_SCROLL_N").ok().and_then(|x| x.parse().ok()).unwrap_or(0);
+        for k in 0..scroll_n {
+            let down = press_tick + 40 + k * 25;
+            if ticks == down {
+                emulator.handle_event(Event::Keydown(wie_backend::KeyCode::DOWN));
+            }
+            if ticks == down + 10 {
+                emulator.handle_event(Event::Keyup(wie_backend::KeyCode::DOWN));
+            }
         }
 
-        if ticks == 24000 {
-            eprintln!("[{label}] pressing OK at class confirm tick {ticks}");
-            emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
+        // An optional second probe key, so a "scroll then confirm" sequence
+        // can be exercised (WIE_KEY2 pressed at WIE_PRESS_TICK2).
+        if let Some(key2) = std::env::var("WIE_KEY2").ok().and_then(|n| key_by_name(&n)) {
+            let t2: u32 = std::env::var("WIE_PRESS_TICK2").ok().and_then(|x| x.parse().ok()).unwrap_or(u32::MAX);
+            if ticks == t2 {
+                eprintln!("[{label}] pressing probe key2 {:?} at tick {ticks}", key2);
+                emulator.handle_event(Event::Keydown(key2));
+            }
+            if ticks == t2 + 20 {
+                emulator.handle_event(Event::Keyup(key2));
+            }
         }
-        if ticks == 24020 {
-            eprintln!("[{label}] releasing OK at class confirm tick {ticks}");
-            emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
+
+        // Report the exact last frame periodically so an advance to a simpler
+        // screen is visible even when the busiest-frame heuristic would hide it.
+        if ticks % 500 == 0 {
+            let c = screen.captured.lock().unwrap();
+            eprintln!("[{label}] tick {ticks}: last frame sig={:016x} colors={}", c.last_sig, c.last_colors);
         }
 
         if let Err(error) = emulator.tick() {
@@ -257,6 +314,15 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
     top.sort_by_key(|(_, count)| core::cmp::Reverse(**count));
     for (color, count) in top.into_iter().take(6) {
         eprintln!("[{label}]   #{color:06x} x{count}");
+    }
+
+    if let Ok(path) = std::env::var("WIE_LAST_PPM") {
+        if !captured.last_pixels.is_empty() {
+            let mut ppm = format!("P6\n{} {}\n255\n", captured.width, captured.height).into_bytes();
+            ppm.extend_from_slice(&captured.last_pixels);
+            let _ = std::fs::write(&path, ppm);
+            eprintln!("[{label}] wrote LAST frame (sig={:016x}) to {path}", captured.last_sig);
+        }
     }
 
     if let Ok(path) = std::env::var("LOM_CAPTURE_PATH") {
