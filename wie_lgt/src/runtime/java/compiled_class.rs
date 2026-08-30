@@ -19,6 +19,7 @@ use jvm::{ClassInstance, JavaError, JavaValue, Jvm};
 use jvm_rust::ClassDefinitionImpl;
 
 use wie_core_arm::ArmCore;
+use wie_util::WieError;
 
 use super::{
     app_classes::{AppClass, AppMember},
@@ -117,6 +118,22 @@ impl MethodBody<JavaError, CompiledContext> for CompiledMethod {
 
         let result: u32 = match context.core.run_function(self.entry, &words).await {
             Ok(result) => result,
+            // The compiled code threw a Java exception that no compiled save
+            // point caught. Surface it as a real JVM exception so a Java catch
+            // higher up can handle it and its stack trace names where it was
+            // thrown, rather than a fatal that ends the whole title.
+            Err(WieError::JavaException(exception)) => {
+                return Err(match context.handles.get(exception) {
+                    Some(instance) => JavaError::JavaException(instance),
+                    None => {
+                        jvm.exception(
+                            "net/wie/WieError",
+                            &format!("Compiled {}.{} threw an unmapped exception {exception:#x}", self.class_name, self.name),
+                        )
+                        .await
+                    }
+                });
+            }
             Err(error) => {
                 return Err(jvm
                     .exception("net/wie/WieError", &format!("Compiled {}.{} failed: {error}", self.class_name, self.name))

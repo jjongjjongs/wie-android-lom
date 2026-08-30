@@ -145,10 +145,25 @@ impl SavePointState {
     /// `longjmp(save_point, exception)`. Restore the context captured by
     /// table 1 / function 0x32 and make setjmp appear to return `exception`.
     pub fn throw(&self, core: &mut ArmCore, exception: u32) -> Result<()> {
+        let thread_id = Self::thread_id(core);
+
+        // No active save point means the compiled code has no try/catch (nor the
+        // reference firmware's top-level handler, which WIE does not run as guest
+        // code). The exception is uncaught in compiled code: hand it to the JVM
+        // as a real Java exception so it propagates with a stack trace and a Java
+        // catch higher up can still handle it, rather than ending the run on the
+        // missing chain.
+        let has_point = self.chains.lock().get(&thread_id).is_some_and(|chain| !chain.is_empty());
+        if !has_point {
+            return Err(WieError::JavaException(exception));
+        }
+
         let point = self.remove(core, 0)?;
-        let context = point
-            .continuation
-            .ok_or_else(|| WieError::FatalError(alloc::format!("longjmp target {:#x} has no captured setjmp continuation", point.address)))?;
+        let Some(context) = point.continuation else {
+            // Allocated but never captured by setjmp, so there is nowhere to
+            // longjmp; treat it as uncaught and propagate the same way.
+            return Err(WieError::JavaException(exception));
+        };
 
         let return_pc = context.pc;
         core.restore_context(&context);
