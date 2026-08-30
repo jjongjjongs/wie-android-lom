@@ -22,7 +22,10 @@ use crate::{
 
 const GLOBAL_DATA_BASE: u32 = 0x7fff0000;
 const FUNCTIONS_BASE: u32 = 0x71000000;
-const FUNCTIONS_SIZE: usize = 0x10000;
+// Each resolved import and every application class method gets a 16-byte SVC
+// stub here. A title with many classes (LGT CLDC games register hundreds) needs
+// well over the 4096 stubs a 64 KiB arena held, so give it room for ~64K.
+const FUNCTIONS_SIZE: usize = 0x100000;
 const SVC_STUB_SIZE: u32 = 16;
 pub const RUN_FUNCTION_LR: u32 = 0x7f000000;
 pub const HEAP_BASE: u32 = 0x40000000;
