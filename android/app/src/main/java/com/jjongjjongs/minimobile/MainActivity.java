@@ -13,10 +13,10 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Typeface;
-import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -27,6 +27,7 @@ import android.util.SparseArray;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -110,6 +111,21 @@ public final class MainActivity extends Activity {
     private static final int COLOR_SCREEN_BEZEL = Color.rgb(10, 11, 14);
     /** The pad the keys sit on: dark, matching the device body. */
     private static final int COLOR_KEYPAD_TRAY = Color.rgb(23, 26, 32);
+
+    // Light "Mini Mobile" palette for the library/home screen: a clean white
+    // ground with a single green accent, matching the approved home redesign.
+    // The player screen keeps the dark device palette above.
+    private static final int LIB_BG = Color.rgb(255, 255, 255);
+    private static final int LIB_SURFACE = Color.rgb(255, 255, 255);
+    private static final int LIB_INK = Color.rgb(26, 42, 32);          // #1a2a20 primary text
+    private static final int LIB_MUTED = Color.rgb(100, 117, 104);     // #647568 secondary text
+    private static final int LIB_LINE = Color.rgb(233, 241, 235);      // #e9f1eb card border
+    private static final int LIB_DIVIDER = Color.rgb(238, 243, 239);   // #eef3ef row divider
+    private static final int LIB_GREEN = Color.rgb(46, 139, 87);       // #2e8b57 accent
+    private static final int LIB_GREEN_DEEP = Color.rgb(34, 114, 71);  // #227247 accent text
+    private static final int LIB_GREEN_SOFT = Color.rgb(220, 242, 226);// #dcf2e2 chip/button fill
+    private static final int LIB_GREEN_LINE = Color.rgb(199, 232, 209);// #c7e8d1 button border
+    private static final int LIB_GREEN_SOFTER = Color.rgb(238, 248, 241);// #eef8f1 empty tile
 
     private final ScheduledExecutorService emulatorThread = Executors.newSingleThreadScheduledExecutor();
 
@@ -240,64 +256,101 @@ public final class MainActivity extends Activity {
         landscapeMode = false;
         // The library is always upright, whichever way the player was left.
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        // The home screen is light, so the status-bar icons must go dark.
+        setLightStatusBar(true);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(COLOR_BG);
+        root.setBackgroundColor(LIB_BG);
 
+        // A small title strip at the very top, like the mockup's app bar.
         TextView bar = new TextView(this);
         bar.setText("Mini Mobile");
-        bar.setTextSize(21f);
-        bar.setTextColor(Color.WHITE);
-        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(18), 0, dp(18), 0);
-        bar.setBackgroundColor(COLOR_PANEL);
-        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
+        bar.setTextSize(16f);
+        bar.setTypeface(Typeface.DEFAULT_BOLD);
+        bar.setTextColor(LIB_INK);
+        bar.setPadding(dp(18), dp(12), dp(18), dp(6));
+        root.addView(bar);
 
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.VERTICAL);
-        header.setPadding(dp(18), dp(20), dp(18), dp(8));
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(4), dp(16), dp(20));
 
-        TextView title = new TextView(this);
-        title.setText("Mini Mobile");
-        title.setTextSize(27f);
-        title.setTextColor(Color.WHITE);
-        title.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
-        header.addView(title);
+        // Header name with the green status dot.
+        LinearLayout nameRow = new LinearLayout(this);
+        nameRow.setOrientation(LinearLayout.HORIZONTAL);
+        nameRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        View dot = new View(this);
+        dot.setBackground(circle(LIB_GREEN));
+        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(8), dp(8));
+        dotParams.rightMargin = dp(8);
+        nameRow.addView(dot, dotParams);
+        TextView name = new TextView(this);
+        name.setText("Mini Mobile");
+        name.setTextSize(19f);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        name.setTextColor(LIB_INK);
+        nameRow.addView(name);
+        content.addView(nameRow);
 
-        TextView about = new TextView(this);
-        about.setText("독립 실행형 WIPI 에뮬레이터\n게임 저장소: " + gamesDir.getAbsolutePath());
-        about.setTextSize(14f);
-        about.setTextColor(COLOR_SUBTEXT);
-        about.setPadding(0, dp(18), 0, 0);
-        header.addView(about);
+        // Every header line the mockup keeps, just at smaller sizes.
+        TextView sub = new TextView(this);
+        sub.setText("독립 실행형 WIPI 에뮬레이터");
+        sub.setTextSize(11.5f);
+        sub.setTextColor(LIB_MUTED);
+        sub.setPadding(0, dp(4), 0, 0);
+        content.addView(sub);
 
-        TextView hint = new TextView(this);
-        hint.setText("게임 실행: 한 번 누르기\n세이브 꺼내기·불러오기 · 삭제: 길게 누르기");
-        hint.setTextSize(14f);
-        hint.setTextColor(COLOR_SUBTEXT);
-        hint.setPadding(0, dp(16), 0, dp(14));
-        header.addView(hint);
+        TextView store = new TextView(this);
+        store.setText("게임 저장소: " + gamesDir.getAbsolutePath());
+        store.setTextSize(10.5f);
+        store.setTextColor(LIB_MUTED);
+        store.setPadding(0, dp(1), 0, 0);
+        content.addView(store);
 
+        TextView use = new TextView(this);
+        use.setText("게임 실행: 한 번 누르기 · 세이브 꺼내기·불러오기 · 삭제: 길게 누르기");
+        use.setTextSize(11f);
+        use.setTextColor(LIB_MUTED);
+        use.setPadding(0, dp(8), 0, dp(14));
+        content.addView(use);
+
+        // Two soft-green pill buttons, side by side.
         LinearLayout actions = new LinearLayout(this);
-
         Button refresh = flatButton("목록 새로고침");
         refresh.setOnClickListener(v -> showLibrary());
         actions.addView(refresh, buttonParams(0));
-
         Button pick = flatButton("APK/ZIP 가져오기");
         pick.setOnClickListener(v -> openPicker());
-        actions.addView(pick, buttonParams(dp(12)));
+        actions.addView(pick, buttonParams(dp(10)));
+        content.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
 
-        header.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
-        root.addView(header);
+        // Section header: title on the left, live count on the right.
+        File[] games = gamesDir.listFiles(File::isFile);
+        int count = games == null ? 0 : games.length;
+        LinearLayout sect = new LinearLayout(this);
+        sect.setOrientation(LinearLayout.HORIZONTAL);
+        sect.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        sect.setPadding(dp(2), dp(16), dp(2), dp(8));
+        TextView sectTitle = new TextView(this);
+        sectTitle.setText("게임 목록");
+        sectTitle.setTextSize(13f);
+        sectTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        sectTitle.setTextColor(LIB_INK);
+        sect.addView(sectTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView sectCount = new TextView(this);
+        sectCount.setText(count + "개");
+        sectCount.setTextSize(12f);
+        sectCount.setTextColor(LIB_MUTED);
+        sect.addView(sectCount);
+        content.addView(sect);
 
-        LinearLayout list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        populateGames(list);
+        // One rounded surface with hairline dividers between rows.
+        content.addView(buildGameList(games));
 
         ScrollView scroll = new ScrollView(this);
-        scroll.addView(list);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.addView(content);
         root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         applyStatusBarInset(root);
@@ -310,47 +363,143 @@ public final class MainActivity extends Activity {
         return params;
     }
 
-    private void populateGames(LinearLayout list) {
-        File[] games = gamesDir.listFiles(File::isFile);
-
+    /** The rounded list card, or the empty state when nothing is imported. */
+    private View buildGameList(File[] games) {
         if (games == null || games.length == 0) {
-            TextView empty = new TextView(this);
-            empty.setText("가져온 게임이 없습니다.");
-            empty.setTextColor(COLOR_SUBTEXT);
-            empty.setTextSize(16f);
-            empty.setGravity(android.view.Gravity.CENTER);
-            empty.setPadding(0, dp(48), 0, 0);
-            list.addView(empty);
-            return;
+            return buildEmptyState();
         }
 
         Arrays.sort(games, Comparator.comparing(File::getName, String.CASE_INSENSITIVE_ORDER));
-        for (File game : games) {
-            list.addView(createGameRow(game));
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(roundedRect(LIB_SURFACE, LIB_LINE, 1, 16));
+        roundCorners(card, 16);
+
+        for (int i = 0; i < games.length; i++) {
+            card.addView(createGameRow(games[i]));
+            if (i < games.length - 1) {
+                View divider = new View(this);
+                divider.setBackgroundColor(LIB_DIVIDER);
+                card.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
+            }
         }
+        return card;
+    }
+
+    private View buildEmptyState() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        box.setPadding(dp(16), dp(44), dp(16), dp(44));
+
+        TextView tile = new TextView(this);
+        tile.setText("+");
+        tile.setTextSize(30f);
+        tile.setTypeface(Typeface.DEFAULT_BOLD);
+        tile.setTextColor(LIB_GREEN);
+        tile.setGravity(android.view.Gravity.CENTER);
+        tile.setBackground(roundedRect(LIB_GREEN_SOFTER, 0, 0, 20));
+        box.addView(tile, new LinearLayout.LayoutParams(dp(62), dp(62)));
+
+        TextView et = new TextView(this);
+        et.setText("아직 게임이 없어요");
+        et.setTextSize(15f);
+        et.setTypeface(Typeface.DEFAULT_BOLD);
+        et.setTextColor(LIB_INK);
+        et.setGravity(android.view.Gravity.CENTER);
+        et.setPadding(0, dp(12), 0, 0);
+        box.addView(et);
+
+        TextView es = new TextView(this);
+        es.setText("위의 ‘APK/ZIP 가져오기’로 게임을 추가하세요.");
+        es.setTextSize(12.5f);
+        es.setTextColor(LIB_MUTED);
+        es.setGravity(android.view.Gravity.CENTER);
+        es.setPadding(0, dp(6), 0, 0);
+        box.addView(es);
+
+        return box;
     }
 
     private View createGameRow(File game) {
         LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(18), dp(10), dp(18), dp(10));
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
 
-        ImageView icon = new ImageView(this);
+        // Cover: the archive's own icon if it carries one, otherwise a colour
+        // tile with the title's first character.
         Bitmap bitmap = readArchiveIcon(game);
+        View cover;
         if (bitmap != null) {
+            ImageView icon = new ImageView(this);
             icon.setImageBitmap(bitmap);
             icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            roundCorners(icon, 11);
+            cover = icon;
         } else {
-            icon.setImageDrawable(new ColorDrawable(colorForName(game.getName())));
+            String label = displayName(game);
+            TextView tile = new TextView(this);
+            tile.setText(label.isEmpty() ? "?" : label.substring(0, 1));
+            tile.setTextColor(Color.WHITE);
+            tile.setTextSize(18f);
+            tile.setTypeface(Typeface.DEFAULT_BOLD);
+            tile.setGravity(android.view.Gravity.CENTER);
+            tile.setBackground(roundedRect(colorForName(game.getName()), 0, 0, 11));
+            cover = tile;
         }
-        row.addView(icon, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        row.addView(cover, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        // Title, then a tag chip plus the file size.
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        metaParams.leftMargin = dp(12);
+        metaParams.rightMargin = dp(10);
 
         TextView name = new TextView(this);
         name.setText(displayName(game));
-        name.setTextColor(COLOR_TEXT);
-        name.setTextSize(17f);
-        name.setPadding(dp(14), 0, 0, 0);
-        row.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        name.setTextColor(LIB_INK);
+        name.setTextSize(14f);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        meta.addView(name);
+
+        LinearLayout metaLine = new LinearLayout(this);
+        metaLine.setOrientation(LinearLayout.HORIZONTAL);
+        metaLine.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        metaLine.setPadding(0, dp(2), 0, 0);
+
+        TextView tag = new TextView(this);
+        tag.setText(archiveTag(game));
+        tag.setTextSize(10f);
+        tag.setTypeface(Typeface.DEFAULT_BOLD);
+        tag.setTextColor(LIB_GREEN_DEEP);
+        tag.setBackground(roundedRect(LIB_GREEN_SOFT, 0, 0, 6));
+        tag.setPadding(dp(6), dp(1), dp(6), dp(1));
+        LinearLayout.LayoutParams tagParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tagParams.rightMargin = dp(6);
+        metaLine.addView(tag, tagParams);
+
+        TextView size = new TextView(this);
+        size.setText(formatSize(game.length()));
+        size.setTextSize(11.5f);
+        size.setTextColor(LIB_MUTED);
+        metaLine.addView(size);
+
+        meta.addView(metaLine);
+        row.addView(meta, metaParams);
+
+        // A round, soft-green play affordance on the right.
+        TextView play = new TextView(this);
+        play.setText("▶");
+        play.setTextSize(11f);
+        play.setTextColor(LIB_GREEN);
+        play.setGravity(android.view.Gravity.CENTER);
+        play.setBackground(circle(LIB_GREEN_SOFT));
+        row.addView(play, new LinearLayout.LayoutParams(dp(29), dp(29)));
 
         row.setOnClickListener(v -> showPlayer(game));
         row.setOnLongClickListener(v -> {
@@ -359,6 +508,64 @@ public final class MainActivity extends Activity {
         });
 
         return row;
+    }
+
+    /** Uppercase archive extension used as the row's small tag chip. */
+    private String archiveTag(File game) {
+        String fileName = game.getName();
+        int dot = fileName.lastIndexOf('.');
+        String ext = dot >= 0 ? fileName.substring(dot + 1) : "";
+        return ext.isEmpty() ? "게임" : ext.toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private String formatSize(long bytes) {
+        if (bytes >= 1024L * 1024L) {
+            return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
+        }
+        return String.format(java.util.Locale.ROOT, "%.0f KB", Math.max(1.0, bytes / 1024.0));
+    }
+
+    /** A filled, optionally bordered, rounded-rectangle background. */
+    private GradientDrawable roundedRect(int fill, int stroke, int strokeDp, int radiusDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(radiusDp));
+        if (strokeDp > 0) {
+            drawable.setStroke(dp(strokeDp), stroke);
+        }
+        return drawable;
+    }
+
+    private GradientDrawable circle(int fill) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.OVAL);
+        drawable.setColor(fill);
+        return drawable;
+    }
+
+    /** Clips a view to rounded corners so bitmaps and rows follow the card. */
+    private void roundCorners(View view, int radiusDp) {
+        final float radius = dp(radiusDp);
+        view.setClipToOutline(true);
+        view.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View v, Outline outline) {
+                outline.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+            }
+        });
+    }
+
+    /** Dark status-bar icons for the light home screen; light for the player. */
+    private void setLightStatusBar(boolean light) {
+        View decor = getWindow().getDecorView();
+        int flags = decor.getSystemUiVisibility();
+        if (light) {
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        } else {
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        }
+        decor.setSystemUiVisibility(flags);
+        getWindow().setStatusBarColor(light ? LIB_BG : COLOR_PANEL);
     }
 
     /** What a long press offers: get the saves out, or drop the game. */
@@ -782,6 +989,8 @@ public final class MainActivity extends Activity {
         currentGame = game;
         currentGameName = displayName(game);
         landscapeMode = false;
+        // The player is a dark device again, so restore light status-bar icons.
+        setLightStatusBar(false);
 
         // Persistent views, kept across rotations so the last frame and any
         // held keys survive a re-layout instead of being torn down.
@@ -1067,10 +1276,15 @@ public final class MainActivity extends Activity {
     private Button flatButton(String label) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextSize(16f);
-        button.setTextColor(Color.rgb(30, 30, 30));
+        button.setTextSize(11.5f);
+        button.setTextColor(LIB_GREEN_DEEP);
         button.setAllCaps(false);
-        button.setBackgroundColor(Color.rgb(211, 211, 211));
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setBackground(roundedRect(LIB_GREEN_SOFT, LIB_GREEN_LINE, 1, 15));
+        button.setPadding(dp(10), dp(6), dp(10), dp(6));
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setStateListAnimator(null);
         return button;
     }
 
