@@ -349,7 +349,50 @@ impl ArmCore {
         loop {
             let result = {
                 let mut inner = self.inner.lock();
-                inner.engine.run(RUN_FUNCTION_LR, 1000)?
+                match inner.engine.run(RUN_FUNCTION_LR, 1000) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let regs = [
+                            ArmRegister::R0,
+                            ArmRegister::R1,
+                            ArmRegister::R2,
+                            ArmRegister::R3,
+                            ArmRegister::R4,
+                            ArmRegister::R5,
+                            ArmRegister::R6,
+                            ArmRegister::R7,
+                            ArmRegister::R8,
+                            ArmRegister::SB,
+                            ArmRegister::SL,
+                            ArmRegister::FP,
+                            ArmRegister::IP,
+                            ArmRegister::SP,
+                            ArmRegister::LR,
+                            ArmRegister::PC,
+                        ]
+                        .map(|r| inner.engine.reg_read(r));
+                        tracing::warn!(
+                            "engine fault {error:?}: R0={:#x} R1={:#x} R2={:#x} R3={:#x} R4={:#x} R5={:#x} R6={:#x} R7={:#x} R8={:#x} SB={:#x} SL={:#x} FP={:#x} IP={:#x} SP={:#x} LR={:#x} PC={:#x}",
+                            regs[0],
+                            regs[1],
+                            regs[2],
+                            regs[3],
+                            regs[4],
+                            regs[5],
+                            regs[6],
+                            regs[7],
+                            regs[8],
+                            regs[9],
+                            regs[10],
+                            regs[11],
+                            regs[12],
+                            regs[13],
+                            regs[14],
+                            regs[15]
+                        );
+                        return Err(error);
+                    }
+                }
             };
             crate::RUN_CALLS.fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
 

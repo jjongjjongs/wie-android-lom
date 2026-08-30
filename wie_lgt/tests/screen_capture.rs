@@ -117,6 +117,9 @@ impl Platform for CapturePlatform {
     fn vibrate(&self, duration_ms: u64, intensity: u8) {
         self.inner.vibrate(duration_ms, intensity)
     }
+    fn set_backlight_mode(&self, mode: u8) {
+        self.inner.set_backlight_mode(mode)
+    }
 }
 
 /// Runs an archive for a while and reports the frames it painted.
@@ -135,6 +138,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
     let platform = Box::new(CapturePlatform {
         inner: TestPlatform::with_event_handler(move |event| match event {
             TestPlatformEvent::Stdout(buf) => eprint!("[stdout] {}", String::from_utf8_lossy(&buf)),
+            TestPlatformEvent::OpenUrl(url) => eprintln!("[open-url] {url}"),
             TestPlatformEvent::Exit => exited_clone.store(true, Ordering::SeqCst),
         }),
         screen: screen.clone(),
