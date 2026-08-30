@@ -130,6 +130,8 @@ public final class MainActivity extends Activity {
 
     private volatile boolean running;
     private volatile boolean foreground = true;
+    /** Set while the exit-confirmation dialog is up, to freeze the game. */
+    private volatile boolean paused;
     private boolean playerVisible;
     private int statusCounter;
 
@@ -207,20 +209,23 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        // In a game, back asks before leaving: 예 quits to the library, 아니요
-        // dismisses and returns to the game, which keeps running behind the
-        // dialog.
+        // In a game, back asks before leaving. The game is frozen while the
+        // dialog is up: 예 quits to the library, 아니요 (or dismissing the dialog
+        // with back / an outside tap) resumes it in place.
+        paused = true;
         new AlertDialog.Builder(this)
                 .setTitle("종료")
                 .setMessage("애플리케이션을 종료하시겠습니까?")
                 .setPositiveButton("예", (dialog, which) -> exitGameToLibrary())
-                .setNegativeButton("아니요", null)
+                .setNegativeButton("아니요", (dialog, which) -> paused = false)
+                .setOnCancelListener(dialog -> paused = false)
                 .show();
     }
 
     /** Stops the running game and returns to the library. */
     private void exitGameToLibrary() {
         running = false;
+        paused = false;
         NativeBridge.nativeStop();
         audioOutput.release();
         showLibrary();
@@ -773,6 +778,7 @@ public final class MainActivity extends Activity {
     private void showPlayer(File game) {
         playerVisible = true;
         running = false;
+        paused = false;
         currentGame = game;
         currentGameName = displayName(game);
         landscapeMode = false;
@@ -958,7 +964,7 @@ public final class MainActivity extends Activity {
      * Runs on the emulator thread.
      */
     private void emulatorStep() {
-        if (!running || !playerVisible || !foreground) {
+        if (!running || !playerVisible || !foreground || paused) {
             return;
         }
 
