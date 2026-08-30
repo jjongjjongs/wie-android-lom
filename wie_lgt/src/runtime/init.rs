@@ -1876,6 +1876,17 @@ fn class_identity_name(context: &InitSvcContext, root: u32) -> Option<String> {
         return None;
     }
 
+    // A caller may name a class by the handle activation produced rather than by
+    // its root (the two occupy different address ranges). Resolve the handle to
+    // its root first so the lookups below, which key on the root, still match.
+    let root = context
+        .java_activated_classes
+        .lock()
+        .iter()
+        .find(|(_, activated)| **activated == root)
+        .map(|(root, _)| *root)
+        .unwrap_or(root);
+
     if let Some(name) = context
         .app_classes
         .lock()
