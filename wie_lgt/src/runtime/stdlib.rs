@@ -16,6 +16,22 @@ use crate::runtime::{SVC_CATEGORY_STDLIB, savepoint::SavePointState, svc_ids::St
 const STDLIB_ID_MAX: usize = 0x600;
 pub(crate) static STDLIB_SVC_COUNT: [core::sync::atomic::AtomicU64; STDLIB_ID_MAX] = [const { core::sync::atomic::AtomicU64::new(0) }; STDLIB_ID_MAX];
 
+/// `rand`/`srand` state. The reference links the platform libc's `rand`; games
+/// use it for variety rather than a specific sequence, so a standard POSIX
+/// linear-congruential generator is enough - and far better than the constant
+/// zero an unimplemented import returned, which froze everything random.
+static RAND_STATE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1);
+
+fn c_rand() -> u32 {
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let next = RAND_STATE.load(Relaxed).wrapping_mul(1103515245).wrapping_add(12345);
+    RAND_STATE.store(next, Relaxed);
+
+    // POSIX: return (next / 65536) % 32768, i.e. 0..=RAND_MAX (0x7fff).
+    (next >> 16) & 0x7fff
+}
+
 /// Log the top stdlib functions by call rate (names via `StdlibSvcId`), draining
 /// the counters. Identifies the exact hot C-runtime import behind the frame cost
 /// for titles whose bottleneck is the `stdlib` syscall round-trip.
@@ -72,6 +88,17 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System, save_poi
             x if x == StdlibSvcId::Printf as u32 => EmulatedFunction::call(&printf, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Sprintf as u32 => EmulatedFunction::call(&sprintf, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Atoi as u32 => EmulatedFunction::call(&atoi, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Rand as u32 => {
+                let value = c_rand();
+                tracing::debug!("rand() -> {value}");
+                value.write(core, lr)
+            }
+            x if x == StdlibSvcId::Srand as u32 => {
+                let seed = core.read_param(0)?;
+                RAND_STATE.store(seed, core::sync::atomic::Ordering::Relaxed);
+                tracing::debug!("srand({seed})");
+                0u32.write(core, lr)
+            }
             x if x == StdlibSvcId::Strcpy as u32 => EmulatedFunction::call(&stdlib::strcpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strncpy as u32 => EmulatedFunction::call(&strncpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strcat as u32 => EmulatedFunction::call(&strcat, core, &mut ()).await?.write(core, lr),
