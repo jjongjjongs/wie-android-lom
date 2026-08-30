@@ -92,6 +92,9 @@ type ImportFunctionCache = Arc<Mutex<BTreeMap<(u32, u32), u32>>>;
 type UnresolvedImportCallCounts = Arc<Mutex<BTreeMap<(u32, u32), u64>>>;
 /// Platform classes the application imports, published by import `0x14`.
 type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
+/// `(virtual_methods input, virtual_method_offsets output, first own row, one
+/// past the last row)` captured from import `0x14` for own-method resolution.
+type OwnVirtualResolve = Arc<Mutex<Option<(u32, u32, u32, u32)>>>;
 type SyntheticClasses = Arc<Mutex<BTreeMap<u32, String>>>;
 type HeavyLinkedClasses = Arc<Mutex<BTreeSet<u32>>>;
 /// Native monitor ownership keyed by the guest object's address.
@@ -237,6 +240,12 @@ struct InitSvcContext {
     /// `mclass`). Used as `Main::main`'s argv[0] when a title's ABI does not
     /// hand `vm_run_main_class` a readable argument vector.
     main_class_name: Option<Arc<str>>,
+    /// The application's own virtual-method reference resolution, captured from
+    /// import `0x14`: `(virtual_methods input, virtual_method_offsets output,
+    /// first own row, one past the last row)`. Re-run as application classes
+    /// are registered and activated so a class bridged after `0x14` still has
+    /// its own-method references filled.
+    own_virtual_resolve: OwnVirtualResolve,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -278,6 +287,7 @@ fn register_init_svc_handler(
             vm_reschedule_deadlines_ms: Default::default(),
             vm_monitors: Default::default(),
             main_class_name,
+            own_virtual_resolve: Default::default(),
         },
     )
 }
@@ -569,6 +579,13 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             tracing::debug!(
                 "LGT vm_activate_class(root={root:#x}, table={table:#x}) -> handle={activated:#x}, data={data:#x}, class_vtable={class_vtable:#x}, instance_vtable={instance_vtable:#x}"
             );
+
+            // This class's dispatch slots are now assigned. A title that
+            // bridges its main class only at launch reaches its own-method
+            // references (recorded at import 0x14) unresolved; fill any this
+            // class now satisfies.
+            resolve_own_virtual_methods(core, context).await?;
+
             activated.write(core, lr)
         }
         InitSvcId::VmInitializeClass => {
@@ -746,7 +763,23 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             )
             .await?;
 
+            // `vm_resolve_lists` resolves the references made to the imported
+            // platform classes, whose ranges the class table declares. The
+            // application's own classes append their own virtual-method
+            // references to the same table, past the platform range, and the
+            // reference resolves those too. Record the range and resolve it
+            // here as well: a compiled own-class method calling one of its own
+            // methods reads a slot from this table, and a zero there branches
+            // through a null dispatch slot. Some titles bridge the class that
+            // owns these references only when the main class is launched, after
+            // this import, so the resolution re-runs as classes appear.
+            let start = table.virtual_methods.len() as u32;
+            let end = start + table.virtual_method_offset_capacity().unwrap_or(1024);
+            *context.own_virtual_resolve.lock() = Some((arguments[3], table.outputs.virtual_method_offsets, start, end));
+
             *context.imported_classes.lock() = Some(table);
+
+            resolve_own_virtual_methods(core, context).await?;
 
             ().write(core, lr)
         }
@@ -1416,6 +1449,71 @@ fn ensure_heavy_method_slots_linked(core: &mut ArmCore, context: &InitSvcContext
     }
 
     context.heavy_linked_classes.lock().insert(root);
+    Ok(())
+}
+
+/// Resolves the application's own virtual-method references.
+///
+/// Import `0x14` (`vm_resolve_lists`) resolves the references made to the
+/// imported platform classes, whose ranges the class table declares. The
+/// application's own classes append their own virtual-method references to the
+/// same table, past the platform range, and native resolves those too. WIE's
+/// platform resolver stops at the platform range, leaving these trailing rows
+/// zero - so a compiled own-class method calling one of its own methods read a
+/// zero slot and branched through the reserved (null) dispatch slot.
+///
+/// Each trailing row is resolved by name against the registered application
+/// classes, whose method slots heavy linking assigns, stopping at the blank
+/// row that terminates the table.
+async fn resolve_own_virtual_methods(core: &mut ArmCore, context: &InitSvcContext) -> Result<()> {
+    let Some((virtual_methods, output, start, end)) = *context.own_virtual_resolve.lock() else {
+        return Ok(());
+    };
+    if virtual_methods == 0 || output == 0 {
+        return Ok(());
+    }
+
+    // Assign dispatch slots to every registered application class first, so a
+    // method resolved below already carries its linked slot.
+    let roots: Vec<u32> = context.app_classes.lock().iter().map(|class| class.root).collect();
+    for root in roots {
+        ensure_heavy_method_slots_linked(core, context, root)?;
+    }
+
+    // The table is blank-terminated; the layout bound is a backstop so a
+    // missing terminator cannot run off into unrelated memory.
+    for index in start..end {
+        // A row already filled by an earlier pass stays as it is: this runs
+        // again each time a class is registered or activated, filling more of
+        // the table as the classes that own these references appear.
+        if read_generic::<u16, _>(core, output + index * 2)? != 0 {
+            continue;
+        }
+
+        let entry = virtual_methods + index * 8;
+        let name_ptr: u32 = read_generic(core, entry)?;
+        let descriptor_ptr: u32 = read_generic(core, entry + 4)?;
+        if name_ptr == 0 || descriptor_ptr == 0 {
+            break;
+        }
+
+        let name = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, name_ptr)?).into_owned();
+        let descriptor = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, descriptor_ptr)?).into_owned();
+
+        let slot = context
+            .app_classes
+            .lock()
+            .iter()
+            .flat_map(|class| class.members.iter())
+            .find(|member| member.is_method() && member.name() == name && member.descriptor() == descriptor && (member.slot() as u16 as i16) > 0)
+            .map(|member| member.slot());
+
+        if let Some(slot) = slot {
+            write_generic(core, output + index * 2, slot as u16)?;
+            tracing::debug!("resolved own virtual method {name}{descriptor} at row {index} -> slot {slot}");
+        }
+    }
+
     Ok(())
 }
 

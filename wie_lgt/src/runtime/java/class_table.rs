@@ -276,6 +276,25 @@ impl ClassTable {
         }
     }
 
+    /// How many rows `virtual_method_offsets` has room for, bounded by
+    /// whichever output array follows it in `.bss`, or `None` when it is the
+    /// last output and no in-layout bound exists (a blank input row then ends
+    /// the walk instead).
+    pub fn virtual_method_offset_capacity(&self) -> Option<u32> {
+        let virtual_method_offsets = self.outputs.virtual_method_offsets;
+
+        [
+            self.outputs.field_offsets,
+            self.outputs.static_field_offsets,
+            self.outputs.interface_method_offsets,
+            self.outputs.static_method_offsets,
+        ]
+        .into_iter()
+        .filter(|x| *x > virtual_method_offsets)
+        .min()
+        .map(|next| (next - virtual_method_offsets) / 2)
+    }
+
     /// The class a token from a reserved row belongs to.
     pub fn class_of_object(&self, class_object: u32) -> Option<u32> {
         self.class_objects.iter().position(|x| *x == class_object).map(|x| x as u32)
