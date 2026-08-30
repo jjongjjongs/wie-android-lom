@@ -100,3 +100,7 @@ jobs:
           # uploaded as gradle's `app-debug.apk`.
           cp android/app/build/outputs/apk/debug/app-debug.apk wie-mobile-debug.apk
           gh release upload "$TAG" wie-mobile-debug.apk --clobber
+
+          # Drop a stale `app-debug.apk` asset left by an older workflow: it
+          # shows up next to the real one and is easy to download by mistake.
+          gh release delete-asset "$TAG" app-debug.apk --yes 2>/dev/null || true
