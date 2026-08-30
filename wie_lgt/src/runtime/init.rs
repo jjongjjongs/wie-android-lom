@@ -471,6 +471,17 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 context.system.yield_now().await;
             }
 
+            // Also take the object's JVM monitor. A compiled `synchronized`
+            // block enters through this SVC, but `Object.wait/notify` check JVM
+            // ownership - without this a worker that waits on a lock it holds
+            // gets IllegalMonitorStateException. Our own tracking already
+            // serialised access, so this acquires immediately.
+            if let Some(instance) = context.java_handles.get(object)
+                && let Err(error) = context.jvm.monitor_enter(&instance).await
+            {
+                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
+            }
+
             0u32.write(core, lr)
         }
         InitSvcId::VmMonitorExit => {
@@ -486,6 +497,12 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 return Err(WieError::FatalError(format!(
                     "vm_monitor_exit({object:#x}) from non-owner thread {thread_id}"
                 )));
+            }
+
+            if let Some(instance) = context.java_handles.get(object)
+                && let Err(error) = context.jvm.monitor_exit(&instance).await
+            {
+                return Err(wie_jvm_support::JvmSupport::to_wie_err(&context.jvm, error).await);
             }
 
             0u32.write(core, lr)
