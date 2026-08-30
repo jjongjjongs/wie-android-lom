@@ -236,7 +236,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             eprintln!("[{label}] pressing OK (intro) at tick {ticks}");
             emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
         }
-        if ticks == intro_tick + 20 {
+        if ticks == intro_tick.saturating_add(20) {
             emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
         }
 
@@ -246,7 +246,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             eprintln!("[{label}] pressing OK (title) at tick {ticks}");
             emulator.handle_event(Event::Keydown(wie_backend::KeyCode::OK));
         }
-        if ticks == title_tick + 20 {
+        if ticks == title_tick.saturating_add(20) {
             emulator.handle_event(Event::Keyup(wie_backend::KeyCode::OK));
         }
 
@@ -255,7 +255,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
                 eprintln!("[{label}] pressing probe key {:?} at tick {ticks}", key);
                 emulator.handle_event(Event::Keydown(key));
             }
-            if ticks == press_tick + 20 {
+            if ticks == press_tick.saturating_add(20) {
                 emulator.handle_event(Event::Keyup(key));
             }
         }
@@ -264,11 +264,11 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
         // ticks apart, starting at `press_tick`, before any confirm probe.
         let scroll_n: u32 = std::env::var("WIE_SCROLL_N").ok().and_then(|x| x.parse().ok()).unwrap_or(0);
         for k in 0..scroll_n {
-            let down = press_tick + 40 + k * 25;
+            let down = press_tick.saturating_add(40).saturating_add(k * 25);
             if ticks == down {
                 emulator.handle_event(Event::Keydown(wie_backend::KeyCode::DOWN));
             }
-            if ticks == down + 10 {
+            if ticks == down.saturating_add(10) {
                 emulator.handle_event(Event::Keyup(wie_backend::KeyCode::DOWN));
             }
         }
@@ -281,7 +281,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
                 eprintln!("[{label}] pressing probe key2 {:?} at tick {ticks}", key2);
                 emulator.handle_event(Event::Keydown(key2));
             }
-            if ticks == t2 + 20 {
+            if ticks == t2.saturating_add(20) {
                 emulator.handle_event(Event::Keyup(key2));
             }
         }
