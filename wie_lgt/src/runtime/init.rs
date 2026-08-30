@@ -114,11 +114,6 @@ const CLASS_DISPATCH_SLOTS: u32 = 0x26;
 /// Guard on how far a class hierarchy is walked looking for a platform class.
 const MAX_SUPERCLASS_DEPTH: usize = 32;
 
-/// Above this, an array length from `vm_instantiate_array` is not a real
-/// request but a misread register (typically an object handle), so it is not
-/// allocated. A feature-phone title never asks for a million-element array.
-const MAX_SANE_ARRAY_LENGTH: u32 = 0x0010_0000;
-
 /// Native CLDC initializes both `the_vm_reschedule_count` and its threshold
 /// from configuration 32, whose LGT value is 100.
 const VM_RESCHEDULE_COUNT_THRESHOLD: u32 = 100;
@@ -805,24 +800,24 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let class = core.read_param(0)?;
             let length = core.read_param(1)?;
 
+            // On this ABI table-0x64 slot 0xf is `vm_instantiate` (a single
+            // object), not `vm_instantiate_array`: the caller passes a regular
+            // class token and a second value that is not a length. A real array
+            // instantiation always names a registered array class (handed out by
+            // vm_get_array_class), so when the class is not one and it can be
+            // instantiated as a single object, do that instead of allocating a
+            // bogus, gigantic reference array the caller then treats as one
+            // object.
+            let is_array_class = context.array_classes.lock().contains_key(&class);
+            if !is_array_class && let Ok(instance) = instantiate(core, context, class).await {
+                tracing::debug!("vm_instantiate via slot 0xf (class {class:#x} is not an array class) -> {instance:#x}");
+                return instance.write(core, lr);
+            }
+
             // Native vm_instantiate_array treats the requested length as signed
             // and throws before attempting any allocation when it is negative.
             if (length as i32) < 0 {
                 return throw_vm_exception(core, context, "java/lang/NegativeArraySizeException").await;
-            }
-
-            // A length in the millions is not an array request. On this ABI
-            // slot 0xf is `vm_instantiate` (a single object), not
-            // `vm_instantiate_array`: the register we read as a length is
-            // really the second object handle, and the caller uses the result
-            // as one object - the observed call built an AnnunciatorComponent
-            // from it. So when the "length" is an object-handle-sized value,
-            // instantiate a single object of `class` instead of an array.
-            if length > MAX_SANE_ARRAY_LENGTH {
-                let instance = instantiate(core, context, class).await?;
-                tracing::debug!("vm_instantiate via slot 0xf (length {length:#x} is not a count): class {class:#x} -> {instance:#x}");
-
-                return instance.write(core, lr);
             }
 
             vm_instantiate_array(&context.java_handles, &context.array_classes, class, length)
