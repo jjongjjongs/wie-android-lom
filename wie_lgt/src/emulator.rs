@@ -36,7 +36,7 @@ impl LgtEmulator {
 
         tracing::info!("Loading app {}, pid {}, mclass {}", app_info.aid, app_info.pid, app_info.mclass);
 
-        let jar_filename = format!("{}.jar", app_info.aid);
+        let jar_filename = Self::find_jar(&files, &app_info.aid)?;
 
         Self::load(
             platform,
@@ -47,6 +47,33 @@ impl LgtEmulator {
             &files,
             options,
         )
+    }
+
+    /// The jar an archive's descriptor names, or the one it actually contains.
+    ///
+    /// Repacked archives do not always agree with themselves: SEED's `app_info`
+    /// declares `AID:00027565` while the jar beside it is `00025A84.jar`. When
+    /// the declared name is absent and there is exactly one jar, that jar is
+    /// what the descriptor meant.
+    fn find_jar(files: &BTreeMap<String, Vec<u8>>, aid: &str) -> Result<String> {
+        let declared = format!("{aid}.jar");
+        if files.contains_key(&declared) {
+            return Ok(declared);
+        }
+
+        let mut jars = files.keys().filter(|x| x.ends_with(".jar"));
+
+        match (jars.next(), jars.next()) {
+            (Some(jar), None) => {
+                tracing::warn!("LGT archive declares {declared} but contains {jar}; using it");
+
+                Ok(jar.clone())
+            }
+            (Some(_), Some(_)) => Err(WieError::FatalError(format!(
+                "LGT archive declares {declared}, which is missing, and holds several jars"
+            ))),
+            _ => Err(WieError::FatalError(format!("LGT archive holds no jar; expected {declared}"))),
+        }
     }
 
     pub fn from_jar(
@@ -100,28 +127,79 @@ impl LgtEmulator {
         let mut system_clone = system.clone();
         let main_class_name_clone = main_class_name.clone();
         let jar_filename = jar_filename.to_owned();
+        let aid = aid.to_owned();
 
-        system.spawn(async move || Self::do_start(&mut core_clone, &mut system_clone, jar_filename, main_class_name_clone).await);
+        system.spawn(async move || Self::do_start(&mut core_clone, &mut system_clone, jar_filename, aid, main_class_name_clone).await);
 
         Ok(Self { core, system })
     }
 
     #[tracing::instrument(name = "start", skip_all)]
-    async fn do_start(core: &mut ArmCore, system: &mut System, jar_filename: String, _main_class_name: Option<String>) -> Result<()> {
+    async fn do_start(core: &mut ArmCore, system: &mut System, jar_filename: String, aid: String, main_class_name: Option<String>) -> Result<()> {
         let protos = [wie_midp::get_protos().into(), wie_wipi_java::get_protos().into()];
         let jvm = JvmSupport::new_jvm(system, Some(&jar_filename), Box::new(protos), &[], RustJavaJvmImplementation).await?; // TODO use lgt's java implementation
 
-        let class_loader = jvm.current_class_loader().await.unwrap();
-        let stream = JavaLangClassLoader::get_resource_as_stream(&jvm, &class_loader, "binary.mod")
-            .await
-            .unwrap()
-            .unwrap();
+        let class_loader = match jvm.current_class_loader().await {
+            Ok(class_loader) => class_loader,
+            Err(error) => return Err(JvmSupport::to_wie_err(&jvm, error).await),
+        };
 
-        let binary_mod = JavaIoInputStream::read_until_end(&jvm, &stream).await.unwrap();
+        let stream = match JavaLangClassLoader::get_resource_as_stream(&jvm, &class_loader, "binary.mod").await {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return Err(WieError::FatalError(format!("{jar_filename} has no binary.mod"))),
+            Err(error) => return Err(JvmSupport::to_wie_err(&jvm, error).await),
+        };
 
-        load_native(core, system, &jvm, &binary_mod).await?;
+        let mut binary_mod = match JavaIoInputStream::read_until_end(&jvm, &stream).await {
+            Ok(binary_mod) => binary_mod,
+            Err(error) => return Err(JvmSupport::to_wie_err(&jvm, error).await),
+        };
+
+        apply_offline_auth_patch(&aid, &mut binary_mod);
+
+        load_native(core, system, &jvm, &binary_mod, main_class_name.as_deref()).await?;
 
         Ok(())
+    }
+}
+
+/// Super Action Hero 3 (`00028E74`) checks in with an authentication server
+/// before it will play. WipiPlayer flips the one event the check dispatches so
+/// the title takes its offline branch instead; do the same to the module we
+/// load. The instruction is `cmp r3, #0x15; bne; movs r0, #0x15; movs r1,
+/// #0x2d; bl <auth>` - the auth event id 0x15 handed to the dispatcher. Turning
+/// it into 0x18 is the whole patch WipiPlayer verified by hash.
+///
+/// It is applied only to that title, and only when the exact instruction window
+/// is present exactly once, so nothing else can be touched by accident.
+fn apply_offline_auth_patch(aid: &str, binary_mod: &mut [u8]) {
+    if !aid.eq_ignore_ascii_case("00028E74") {
+        return;
+    }
+
+    // cmp r3,#0x15 ; bne +.. ; movs r0,#0x15 ; movs r1,#0x2d
+    const WINDOW: [u8; 8] = [0x15, 0x2b, 0x05, 0xd1, 0x15, 0x20, 0x2d, 0x21];
+    // Offset within the window of the `movs r0, #0x15` immediate byte.
+    const IMM_OFFSET: usize = 4;
+    const PATCHED_IMM: u8 = 0x18;
+
+    let mut site = None;
+    let mut count = 0usize;
+    for (index, window) in binary_mod.windows(WINDOW.len()).enumerate() {
+        if window == WINDOW {
+            count += 1;
+            site.get_or_insert(index);
+        }
+    }
+
+    match (count, site) {
+        (1, Some(start)) => {
+            let target = start + IMM_OFFSET;
+            binary_mod[target] = PATCHED_IMM;
+            tracing::info!("Applied Super Action Hero 3 offline authentication patch at binary.mod offset {target}");
+        }
+        (0, _) => tracing::warn!("Super Action Hero 3 auth patch site not found; leaving binary.mod unchanged"),
+        (n, _) => tracing::warn!("Super Action Hero 3 auth pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
     }
 }
 

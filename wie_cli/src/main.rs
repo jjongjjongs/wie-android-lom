@@ -195,7 +195,9 @@ pub fn start(filename: &str, options: Options) -> anyhow::Result<()> {
     let platform = Box::new(WieCliPlatform::new(window.handle()));
 
     let buf = fs::read(filename)?;
-    let mut emulator: Box<dyn Emulator> = if filename.ends_with("zip") {
+    // Only used to pick the loader; all file access keeps the original casing.
+    let extension = filename.to_lowercase();
+    let mut emulator: Box<dyn Emulator> = if extension.ends_with("zip") {
         let files = extract_zip(&buf).unwrap();
 
         if KtfEmulator::loadable_archive(&files) {
@@ -207,14 +209,14 @@ pub fn start(filename: &str, options: Options) -> anyhow::Result<()> {
         } else {
             anyhow::bail!("Unknown archive format");
         }
-    } else if filename.ends_with("jad") {
+    } else if extension.ends_with("jad") {
         let jar_filename = filename.replace(".jad", ".jar");
         let jar = fs::read(&jar_filename)?;
 
         let jar_filename = jar_filename[jar_filename.rfind('/').unwrap_or(0) + 1..].to_owned();
 
         Box::new(J2MEEmulator::from_jad_jar(platform, buf, jar_filename, jar)?)
-    } else if filename.ends_with("jar") {
+    } else if extension.ends_with("jar") {
         let filename_without_path = filename[filename.rfind('/').unwrap_or(0) + 1..].to_owned();
         let filename_without_ext = filename_without_path.trim_end_matches(".jar");
 

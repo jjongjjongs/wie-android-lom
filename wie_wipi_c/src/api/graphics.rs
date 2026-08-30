@@ -23,16 +23,23 @@ const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
 /// Read a WIPI-C string. `length == -1` means NUL-terminated; `length > 0`
 /// reads exactly that many bytes; `length == 0` and other negatives yield
 /// an empty string.
-fn read_wipi_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<Vec<u8>> {
-    if length > 0 {
+///
+/// The bytes are EUC-KR, which is what a Korean handset's toolchain put in the
+/// binary. Reading them as UTF-8 turns every Hangul syllable into U+FFFD, and
+/// the font has no glyph for that, so a title's text silently drew nothing at
+/// all - which is what dialogue boxes with no words in them were.
+fn read_wipi_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<String> {
+    let bytes = if length > 0 {
         let mut buf = vec![0u8; length as usize];
         context.read_bytes(ptr, &mut buf)?;
-        return Ok(buf);
-    }
-    if length == -1 {
-        return read_null_terminated_string_bytes(context, ptr);
-    }
-    Ok(Vec::new())
+        buf
+    } else if length == -1 {
+        read_null_terminated_string_bytes(context, ptr)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(encoding_rs::EUC_KR.decode(&bytes).0.into_owned())
 }
 
 pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWord) -> Result<WIPICIndirectPtr> {
@@ -223,6 +230,123 @@ pub async fn fill_arc(
     Ok(())
 }
 
+/// Reads `n` (x, y) vertices from two parallel `M_Int32` arrays, the way the
+/// WIPI polygon calls pass them.
+fn read_polygon_points(context: &mut dyn WIPICContext, x_points: WIPICWord, y_points: WIPICWord, n: usize) -> Result<Vec<(i32, i32)>> {
+    let mut points = Vec::with_capacity(n);
+    for i in 0..n {
+        let offset = (i * size_of::<i32>()) as WIPICWord;
+        let x: i32 = read_generic(context, x_points + offset)?;
+        let y: i32 = read_generic(context, y_points + offset)?;
+        points.push((x, y));
+    }
+    Ok(points)
+}
+
+/// The bounding box of a set of points as `(min_x, min_y, max_x, max_y)`. Used
+/// as the draw clip so a stray vertex cannot paint outside the shape's extent.
+/// `Clip` is neither `Copy` nor `Clone`, so callers rebuild one per draw from
+/// these bounds.
+fn polygon_bounds(points: &[(i32, i32)]) -> (i32, i32, i32, i32) {
+    let min_x = points.iter().map(|p| p.0).min().unwrap_or(0);
+    let min_y = points.iter().map(|p| p.1).min().unwrap_or(0);
+    let max_x = points.iter().map(|p| p.0).max().unwrap_or(0);
+    let max_y = points.iter().map(|p| p.1).max().unwrap_or(0);
+    (min_x, min_y, max_x, max_y)
+}
+
+fn bounds_clip(bounds: (i32, i32, i32, i32)) -> Clip {
+    let (min_x, min_y, max_x, max_y) = bounds;
+    Clip {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x + 1).max(0) as u32,
+        height: (max_y - min_y + 1).max(0) as u32,
+    }
+}
+
+pub async fn draw_polygon(
+    context: &mut dyn WIPICContext,
+    dst: WIPICIndirectPtr,
+    x_points: WIPICWord,
+    y_points: WIPICWord,
+    n_points: i32,
+    p_gctx: WIPICWord,
+) -> Result<()> {
+    tracing::debug!("MC_grpDrawPolygon({:#x}, {x_points:#x}, {y_points:#x}, {n_points}, {p_gctx:#x})", dst.0);
+
+    if n_points < 2 || x_points == 0 || y_points == 0 {
+        return Ok(());
+    }
+
+    let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
+    let gctx: WIPICGraphicsContext = read_generic(context, p_gctx)?;
+    let points = read_polygon_points(context, x_points, y_points, n_points as usize)?;
+
+    let bounds = polygon_bounds(&points);
+    let color = framebuffer.pixel_to_color(gctx.fgpxl);
+    let mut canvas = framebuffer.canvas(context)?;
+
+    // Close the outline back to the first vertex, which is what a polygon is.
+    for i in 0..points.len() {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % points.len()];
+        canvas.draw_line(x1, y1, x2, y2, color, bounds_clip(bounds));
+    }
+    canvas.flush()?;
+
+    Ok(())
+}
+
+pub async fn fill_polygon(
+    context: &mut dyn WIPICContext,
+    dst: WIPICIndirectPtr,
+    x_points: WIPICWord,
+    y_points: WIPICWord,
+    n_points: i32,
+    p_gctx: WIPICWord,
+) -> Result<()> {
+    tracing::debug!("MC_grpFillPolygon({:#x}, {x_points:#x}, {y_points:#x}, {n_points}, {p_gctx:#x})", dst.0);
+
+    if n_points < 3 || x_points == 0 || y_points == 0 {
+        return Ok(());
+    }
+
+    let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
+    let gctx: WIPICGraphicsContext = read_generic(context, p_gctx)?;
+    let points = read_polygon_points(context, x_points, y_points, n_points as usize)?;
+
+    let bounds = polygon_bounds(&points);
+    let color = framebuffer.pixel_to_color(gctx.fgpxl);
+    let (min_y, max_y) = (bounds.1, bounds.3);
+    let mut canvas = framebuffer.canvas(context)?;
+
+    // Even-odd scanline fill: for each row, gather where the edges cross it,
+    // sort, and paint the interior between successive crossing pairs.
+    let mut crossings: Vec<i32> = Vec::with_capacity(points.len());
+    for y in min_y..=max_y {
+        crossings.clear();
+        for i in 0..points.len() {
+            let (x1, y1) = points[i];
+            let (x2, y2) = points[(i + 1) % points.len()];
+            // A half-open edge test counts each vertex once, so a scanline
+            // passing exactly through a vertex is not filled twice.
+            let (lo, hi, xa, xb) = if y1 <= y2 { (y1, y2, x1, x2) } else { (y2, y1, x2, x1) };
+            if y >= lo && y < hi {
+                let x = xa + (xb - xa) * (y - lo) / (hi - lo);
+                crossings.push(x);
+            }
+        }
+        crossings.sort_unstable();
+        for pair in crossings.chunks_exact(2) {
+            canvas.draw_line(pair[0], y, pair[1], y, color, bounds_clip(bounds));
+        }
+    }
+    canvas.flush()?;
+
+    Ok(())
+}
+
 pub async fn create_image(
     context: &mut dyn WIPICContext,
     ptr_image: WIPICWord,
@@ -271,7 +395,11 @@ pub async fn draw_image(
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
     let image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
 
-    let src_image = FrameBuffer(image.img).image(context)?;
+    // The img plane is a 16bpp colour buffer for titles that read image memory
+    // directly; compositing goes through the full-colour mask plane so per-pixel
+    // alpha survives. Older images without a mask still composite from img.
+    let source = if image.mask.buf.0 != 0 { image.mask } else { image.img };
+    let src_image = FrameBuffer(source).image(context)?;
     let mut canvas = framebuffer.canvas(context)?;
 
     let clip = Clip {
@@ -484,13 +612,9 @@ pub async fn get_font_descent(_: &mut dyn WIPICContext, font: i32) -> Result<i32
 pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_string: WIPICWord, length: i32) -> Result<i32> {
     tracing::debug!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
 
-    let bytes = read_wipi_string(context, ptr_string, length)?;
-    if bytes.is_empty() {
-        return Ok(0);
-    }
-    let s = String::from_utf8_lossy(&bytes);
+    let string = read_wipi_string(context, ptr_string, length)?;
 
-    Ok(string_width(&s, 10.0) as i32)
+    Ok(string_width(&string, 10.0) as i32)
 }
 
 pub async fn draw_string(
@@ -504,15 +628,13 @@ pub async fn draw_string(
 ) -> Result<()> {
     tracing::debug!("MC_grpDrawString({:#x}, {x}, {y}, {ptr_string:#x}, {length}, {pgc:#x})", dst.0);
 
-    let string_bytes = read_wipi_string(context, ptr_string, length)?;
-    if string_bytes.is_empty() {
+    let string = read_wipi_string(context, ptr_string, length)?;
+    if string.is_empty() {
         return Ok(());
     }
 
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
     let gctx: WIPICGraphicsContext = read_generic(context, pgc)?;
-
-    let string = String::from_utf8_lossy(&string_bytes);
 
     let clip = Clip {
         x: 0,
@@ -539,6 +661,32 @@ pub async fn repaint(context: &mut dyn WIPICContext, lcd: i32, x: i32, y: i32, w
     Ok(())
 }
 
+/// Row length in bytes and the stride to advance by, or `None` when the call
+/// asks for nothing that can be delivered.
+///
+/// `ipl` is a destination stride, but a handset asked less of it than the name
+/// suggests: LGT's own runtime checks only that it is positive and then
+/// discards it, writing rows packed at `w * 4`. Titles are written against
+/// that. Zenonia reads single pixels with `w = 1, ipl = 1`, and rejecting
+/// those left it reading uninitialised stack as pixels - which is what its
+/// collision checks were deciding on.
+///
+/// A stride wide enough to be one is still honoured, since nothing says the
+/// other handsets discarded it too; anything smaller falls back to packed.
+fn destination_stride(w: i32, h: i32, ipl: i32) -> Option<(i32, i32)> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    if ipl <= 0 {
+        tracing::warn!("MC_grpGetRGBPixels: invalid ipl {ipl}");
+        return None;
+    }
+
+    let row_bytes = i32::try_from((w as i64).checked_mul(4)?).ok()?;
+
+    Some((row_bytes, ipl.max(row_bytes)))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn get_rgb_pixels(
     context: &mut dyn WIPICContext,
@@ -552,14 +700,9 @@ pub async fn get_rgb_pixels(
 ) -> Result<()> {
     tracing::debug!("MC_grpGetRGBPixels({:#x}, {x}, {y}, {w}, {h}, {pd:#x}, {ipl})", src.0);
 
-    let row_bytes = match (w as i64).checked_mul(4) {
-        Some(n) if w > 0 && h > 0 => n as i32,
-        _ => return Ok(()),
-    };
-    if ipl < row_bytes {
-        tracing::warn!("MC_grpGetRGBPixels: invalid ipl {ipl} (need >= {row_bytes})");
+    let Some((row_bytes, ipl)) = destination_stride(w, h, ipl) else {
         return Ok(());
-    }
+    };
 
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(src)?)?);
     let image = framebuffer.image(context)?;
@@ -781,10 +924,56 @@ pub async fn get_framebuffer_bpl(context: &mut dyn WIPICContext, framebuffer: WI
     Ok(framebuffer.bpl as _)
 }
 
-pub async fn get_framebuffer_bpp(context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {
+pub async fn get_framebuffer_bpp(_context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {
     tracing::debug!("MC_GRP_GET_FRAME_BUFFER_BPP({:#x})", framebuffer.0);
 
-    let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(framebuffer)?)?;
+    // The vendor `wipic_get_frame_bpp` ignores its argument and returns the
+    // display's depth from a global. Titles rely on that: their direct-blit
+    // inner loop calls this with whatever register happens to be live - the
+    // frame pointer, the width - not a framebuffer handle, then uses the result
+    // as the pixel stride. Dereferencing that argument as a handle here read a
+    // garbage struct and returned a garbage depth, so a title's glyph and
+    // sprite writes landed at the wrong offset and never appeared while its
+    // `MC_grpFillRect` panels, which never touch this call, drew fine. Every
+    // framebuffer this runtime hands out is `FRAMEBUFFER_DEPTH`, so report it
+    // directly and ignore the argument, as the vendor does.
+    Ok(FRAMEBUFFER_DEPTH as _)
+}
 
-    Ok(framebuffer.bpp as _)
+#[cfg(test)]
+mod tests {
+    use super::destination_stride;
+
+    /// A single pixel read into four bytes of stack, which is how a title asks
+    /// whether it has walked into something. LGT's runtime takes `ipl = 1`.
+    #[test]
+    fn a_one_pixel_probe_is_delivered() {
+        assert_eq!(destination_stride(1, 1, 1), Some((4, 4)));
+    }
+
+    #[test]
+    fn a_real_stride_is_honoured() {
+        // Reading 100 pixels into a 240 wide buffer.
+        assert_eq!(destination_stride(100, 50, 960), Some((400, 960)));
+    }
+
+    /// Too small to be a stride, so the rows pack - which is what the handset
+    /// did with any value at all.
+    #[test]
+    fn a_short_stride_packs_instead_of_dropping_the_call() {
+        assert_eq!(destination_stride(8, 4, 3), Some((32, 32)));
+    }
+
+    #[test]
+    fn nothing_to_read_is_dropped() {
+        assert_eq!(destination_stride(0, 4, 16), None);
+        assert_eq!(destination_stride(4, 0, 16), None);
+        assert_eq!(destination_stride(4, 4, 0), None);
+        assert_eq!(destination_stride(4, 4, -1), None);
+    }
+
+    #[test]
+    fn an_unreasonable_width_is_dropped_rather_than_overflowing() {
+        assert_eq!(destination_stride(i32::MAX, 1, i32::MAX), None);
+    }
 }

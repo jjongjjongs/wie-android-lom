@@ -1,0 +1,99 @@
+name: Android APK
+
+# The apk is the deliverable, so it gets built on the branches it is being
+# worked on as well as on main - a workflow that only runs after merge cannot
+# tell anyone whether the thing builds.
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+  pull_request:
+  workflow_dispatch:
+
+# Needed only by the release step, which replaces the apk hanging off a fixed
+# tag. Everything else here reads.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      # The runner image ships an NDK; cargo-ndk needs to be pointed at it.
+      - name: Export NDK location
+        run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        working-directory: android
+        run: gradle --no-daemon assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wie-mobile-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      # An artifact can only be downloaded by someone signed in to GitHub, from
+      # a zip, which is awkward on the handset the apk is meant for. A release
+      # asset is a plain link, so the apk also goes to one - always the same
+      # tag, so the link does not change between builds.
+      - name: Publish the APK to the development release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: mobile-dev
+        run: |
+          set -eu
+
+          notes="Development build, replaced by every push.
+
+          | | |
+          |---|---|
+          | Branch | \`${{ github.ref_name }}\` |
+          | Commit | ${{ github.sha }} |
+          | Built | $(date -u '+%Y-%m-%d %H:%M UTC') |
+
+          Debug build, unsigned for release: Android will ask for permission to
+          install it from outside the store."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$notes" --prerelease
+          else
+            gh release create "$TAG" --title 'WIE Mobile (development build)' --notes "$notes" --prerelease
+          fi
+
+          # The asset takes the file's own name, so it is renamed rather than
+          # uploaded as gradle's `app-debug.apk`.
+          cp android/app/build/outputs/apk/debug/app-debug.apk wie-mobile-debug.apk
+          gh release upload "$TAG" wie-mobile-debug.apk --clobber

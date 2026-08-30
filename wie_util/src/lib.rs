@@ -174,6 +174,19 @@ where
     write_generic(writer, cursor, 0u32)
 }
 
+/// Decodes one `Key:Value` payload of a feature phone app descriptor
+/// (KTF `__adf__`, LGT `app_info`).
+///
+/// Descriptors are written by the handset, so line endings are inconsistent:
+/// archives dumped from LGT handsets frequently use CRLF. A trailing `\r` here
+/// ends up in the AID and turns the jar lookup into `0002A4B1\r.jar`, so
+/// surrounding whitespace is always trimmed.
+pub fn descriptor_value(value: &[u8]) -> String {
+    let text: String = String::from_utf8_lossy(value).into();
+
+    text.trim().into()
+}
+
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;
 

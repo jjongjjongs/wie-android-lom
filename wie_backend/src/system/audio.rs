@@ -48,6 +48,17 @@ impl Audio {
     }
 
     pub fn play(&mut self, system: &System, audio_handle: AudioHandle, repeat: bool) -> Result<(), AudioError> {
+        self.play_with_completion(system, audio_handle, repeat)?;
+
+        Ok(())
+    }
+
+    pub fn play_with_completion(
+        &mut self,
+        system: &System,
+        audio_handle: AudioHandle,
+        repeat: bool,
+    ) -> Result<(Arc<AtomicBool>, Arc<AtomicBool>), AudioError> {
         let player = match self.files.get(&audio_handle) {
             Some(AudioFile::Smaf(data)) => SmafPlayer::new(data),
             None => return Err(AudioError::InvalidHandle),
@@ -60,16 +71,27 @@ impl Audio {
 
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_clone = stop_flag.clone();
-        self.playing.insert(audio_handle, stop_flag);
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_clone = completed.clone();
+
+        self.playing.insert(audio_handle, stop_flag.clone());
 
         // TODO use dedicated audio player task
         system.spawn(async move || {
             player.play(&mut system_clone, &**sink_clone, &stop_flag_clone, repeat).await;
 
+            if !stop_flag_clone.load(Ordering::Relaxed) {
+                completed_clone.store(true, Ordering::Release);
+            }
+
             Ok(())
         });
 
-        Ok(())
+        Ok((completed, stop_flag))
+    }
+
+    pub fn is_playing(&self, audio_handle: AudioHandle) -> bool {
+        self.playing.contains_key(&audio_handle)
     }
 
     pub fn stop(&mut self, audio_handle: AudioHandle) {

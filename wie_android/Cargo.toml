@@ -1,0 +1,26 @@
+[package]
+name = "wie_android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-trait = { workspace = true }
+md5 = { workspace = true, features = ["std"] }
+tracing = { workspace = true }
+
+jni = "^0.21"
+tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
+
+wie_backend = { workspace = true }
+wie_util = { workspace = true }
+wie_j2me = { path = "../wie_j2me" }
+wie_ktf = { path = "../wie_ktf" }
+wie_lgt = { path = "../wie_lgt" }
+wie_skt = { path = "../wie_skt" }
+
+[dev-dependencies]
+smaf_player = { git = "https://github.com/dlunch/smaf.git" }

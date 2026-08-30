@@ -15,6 +15,7 @@ use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes
 
 use crate::{WIPICResult, context::WIPICContext, method::MethodBody};
 
+pub use self::sprintf::format as format_varargs;
 use self::sprintf::sprintf;
 
 #[repr(C, packed)]
@@ -39,7 +40,12 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "RSSILEVEL" => "30",
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
-        "PHONENUMBER" => "", // putting this cause some game to fail authentication
+        "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
+        // LGT ez-i cert.c2s DRM uses the subscriber phone number as the decryption key,
+        // so games bound to a specific number only authenticate when this matches the
+        // number their cert was issued for. Recovered for Inotia 2 (0002BA13) via
+        // known-plaintext (decrypted appID) against its cert.c2s; see docs.
+        "PHONENUMBER" => "01046119269",
         "MIN" => "01000000000",
         "ANNUN_CALL" => "0",
         "ANNUN_SMS" => "0",
@@ -108,10 +114,17 @@ pub async fn set_timer(
     }
 
     let now = context.system().platform().now();
-    let timeout = (((timeout_high as u64) << 32) | (timeout_low as u64)) as _;
+
+    // Raptor represents the delay as a signed 64-bit value split into two
+    // words. Legacy runtimes schedule a negative delay on the next scheduler
+    // tick instead of interpreting it as a very large unsigned duration.
+    let raw_timeout = ((timeout_high as u64) << 32) | timeout_low as u64;
+    let timeout = if (raw_timeout as i64) < 0 { 1 } else { raw_timeout };
+
     let timer: WIPICTimer = read_generic(context, ptr_timer)?;
 
     context.set_timer(
+        ptr_timer,
         now + timeout,
         Box::new(TimerCallback {
             ptr_timer,
@@ -123,8 +136,10 @@ pub async fn set_timer(
     Ok(())
 }
 
-pub async fn unset_timer(_: &mut dyn WIPICContext, a0: WIPICWord) -> Result<()> {
-    tracing::warn!("stub MC_knlUnsetTimer({a0:#x})");
+pub async fn unset_timer(context: &mut dyn WIPICContext, ptr_timer: WIPICWord) -> Result<()> {
+    tracing::debug!("MC_knlUnsetTimer({ptr_timer:#x})");
+
+    context.unset_timer(ptr_timer);
 
     Ok(())
 }
@@ -258,15 +273,19 @@ pub async fn sprintk(
 }
 
 pub async fn get_total_memory(_context: &mut dyn WIPICContext) -> Result<i32> {
-    tracing::warn!("stub MC_knlGetTotalMemory()");
+    // A handset reported tens of MiB here; the old 1 MiB made memory-probing
+    // titles believe the heap was already full and refuse to load.
+    const TOTAL_MEMORY: i32 = 32 * 1024 * 1024;
+    tracing::debug!("MC_knlGetTotalMemory() -> {TOTAL_MEMORY:#x}");
 
-    Ok(0x100000) // TODO hardcoded
+    Ok(TOTAL_MEMORY)
 }
 
 pub async fn get_free_memory(_context: &mut dyn WIPICContext) -> Result<i32> {
-    tracing::warn!("stub MC_knlGetFreeMemory()");
+    const FREE_MEMORY: i32 = 24 * 1024 * 1024;
+    tracing::debug!("MC_knlGetFreeMemory() -> {FREE_MEMORY:#x}");
 
-    Ok(0x100000) // TODO hardcoded
+    Ok(FREE_MEMORY)
 }
 
 pub async fn exit(context: &mut dyn WIPICContext, code: i32) -> Result<()> {

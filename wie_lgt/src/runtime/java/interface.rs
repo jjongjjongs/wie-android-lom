@@ -1,27 +1,66 @@
-use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
-use core::sync::atomic::AtomicU32;
+use alloc::{borrow::ToOwned, collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
 
-use jvm::{ClassInstance, Jvm, Result as JvmResult, runtime::JavaLangString};
-use jvm_rust::ClassDefinitionImpl;
 use spin::Mutex;
+
+use jvm::{Jvm, Result as JvmResult, runtime::JavaLangString};
 use wie_core_arm::{Allocator, ArmCore};
 use wie_jvm_support::JvmSupport;
-use wie_util::{ByteRead, Result, write_generic};
+use wie_util::{ByteRead, Result, read_generic, read_null_terminated_string_bytes, write_generic};
 
 use crate::runtime::{
     SVC_CATEGORY_INIT,
-    java::classes::lm::{Lm, LmContext},
+    java::{
+        app_classes::{self, AppClass},
+        class_table::{ClassTable, OutputArrays},
+        compiled_class::{self, CompiledContext},
+        handles::JavaHandles,
+    },
     svc_ids::InitSvcId,
 };
 
-pub type JavaHandleTable = Arc<Mutex<BTreeMap<u32, Box<dyn ClassInstance>>>>;
+/// Guard on the argument vector the application passes to `Main.main`.
+const MAX_MAIN_ARGUMENTS: u32 = 16;
+
+/// Guard on how far an application class hierarchy is followed.
+const MAX_CLASS_DEPTH: usize = 32;
 
 /// Diagnostic SVC range used for unresolved LGT Java-interface imports.
 /// The low 12 bits preserve the original function index.
 pub const JAVA_DIAG_SVC_BASE: u32 = 0x1000;
 
+/// One SVC id per row of the application's static method table. The low bits
+/// carry the row index, which is how the handler knows what was called.
+pub const JAVA_STATIC_METHOD_SVC_BASE: u32 = 0x2000;
+
+/// One SVC id per row of the virtual method table. The stub sits in a class's
+/// dispatch table, so the receiver arrives in the first word.
+pub const JAVA_VIRTUAL_METHOD_SVC_BASE: u32 = 0x4000;
+
+/// Slots every dispatch table has room for, declared or not.
+pub const DISPATCH_TABLE_SLOTS: u32 = 64;
+
+/// Where a class's own virtual methods start in its dispatch table. Slot 0 is
+/// the class's `<init>` and slots 1 to 9 are `java/lang/Object`'s, in every
+/// `dt_` in `liblgt_system.so`.
+pub const FIRST_CLASS_SLOT: u32 = 10;
+
+/// Classes that can have their own reserved block of unknown-slot ids. One
+/// past the last is the fallback table's index.
+pub const MAX_DISPATCH_CLASSES: u32 = 63;
+
+/// One SVC id per (class, slot) pair a dispatch table does not account for.
+pub const JAVA_UNKNOWN_SLOT_SVC_BASE: u32 = 0x5000;
+
+/// One SVC id per row of the static method table that carries no descriptor.
+/// The compiled code calls these too, so they cannot be left null.
+pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x3000;
+
+/// Upper bound on rows, so a table that fails to parse cannot run off the end
+/// of its SVC range.
+pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x1000;
+
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
-    Ok(match function_index {
+    let method = match function_index {
         0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk0)?,
         0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk12)?,
         0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaInterfaceUnk5)?,
@@ -30,14 +69,18 @@ pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Res
         0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport10)?,
         0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport11)?,
         0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImport23)?,
-        0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
+        0x13 | 0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
         0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk9)?,
         0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaUnk11)?,
+        0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE1)?,
+        0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaImportE2)?,
         _ => {
-            tracing::warn!("Unimplemented LGT Java import {function_index:#x}; installing diagnostic zero-return stub");
+            tracing::warn!("Unimplemented LGT Java import {function_index:#x};                  installing diagnostic zero-return stub");
             core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + function_index)?
         }
-    })
+    };
+
+    Ok(method)
 }
 
 pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32) -> Result<()> {
@@ -45,118 +88,243 @@ pub async fn java_unk0(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u3
     Ok(())
 }
 
+/// Import `0x14`. Reads the tables describing every platform class the
+/// application imports, then fills the output arrays so the compiled code can
+/// reach them.
 #[allow(clippy::too_many_arguments)]
 pub async fn java_load_classes(
-    _core: &mut ArmCore,
-    _: &mut (),
+    core: &mut ArmCore,
+    handles: &JavaHandles,
     classes: u32,
     fields: u32,
     static_fields: u32,
     virtual_methods: u32,
-    a4: u32,
+    interface_methods: u32,
     static_methods: u32,
     field_offsets: u32,
     static_field_offsets: u32,
     virtual_method_offsets: u32,
-    a9: u32,
+    interface_method_offsets: u32,
     static_method_offsets: u32,
-) -> Result<()> {
+) -> Result<ClassTable> {
+    let mut table = ClassTable::parse(
+        core,
+        classes,
+        fields,
+        static_fields,
+        virtual_methods,
+        interface_methods,
+        static_methods,
+        OutputArrays {
+            field_offsets,
+            static_field_offsets,
+            virtual_method_offsets,
+            interface_method_offsets,
+            static_method_offsets,
+        },
+    )?;
+
     tracing::debug!(
-        "java_load_classes({classes:#x}, {fields:#x}, {static_fields:#x}, {virtual_methods:#x}, {a4:#x}, {static_methods:#x}, {field_offsets:#x}, {static_field_offsets:#x}, {virtual_method_offsets:#x}, {a9:#x}, {static_method_offsets:#x})"
+        "java_load_classes: {} classes, {} static methods, {} virtual methods; inputs at \
+         classes={classes:#x}, fields={fields:#x}, static_fields={static_fields:#x}, \
+         virtual_methods={virtual_methods:#x}, interface_methods={interface_methods:#x}, \
+         static_methods={static_methods:#x}; outputs at \
+         static_method_offsets={:#x}, virtual_method_offsets={:#x}, field_offsets={:#x}, \
+         static_field_offsets={:#x}, interface_method_offsets={:#x}",
+        table.classes.len(),
+        table.static_methods.len(),
+        table.virtual_methods.len(),
+        table.outputs.static_method_offsets,
+        table.outputs.virtual_method_offsets,
+        table.outputs.field_offsets,
+        table.outputs.static_field_offsets,
+        table.outputs.interface_method_offsets,
     );
-    for (name, address) in [
-        ("classes", classes),
-        ("fields", fields),
-        ("static_fields", static_fields),
-        ("virtual_methods", virtual_methods),
-        ("a4", a4),
-        ("static_methods", static_methods),
-        ("field_offsets", field_offsets),
-        ("static_field_offsets", static_field_offsets),
-        ("virtual_method_offsets", virtual_method_offsets),
-        ("a9", a9),
-        ("static_method_offsets", static_method_offsets),
-    ] {
-        let mut bytes = [0u8; 64];
 
-        match _core.read_bytes(address, &mut bytes) {
-            Ok(read) => {
-                tracing::warn!("java_load_classes {name} @{address:#x}, read={read:#x}: {:02x?}", &bytes[..read]);
-            }
-            Err(error) => {
-                tracing::warn!("java_load_classes {name} @{address:#x}: read failed: {error}");
-            }
-        }
+    install_dispatch(core, handles, &mut table)?;
+
+    Ok(table)
+}
+
+/// Builds, per class, the dispatch table an instance points at and the token
+/// its first reserved static row hands back.
+///
+/// The compiled code dispatches a virtual call as
+///
+/// ```text
+/// ldrsh r2, [r8, #row * 2]   ; slot, from virtual_method_offsets
+/// ldr   r3, [r5]             ; the receiver's dispatch table, at its word 0
+/// add   r3, r3, r2, lsl #2
+/// ldr   ip, [r3, #4]         ; the entry, one word past the slot
+/// bx    ip
+/// ```
+///
+/// so the table needs a leading word before its entries, and every instance
+/// needs to point at one.
+fn build_dispatch_tables(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
+    if table.classes.len() as u32 > MAX_DISPATCH_CLASSES {
+        return Err(wie_util::WieError::FatalError(alloc::format!(
+            "LGT class table has {} classes, more than the {MAX_DISPATCH_CLASSES} with reserved dispatch slots",
+            table.classes.len()
+        )));
     }
 
-    let mut class_count_bytes = [0u8; 4];
-    _core.read_bytes(classes, &mut class_count_bytes)?;
-    let class_count = u32::from_le_bytes(class_count_bytes).min(64);
+    for index in 0..table.classes.len() as u32 {
+        let (start, count) = {
+            let class = &table.classes[index as usize];
+            (class.virtual_method_start, class.virtual_method_count)
+        };
 
-    tracing::warn!("java_load_classes class_count={class_count}");
-    for index in [17u32, 18u32] {
-        let pointer_address = virtual_methods.wrapping_add(index * 4);
-        let mut pointer_bytes = [0u8; 4];
+        let first_slot = if table.classes[index as usize].name == "org/kwis/msp/media/Clip" {
+            FIRST_CLASS_SLOT + 3
+        } else {
+            FIRST_CLASS_SLOT
+        };
+        let vtable = build_dispatch_table(core, index, start, count, first_slot)?;
 
-        _core.read_bytes(pointer_address, &mut pointer_bytes)?;
-        let descriptor_pointer = u32::from_le_bytes(pointer_bytes);
+        // Eight bytes is the smallest allocation that reads back distinctly;
+        // nothing inspects the contents, the address is the identity.
+        let class_object = Allocator::alloc(core, 8)?;
+        write_generic(core, class_object, 0u32)?;
+        write_generic(core, class_object + 4, index)?;
 
-        let mut descriptor_bytes = [0u8; 96];
+        handles.set_dispatch_table(&table.classes[index as usize].name, vtable);
 
-        match _core.read_bytes(descriptor_pointer, &mut descriptor_bytes) {
-            Ok(read) => {
-                let end = descriptor_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
+        tracing::trace!(
+            "LGT class {} -> object {class_object:#x}, dispatch table {vtable:#x} ({count} declared slots)",
+            table.classes[index as usize].name
+        );
 
-                tracing::warn!(
-                    "java_load_classes virtual_method[{index}] slot={pointer_address:#x}, descriptor={descriptor_pointer:#x}, text={}",
-                    String::from_utf8_lossy(&descriptor_bytes[..end])
-                );
-            }
-            Err(error) => {
-                tracing::warn!("java_load_classes virtual_method[{index}] descriptor={descriptor_pointer:#x}: read failed: {error}");
-            }
-        }
+        table.vtables.push(vtable);
+        table.class_objects.push(class_object);
     }
 
-    for index in 0..class_count {
-        // classes + 4 뒤부터 클래스당 6개의 u32, 즉 24바이트
-        let entry_address = classes.wrapping_add(4 + index * 24);
+    // Objects of a class the application never declared still get called on,
+    // so they need a table too.
+    let fallback = build_dispatch_table(core, MAX_DISPATCH_CLASSES, 0, 0, FIRST_CLASS_SLOT)?;
+    handles.set_fallback_dispatch_table(fallback);
 
-        let mut entry_bytes = [0u8; 24];
+    tracing::debug!("LGT fallback dispatch table at {fallback:#x}");
 
-        if let Err(error) = _core.read_bytes(entry_address, &mut entry_bytes) {
-            tracing::warn!(
-                "java_load_classes class[{index}] entry read failed \
-             @{entry_address:#x}: {error}"
-            );
+    Ok(())
+}
+
+/// Builds one dispatch table.
+///
+/// A class's own methods start at [`FIRST_CLASS_SLOT`], because the ten slots
+/// before them belong to `<init>` and `java/lang/Object` in every table the
+/// platform builds. Getting that wrong is not caught by anything the runtime
+/// can see on its own - the slots it hands out and the table it builds stay
+/// consistent with each other - but the compiled code also emits fixed slot
+/// numbers for methods the platform is expected to provide, and those are
+/// numbered from the real layout.
+///
+/// Every table is the same size whatever the class declares, because a class
+/// gets called at slots it never mentions: Battle Monster branches through
+/// slot 13 of a `java/lang/Runtime` that declares no virtual methods at all. A
+/// short table leaves that slot zero and the branch goes to address zero, so
+/// the slots a class does not declare are filled with stubs that report what
+/// was called instead.
+fn build_dispatch_table(core: &mut ArmCore, class_index: u32, start: u32, count: u32, first_slot: u32) -> Result<u32> {
+    let vtable = Allocator::alloc(core, (DISPATCH_TABLE_SLOTS + 1) * 4)?;
+    write_generic(core, vtable, 0u32)?;
+
+    for slot in 0..DISPATCH_TABLE_SLOTS {
+        let declared = slot.checked_sub(first_slot).filter(|index| *index < count);
+
+        let svc = if let Some(index) = declared {
+            JAVA_VIRTUAL_METHOD_SVC_BASE + start + index
+        } else {
+            JAVA_UNKNOWN_SLOT_SVC_BASE + class_index * DISPATCH_TABLE_SLOTS + slot
+        };
+
+        let stub = core.make_svc_stub(SVC_CATEGORY_INIT, svc)?;
+        write_generic(core, vtable + 4 + slot * 4, stub)?;
+    }
+
+    Ok(vtable)
+}
+
+/// Publishes the table into the arrays the compiled code reads.
+///
+/// Rows the application left blank are skipped: it reserves two at the head of
+/// every class's static method block, and what belongs there is not yet known.
+fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut ClassTable) -> Result<()> {
+    if table.static_methods.len() as u32 > JAVA_METHOD_SVC_LIMIT {
+        return Err(wie_util::WieError::FatalError(alloc::format!(
+            "LGT static method table has {} rows, more than the {JAVA_METHOD_SVC_LIMIT} reserved",
+            table.static_methods.len()
+        )));
+    }
+
+    for index in 0..table.static_methods.len() as u32 {
+        let (svc, description) = match &table.static_methods[index as usize] {
+            Some(member) => (JAVA_STATIC_METHOD_SVC_BASE + index, table.describe(member)),
+            // Every class reserves two rows at the head of its static method
+            // block, and the compiled code branches through them: an LGT
+            // constructor calls its class's first reserved row before the
+            // superclass constructor. Leaving them null turns that into a
+            // branch to address zero, so they get a stub that reports what it
+            // was called with. What they are meant to do is still unknown.
+            None => {
+                let (class, slot) = table
+                    .static_method_owner(index)
+                    .map(|(class, slot)| (class.name.as_str(), slot))
+                    .unwrap_or(("<unowned>", 0));
+
+                (JAVA_RESERVED_SLOT_SVC_BASE + index, alloc::format!("{class} reserved slot {slot}"))
+            }
+        };
+
+        let stub = core.make_svc_stub(SVC_CATEGORY_INIT, svc)?;
+        write_generic(core, table.outputs.static_method_offsets + index * 4, stub)?;
+
+        tracing::trace!("LGT static method[{index}] {description} -> {stub:#x}");
+    }
+
+    // Virtual methods are dispatched through the receiver, so the array holds
+    // the slot to index its vtable with rather than an address. The compiled
+    // code reads it with `ldrsh`, so the entries are signed halfwords.
+    for index in 0..table.virtual_methods.len() as u32 {
+        let Some(member) = table.virtual_methods[index as usize].as_ref() else {
             continue;
-        }
+        };
+        let Some(slot) = table.virtual_slot(index) else { continue };
+        let class_name = table.class_name(member.class_index);
 
-        let name_pointer = u32::from_le_bytes([entry_bytes[0], entry_bytes[1], entry_bytes[2], entry_bytes[3]]);
+        // Clip extends BaseClip. Object occupies slots 1..9 and BaseClip
+        // occupies slots 10..12, so Clip's own methods begin at slot 13.
+        let first_slot = if class_name == "org/kwis/msp/media/Clip" {
+            FIRST_CLASS_SLOT + 3
+        } else {
+            FIRST_CLASS_SLOT
+        };
+        let slot = slot + first_slot;
 
-        let mut name_bytes = [0u8; 128];
+        write_generic(core, table.outputs.virtual_method_offsets + index * 2, slot as u16)?;
 
-        match _core.read_bytes(name_pointer, &mut name_bytes) {
-            Ok(read) => {
-                let end = name_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-                tracing::warn!(
-                    "java_load_classes class[{index}] entry={entry_address:#x}, \
-                 name_ptr={name_pointer:#x}, name={}, raw={:02x?}",
-                    String::from_utf8_lossy(&name_bytes[..end]),
-                    entry_bytes
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    "java_load_classes class[{index}] entry={entry_address:#x}, \
-                 name_ptr={name_pointer:#x}: name read failed: {error}, \
-                 raw={:02x?}",
-                    entry_bytes
-                );
-            }
-        }
+        tracing::trace!("LGT virtual method[{index}] {} -> slot {slot}", table.describe(member));
     }
+
+    build_dispatch_tables(core, handles, table)?;
+
+    // A field access is `fields[field_offsets[row]]`, where `fields` is the
+    // word array an instance points at. The rows are not the platform's own
+    // field table - the compiled code indexes far past it, into what must be
+    // the application's own fields - and nothing says which field a row means.
+    //
+    // It does not have to. The application only ever reaches a field through
+    // this array, so any assignment it agrees with itself on works, and giving
+    // every row its own word is the assignment that cannot collide. It costs
+    // an instance one word per row instead of one per field.
+    let capacity = table.field_offset_capacity();
+    for row in 0..capacity {
+        write_generic(core, table.outputs.field_offsets + row * 2, row as u16)?;
+    }
+
+    handles.set_field_slots(capacity);
+
+    tracing::debug!("LGT field slots: {capacity} rows, identity mapped");
 
     Ok(())
 }
@@ -167,141 +335,48 @@ pub async fn java_unk9(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("java_unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-    tracing::warn!("java_unk11 class_ptr={a0:#x}, argc={a2}, argv={a3:#x}");
+/// Import `0x83`. The application asks the platform to run a Java main class,
+/// passing the Jlet's own class name as the first argument - the same shape
+/// KTF uses. The named class is one of the application's own compiled classes,
+/// so a bridge is registered for it before `Main` is entered.
+#[allow(clippy::too_many_arguments)]
+pub async fn java_unk11(
+    core: &mut ArmCore,
+    jvm: &mut Jvm,
+    handles: &JavaHandles,
+    app_classes: &Mutex<Vec<AppClass>>,
+    image_ranges: &[(u32, u32)],
+    argc: u32,
+    argv: u32,
+) -> Result<u32> {
+    let argc = argc.min(MAX_MAIN_ARGUMENTS);
 
-    let lm_class = ClassDefinitionImpl::from_class_proto(
-        Lm::as_proto(),
-        Box::new(LmContext {
-            core: core.clone(),
-            native_this: Arc::new(AtomicU32::new(0)),
-        }) as Box<_>,
-    );
-
-    match jvm.register_class(Box::new(lm_class), None).await {
-        Ok(_) => {
-            tracing::warn!("Registered Lm stub class");
-        }
-        Err(error) => {
-            tracing::warn!("Lm stub class registration failed: {error:?}");
-        }
-    }
-
-    let mut argv_raw = [0u8; 64];
-    if core.read_bytes(a3, &mut argv_raw).is_ok() {
-        tracing::warn!("java_unk11 argv raw @{a3:#x}: {argv_raw:02x?}");
-    }
-
-    let mut class_bytes = [0u8; 128];
-    match core.read_bytes(a0, &mut class_bytes) {
-        Ok(read) => {
-            let end = class_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-            tracing::warn!("java_unk11 class: {}", String::from_utf8_lossy(&class_bytes[..end]));
-        }
-        Err(error) => {
-            tracing::warn!("java_unk11 class read failed: {error}");
-        }
-    }
-
-    let argc = a2.min(16);
-
+    let mut arguments = Vec::with_capacity(argc as usize);
     for index in 0..argc {
-        let pointer_address = a3.wrapping_add(index * 4);
-        let mut pointer_bytes = [0u8; 4];
+        let pointer: u32 = read_generic(core, argv + index * 4)?;
+        let bytes = read_null_terminated_string_bytes(core, pointer)?;
 
-        if let Err(error) = core.read_bytes(pointer_address, &mut pointer_bytes) {
-            tracing::warn!("java_unk11 argv[{index}] pointer read failed @{pointer_address:#x}: {error}");
-            continue;
-        }
-
-        let pointer = u32::from_le_bytes(pointer_bytes);
-
-        let mut argument_bytes = [0u8; 128];
-        match core.read_bytes(pointer, &mut argument_bytes) {
-            Ok(read) => {
-                let end = argument_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-                tracing::warn!(
-                    "java_unk11 argv[{index}] ptr={pointer:#x}: {} | raw={:02x?}",
-                    String::from_utf8_lossy(&argument_bytes[..end]),
-                    &argument_bytes[..end]
-                );
-            }
-            Err(error) => {
-                tracing::warn!("java_unk11 argv[{index}] ptr={pointer:#x}: read failed: {error}");
-            }
-        }
+        arguments.push(String::from_utf8_lossy(&bytes).into_owned());
     }
 
-    // invoke static? used to be called with org/kwis/msp/lcdui/Main
+    tracing::debug!("java_run_main({arguments:?})");
 
-    // Diagnostic mode: keep the ARM application alive so the next missing
-    // interface call can be observed. A real JVM bridge will replace this.
-    for address in [0x01500954u32, 0x01500958u32] {
-        let mut value_bytes = [0u8; 4];
-
-        match core.read_bytes(address, &mut value_bytes) {
-            Ok(_) => {
-                let value = u32::from_le_bytes(value_bytes);
-                let mut object_bytes = [0u8; 32];
-
-                match core.read_bytes(value, &mut object_bytes) {
-                    Ok(_) => {
-                        let words: Vec<u32> = object_bytes
-                            .chunks(4)
-                            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-                            .collect();
-
-                        tracing::warn!("java_unk11 slot target @{value:#x}: {words:#x?}");
-                    }
-                    Err(error) => {
-                        tracing::warn!("java_unk11 slot target @{value:#x} read failed: {error}");
-                    }
-                }
-
-                tracing::warn!("java_unk11 global slot @{address:#x} = {value:#x}, thumb={}", value & 1);
-                for target in [0x71000001u32, 0x71000000u32, 0x71000011u32, 0x71000010u32] {
-                    let mut bytes = [0u8; 16];
-
-                    match core.read_bytes(target, &mut bytes) {
-                        Ok(_) => {
-                            tracing::warn!("java_unk11 candidate @{target:#x}: {bytes:02x?}");
-                        }
-                        Err(error) => {
-                            tracing::warn!("java_unk11 candidate @{target:#x} read failed: {error}");
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!("java_unk11 global slot @{address:#x} read failed: {error}");
-            }
-        }
+    if let Some(main_class_name) = arguments.first() {
+        bridge_class_chain(jvm, core, handles, app_classes, image_ranges, main_class_name).await;
     }
-    let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", argc as usize).await {
+
+    let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", arguments.len()).await {
         Ok(array) => array,
         Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
     };
 
-    for index in 0..argc {
-        let pointer_address = a3.wrapping_add(index * 4);
-        let mut pointer_bytes = [0u8; 4];
-        core.read_bytes(pointer_address, &mut pointer_bytes)?;
-
-        let pointer = u32::from_le_bytes(pointer_bytes);
-        let mut argument_bytes = [0u8; 128];
-        let read = core.read_bytes(pointer, &mut argument_bytes)?;
-        let end = argument_bytes[..read].iter().position(|&value| value == 0).unwrap_or(read);
-
-        let argument = String::from_utf8_lossy(&argument_bytes[..end]);
-        let java_argument = match JavaLangString::from_rust_string(jvm, argument.as_ref()).await {
-            Ok(argument) => argument,
+    for (index, argument) in arguments.iter().enumerate() {
+        let java_argument = match JavaLangString::from_rust_string(jvm, argument).await {
+            Ok(value) => value,
             Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
         };
 
-        if let Err(error) = jvm.store_array(&mut args_array, index as usize, vec![java_argument]).await {
+        if let Err(error) = jvm.store_array(&mut args_array, index, vec![java_argument]).await {
             return Err(JvmSupport::to_wie_err(jvm, error).await);
         }
     }
@@ -315,6 +390,79 @@ pub async fn java_unk11(core: &mut ArmCore, jvm: &mut Jvm, a0: u32, a1: u32, a2:
     }
 
     Ok(0)
+}
+
+/// Registers a JVM stand-in for an application class and everything it
+/// inherits from.
+///
+/// An application class can extend another one - Battle Monster's `Game`
+/// extends `a`, which extends `org/kwis/msp/lcdui/Jlet` - so the chain is
+/// walked to the first platform class and registered from the top down. A
+/// class cannot be registered before its parent.
+pub async fn bridge_class_chain(
+    jvm: &Jvm,
+    core: &ArmCore,
+    handles: &JavaHandles,
+    app_classes: &Mutex<Vec<AppClass>>,
+    image_ranges: &[(u32, u32)],
+    name: &str,
+) -> bool {
+    let mut chain = Vec::new();
+    let mut next = Some(name.to_owned());
+
+    while let Some(class_name) = next {
+        if chain.len() >= MAX_CLASS_DEPTH {
+            tracing::warn!("Application class {name} inherits more than {MAX_CLASS_DEPTH} deep; giving up");
+            return false;
+        }
+
+        // The definition is built while the lock is held, and the lock is let
+        // go before the JVM runs: registering re-enters the runtime.
+        //
+        // The main class is usually absent from the registered table, so fall
+        // back to finding it by shape in the image.
+        let described = {
+            let app_classes = app_classes.lock();
+
+            app_classes
+                .iter()
+                .find(|x| x.name == class_name)
+                .map(|class| (class.superclass.clone(), compiled_class::as_proto(class)))
+        };
+        let described = match described {
+            Some(described) => Some(described),
+            None => {
+                app_classes::find_class(core, image_ranges, &class_name).map(|class| (class.superclass.clone(), compiled_class::as_proto(&class)))
+            }
+        };
+
+        // Not one of the application's classes, so it is a platform class the
+        // JVM already knows and the chain ends here.
+        let Some((superclass, proto)) = described else {
+            break;
+        };
+
+        chain.push((class_name, proto));
+        next = superclass;
+    }
+
+    if chain.is_empty() {
+        tracing::error!("Application class {name} is nowhere in the image; cannot bridge it");
+        return false;
+    }
+
+    let context = CompiledContext {
+        core: core.clone(),
+        handles: handles.clone(),
+    };
+
+    for (class_name, proto) in chain.into_iter().rev() {
+        if !compiled_class::register(jvm, &context, &class_name, proto).await {
+            return false;
+        }
+    }
+
+    true
 }
 
 pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
@@ -358,22 +506,25 @@ pub async fn java_unk12(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
     Ok(())
 }
 
-pub async fn java_import_09(
-    core: &mut ArmCore,
-    java_handles: &mut JavaHandleTable,
-    jvm: &mut Jvm,
-    _a0: u32,
-    a1: u32,
-    a2: u32,
-    a3: u32,
-) -> Result<u32> {
-    tracing::warn!("java_import_09(utf16={a1:#x}, length={a2:#x}, output={a3:#x})");
+/// `vm_get_constant_string(class, chars, length, cache)`.
+///
+/// The application keeps one word per string constant and passes its address
+/// as `cache`. A non-zero word means the constant has been interned already
+/// and is handed straight back; otherwise the string is built, stored there,
+/// and **returned** - the compiled code takes the result from `r0` and only
+/// reads the cache word on a later call. Returning zero here handed the
+/// application a null every time a constant was first used, which is how
+/// `new StringBuffer("/res/script/")` came to be constructed on a null.
+pub async fn vm_get_constant_string(core: &mut ArmCore, handles: &JavaHandles, jvm: &mut Jvm, chars: u32, length: u32, cache: u32) -> Result<u32> {
+    let interned: u32 = read_generic(core, cache)?;
+    if interned != 0 {
+        return Ok(interned);
+    }
 
-    let mut bytes = vec![0u8; (a2 as usize) * 2];
-    core.read_bytes(a1, &mut bytes)?;
+    let mut bytes = vec![0u8; (length as usize) * 2];
+    core.read_bytes(chars, &mut bytes)?;
 
     let utf16 = bytes.chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect::<Vec<_>>();
-
     let rust_string = String::from_utf16_lossy(&utf16);
 
     let java_string = match JavaLangString::from_rust_string(jvm, &rust_string).await {
@@ -381,33 +532,73 @@ pub async fn java_import_09(
         Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
     };
 
-    let identity = java_string.identity();
+    let handle = handles.insert(java_string)?;
+    write_generic(core, cache, handle)?;
 
-    // The original LGT VM uses a 12-byte native object handle.
-    // Allocate an equally sized opaque guest-side handle and retain the
-    // corresponding Rust JVM object in the per-runtime handle table.
-    let handle = Allocator::alloc(core, 12)?;
-    write_generic(core, handle, 0u32)?;
-    write_generic(core, handle + 4, 0u32)?;
-    write_generic(core, handle + 8, 0xffff_ffffu32)?;
+    tracing::debug!("vm_get_constant_string({rust_string:?}) -> {handle:#x}, cached at {cache:#x}");
 
-    java_handles.lock().insert(handle, java_string);
-    write_generic(core, a3, handle)?;
-
-    tracing::warn!(
-        "java_import_09 created {:?}, identity={identity:#x}, handle={handle:#x}, output={a3:#x}",
-        rust_string
-    );
-
-    Ok(0)
+    Ok(handle)
 }
 
-pub async fn java_import_10(core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    let (pc, lr) = core.read_pc_lr()?;
+/// The shape represented by one array-class token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArrayClassInfo {
+    pub dimensions: u32,
+    pub element_class: u32,
+    pub atype: u32,
+    pub element_size: u32,
+}
 
-    tracing::warn!("java_import_10(pc={pc:#x}, lr={lr:#x}, a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+/// Array classes handed out by `vm_get_array_class`, mapped to their complete
+/// shape. Different array types can have the same element width and must not
+/// therefore share a token.
+pub type ArrayClasses = Arc<Mutex<BTreeMap<u32, ArrayClassInfo>>>;
 
-    Ok(0)
+/// Bytes a reference takes, which is also what an element of an array of
+/// arrays takes.
+pub const REFERENCE_SIZE: u32 = 4;
+
+/// Bytes one element of a primitive array takes.
+///
+/// The codes are the JVM's `newarray` atypes, which is what
+/// `vm_get_array_class` indexes its descriptor letters with: 4 `boolean`,
+/// 5 `char`, 6 `float`, 7 `double`, 8 `byte`, 9 `short`, 10 `int`, 11 `long`.
+pub fn primitive_element_size(atype: u32) -> Option<u32> {
+    Some(match atype {
+        // Standard JVM primitive array tags.
+        //
+        // LGT tag 1 is not a byte primitive in Legend of Master: it is also
+        // used for arrays whose elements are object references. Leaving it
+        // unresolved makes `vm_get_array_class` use REFERENCE_SIZE.
+        4 | 8 => 1,
+        5 | 9 => 2,
+        6 | 10 => 4,
+        7 | 11 => 8,
+        _ => return None,
+    })
+}
+
+/// `vm_instantiate_array(array_class, length)`.
+///
+/// The compiled code asks `vm_get_array_class` for the class first, so the
+/// element size is whatever that call recorded for it. An array has no class
+/// of its own here, so it dispatches through the fallback table like anything
+/// else the application never declared.
+pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClasses, class: u32, length: u32) -> Result<u32> {
+    let element_size = match array_class.lock().get(&class).copied() {
+        Some(info) => info.element_size,
+        None => {
+            tracing::warn!("vm_instantiate_array({class:#x}, {length}) names no array class; assuming references");
+
+            REFERENCE_SIZE
+        }
+    };
+
+    let array = handles.allocate_array(handles.fallback_dispatch_table(), length, element_size)?;
+
+    tracing::debug!("vm_instantiate_array({class:#x}, {length}) -> {array:#x}, {element_size} bytes an element");
+
+    Ok(array)
 }
 
 pub async fn java_import_11(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {

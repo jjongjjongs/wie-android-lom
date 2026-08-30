@@ -1,10 +1,12 @@
-use alloc::{format, string::String};
+use alloc::string::String;
 use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Timelike};
 use core::cmp::min;
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId, stdlib};
-use wie_util::{ByteWrite, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes};
+use wie_util::{ByteWrite, Result, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes};
+
+use wie_wipi_c::api::kernel::format_varargs;
 
 use crate::runtime::{SVC_CATEGORY_STDLIB, svc_ids::StdlibSvcId};
 
@@ -13,21 +15,37 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System) -> Resul
         let (_, lr) = core.read_pc_lr()?;
 
         match id.0 {
-            x if x == StdlibSvcId::Unk2 as u32 => EmulatedFunction::call(&unk2, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Printf as u32 => EmulatedFunction::call(&printf, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Sprintf as u32 => EmulatedFunction::call(&sprintf, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Atoi as u32 => EmulatedFunction::call(&atoi, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strcpy as u32 => EmulatedFunction::call(&stdlib::strcpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strncpy as u32 => EmulatedFunction::call(&strncpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strcat as u32 => EmulatedFunction::call(&strcat, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strcmp as u32 => EmulatedFunction::call(&strcmp, core, &mut ()).await?.write(core, lr),
-            x if x == StdlibSvcId::Unk4 as u32 => EmulatedFunction::call(&unk4, core, &mut ()).await?.write(core, lr),
-            x if x == StdlibSvcId::Unk5 as u32 => EmulatedFunction::call(&unk5, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strncmp as u32 => EmulatedFunction::call(&strncmp, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strstr as u32 => EmulatedFunction::call(&strstr, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strlen as u32 => EmulatedFunction::call(&stdlib::strlen, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memcpy as u32 => EmulatedFunction::call(&stdlib::memcpy, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Memmove as u32 => EmulatedFunction::call(&stdlib::memmove, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Memcmp as u32 => EmulatedFunction::call(&stdlib::memcmp, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memset as u32 => EmulatedFunction::call(&stdlib::memset, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Time as u32 => EmulatedFunction::call(&time, core, system).await?.write(core, lr),
             x if x == StdlibSvcId::Localtime as u32 => EmulatedFunction::call(&localtime, core, &mut ()).await?.write(core, lr),
-            x if x == StdlibSvcId::Unk3 as u32 => EmulatedFunction::call(&unk3, core, &mut ()).await?.write(core, lr),
-            _ => Err(WieError::FatalError(format!("Unknown lgt stdlib import: {:#x}", id.0))),
+            x if x == StdlibSvcId::Atexit as u32 => EmulatedFunction::call(&atexit, core, &mut ()).await?.write(core, lr),
+            // An unrecognised import is reported and returns zero, the way
+            // unknown WIPI-C and Java imports already do. Ending the run
+            // instead hides everything the application would have done next,
+            // which is the only way to find out what the import was for.
+            index => {
+                let a0 = core.read_param(0)?;
+                let a1 = core.read_param(1)?;
+                let a2 = core.read_param(2)?;
+                let a3 = core.read_param(3)?;
+
+                tracing::warn!("Unknown LGT stdlib import {index:#x}(a0={a0:#x}, a1={a1:#x}, a2={a2:#x}, a3={a3:#x})");
+
+                0u32.write(core, lr)
+            }
         }
     }
 
@@ -116,31 +134,89 @@ async fn localtime(core: &mut ArmCore, _: &mut (), ptr_time: u32) -> Result<u32>
     Ok(result)
 }
 
-async fn unk2(_core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
-    tracing::warn!("unk2({a0:#x})");
+/// The format string is written out as-is. Conversions are left alone rather
+/// than guessed at: the arguments after the first are spread across registers
+/// and the stack by rules this does not model, and a wrong walk of them reads
+/// memory that is not there. Applications use this for their own tracing.
+async fn printf(core: &mut ArmCore, _: &mut (), format: u32) -> Result<u32> {
+    let bytes = read_null_terminated_string_bytes(core, format)?;
 
-    // error exit?
+    tracing::debug!("printf({:?})", String::from_utf8_lossy(&bytes));
 
-    Ok(())
+    Ok(bytes.len() as u32)
 }
 
-async fn unk3(core: &mut ArmCore, _: &mut (), a0: u32) -> Result<()> {
-    tracing::warn!("unk3({a0:#x})");
+/// `sprintf(dest, format, ...)`. A title formatting its HUD text this way got
+/// an empty destination while this was an unimplemented import, so the numbers
+/// and labels it built each frame never appeared. Six variadic words cover the
+/// specifiers these titles use; the format engine stops at the last one.
+#[allow(clippy::too_many_arguments)]
+async fn sprintf(core: &mut ArmCore, _: &mut (), dest: u32, format: u32, a0: u32, a1: u32, a2: u32, a3: u32, a4: u32, a5: u32) -> Result<u32> {
+    let format_bytes = read_null_terminated_string_bytes(core, format)?;
+    let format_string = encoding_rs::EUC_KR.decode(&format_bytes).0;
 
-    let _: () = core.run_function(a0, &[]).await?;
+    tracing::debug!("sprintf({dest:#x}, {:?})", format_string);
 
-    Ok(())
+    let args = [a0, a1, a2, a3, a4, a5];
+    let result = format_varargs(&format_string, &args, &mut |ptr| {
+        let bytes = read_null_terminated_string_bytes(core, ptr)?;
+        Ok(encoding_rs::EUC_KR.decode(&bytes).0.into_owned())
+    })?;
+
+    let result_bytes = encoding_rs::EUC_KR.encode(&result).0;
+    write_null_terminated_string_bytes(core, dest, &result_bytes)?;
+
+    Ok(result.len() as u32)
 }
 
-async fn unk4(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32, a2: u32, a3: u32) -> Result<()> {
-    tracing::warn!("unk4({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+async fn strncmp(core: &mut ArmCore, _: &mut (), ptr_str1: u32, ptr_str2: u32, size: u32) -> Result<u32> {
+    tracing::debug!("strncmp({ptr_str1:#x}, {ptr_str2:#x}, {size})");
 
-    Ok(())
+    if ptr_str1 == 0 || ptr_str2 == 0 {
+        return Ok(u32::from(ptr_str1 != ptr_str2));
+    }
+
+    let str1 = read_null_terminated_string_bytes(core, ptr_str1)?;
+    let str2 = read_null_terminated_string_bytes(core, ptr_str2)?;
+
+    let size = size as usize;
+    let head1 = &str1[..min(size, str1.len())];
+    let head2 = &str2[..min(size, str2.len())];
+
+    Ok(head1.cmp(head2) as u32)
 }
 
-async fn unk5(_core: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Result<()> {
-    tracing::warn!("unk5({a0:#x}, {a1:#x})");
-    // strstr??
+/// Returns the address of the first occurrence of `needle` in `haystack`, or
+/// zero. This used to do nothing and return zero, which reads as "not found"
+/// and is a plausible answer, so nothing ever looked wrong.
+async fn strstr(core: &mut ArmCore, _: &mut (), haystack: u32, needle: u32) -> Result<u32> {
+    // Applications pass a null haystack and expect "not found" rather than a
+    // fault, which is what they got while this was a stub that did nothing.
+    if haystack == 0 || needle == 0 {
+        tracing::debug!("strstr({haystack:#x}, {needle:#x}) -> 0x0");
 
-    Ok(())
+        return Ok(0);
+    }
+
+    let haystack_bytes = read_null_terminated_string_bytes(core, haystack)?;
+    let needle_bytes = read_null_terminated_string_bytes(core, needle)?;
+
+    let found = haystack_bytes
+        .windows(needle_bytes.len().max(1))
+        .position(|window| window == needle_bytes.as_slice())
+        .map(|offset| haystack + offset as u32)
+        .unwrap_or(0);
+
+    tracing::debug!("strstr({haystack:#x}, {needle:#x}) -> {found:#x}");
+
+    Ok(found)
+}
+
+/// Registers a function to run at exit, which is not the same as running it.
+/// This used to call it immediately, which runs an application's teardown in
+/// the middle of its startup.
+async fn atexit(_core: &mut ArmCore, _: &mut (), handler: u32) -> Result<u32> {
+    tracing::debug!("atexit({handler:#x})");
+
+    Ok(0)
 }

@@ -3412,6 +3412,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
+name = "wie_android"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "jni 0.21.1",
+ "md5",
+ "smaf_player",
+ "tracing",
+ "tracing-subscriber",
+ "wie_backend",
+ "wie_j2me",
+ "wie_ktf",
+ "wie_lgt",
+ "wie_skt",
+ "wie_util",
+]
+
+[[package]]
 name = "wie_backend"
 version = "0.0.1"
 dependencies = [
@@ -3556,6 +3574,7 @@ dependencies = [
  "bytemuck",
  "chrono",
  "elf",
+ "encoding_rs",
  "futures",
  "java_class_proto",
  "java_constants",
@@ -3565,6 +3584,7 @@ dependencies = [
  "spin",
  "test_utils",
  "tracing",
+ "tracing-subscriber",
  "wie_backend",
  "wie_core_arm",
  "wie_jvm_support",

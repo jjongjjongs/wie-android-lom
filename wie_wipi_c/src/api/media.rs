@@ -1,12 +1,13 @@
-use alloc::vec;
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 
 use bytemuck::{Pod, Zeroable};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use wipi_types::wipic::WIPICWord;
 
-use wie_util::{Result, read_generic, write_generic};
+use wie_util::{Result, WieError, read_generic, write_generic};
 
-use crate::context::WIPICContext;
+use crate::{WIPICResult, context::WIPICContext, method::MethodBody};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -80,9 +81,15 @@ struct MdaClip {
 pub async fn clip_create(context: &mut dyn WIPICContext, ptr_type: WIPICWord, buf_size: WIPICWord, callback: WIPICWord) -> Result<WIPICWord> {
     tracing::debug!("MC_mdaClipCreate({ptr_type:#x}, {buf_size:#x}, {callback:#x})");
 
-    let clip = context.alloc_raw(size_of::<MdaClip>() as u32)?;
+    let clip_address = context.alloc_raw(size_of::<MdaClip>() as u32)?;
+    let clip = MdaClip {
+        h_proc: callback as i32,
+        in_use: 1,
+        ..MdaClip::zeroed()
+    };
+    write_generic(context, clip_address, clip)?;
 
-    Ok(clip)
+    Ok(clip_address)
 }
 
 pub async fn clip_free(context: &mut dyn WIPICContext, clip: WIPICWord) -> Result<WIPICWord> {
@@ -185,19 +192,64 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
     }
 
     let clip: MdaClip = read_generic(context, ptr_clip)?;
+    let callback = clip.h_proc as WIPICWord;
 
-    let system = context.system();
+    let completed = {
+        let system = context.system();
+        system.audio().play_with_completion(system, clip.handle, repeat != 0)
+    };
 
-    let result = system.audio().play(system, clip.handle, repeat != 0);
+    let (completed, stopped) = match completed {
+        Ok(status) => status,
+        Err(error) => {
+            tracing::error!("Failed to play audio: {error:?}");
+            return Ok(0);
+        }
+    };
 
-    if let Err(x) = result {
-        tracing::error!("Failed to load audio: {x:?}");
+    if callback != 0 && repeat == 0 {
+        struct PlaybackCompletedCallback {
+            completed: Arc<AtomicBool>,
+            stopped: Arc<AtomicBool>,
+            callback: WIPICWord,
+            clip: WIPICWord,
+        }
+
+        #[async_trait::async_trait]
+        impl MethodBody<WieError> for PlaybackCompletedCallback {
+            async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
+                while !self.completed.load(Ordering::Acquire) && !self.stopped.load(Ordering::Acquire) {
+                    context.system().sleep(1).await;
+                }
+
+                if self.stopped.load(Ordering::Acquire) {
+                    tracing::debug!("MC_mdaPlay completion callback cancelled for stopped clip {:#x}", self.clip);
+
+                    return Ok(WIPICResult { results: Vec::new() });
+                }
+
+                tracing::debug!("MC_mdaPlay completion callback({:#x}, event=3)", self.callback);
+                context.call_function(self.callback, &[self.clip, 3]).await?;
+
+                Ok(WIPICResult { results: Vec::new() })
+            }
+        }
+
+        context.spawn(Box::new(PlaybackCompletedCallback {
+            completed,
+            stopped,
+            callback,
+            clip: ptr_clip,
+        }))?;
     }
 
     Ok(0)
 }
 
 pub async fn clip_alloc_player(_context: &mut dyn WIPICContext, clip: WIPICWord, param: WIPICWord) -> Result<WIPICWord> {
+    // Returning a non-null handle here makes titles read the player as "already
+    // set up" and skip the following MC_mdaPlay, leaving the logo jingle and
+    // looping BGM silent. Keep the validated stub so MC_mdaPlay drives playback.
     tracing::warn!("stub MC_mdaClipAllocPlayer({clip:#x}, {param:#x})");
 
     Ok(0)
@@ -245,10 +297,19 @@ pub async fn stop(context: &mut dyn WIPICContext, ptr_clip: WIPICWord) -> Result
     }
 
     let clip: MdaClip = read_generic(context, ptr_clip)?;
+    let callback = clip.h_proc as WIPICWord;
 
-    let system = context.system();
+    // Whether this clip was actually playing lives in the backend registry, not
+    // in the guest ABI struct, so a stop only reports the interruption when it
+    // really tears down a running playback.
+    let was_playing = context.system().audio().is_playing(clip.handle);
 
-    system.audio().stop(clip.handle);
+    context.system().audio().stop(clip.handle);
+
+    if was_playing && callback != 0 {
+        tracing::debug!("MC_mdaStop callback({callback:#x}, clip={ptr_clip:#x}, event=-1)");
+        context.call_function(callback, &[ptr_clip, (-1i32) as WIPICWord]).await?;
+    }
 
     Ok(0)
 }

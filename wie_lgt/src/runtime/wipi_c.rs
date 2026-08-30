@@ -13,7 +13,7 @@ use wie_jvm_support::JvmSupport;
 use wie_util::{Result, read_generic, write_generic, write_null_terminated_string_bytes};
 use wie_wipi_c::{
     MethodImpl, WIPICContext, WIPICMethodBody, WIPICResult,
-    api::{database, graphics, kernel, media, misc, net},
+    api::{database, graphics, kernel, media, misc, net, util},
 };
 
 use context::LgtWIPICContext;
@@ -44,7 +44,23 @@ struct CMethodProxy {
 async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm), id: SvcId) -> Result<()> {
     let wipic_context = LgtWIPICContext::new(core.clone(), system.clone(), jvm.clone());
     let (_, lr) = core.read_pc_lr()?;
-    let method = match WIPICSvcId::try_from(id)? {
+    // An unimplemented WIPI-C function is reported and skipped rather than
+    // ending the run. Stopping on the first one hides everything a title does
+    // afterwards, and the calls that turn up are usually peripheral - Xenogia
+    // stops on database id 0x19c before drawing anything.
+    let svc_id = match WIPICSvcId::try_from(id) {
+        Ok(svc_id) => svc_id,
+        Err(error) => {
+            tracing::warn!("{error}; returning 0");
+
+            return WIPICMethodResult {
+                result: WIPICResult { results: vec![0] },
+            }
+            .write(core, lr);
+        }
+    };
+
+    let method = match svc_id {
         WIPICSvcId::CletRegister => {
             return EmulatedFunction::call(&clet_register, core, jvm).await?.write(core, lr);
         }
@@ -56,7 +72,8 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::Printk => kernel::printk.into_body(),
         WIPICSvcId::Sprintk => kernel::sprintk.into_body(),
         WIPICSvcId::Unk13 => unk13.into_body(),
-        WIPICSvcId::Unk1 => unk1.into_body(),
+        WIPICSvcId::GetCurProgramId => kernel::get_cur_program_id.into_body(),
+        WIPICSvcId::GetProgramName => kernel::get_program_name.into_body(),
         WIPICSvcId::Exit => kernel::exit.into_body(),
         WIPICSvcId::Alloc => kernel::alloc.into_body(),
         WIPICSvcId::Calloc => kernel::calloc.into_body(),
@@ -72,6 +89,7 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::GetResourceId => kernel::get_resource_id.into_body(),
         WIPICSvcId::GetResource => kernel::get_resource.into_body(),
         WIPICSvcId::Unk2 => unk2.into_body(),
+        WIPICSvcId::Unk3 => unk3.into_body(),
         WIPICSvcId::GetImageProperty => graphics::get_image_property.into_body(),
         WIPICSvcId::GetImageFramebuffer => graphics::get_image_framebuffer.into_body(),
         WIPICSvcId::GetScreenFramebuffer => graphics::get_screen_framebuffer.into_body(),
@@ -83,6 +101,8 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::DrawLine => graphics::draw_line.into_body(),
         WIPICSvcId::DrawRect => graphics::draw_rect.into_body(),
         WIPICSvcId::FillRect => graphics::fill_rect.into_body(),
+        WIPICSvcId::DrawPolygon => graphics::draw_polygon.into_body(),
+        WIPICSvcId::FillPolygon => graphics::fill_polygon.into_body(),
         WIPICSvcId::CopyFrameBuffer => graphics::copy_frame_buffer.into_body(),
         WIPICSvcId::DrawImage => graphics::draw_image.into_body(),
         WIPICSvcId::CopyArea => graphics::copy_area.into_body(),
@@ -101,11 +121,11 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::GetStringWidth => graphics::get_string_width.into_body(),
         WIPICSvcId::CreateImage => graphics::create_image.into_body(),
         WIPICSvcId::Unk0 => unk0.into_body(),
-        WIPICSvcId::Unk11 => unk11.into_body(),
-        WIPICSvcId::Unk3 => unk3.into_body(),
-        WIPICSvcId::Unk4 => unk4.into_body(),
-        WIPICSvcId::Unk7 => unk7.into_body(),
-        WIPICSvcId::Unk6 => unk6.into_body(),
+        WIPICSvcId::PostEvent => graphics::post_event.into_body(),
+        WIPICSvcId::ImGetSupportModeCount => im_get_support_mode_count.into_body(),
+        WIPICSvcId::ImGetSupportedModes => im_get_supported_modes.into_body(),
+        WIPICSvcId::ImSetCurrentMode => im_set_current_mode.into_body(),
+        WIPICSvcId::ImGetCurrentMode => im_get_current_mode.into_body(),
         WIPICSvcId::TimeNow => time_now.into_body(),
         WIPICSvcId::TimeComponent => time_component.into_body(),
         WIPICSvcId::TimeConvert => time_convert.into_body(),
@@ -122,9 +142,14 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::UpdateRecord => database::update_record.into_body(),
         WIPICSvcId::SelectRecord => database::select_record.into_body(),
         WIPICSvcId::Unk8 => database::exists_database.into_body(),
+        WIPICSvcId::FsAvailable => fs_available.into_body(),
         WIPICSvcId::Connect => net::connect.into_body(),
         WIPICSvcId::Close => net::close.into_body(),
         WIPICSvcId::SocketClose => net::socket_close.into_body(),
+        WIPICSvcId::Htonl => util::htonl.into_body(),
+        WIPICSvcId::Htons => util::htons.into_body(),
+        WIPICSvcId::Ntohl => util::ntohl.into_body(),
+        WIPICSvcId::Ntohs => util::ntohs.into_body(),
         WIPICSvcId::ClipCreate => media::clip_create.into_body(),
         WIPICSvcId::ClipFree => media::clip_free.into_body(),
         WIPICSvcId::ClipPutData => media::clip_put_data.into_body(),
@@ -132,6 +157,8 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
         WIPICSvcId::ClipGetVolume => media::clip_get_volume.into_body(),
         WIPICSvcId::ClipSetVolume => media::clip_set_volume.into_body(),
         WIPICSvcId::Play => media::play.into_body(),
+        WIPICSvcId::Pause => media::pause.into_body(),
+        WIPICSvcId::Resume => media::resume.into_body(),
         WIPICSvcId::Stop => media::stop.into_body(),
         WIPICSvcId::Unk5 => unk5.into_body(),
         WIPICSvcId::Vibrator => media::vibrator.into_body(),
@@ -235,10 +262,11 @@ async fn unk0(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
     Ok(0)
 }
 
-async fn unk1(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk1({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-
-    // kernel
+async fn unk3(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    // 0xcf sits with the graphics context calls (InitContext/SetContext); it was
+    // hitting the unknown-SVC path and spamming a fatal log. Stubbed to 0, which
+    // is what the unknown path already returned.
+    tracing::debug!("stub unk3/0xcf({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
@@ -254,14 +282,19 @@ async fn unk2(context: &mut dyn WIPICContext) -> Result<u32> {
     Ok(result)
 }
 
-async fn unk3(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk3({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imGetSurpportModeCount` (vendor export 300). No input-method engine is
+/// emulated, so no modes are offered; a title reads zero as "the handset has
+/// no IME" and uses its own on-screen entry instead of asking to switch modes.
+async fn im_get_support_mode_count(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imGetSurpportModeCount({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
 
-async fn unk4(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk4({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imGetSupportedModes` (vendor export 301). Nothing to enumerate while no
+/// modes are supported.
+async fn im_get_supported_modes(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imGetSupportedModes({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
@@ -274,14 +307,39 @@ async fn unk5(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
     Ok(0)
 }
 
-async fn unk6(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk6({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_fsAvailable` - free bytes on the storage a title saves to.
+///
+/// The vendor call asks the device for real free space; there is no equivalent
+/// here, and a title only wants to know it has room, so a generous fixed figure
+/// is returned. Zero, which the unimplemented path returned, reads as a full
+/// disk, and a game that will not write to a disk it thinks is full sits
+/// retrying the check.
+async fn fs_available(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    /// 16 MiB, more than a handset title expects and well short of anything
+    /// that would overflow its own arithmetic.
+    const FREE_BYTES: u32 = 16 * 1024 * 1024;
+
+    tracing::debug!("MC_fsAvailable({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x}) -> {FREE_BYTES}");
+
+    Ok(FREE_BYTES)
+}
+
+/// `MC_imGetCurrentMode` (vendor export 303). No mode is ever set, so there is
+/// none to report.
+async fn im_get_current_mode(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imGetCurrentMode({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
 
-async fn unk7(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk7({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+/// `MC_imSetCurrentMode` (vendor export 302). Returns failure because no mode
+/// is supported. The vendor runtime crashes here when an out-of-range mode
+/// index reaches `dime_set_mode`, which reads a NULL mode name through
+/// `strcmp` - the failure WipiPlayer patches in. There is no equivalent path
+/// to fault here: the request is rejected before anything is dereferenced, so
+/// the null-mode crash cannot happen.
+async fn im_set_current_mode(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
+    tracing::debug!("MC_imSetCurrentMode({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
@@ -366,12 +424,6 @@ fn civil_from_days(days: i64) -> (i32, i32, i32) {
 
 async fn unk10(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
     tracing::warn!("stub unk10({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
-
-    Ok(0)
-}
-
-async fn unk11(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    tracing::warn!("stub unk11({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }
