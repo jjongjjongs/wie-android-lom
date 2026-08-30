@@ -811,25 +811,18 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 return throw_vm_exception(core, context, "java/lang/NegativeArraySizeException").await;
             }
 
-            // A length in the millions is not a real array request: a title
-            // whose ABI carries the length in a different register reaches here
-            // with an object handle in its place, and allocating it would fail
-            // and end the run. Log every argument register so the register the
-            // length really lives in can be identified, and continue with an
-            // empty array rather than attempting a gigabyte allocation.
+            // A length in the millions is not an array request. On this ABI
+            // slot 0xf is `vm_instantiate` (a single object), not
+            // `vm_instantiate_array`: the register we read as a length is
+            // really the second object handle, and the caller uses the result
+            // as one object - the observed call built an AnnunciatorComponent
+            // from it. So when the "length" is an object-handle-sized value,
+            // instantiate a single object of `class` instead of an array.
             if length > MAX_SANE_ARRAY_LENGTH {
-                let params: Vec<u32> = (0..4).map(|index| core.read_param(index)).collect::<Result<_>>()?;
-                tracing::warn!(
-                    "vm_instantiate_array implausible length {length:#x} (class {class:#x}); p0={:#x} p1={:#x} p2={:#x} p3={:#x}; using an empty array and continuing",
-                    params[0],
-                    params[1],
-                    params[2],
-                    params[3]
-                );
+                let instance = instantiate(core, context, class).await?;
+                tracing::debug!("vm_instantiate via slot 0xf (length {length:#x} is not a count): class {class:#x} -> {instance:#x}");
 
-                return vm_instantiate_array(&context.java_handles, &context.array_classes, class, 0)
-                    .await?
-                    .write(core, lr);
+                return instance.write(core, lr);
             }
 
             vm_instantiate_array(&context.java_handles, &context.array_classes, class, length)
