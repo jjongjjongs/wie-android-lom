@@ -809,7 +809,13 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             // bogus, gigantic reference array the caller then treats as one
             // object.
             let is_array_class = context.array_classes.lock().contains_key(&class);
-            if !is_array_class && let Ok(instance) = instantiate(core, context, class).await {
+            if !is_array_class
+                && let Ok(instance) = instantiate(core, context, class).await
+                && instance != class
+            {
+                // `instantiate` echoes its argument back when it cannot resolve
+                // the class; only a genuinely new object (a different address)
+                // counts as a single-object instantiation.
                 tracing::debug!("vm_instantiate via slot 0xf (class {class:#x} is not an array class) -> {instance:#x}");
                 return instance.write(core, lr);
             }
@@ -2118,12 +2124,19 @@ async fn instantiate(core: &mut ArmCore, context: &mut InitSvcContext, token: u3
 /// binding it to a fresh allocation is what lets the superclass constructor
 /// the compiled code calls next find an object instead of building one.
 async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext, handle: u32) -> Result<u32> {
-    let root = context
-        .java_activated_classes
-        .lock()
-        .iter()
-        .find(|(_, activated)| **activated == handle)
-        .map(|(root, _)| *root);
+    let root = {
+        let activated = context.java_activated_classes.lock();
+
+        // The caller usually passes the handle activation produced, but some
+        // pass the class root directly (the map's key). Class roots live in the
+        // loaded image and activation handles in the object range, so the two
+        // never collide - accept either.
+        activated
+            .iter()
+            .find(|(_, activated)| **activated == handle)
+            .map(|(root, _)| *root)
+            .or_else(|| activated.contains_key(&handle).then_some(handle))
+    };
 
     let Some(root) = root else {
         tracing::warn!("LGT vm_instantiate({handle:#x}) names neither a platform nor an application class");
