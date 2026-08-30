@@ -1,4 +1,4 @@
-package com.jjongjjongs.wiemobile;
+package com.jjongjjongs.minimobile;
 
 final class MidiSynthBridge {
     static {

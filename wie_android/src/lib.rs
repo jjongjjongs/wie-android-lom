@@ -1,4 +1,4 @@
-//! JNI bridge behind `com.jjongjjongs.wiemobile.NativeBridge`.
+//! JNI bridge behind `com.jjongjjongs.minimobile.NativeBridge`.
 //!
 //! Java owns the loop: a single background thread calls [`nativeStart`] once
 //! and then [`nativeTick`] every 16ms, collecting rendered frames with
@@ -82,7 +82,7 @@ fn guard(f: impl FnOnce()) {
 /// # Safety
 /// Called by the JVM with valid `env`, `archive` and `runtime_dir` references.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeStart(
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeStart(
     mut env: JNIEnv,
     _class: JClass,
     archive: JByteArray,
@@ -125,7 +125,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeTick(env: JNIEnv, _class: JClass, budget_ms: jint) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeTick(env: JNIEnv, _class: JClass, budget_ms: jint) -> jstring {
     let budget = Duration::from_millis(budget_ms.clamp(0, MAX_TICK_BUDGET.as_millis() as jint) as u64);
 
     guard_string(&env, || with_runner(|runner| runner.tick(budget)))
@@ -138,7 +138,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeStop(_env: JNIEnv, _class: JClass) {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeStop(_env: JNIEnv, _class: JClass) {
     tracing::info!("nativeStop");
 
     guard(|| with_runner(|runner| runner.stop()));
@@ -149,7 +149,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeRunning(_env: JNIEnv, _class: JClass) -> jint {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeRunning(_env: JNIEnv, _class: JClass) -> jint {
     std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.is_running())))
         .unwrap_or(false)
         .into()
@@ -160,7 +160,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeLastError(env: JNIEnv, _class: JClass) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeLastError(env: JNIEnv, _class: JClass) -> jstring {
     guard_string(&env, || with_runner(|runner| runner.last_error()))
 }
 
@@ -172,7 +172,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeKey(_env: JNIEnv, _class: JClass, index: jint, pressed: jint) {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeKey(_env: JNIEnv, _class: JClass, index: jint, pressed: jint) {
     guard(|| with_runner(|runner| runner.key(index, pressed != 0)));
 }
 
@@ -184,7 +184,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeFrame(env: JNIEnv, _class: JClass) -> jshortArray {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeFrame(env: JNIEnv, _class: JClass) -> jshortArray {
     let frame = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_frame()))) {
         Ok(Some(frame)) => frame,
         Ok(None) => return std::ptr::null_mut(),
@@ -225,7 +225,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollOutput(env: JNIEnv, _class: JClass) -> jbyteArray {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativePollOutput(env: JNIEnv, _class: JClass) -> jbyteArray {
     let command = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_audio()))) {
         Ok(Some(command)) => command,
         Ok(None) => return std::ptr::null_mut(),
@@ -255,7 +255,11 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeRenderAudio(env: JNIEnv, _class: JClass, frames: jint) -> jbyteArray {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeRenderAudio(
+    env: JNIEnv,
+    _class: JClass,
+    frames: jint,
+) -> jbyteArray {
     let frames = frames.max(0) as usize;
     let pcm = std::panic::catch_unwind(AssertUnwindSafe(|| crate::audio::render_audio_bytes(frames))).unwrap_or_default();
 
@@ -276,7 +280,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBacklightMode(_env: JNIEnv, _class: JClass) -> jint {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativePollBacklightMode(_env: JNIEnv, _class: JClass) -> jint {
     std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_backlight_mode()))).unwrap_or(0) as jint
 }
 
@@ -287,7 +291,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollPhoneCall(env: JNIEnv, _class: JClass) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativePollPhoneCall(env: JNIEnv, _class: JClass) -> jstring {
     let number = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_phone_call()))) {
         Ok(Some(number)) => number,
         Ok(None) | Err(_) => return std::ptr::null_mut(),
@@ -304,7 +308,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativePollBrowserUrl(env: JNIEnv, _class: JClass) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativePollBrowserUrl(env: JNIEnv, _class: JClass) -> jstring {
     let url = match std::panic::catch_unwind(AssertUnwindSafe(|| with_runner(|runner| runner.take_browser_url()))) {
         Ok(Some(url)) => url,
         Ok(None) | Err(_) => return std::ptr::null_mut(),
@@ -320,7 +324,11 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with valid `env` and `archive` references.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeInspect(env: JNIEnv, _class: JClass, archive: JByteArray) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeInspect(
+    env: JNIEnv,
+    _class: JClass,
+    archive: JByteArray,
+) -> jstring {
     logging::init();
 
     let Ok(data) = env.convert_byte_array(&archive) else {
@@ -342,7 +350,11 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with valid `env` and `archive` references.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeSaveIds(env: JNIEnv, _class: JClass, archive: JByteArray) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeSaveIds(
+    env: JNIEnv,
+    _class: JClass,
+    archive: JByteArray,
+) -> jstring {
     logging::init();
 
     let Ok(data) = env.convert_byte_array(&archive) else {
@@ -364,7 +376,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeLog(env: JNIEnv, _class: JClass) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeLog(env: JNIEnv, _class: JClass) -> jstring {
     logging::init();
 
     guard_string(&env, logging::snapshot)
@@ -378,7 +390,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeLogFilter(env: JNIEnv, _class: JClass) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeLogFilter(env: JNIEnv, _class: JClass) -> jstring {
     logging::init();
 
     guard_string(&env, logging::filter)
@@ -393,7 +405,7 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with valid `env` and `directive` references.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeSetLogFilter(
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeSetLogFilter(
     mut env: JNIEnv,
     _class: JClass,
     directive: JString,
@@ -416,6 +428,6 @@ pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_native
 /// # Safety
 /// Called by the JVM with a valid `env` reference.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_com_jjongjjongs_wiemobile_NativeBridge_nativeVersion(env: JNIEnv, _class: JClass) -> jstring {
+pub unsafe extern "system" fn Java_com_jjongjjongs_minimobile_NativeBridge_nativeVersion(env: JNIEnv, _class: JClass) -> jstring {
     to_java_string(&env, env!("CARGO_PKG_VERSION"))
 }

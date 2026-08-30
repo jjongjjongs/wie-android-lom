@@ -1,4 +1,4 @@
-package com.jjongjjongs.wiemobile;
+package com.jjongjjongs.minimobile;
 
 import android.content.ContentResolver;
 import android.content.ContentValues;

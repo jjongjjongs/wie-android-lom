@@ -47,7 +47,7 @@ static uint8_t hooked_play_wave(uint8_t channel, uint32_t sample_rate,
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_jjongjjongs_wiemobile_NativeWaveBridge_nativeInstall(JNIEnv *env, jclass clazz) {
+Java_com_jjongjjongs_minimobile_NativeWaveBridge_nativeInstall(JNIEnv *env, jclass clazz) {
     if (!g_bridge_class) g_bridge_class = (*env)->NewGlobalRef(env, clazz);
     if (!g_on_wave) g_on_wave = (*env)->GetStaticMethodID(env, clazz, "onWave", "(IIJ[S)Z");
     if (!g_bridge_class || !g_on_wave) {

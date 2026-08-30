@@ -1,6 +1,6 @@
 # Mobile setup
 
-The Android app (`com.jjongjjongs.wiemobile`) wraps the emulator core so
+The Android app (`com.jjongjjongs.minimobile`) wraps the emulator core so
 feature phone archives can be run on a handset. It is a thin shell: a library
 of imported .zip/.jar files, and a player with an on-screen keypad.
 

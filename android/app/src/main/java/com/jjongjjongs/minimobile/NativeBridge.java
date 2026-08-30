@@ -1,4 +1,4 @@
-package com.jjongjjongs.wiemobile;
+package com.jjongjjongs.minimobile;
 
 /**
  * Entry points implemented by the {@code wie_android} crate.

@@ -1,4 +1,4 @@
-package com.jjongjjongs.wiemobile;
+package com.jjongjjongs.minimobile;
 
 import android.Manifest;
 import android.app.Activity;
@@ -246,7 +246,7 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(COLOR_BG);
 
         TextView bar = new TextView(this);
-        bar.setText("WIE WIPI Player");
+        bar.setText("Mini Mobile");
         bar.setTextSize(21f);
         bar.setTextColor(Color.WHITE);
         bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -259,7 +259,7 @@ public final class MainActivity extends Activity {
         header.setPadding(dp(18), dp(20), dp(18), dp(8));
 
         TextView title = new TextView(this);
-        title.setText("WIE WIPI Player");
+        title.setText("Mini Mobile");
         title.setTextSize(27f);
         title.setTextColor(Color.WHITE);
         title.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
