@@ -58,6 +58,29 @@ pub fn init() {
 
         let _ = RELOAD_HANDLE.set(handle);
         *current_directive() = directive;
+
+        // A panic is caught at the JNI boundary and shown to the player as a
+        // generic message, and the default hook prints to stderr, which never
+        // reaches the saved log. Route the panic's message and location into the
+        // log so a caught panic is diagnosable from the capture alone.
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let location = info
+                .location()
+                .map(|location| format!("{}:{}", location.file(), location.line()))
+                .unwrap_or_else(|| "unknown location".to_owned());
+
+            let message = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".to_owned());
+
+            tracing::error!("panic at {location}: {message}");
+
+            default_hook(info);
+        }));
     });
 }
 
