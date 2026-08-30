@@ -2008,16 +2008,13 @@ async fn class_is_assignable_to(core: &ArmCore, context: &mut InitSvcContext, so
         return Ok(true);
     }
 
-    let source = class_identity_name(context, source_root).ok_or_else(|| {
-        WieError::FatalError(format!(
-            "vm_class_is_assignable_to source {source_root:#x} names no application, platform, or array class"
-        ))
-    })?;
-    let target = class_identity_name(context, target_root).ok_or_else(|| {
-        WieError::FatalError(format!(
-            "vm_class_is_assignable_to target {target_root:#x} names no application, platform, or array class"
-        ))
-    })?;
+    // An unresolvable class must not end the run. Report it "not assignable"
+    // and carry on: the caller uses this for instanceof/checkcast, and a false
+    // is survivable where aborting the whole title is not.
+    let (Some(source), Some(target)) = (class_identity_name(context, source_root), class_identity_name(context, target_root)) else {
+        tracing::warn!("vm_class_is_assignable_to({source_root:#x}, {target_root:#x}) names an unknown class; assuming not assignable");
+        return Ok(false);
+    };
 
     // Application classes only exist in the AOT image until they are bridged
     // into RustJava. For an array, bridge its reference component rather than
