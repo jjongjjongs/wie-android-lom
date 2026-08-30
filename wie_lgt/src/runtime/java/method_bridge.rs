@@ -78,6 +78,11 @@ fn read_arguments(core: &ArmCore, count: usize) -> Result<Vec<u32>> {
     (0..count).map(|index| core.read_param(index)).collect()
 }
 
+/// Upper bound on a guest array wrapped as a byte array from an `Object`
+/// parameter. A plausible I/O or copy buffer is well under this; a larger
+/// "length" means the handle is not really an array, so it is not chased.
+const MAX_WRAPPED_ARRAY_BYTES: u32 = 0x0010_0000;
+
 struct ByteArrayWriteback {
     guest_handle: u32,
     array: ClassInstanceRef<Array<i8>>,
@@ -235,17 +240,55 @@ async fn marshal_arguments(
                 None if words[word] == 0 => JavaValue::Object(None),
                 None => {
                     let handle = words[word];
-                    let vtable = read_generic::<u32, _>(core, handle).unwrap_or(0);
-                    let root = if vtable != 0 {
-                        read_generic::<u32, _>(core, vtable).unwrap_or(0)
+
+                    // A compiled array passed where the method declares Object
+                    // (System.arraycopy's src/dst, an I/O read buffer) never
+                    // reaches the `[B` path above. Wrap it as a byte array with
+                    // writeback - the buffers these calls carry are byte arrays -
+                    // rather than ending the run. Guard the length first so a
+                    // garbage handle cannot allocate wildly; anything implausible
+                    // keeps the original diagnostic.
+                    let data = read_generic::<u32, _>(core, handle + 8).unwrap_or(0);
+                    let length = if data != 0 {
+                        read_generic::<u32, _>(core, data).unwrap_or(u32::MAX)
                     } else {
-                        0
+                        u32::MAX
                     };
 
-                    return Err(WieError::FatalError(format!(
-                        "Argument {word} of {} is {handle:#x}, which names no object this runtime handed out; vtable={vtable:#x}, class_root={root:#x}",
-                        parameters.join("")
-                    )));
+                    if data != 0 && length <= MAX_WRAPPED_ARRAY_BYTES {
+                        let bytes = handles.read_byte_array(handle)?;
+                        let byte_length = bytes.len();
+
+                        let mut array = match jvm.instantiate_array("B", byte_length).await {
+                            Ok(array) => array,
+                            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+                        };
+
+                        if let Err(error) = jvm.store_array(&mut array, 0, bytes).await {
+                            return Err(JvmSupport::to_wie_err(jvm, error).await);
+                        }
+
+                        writebacks.push(ByteArrayWriteback {
+                            guest_handle: handle,
+                            array: array.clone().into(),
+                            length: byte_length,
+                        });
+
+                        tracing::warn!("marshalled guest array {handle:#x} as a byte array for parameter {parameter}");
+                        JavaValue::Object(Some(array))
+                    } else {
+                        let vtable = read_generic::<u32, _>(core, handle).unwrap_or(0);
+                        let root = if vtable != 0 {
+                            read_generic::<u32, _>(core, vtable).unwrap_or(0)
+                        } else {
+                            0
+                        };
+
+                        return Err(WieError::FatalError(format!(
+                            "Argument {word} of {} is {handle:#x}, which names no object this runtime handed out; vtable={vtable:#x}, class_root={root:#x}",
+                            parameters.join("")
+                        )));
+                    }
                 }
             },
         };
