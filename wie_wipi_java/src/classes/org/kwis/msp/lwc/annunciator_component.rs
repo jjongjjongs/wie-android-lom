@@ -202,7 +202,16 @@ impl AnnunciatorComponent {
             .invoke_virtual(&this, "getWorkComponent", "()Lorg/kwis/msp/lwc/Component;", ())
             .await?;
 
-        let width: i32 = jvm.invoke_virtual(&work, "getWidth", "()I", ()).await?;
+        // A shell that has been shown before any work component is added has a
+        // null work component. The annunciator bar spans the display, so take
+        // the width from the display in that case rather than dereferencing
+        // null. The display field is always set (the constructor requires it).
+        let width: i32 = if work.is_null() {
+            let display: ClassInstanceRef<Display> = jvm.get_field(&this, "display", "Lorg/kwis/msp/lcdui/Display;").await?;
+            jvm.invoke_virtual(&display, "getWidth", "()I", ()).await?
+        } else {
+            jvm.invoke_virtual(&work, "getWidth", "()I", ()).await?
+        };
 
         let size_index: i32 = jvm.get_field(&this, "__wieDisplaySizeIndex", "I").await?;
 
