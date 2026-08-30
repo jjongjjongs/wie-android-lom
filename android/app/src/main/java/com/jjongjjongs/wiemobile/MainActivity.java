@@ -207,6 +207,19 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        // In a game, back asks before leaving: 예 quits to the library, 아니요
+        // dismisses and returns to the game, which keeps running behind the
+        // dialog.
+        new AlertDialog.Builder(this)
+                .setTitle("종료")
+                .setMessage("애플리케이션을 종료하시겠습니까?")
+                .setPositiveButton("예", (dialog, which) -> exitGameToLibrary())
+                .setNegativeButton("아니요", null)
+                .show();
+    }
+
+    /** Stops the running game and returns to the library. */
+    private void exitGameToLibrary() {
         running = false;
         NativeBridge.nativeStop();
         audioOutput.release();
