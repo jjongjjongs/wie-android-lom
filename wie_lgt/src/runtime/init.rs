@@ -2008,12 +2008,16 @@ async fn class_is_assignable_to(core: &ArmCore, context: &mut InitSvcContext, so
         return Ok(true);
     }
 
-    // An unresolvable class must not end the run. Report it "not assignable"
-    // and carry on: the caller uses this for instanceof/checkcast, and a false
-    // is survivable where aborting the whole title is not.
+    // An unresolvable class must not end the run. This slot backs both
+    // instanceof and the aastore type check, and titles reach it storing an
+    // object into a platform-typed array through a class token WIE cannot name
+    // yet - a store the game intends to succeed. Reporting "not assignable"
+    // there throws a spurious ArrayStoreException, so assume assignable and
+    // carry on, which is right for those legitimate stores and no worse than
+    // aborting for the rest.
     let (Some(source), Some(target)) = (class_identity_name(context, source_root), class_identity_name(context, target_root)) else {
-        tracing::warn!("vm_class_is_assignable_to({source_root:#x}, {target_root:#x}) names an unknown class; assuming not assignable");
-        return Ok(false);
+        tracing::warn!("vm_class_is_assignable_to({source_root:#x}, {target_root:#x}) names an unknown class; assuming assignable");
+        return Ok(true);
     };
 
     // Application classes only exist in the AOT image until they are bridged
