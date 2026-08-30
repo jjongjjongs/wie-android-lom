@@ -369,10 +369,11 @@ impl ArmCore {
                             ArmRegister::SP,
                             ArmRegister::LR,
                             ArmRegister::PC,
+                            ArmRegister::Cpsr,
                         ]
                         .map(|r| inner.engine.reg_read(r));
                         tracing::warn!(
-                            "engine fault {error:?}: R0={:#x} R1={:#x} R2={:#x} R3={:#x} R4={:#x} R5={:#x} R6={:#x} R7={:#x} R8={:#x} SB={:#x} SL={:#x} FP={:#x} IP={:#x} SP={:#x} LR={:#x} PC={:#x}",
+                            "engine fault {error:?}: R0={:#x} R1={:#x} R2={:#x} R3={:#x} R4={:#x} R5={:#x} R6={:#x} R7={:#x} R8={:#x} SB={:#x} SL={:#x} FP={:#x} IP={:#x} SP={:#x} LR={:#x} PC={:#x} CPSR={:#x}",
                             regs[0],
                             regs[1],
                             regs[2],
@@ -388,7 +389,8 @@ impl ArmCore {
                             regs[12],
                             regs[13],
                             regs[14],
-                            regs[15]
+                            regs[15],
+                            regs[16]
                         );
                         return Err(error);
                     }

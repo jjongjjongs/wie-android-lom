@@ -205,13 +205,16 @@ pub async fn alloc(context: &mut dyn WIPICContext, size: WIPICWord) -> Result<WI
 pub async fn calloc(context: &mut dyn WIPICContext, size: WIPICWord) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_knlCalloc({size:#x})");
 
-    if size == 0 {
-        return Ok(WIPICIndirectPtr(0));
-    }
+    // A zero-size request still returns a unique, freeable non-null pointer, as
+    // the reference allocator does. A title's font loader callocs a
+    // zero-length buffer and treats a null result as failure, unwinding into a
+    // state it then dereferences through a -1 handle; handing back null there
+    // faulted it. Allocate a minimal block so the pointer is non-null.
+    let alloc_size = size.max(1);
 
-    let memory = context.alloc(size)?;
+    let memory = context.alloc(alloc_size)?;
 
-    let zero = iter::repeat_n(0, size as _).collect::<Vec<_>>();
+    let zero = iter::repeat_n(0, alloc_size as _).collect::<Vec<_>>();
     context.write_bytes(context.data_ptr(memory)?, &zero)?;
 
     Ok(memory)
@@ -424,7 +427,11 @@ mod test {
         let mut context = TestContext::new();
 
         assert_eq!(alloc(&mut context, 0).await.unwrap().0, 0);
-        assert_eq!(calloc(&mut context, 0).await.unwrap().0, 0);
+        // calloc of zero returns a unique, freeable non-null pointer, matching
+        // the reference allocator that a font loader relies on.
+        let zero = calloc(&mut context, 0).await.unwrap();
+        assert_ne!(zero.0, 0);
+        free(&mut context, zero).await.unwrap();
         assert_eq!(free(&mut context, wipi_types::wipic::WIPICIndirectPtr(0)).await.unwrap().0, 0);
 
         Ok(())
