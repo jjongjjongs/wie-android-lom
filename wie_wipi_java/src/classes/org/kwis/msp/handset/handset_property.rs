@@ -42,6 +42,11 @@ impl HandsetProperty {
         let value = match name.as_ref() {
             "VIBRATORLEVEL" => "0",
             "DS_LOCK" => "0",
+            // A valid subscriber number so a title that gates on having one
+            // (e.g. an SMS opt-in that reads its own number) sees a real value
+            // instead of an empty string. Matches the WIPI-C PHONENUMBER path's
+            // fallback so both agree.
+            "PHONENUMBER" | "MIN" => "01046119269",
             _ => "",
         };
 
