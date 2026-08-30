@@ -496,7 +496,11 @@ async fn unk3(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
     // 0xcf sits with the graphics context calls (InitContext/SetContext); it was
     // hitting the unknown-SVC path and spamming a fatal log. Stubbed to 0, which
     // is what the unknown path already returned.
-    tracing::debug!("stub unk3/0xcf({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
+    //
+    // Logged at trace, not debug: a title calls this thousands of times a second
+    // and at debug it fills the whole captured log, pushing out the audio and
+    // graphics events that a saved log needs to be useful.
+    tracing::trace!("stub unk3/0xcf({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }

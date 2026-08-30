@@ -28,8 +28,7 @@ static INIT: Once = Once::new();
 /// info/warn, and the graphics service's per-frame drawing stays at info. Faults
 /// and unimplemented calls in those crates log at warn/error, so they still
 /// show. Setting `RUST_LOG`, or the in-app log filter, overrides this entirely.
-const DEFAULT_LOG_DIRECTIVE: &str =
-    "debug,wie_lgt=trace,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,arm32_cpu=warn";
+const DEFAULT_LOG_DIRECTIVE: &str = "debug,wie_lgt=trace,wie_lgt::runtime::wipi_c=debug,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,arm32_cpu=warn";
 
 /// Lets the player swap the log filter at runtime, so capturing a module's
 /// debug/trace detail no longer means editing the default above and rebuilding.
