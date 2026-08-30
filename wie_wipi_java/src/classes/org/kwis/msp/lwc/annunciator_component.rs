@@ -219,13 +219,15 @@ impl AnnunciatorComponent {
             .get_static_field("org/kwis/msp/lwc/AnnunciatorComponent", "__wieAnnunciatorSizes", "[I")
             .await?;
 
-        let mut height = [0i32; 1];
-        jvm.array_raw_buffer(&sizes)
-            .await?
-            .read(size_index as usize * 4, bytemuck::cast_slice_mut(&mut height))?;
+        // `sizes` is an int[]; read the entry for this display size through the
+        // element API. The raw byte buffer's read multiplies the offset by the
+        // element size itself, so passing a byte offset here double-counted it
+        // and ran off the end of the array.
+        let heights: alloc::vec::Vec<i32> = jvm.load_array(&sizes, size_index as usize, 1).await?;
+        let height = heights.first().copied().unwrap_or(0);
 
         let _: () = jvm
-            .invoke_virtual(&this, "configure", "(IIIII)V", (0i32, 0i32, width, height[0], 2i32))
+            .invoke_virtual(&this, "configure", "(IIIII)V", (0i32, 0i32, width, height, 2i32))
             .await?;
 
         Ok(())
