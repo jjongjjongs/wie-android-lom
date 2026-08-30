@@ -32,7 +32,12 @@ impl Main {
 
         let wipi_midlet = jvm.new_class("net/wie/WIPIMIDlet", "()V", ()).await?;
 
-        let main_class_name = JavaLangString::to_rust_string(jvm, &jvm.load_array(&args, 0, 1).await?[0]).await?;
+        // argv hands the main class in binary (dotted) form - `atdata.JimaeMD` -
+        // but classes are registered in JVM internal (slash) form. Normalise so
+        // a packaged main class resolves; a bare class name is unchanged.
+        let main_class_name = JavaLangString::to_rust_string(jvm, &jvm.load_array(&args, 0, 1).await?[0])
+            .await?
+            .replace('.', "/");
         let main_class = jvm.new_class(&main_class_name, "()V", ()).await?;
 
         let _: () = jvm
