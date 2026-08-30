@@ -2143,15 +2143,33 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
         return Ok(handle);
     };
 
-    let class = context
+    let existing = context
         .app_classes
         .lock()
         .iter()
         .find(|x| x.root == root)
         .map(|x| (x.name.clone(), x.instance_words));
 
+    let class = match existing {
+        Some(class) => Some(class),
+        // A class only the main Jlet references is not in the table passed to
+        // vm_register_classes, so it is not cached yet. Parse it from the image
+        // and cache it, the same lazy path heavy-linking uses, rather than
+        // giving up and leaving the caller with a non-object.
+        None => match app_classes::parse_class_root(core, root) {
+            Ok(parsed) => {
+                let info = (parsed.name.clone(), parsed.instance_words);
+                context.app_classes.lock().push(parsed);
+                Some(info)
+            }
+            Err(error) => {
+                tracing::warn!("LGT application class at {root:#x} could not be parsed: {error:?}");
+                None
+            }
+        },
+    };
+
     let Some((class, instance_words)) = class else {
-        tracing::warn!("LGT application class at {root:#x} was never registered");
         return Ok(handle);
     };
 
