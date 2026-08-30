@@ -62,90 +62,57 @@ pub const JAVA_RESERVED_SLOT_SVC_BASE: u32 = 0x4000;
 pub const JAVA_METHOD_SVC_LIMIT: u32 = 0x2000;
 
 pub fn get_java_interface_method(core: &mut ArmCore, function_index: u32) -> Result<u32> {
-    let method = match function_index {
-        // LoM's legacy CLDC ABI uses function 0x03 for vm_alloc_save_point.
-        // Native callers pass the returned save-point block directly to
-        // kernel table 1 / function 0x32 (setjmp).
-        0x03 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAllocSavePoint)?,
-        // Legacy table64 0x06 is the generated-code fallback for a resolved
-        // virtual/interface dispatch slot whose implementation pointer is null.
-        // Its r0 ABI is revision-skewed and carries a live VM/object value rather
-        // than the C-string message accepted by the newer native helper.
-        0x06 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyVmThrowAbstractMethodError)?,
-        // LoM legacy ABI: generated Java wrappers pass their required stack
-        // word count to 0x07 before entering the method body.
-        0x07 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmCheckStackOverflow)?,
-        // 0x09 is the checked reference-array store helper:
-        // (array, index, value).
-        0x09 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImpl)?,
-        // LoM generated get_raw_class wrappers first bring class_shared to
-        // state 3 through 0x64, then activate it through 0x0b. Generated
-        // get_class wrappers initialize that activated Class object via 0x0c.
-        0x0b => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmActivateClass)?,
-        0x0c => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClass)?,
-        0x0d => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAddClasspath)?,
-        0x0f => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiateArray)?,
-        0x12 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaResolveOne)?,
-        // LoM legacy CLDC ABI: 0x03 allocates a save point, while 0x1f
-        // releases it after the setjmp-protected region. Exception paths use
-        // 0x20 to rethrow the object returned through that save point.
-        0x1f => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmFreeSavePoint)?,
-        0x20 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowException)?,
-        // 0x54 is the generated-code safepoint/yield helper. Its incoming
-        // registers are not semantic arguments.
-        0x54 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThreadReschedule)?,
-        // LoM synchronized wrappers enter the object monitor through 0x55
-        // before allocating their save point, and release that same monitor
-        // through 0x56 on both normal and exception-cleanup paths.
-        0x55 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorEnter)?,
-        0x56 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmMonitorExit)?,
-        // LoM uses 0x57 for constant-string materialization:
-        // (module/table, UTF-16 chars, length, cache slot).
-        0x57 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetConstantString)?,
-        // Legacy LGT CLDC startup uses 0xfa -> 0x61 immediately before
-        // WIPI-Java/LGTE module activation. Cross-game binaries preserve this
-        // sequence and never use either slot as an array-store helper.
-        0x61 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyCldcBootstrap61)?,
-        0xfa => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyCldcBootstrapFa)?,
-        0x0e => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiate)?,
-        0x10 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInstantiateMultiArray)?,
-        0x11 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmClassIsAssignableTo)?,
-        // Legacy CLDC exception exports are revision-skewed relative to the
-        // newer reference table. Static generated-code dataflow identifies
-        // these slots by their failure conditions: null dereference, array
-        // bounds, divide-by-zero, failed assignability, and negative-array
-        // allocation respectively.
-        0x21 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowNullPointerException)?,
-        0x22 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowArrayIndexOutOfBoundsException)?,
-        0x23 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowArithmeticException)?,
-        0x25 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmThrowClassCastException)?,
-        0x26 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::LegacyVmThrowNegativeArraySizeException)?,
-        // LoM legacy class-registration lifecycle: 0x40 registers the
-        // module's class/raw-class tables and returns a registration slot.
-        // Module cleanup later passes that saved slot to 0x38.
-        0x38 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmUnregisterClasses)?,
-        0x40 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRegisterClasses)?,
-        0x64 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmInitializeClassShared)?,
-        0x13 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::JavaLoadClasses)?,
-        // LoM legacy 0x14 returns java/lang/String Class; generated code
-        // immediately instantiates it and invokes String constructors/methods.
-        0x14 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringClass)?,
-        0x82 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmRunMainClass)?,
-        0x83 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetArrayClass)?,
-        // LoM legacy 0xe1 returns the String[] class handle; virtually every
-        // caller immediately passes it to 0x0f (VmInstantiateArray).
-        0xe1 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmGetStringArrayClass)?,
-        // LoM legacy 0xe2 is the fast reference-array store helper. Generated
-        // code uses it to populate freshly instantiated String[] arrays, while
-        // 0x09 is the checked/general aastore path.
-        0xe2 => core.make_svc_stub(SVC_CATEGORY_INIT, InitSvcId::VmAastoreImplFast)?,
+    // Table-0x64 is the CLDC module. The index is the module's own export order,
+    // recovered from the reference firmware's `cldc` export table in
+    // liblgt_system.so (each entry is [index, function, name]). This is the
+    // authoritative mapping; earlier per-slot guesses had many wrong.
+    let id = match function_index {
+        0x03 => InitSvcId::CldcModuleActivate,
+        0x04 => InitSvcId::VmRegisterClasses,
+        0x06 => InitSvcId::VmUnregisterClasses,
+        // vm_register_classes_on_process registers the same class tables as
+        // vm_register_classes; the process scoping is not modelled here.
+        0x07 => InitSvcId::VmRegisterClasses,
+        0x09 => InitSvcId::VmGetConstantString,
+        0x0b => InitSvcId::VmInitializeClassShared,
+        0x0c => InitSvcId::VmActivateClass,
+        0x0d => InitSvcId::VmInitializeClass,
+        0x0e => InitSvcId::VmGetArrayClass,
+        0x0f => InitSvcId::VmInstantiate,
+        0x10 => InitSvcId::VmInstantiateArray,
+        0x11 => InitSvcId::VmInstantiateMultiArray,
+        0x12 => InitSvcId::VmClassIsAssignableTo,
+        0x13 => InitSvcId::JavaResolveOne,
+        // vm_resolve_lists publishes the application's class tables.
+        0x14 => InitSvcId::JavaLoadClasses,
+        0x1f => InitSvcId::VmAllocSavePoint,
+        0x20 => InitSvcId::VmFreeSavePoint,
+        0x21 => InitSvcId::VmThrowException,
+        0x22 => InitSvcId::VmThrowNullPointerException,
+        0x23 => InitSvcId::VmThrowArrayIndexOutOfBoundsException,
+        0x25 => InitSvcId::VmThrowArithmeticException,
+        0x26 => InitSvcId::VmThrowClassCastException,
+        0x27 => InitSvcId::LegacyVmThrowNegativeArraySizeException,
+        0x38 => InitSvcId::VmThrowAbstractMethodError,
+        0x40 => InitSvcId::VmThrowNoSuchMethodError,
+        0x54 => InitSvcId::VmCheckStackOverflow,
+        0x55 => InitSvcId::VmThreadReschedule,
+        0x56 => InitSvcId::VmMonitorEnter,
+        0x57 => InitSvcId::VmMonitorExit,
+        0x61 => InitSvcId::VmAastoreImpl,
+        0x64 => InitSvcId::VmFindInterface,
+        0x82 => InitSvcId::VmAddClasspath,
+        0x83 => InitSvcId::VmRunMainClass,
+        0xe1 => InitSvcId::VmGetStringClass,
+        0xe2 => InitSvcId::VmGetStringArrayClass,
+        0xfa => InitSvcId::VmAastoreImplFast,
         _ => {
-            tracing::warn!("Unimplemented LGT Java import {function_index:#x};                  installing diagnostic zero-return stub");
-            core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + function_index)?
+            tracing::warn!("Unimplemented LGT CLDC import {function_index:#x}; installing diagnostic zero-return stub");
+            return core.make_svc_stub(SVC_CATEGORY_INIT, JAVA_DIAG_SVC_BASE + function_index);
         }
     };
 
-    Ok(method)
+    core.make_svc_stub(SVC_CATEGORY_INIT, id)
 }
 
 /// Import `0x14`. Reads the tables describing every platform class the
