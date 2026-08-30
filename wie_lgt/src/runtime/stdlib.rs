@@ -4,7 +4,7 @@ use core::cmp::min;
 
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId, stdlib};
-use wie_util::{ByteWrite, Result, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes};
+use wie_util::{ByteRead, ByteWrite, Result, read_generic, read_null_terminated_string_bytes, write_generic, write_null_terminated_string_bytes};
 
 use wie_wipi_c::api::kernel::format_varargs;
 
@@ -84,10 +84,20 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System, save_poi
             return 0u32.write(core, lr);
         }
 
+        // Character classification/conversion. Each takes one int and returns
+        // one int, so they are dispatched here directly rather than through an
+        // EmulatedFunction wrapper.
+        if let Some(result) = c_ctype(id.0, core.read_param(0)?) {
+            return result.write(core, lr);
+        }
+
         match id.0 {
             x if x == StdlibSvcId::Printf as u32 => EmulatedFunction::call(&printf, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Sprintf as u32 => EmulatedFunction::call(&sprintf, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Atoi as u32 => EmulatedFunction::call(&atoi, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Atol as u32 => EmulatedFunction::call(&atoi, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strtol as u32 => EmulatedFunction::call(&strtol, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strtoul as u32 => EmulatedFunction::call(&strtol, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Rand as u32 => {
                 let value = c_rand();
                 tracing::debug!("rand() -> {value}");
@@ -102,14 +112,24 @@ pub fn register_stdlib_svc_handler(core: &mut ArmCore, system: &System, save_poi
             x if x == StdlibSvcId::Strcpy as u32 => EmulatedFunction::call(&stdlib::strcpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strncpy as u32 => EmulatedFunction::call(&strncpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strcat as u32 => EmulatedFunction::call(&strcat, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strncat as u32 => EmulatedFunction::call(&strncat, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strcmp as u32 => EmulatedFunction::call(&strcmp, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strncmp as u32 => EmulatedFunction::call(&strncmp, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Stricmp as u32 => EmulatedFunction::call(&stricmp, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strnicmp as u32 => EmulatedFunction::call(&strnicmp, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strchr as u32 => EmulatedFunction::call(&strchr, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strrchr as u32 => EmulatedFunction::call(&strrchr, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strspn as u32 => EmulatedFunction::call(&strspn, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strcspn as u32 => EmulatedFunction::call(&strcspn, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Strpbrk as u32 => EmulatedFunction::call(&strpbrk, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strstr as u32 => EmulatedFunction::call(&strstr, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Strlen as u32 => EmulatedFunction::call(&stdlib::strlen, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memcpy as u32 => EmulatedFunction::call(&stdlib::memcpy, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memmove as u32 => EmulatedFunction::call(&stdlib::memmove, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memcmp as u32 => EmulatedFunction::call(&stdlib::memcmp, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Memchr as u32 => EmulatedFunction::call(&memchr, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Memset as u32 => EmulatedFunction::call(&stdlib::memset, core, &mut ()).await?.write(core, lr),
+            x if x == StdlibSvcId::Snprintf as u32 => EmulatedFunction::call(&snprintf, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Time as u32 => EmulatedFunction::call(&time, core, &mut context.system).await?.write(core, lr),
             x if x == StdlibSvcId::Localtime as u32 => EmulatedFunction::call(&localtime, core, &mut ()).await?.write(core, lr),
             x if x == StdlibSvcId::Atexit as u32 => EmulatedFunction::call(&atexit, core, &mut ()).await?.write(core, lr),
@@ -307,4 +327,267 @@ async fn atexit(_core: &mut ArmCore, _: &mut (), handler: u32) -> Result<u32> {
     tracing::debug!("atexit({handler:#x})");
 
     Ok(0)
+}
+
+/// The ctype family (`isalnum`..`toupper`, ids `0x3e9`..=`0x3f5`). Each takes a
+/// single int and returns an int, so they are answered here without an
+/// `EmulatedFunction` wrapper. Returns `None` for any other id so the caller
+/// falls through to its main dispatch. Classification follows the C locale: a
+/// byte outside ASCII classifies as false, matching what the reference libc
+/// returns for these titles' 7-bit inputs.
+fn c_ctype(id: u32, arg: u32) -> Option<u32> {
+    let byte = (arg & 0xff) as u8;
+    let result = match id {
+        x if x == StdlibSvcId::Isalnum as u32 => byte.is_ascii_alphanumeric() as u32,
+        x if x == StdlibSvcId::Isalpha as u32 => byte.is_ascii_alphabetic() as u32,
+        x if x == StdlibSvcId::Iscntrl as u32 => byte.is_ascii_control() as u32,
+        x if x == StdlibSvcId::Isdigit as u32 => byte.is_ascii_digit() as u32,
+        x if x == StdlibSvcId::Isgraph as u32 => byte.is_ascii_graphic() as u32,
+        x if x == StdlibSvcId::Islower as u32 => byte.is_ascii_lowercase() as u32,
+        x if x == StdlibSvcId::Isprint as u32 => (byte.is_ascii_graphic() || byte == b' ') as u32,
+        x if x == StdlibSvcId::Ispunct as u32 => byte.is_ascii_punctuation() as u32,
+        // Rust's `is_ascii_whitespace` omits the vertical tab that C's isspace counts.
+        x if x == StdlibSvcId::Isspace as u32 => (byte.is_ascii_whitespace() || byte == 0x0b) as u32,
+        x if x == StdlibSvcId::Isupper as u32 => byte.is_ascii_uppercase() as u32,
+        x if x == StdlibSvcId::Isxdigit as u32 => byte.is_ascii_hexdigit() as u32,
+        x if x == StdlibSvcId::Tolower as u32 => byte.to_ascii_lowercase() as u32,
+        x if x == StdlibSvcId::Toupper as u32 => byte.to_ascii_uppercase() as u32,
+        _ => return None,
+    };
+
+    Some(result)
+}
+
+/// `strtol`/`strtoul(nptr, endptr, base)`. Skips leading whitespace, an optional
+/// sign, and an optional `0x` prefix (for base 16 or auto-detect), then parses
+/// digits in `base`. Writes the first unparsed address through `endptr` when it
+/// is non-null, as C requires. `strtoul` shares this: the bit pattern returned
+/// in r0 is read back either way.
+async fn strtol(core: &mut ArmCore, _: &mut (), nptr: u32, endptr: u32, base: u32) -> Result<u32> {
+    if nptr == 0 {
+        if endptr != 0 {
+            write_generic(core, endptr, nptr)?;
+        }
+        return Ok(0);
+    }
+
+    let bytes = read_null_terminated_string_bytes(core, nptr)?;
+    let mut i = 0usize;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+
+    let mut negative = false;
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        negative = bytes[i] == b'-';
+        i += 1;
+    }
+
+    let mut base = base;
+    if (base == 0 || base == 16) && i + 1 < bytes.len() && bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+        base = 16;
+        i += 2;
+    } else if base == 0 && i < bytes.len() && bytes[i] == b'0' {
+        base = 8;
+    } else if base == 0 {
+        base = 10;
+    }
+
+    let digits_start = i;
+    let mut accumulator: u64 = 0;
+    while i < bytes.len() {
+        let digit = match bytes[i] {
+            b'0'..=b'9' => (bytes[i] - b'0') as u32,
+            b'a'..=b'z' => (bytes[i] - b'a' + 10) as u32,
+            b'A'..=b'Z' => (bytes[i] - b'A' + 10) as u32,
+            _ => break,
+        };
+        if digit >= base {
+            break;
+        }
+        accumulator = accumulator.wrapping_mul(base as u64).wrapping_add(digit as u64);
+        i += 1;
+    }
+
+    // C sets endptr to the original nptr when no digits were converted.
+    let end = if i == digits_start { nptr } else { nptr + i as u32 };
+    if endptr != 0 {
+        write_generic(core, endptr, end)?;
+    }
+
+    let value = if negative {
+        (accumulator as i64).wrapping_neg() as u32
+    } else {
+        accumulator as u32
+    };
+    tracing::debug!("strtol({nptr:#x}, {endptr:#x}, {base}) -> {value:#x}");
+
+    Ok(value)
+}
+
+async fn strncat(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, size: u32) -> Result<u32> {
+    tracing::debug!("strncat({ptr_dst:#x}, {ptr_src:#x}, {size:#x})");
+
+    let src = read_null_terminated_string_bytes(core, ptr_src)?;
+    let dst = read_null_terminated_string_bytes(core, ptr_dst)?;
+
+    let take = min(size as usize, src.len());
+    write_null_terminated_string_bytes(core, ptr_dst + dst.len() as u32, &src[..take])?;
+
+    Ok(ptr_dst)
+}
+
+async fn stricmp(core: &mut ArmCore, _: &mut (), ptr_str1: u32, ptr_str2: u32) -> Result<u32> {
+    tracing::debug!("stricmp({ptr_str1:#x}, {ptr_str2:#x})");
+
+    let mut str1 = read_null_terminated_string_bytes(core, ptr_str1)?;
+    let mut str2 = read_null_terminated_string_bytes(core, ptr_str2)?;
+    str1.make_ascii_lowercase();
+    str2.make_ascii_lowercase();
+
+    Ok(str1.cmp(&str2) as u32)
+}
+
+async fn strnicmp(core: &mut ArmCore, _: &mut (), ptr_str1: u32, ptr_str2: u32, size: u32) -> Result<u32> {
+    tracing::debug!("strnicmp({ptr_str1:#x}, {ptr_str2:#x}, {size})");
+
+    let mut str1 = read_null_terminated_string_bytes(core, ptr_str1)?;
+    let mut str2 = read_null_terminated_string_bytes(core, ptr_str2)?;
+    str1.make_ascii_lowercase();
+    str2.make_ascii_lowercase();
+
+    let size = size as usize;
+    let head1 = &str1[..min(size, str1.len())];
+    let head2 = &str2[..min(size, str2.len())];
+
+    Ok(head1.cmp(head2) as u32)
+}
+
+/// `strchr(s, c)`. Returns the address of the first `c` in `s`, or zero. A zero
+/// `c` matches the terminator, per C.
+async fn strchr(core: &mut ArmCore, _: &mut (), ptr_str: u32, ch: u32) -> Result<u32> {
+    if ptr_str == 0 {
+        return Ok(0);
+    }
+
+    let bytes = read_null_terminated_string_bytes(core, ptr_str)?;
+    let needle = (ch & 0xff) as u8;
+
+    if let Some(offset) = bytes.iter().position(|&b| b == needle) {
+        return Ok(ptr_str + offset as u32);
+    }
+    if needle == 0 {
+        // The terminator is not part of `bytes`; it sits just past it.
+        return Ok(ptr_str + bytes.len() as u32);
+    }
+
+    Ok(0)
+}
+
+/// `strrchr(s, c)`. Returns the address of the last `c` in `s`, or zero.
+async fn strrchr(core: &mut ArmCore, _: &mut (), ptr_str: u32, ch: u32) -> Result<u32> {
+    if ptr_str == 0 {
+        return Ok(0);
+    }
+
+    let bytes = read_null_terminated_string_bytes(core, ptr_str)?;
+    let needle = (ch & 0xff) as u8;
+
+    if needle == 0 {
+        return Ok(ptr_str + bytes.len() as u32);
+    }
+    if let Some(offset) = bytes.iter().rposition(|&b| b == needle) {
+        return Ok(ptr_str + offset as u32);
+    }
+
+    Ok(0)
+}
+
+async fn strspn(core: &mut ArmCore, _: &mut (), ptr_str: u32, ptr_accept: u32) -> Result<u32> {
+    if ptr_str == 0 {
+        return Ok(0);
+    }
+
+    let bytes = read_null_terminated_string_bytes(core, ptr_str)?;
+    let accept = read_null_terminated_string_bytes(core, ptr_accept)?;
+
+    let count = bytes.iter().take_while(|b| accept.contains(b)).count();
+
+    Ok(count as u32)
+}
+
+async fn strcspn(core: &mut ArmCore, _: &mut (), ptr_str: u32, ptr_reject: u32) -> Result<u32> {
+    if ptr_str == 0 {
+        return Ok(0);
+    }
+
+    let bytes = read_null_terminated_string_bytes(core, ptr_str)?;
+    let reject = read_null_terminated_string_bytes(core, ptr_reject)?;
+
+    let count = bytes.iter().take_while(|b| !reject.contains(b)).count();
+
+    Ok(count as u32)
+}
+
+/// `strpbrk(s, accept)`. Returns the address of the first byte of `s` that
+/// appears in `accept`, or zero.
+async fn strpbrk(core: &mut ArmCore, _: &mut (), ptr_str: u32, ptr_accept: u32) -> Result<u32> {
+    if ptr_str == 0 {
+        return Ok(0);
+    }
+
+    let bytes = read_null_terminated_string_bytes(core, ptr_str)?;
+    let accept = read_null_terminated_string_bytes(core, ptr_accept)?;
+
+    if let Some(offset) = bytes.iter().position(|b| accept.contains(b)) {
+        return Ok(ptr_str + offset as u32);
+    }
+
+    Ok(0)
+}
+
+/// `memchr(s, c, n)`. Returns the address of the first `c` within the first `n`
+/// bytes of `s`, or zero.
+async fn memchr(core: &mut ArmCore, _: &mut (), ptr: u32, ch: u32, size: u32) -> Result<u32> {
+    if ptr == 0 || size == 0 {
+        return Ok(0);
+    }
+
+    let mut buffer = alloc::vec![0u8; size as usize];
+    core.read_bytes(ptr, &mut buffer)?;
+    let needle = (ch & 0xff) as u8;
+
+    if let Some(offset) = buffer.iter().position(|&b| b == needle) {
+        return Ok(ptr + offset as u32);
+    }
+
+    Ok(0)
+}
+
+/// `snprintf(dest, size, format, ...)`. Formats like `sprintf` but writes at
+/// most `size - 1` bytes plus a terminator. Returns the length the full result
+/// would have, as C does. Five variadic words cover the specifiers these titles
+/// use.
+#[allow(clippy::too_many_arguments)]
+async fn snprintf(core: &mut ArmCore, _: &mut (), dest: u32, size: u32, format: u32, a0: u32, a1: u32, a2: u32, a3: u32, a4: u32) -> Result<u32> {
+    let format_bytes = read_null_terminated_string_bytes(core, format)?;
+    let format_string = encoding_rs::EUC_KR.decode(&format_bytes).0;
+
+    tracing::debug!("snprintf({dest:#x}, {size}, {:?})", format_string);
+
+    let args = [a0, a1, a2, a3, a4];
+    let result = format_varargs(&format_string, &args, &mut |ptr| {
+        let bytes = read_null_terminated_string_bytes(core, ptr)?;
+        Ok(encoding_rs::EUC_KR.decode(&bytes).0.into_owned())
+    })?;
+
+    let result_bytes = encoding_rs::EUC_KR.encode(&result).0;
+
+    if size > 0 && dest != 0 {
+        let capacity = (size - 1) as usize;
+        let take = min(capacity, result_bytes.len());
+        write_null_terminated_string_bytes(core, dest, &result_bytes[..take])?;
+    }
+
+    Ok(result.len() as u32)
 }
