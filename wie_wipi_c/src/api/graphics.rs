@@ -8,7 +8,7 @@ use alloc::{string::String, vec, vec::Vec};
 
 use wie_backend::{
     Event,
-    canvas::{Canvas, Clip, Color, Image, PixelType, Rgb8Pixel, Rgb565Pixel, TextAlignment, string_width},
+    canvas::{Canvas, Clip, Color, Image, PixelType, Rgb8Pixel, Rgb565Pixel, TextAlignment, string_width_px},
 };
 use wie_util::{Result, read_generic, read_null_terminated_string_bytes, write_generic};
 
@@ -641,6 +641,15 @@ fn blit_magenta_keyed(canvas: &mut dyn Canvas, dx: i32, dy: i32, w: i32, h: i32,
     }
 }
 
+/// The single font size the WIPI-C text path uses, in device pixels. All of
+/// `MC_grpGetFontHeight`, `MC_grpGetStringWidth` and `MC_grpDrawString` must
+/// agree on it: a title measures text with the first two and lays it out
+/// against the third, so any mismatch makes glyphs overlap. It matches the
+/// 10px ascent + 2px descent the metric getters below report.
+const FONT_PX_HEIGHT: f32 = 12.0;
+/// Baseline offset from the top of the line (the ascent) for that face.
+const FONT_BASELINE: f32 = 10.0;
+
 pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32) -> Result<i32> {
     tracing::warn!("stub MC_grpGetFont({face}, {size}, {style})");
 
@@ -650,7 +659,7 @@ pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32
 pub async fn get_font_height(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
     tracing::warn!("stub MC_grpGetFontHeight({font})");
 
-    Ok(12)
+    Ok(FONT_PX_HEIGHT as i32)
 }
 
 pub async fn get_font_ascent(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
@@ -670,7 +679,7 @@ pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_str
 
     let string = read_wipi_string(context, ptr_string, length)?;
 
-    Ok(string_width(&string, 10.0) as i32)
+    Ok(string_width_px(&string, FONT_PX_HEIGHT) as i32)
 }
 
 pub async fn draw_string(
@@ -701,7 +710,7 @@ pub async fn draw_string(
 
     let mut canvas = framebuffer.canvas(context)?;
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.draw_text(&string, x, y, 40.0 / 3.0, 10.0, TextAlignment::Left, color, clip);
+    canvas.draw_text(&string, x, y, FONT_PX_HEIGHT, FONT_BASELINE, TextAlignment::Left, color, clip);
     canvas.flush()?;
 
     Ok(())
