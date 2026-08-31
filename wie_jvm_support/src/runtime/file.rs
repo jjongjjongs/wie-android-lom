@@ -15,8 +15,17 @@ pub struct FileImpl {
 
 impl FileImpl {
     pub async fn new(system: System, path: &str, write: bool) -> Result<Self, IOError> {
-        if !write && !system.filesystem().exists(path).await {
-            return Err(IOError::NotFound);
+        if !system.filesystem().exists(path).await {
+            if write {
+                // A writable handle to a new file: register it empty now so it
+                // exists (and can be reopened for reading) even before the
+                // first write. WIPI titles open a fresh non-volatile store for
+                // reading right after creating it, and that reopen would
+                // otherwise fail with NotFound.
+                system.filesystem().add_virtual(path, alloc::vec::Vec::new());
+            } else {
+                return Err(IOError::NotFound);
+            }
         }
 
         Ok(Self {
