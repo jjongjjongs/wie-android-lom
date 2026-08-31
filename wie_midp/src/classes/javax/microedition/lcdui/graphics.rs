@@ -14,6 +14,7 @@ use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use crate::classes::javax::microedition::lcdui::{Font, Image};
 
 bitflags::bitflags! {
+    #[derive(Clone, Copy)]
     struct Anchor: i32 {
         const HCENTER = 1;
         const VCENTER = 2;
@@ -45,6 +46,26 @@ impl From<Anchor> for TextAlignment {
         } else {
             TextAlignment::Left
         }
+    }
+}
+
+/// The amount to shift `y` by so the text sits where the vertical anchor asks,
+/// given that `draw_text` treats `y` as the top of the glyph box.
+///
+/// MIDP `drawString` anchors the point vertically at the text's `TOP`, `BOTTOM`,
+/// `BASELINE`, or (`VCENTER`) its middle; the default is `TOP`. `draw_text`
+/// only ever draws downward from the top, so a non-top anchor has to move the
+/// origin up first - without this every `BOTTOM`/`BASELINE`-anchored label (a
+/// SEED menu item, say) lands a line too low.
+fn vertical_anchor_offset(anchor: Anchor, font_height: i32, font_baseline: i32) -> i32 {
+    if anchor.contains(Anchor::BOTTOM) {
+        -font_height
+    } else if anchor.contains(Anchor::BASELINE) {
+        -font_baseline
+    } else if anchor.contains(Anchor::VCENTER) {
+        -font_height / 2
+    } else {
+        0 // TOP or unspecified
     }
 }
 
@@ -422,6 +443,8 @@ impl Graphics {
 
         let clip = Self::clip(jvm, &this).await?;
 
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
+
         canvas.draw_text(
             &string,
             (translate_x + x) as _,
@@ -464,6 +487,8 @@ impl Graphics {
         let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
+
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
 
         canvas.draw_text(
             &string,
@@ -508,6 +533,8 @@ impl Graphics {
 
         let clip = Self::clip(jvm, &this).await?;
 
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
+
         canvas.draw_text(
             &string,
             (translate_x + x) as _,
@@ -549,6 +576,8 @@ impl Graphics {
         let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
+
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
 
         canvas.draw_text(
             &substring,
