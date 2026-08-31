@@ -59,6 +59,7 @@ pub(crate) struct ArmCoreInner {
     svc_handlers: BTreeMap<u32, Arc<Box<dyn RegisteredFunction>>>,
     fast_svc: Option<FastSvcHandler>,
     svc_stubs: BTreeMap<(u32, u32), u32>,
+    code_stubs: BTreeMap<Vec<u8>, u32>,
     next_stub_address: u32,
     profile: Option<ProfileState>,
 }
@@ -135,6 +136,7 @@ impl ArmCore {
             svc_handlers: BTreeMap::new(),
             fast_svc: None,
             svc_stubs: BTreeMap::new(),
+            code_stubs: BTreeMap::new(),
             next_stub_address: FUNCTIONS_BASE,
             profile,
         };
@@ -510,6 +512,42 @@ impl ArmCore {
         inner.svc_stubs.insert((category, id), thumb_address);
 
         tracing::trace!("Register SVC stub at {address:#x}, category={category}, id={id}");
+
+        Ok(thumb_address)
+    }
+
+    /// Writes a small Thumb function into the stub arena and returns its callable
+    /// (low-bit-set) address, deduplicated by its bytes.
+    ///
+    /// Unlike [`make_svc_stub`], the returned code runs entirely in the guest: it
+    /// takes no SVC exception, so a caller in a hot loop keeps executing inside
+    /// the JIT instead of trapping out to a Rust handler on every call. Used for
+    /// the handful of pure-getter imports (framebuffer geometry, the `0xcf`
+    /// no-op) a software blit hammers thousands of times per frame, where the SVC
+    /// round-trip - not the work - was the cost.
+    pub fn make_code_stub(&mut self, code: &[u8]) -> Result<u32> {
+        let mut inner = self.inner.lock();
+
+        if let Some(&address) = inner.code_stubs.get(code) {
+            return Ok(address);
+        }
+
+        if code.len() as u32 > SVC_STUB_SIZE {
+            return Err(WieError::FatalError(format!("Code stub too large: {} bytes", code.len())));
+        }
+
+        let address = inner.next_stub_address;
+        if address + SVC_STUB_SIZE > FUNCTIONS_BASE + FUNCTIONS_SIZE as u32 {
+            return Err(WieError::FatalError("SVC stub space exhausted".into()));
+        }
+        inner.next_stub_address += SVC_STUB_SIZE;
+
+        inner.engine.mem_write(address, code)?;
+
+        let thumb_address = address + 1;
+        inner.code_stubs.insert(code.to_vec(), thumb_address);
+
+        tracing::trace!("Register code stub at {address:#x} ({} bytes)", code.len());
 
         Ok(thumb_address)
     }

@@ -2677,6 +2677,28 @@ fn validate_resolved_import_address(import_table: u32, function_index: u32, addr
     Ok(address)
 }
 
+/// Inline Thumb for the pure-getter WIPI-C imports (framebuffer geometry and the
+/// `0xcf` no-op), or `None` for imports that must keep their SVC stub.
+///
+/// Each returns in the guest with no SVC exception. The framebuffer getters read
+/// one word of the `WIPICFramebuffer` the handle in `r0` points at - `width` at
+/// +0, `height` +4, `bpl` +8, `bpp` +12, `buf` +16 - exactly what the async
+/// handlers return (the handle is the struct's guest address; `data_ptr` is
+/// identity). `GetImageFrameBuffer` returns its argument unchanged because a
+/// `WIPICImage` begins with its framebuffer, and `0xcf` returns 0.
+fn inline_wipic_getter_stub(function_index: u32) -> Option<&'static [u8]> {
+    Some(match function_index {
+        0x33 => &[0x00, 0x68, 0x70, 0x47], // GetFrameBufferWidth:   ldr r0,[r0,#0];  bx lr
+        0x34 => &[0x40, 0x68, 0x70, 0x47], // GetFrameBufferHeight:  ldr r0,[r0,#4];  bx lr
+        0x35 => &[0x80, 0x68, 0x70, 0x47], // GetFrameBufferBpl:     ldr r0,[r0,#8];  bx lr
+        0x36 => &[0xc0, 0x68, 0x70, 0x47], // GetFrameBufferBpp:     ldr r0,[r0,#12]; bx lr
+        0x32 => &[0x00, 0x69, 0x70, 0x47], // GetFrameBufferPointer: ldr r0,[r0,#16]; bx lr
+        0xc9 => &[0x70, 0x47],             // GetImageFrameBuffer:   bx lr
+        0xcf => &[0x00, 0x20, 0x70, 0x47], // unk3/0xcf:             movs r0,#0;      bx lr
+        _ => return None,
+    })
+}
+
 async fn get_import_function(
     core: &mut ArmCore,
     wipic_category: u32,
@@ -2710,7 +2732,16 @@ async fn get_import_function(
     tracing::debug!("get_import_function({import_table:#x}, {function_index:#x})");
 
     let resolved = if import_table == 0x1fb {
-        core.make_svc_stub(wipic_category, function_index)?
+        // A few WIPI-C imports are pure getters a software blit calls thousands
+        // of times a frame (framebuffer geometry) plus the `0xcf` no-op. Resolve
+        // them to inline Thumb that runs in the guest instead of an SVC stub, so
+        // the blit loop never traps out to Rust (each SVC forces a JIT fallback,
+        // which was the whole cost). Everything else keeps the SVC stub.
+        if let Some(code) = inline_wipic_getter_stub(function_index) {
+            core.make_code_stub(code)?
+        } else {
+            core.make_svc_stub(wipic_category, function_index)?
+        }
     } else if import_table == 0x64 {
         get_java_interface_method(core, function_index)?
     } else if import_table == 1 {
