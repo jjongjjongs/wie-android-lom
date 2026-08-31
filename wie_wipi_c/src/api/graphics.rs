@@ -20,6 +20,56 @@ use self::{framebuffer::FrameBuffer, grp_context::WIPICGraphicsContextIdx, image
 
 const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
 const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
+
+/// DIAG: throttle state for the flush-content probe. Logs a summary of what the
+/// flushed buffer actually holds only when the "how much is non-black" bucket
+/// changes, so a device log shows whether the title's directly-written images
+/// reach the presented buffer without flooding.
+static DIAG_LAST_BUCKET: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(-2);
+
+/// DIAG: summarise a presented frame - how many pixels are non-black, how many
+/// distinct colours, and the most common non-black colour - and log it at INFO
+/// when the non-black bucket changes. Temporary instrumentation.
+fn diag_probe_flush(buf_addr: u32, image: &dyn Image) {
+    use alloc::collections::BTreeMap;
+    use core::sync::atomic::Ordering;
+
+    let colors = image.colors();
+    let total = colors.len();
+    let mut non_black = 0usize;
+    let mut counts: BTreeMap<u32, u32> = BTreeMap::new();
+    for c in &colors {
+        let packed = ((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32;
+        if packed != 0 {
+            non_black += 1;
+            *counts.entry(packed).or_default() += 1;
+        }
+    }
+
+    // Bucket by order of magnitude of non-black pixels so steady frames are quiet
+    // but a transition (black <-> image) always logs.
+    let bucket = match non_black {
+        0 => 0,
+        1..=200 => 1,
+        201..=2000 => 2,
+        2001..=10000 => 3,
+        _ => 4,
+    };
+    if DIAG_LAST_BUCKET.swap(bucket, Ordering::Relaxed) == bucket as i64 {
+        return;
+    }
+
+    let mut top: Vec<(u32, u32)> = counts.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    let top3: Vec<alloc::string::String> = top.iter().take(3).map(|(c, n)| alloc::format!("#{c:06x}x{n}")).collect();
+    tracing::info!(
+        "DIAG flush buf={buf_addr:#x} {}x{} non_black={non_black}/{total} distinct={} top=[{}]",
+        image.width(),
+        image.height(),
+        top.len(),
+        top3.join(",")
+    );
+}
 /// Read a WIPI-C string. `length == -1` means NUL-terminated; `length > 0`
 /// reads exactly that many bytes; `length == 0` and other negatives yield
 /// an empty string.
@@ -61,6 +111,16 @@ pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWor
     let memory = context.alloc(size_of::<WIPICFramebuffer>() as WIPICWord)?;
     write_generic(context, context.data_ptr(memory)?, framebuffer.0)?;
     write_generic(context, SCREEN_FRAMEBUFFER_PTR, memory.0)?;
+
+    tracing::info!(
+        "DIAG screen_framebuffer struct={:#x} buf={:#x} {}x{} bpl={} bpp={}",
+        memory.0,
+        framebuffer.0.buf.0,
+        framebuffer.0.width,
+        framebuffer.0.height,
+        framebuffer.0.bpl,
+        framebuffer.0.bpp
+    );
 
     Ok(memory)
 }
@@ -454,6 +514,8 @@ pub async fn flush_lcd(
 
     let src_canvas = framebuffer.image(context)?;
 
+    diag_probe_flush(framebuffer.0.buf.0, &*src_canvas);
+
     let platform = context.system().platform();
     let screen = platform.screen();
 
@@ -559,6 +621,16 @@ pub async fn create_offscreen_framebuffer(context: &mut dyn WIPICContext, w: i32
 
     let memory = context.alloc(size_of::<WIPICFramebuffer>() as WIPICWord)?;
     write_generic(context, context.data_ptr(memory)?, framebuffer.0)?;
+
+    tracing::info!(
+        "DIAG create_offscreen struct={:#x} buf={:#x} {}x{} bpl={} bpp={}",
+        memory.0,
+        framebuffer.0.buf.0,
+        framebuffer.0.width,
+        framebuffer.0.height,
+        framebuffer.0.bpl,
+        framebuffer.0.bpp
+    );
 
     Ok(memory)
 }
@@ -719,11 +791,69 @@ pub async fn draw_string(
 pub async fn repaint(context: &mut dyn WIPICContext, lcd: i32, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
     tracing::debug!("MC_grpRepaint({lcd}, {x}, {y}, {width}, {height})");
 
+    // DIAG: the game may draw its background/images into the screen framebuffer
+    // and present via repaint (which paints nothing). Probe that buffer's
+    // content so a device log reveals whether image pixels are landing there,
+    // unpresented, while only the flushed off-screen buffer (text) reaches the
+    // display.
+    if let Ok(screen_ptr) = read_generic::<u32, _>(context, SCREEN_FRAMEBUFFER_PTR)
+        && screen_ptr != 0
+        && let Ok(fb_raw) = read_generic::<WIPICFramebuffer, _>(context, context.data_ptr(WIPICIndirectPtr(screen_ptr))?)
+    {
+        let fb = FrameBuffer(fb_raw);
+        if fb.0.bpp != 0
+            && fb.0.bpl != 0
+            && fb.0.height != 0
+            && let Ok(image) = fb.image(context)
+        {
+            diag_probe_repaint(fb.0.buf.0, &*image);
+        }
+    }
+
     let platform = context.system().platform();
     let screen = platform.screen();
     screen.request_redraw().unwrap();
 
     Ok(())
+}
+
+/// DIAG: same summary as `diag_probe_flush`, for the screen framebuffer seen at
+/// repaint, throttled independently.
+fn diag_probe_repaint(buf_addr: u32, image: &dyn Image) {
+    use alloc::collections::BTreeMap;
+    use core::sync::atomic::Ordering;
+    static LAST: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(-2);
+
+    let colors = image.colors();
+    let mut non_black = 0usize;
+    let mut counts: BTreeMap<u32, u32> = BTreeMap::new();
+    for c in &colors {
+        let packed = ((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32;
+        if packed != 0 {
+            non_black += 1;
+            *counts.entry(packed).or_default() += 1;
+        }
+    }
+    let bucket = match non_black {
+        0 => 0,
+        1..=200 => 1,
+        201..=2000 => 2,
+        2001..=10000 => 3,
+        _ => 4,
+    };
+    if LAST.swap(bucket, Ordering::Relaxed) == bucket as i64 {
+        return;
+    }
+    let mut top: Vec<(u32, u32)> = counts.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    let top3: Vec<alloc::string::String> = top.iter().take(3).map(|(c, n)| alloc::format!("#{c:06x}x{n}")).collect();
+    tracing::info!(
+        "DIAG repaint screen_buf={buf_addr:#x} {}x{} non_black={non_black} distinct={} top=[{}]",
+        image.width(),
+        image.height(),
+        top.len(),
+        top3.join(",")
+    );
 }
 
 /// Row length in bytes and the stride to advance by, or `None` when the call
