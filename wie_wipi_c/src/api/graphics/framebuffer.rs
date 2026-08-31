@@ -121,6 +121,45 @@ impl FrameBuffer {
         context.write_bytes(context.data_ptr(self.0.buf)?, data)
     }
 
+    /// Writes back only the `[x, x+w) x [y, y+h)` rectangle of `data` (a full
+    /// framebuffer image, row-major at this buffer's stride), clamped to bounds.
+    ///
+    /// Text and other small primitives use this instead of writing the whole
+    /// buffer: a title may have another thread (its firmware) blitting an image
+    /// straight into the same buffer, and a full write-back of a snapshot taken
+    /// before that blit would erase it. Touching only the drawn rectangle leaves
+    /// those pixels intact.
+    pub fn write_rect(&self, context: &mut dyn WIPICContext, data: &[u8], x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+        let bytes_per_pixel = (self.0.bpp / 8) as usize;
+        let bpl = self.0.bpl as usize;
+        if bytes_per_pixel == 0 || bpl == 0 {
+            return Ok(());
+        }
+
+        let fb_w = self.0.width as i32;
+        let fb_h = self.0.height as i32;
+        let x0 = x.clamp(0, fb_w) as usize;
+        let y0 = y.clamp(0, fb_h) as usize;
+        let x1 = x.saturating_add(w).clamp(0, fb_w) as usize;
+        let y1 = y.saturating_add(h).clamp(0, fb_h) as usize;
+        if x1 <= x0 || y1 <= y0 {
+            return Ok(());
+        }
+
+        let base = context.data_ptr(self.0.buf)?;
+        let row_start = x0 * bytes_per_pixel;
+        let row_end = x1 * bytes_per_pixel;
+        for row in y0..y1 {
+            let off = row * bpl;
+            if let Some(src) = data.get(off + row_start..off + row_end)
+                && let Ok(dst) = u32::try_from(off + row_start)
+            {
+                context.write_bytes(base + dst, src)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn pixel_to_color(&self, pixel: WIPICWord) -> Color {
         match self.0.bpp {
             16 => Rgb565Pixel::to_color(pixel as u16),
@@ -141,6 +180,17 @@ impl FramebufferCanvas<'_> {
         self.flushed = true;
 
         self.framebuffer.write(self.context, &self.canvas.image().raw())
+    }
+
+    /// Writes back only the given rectangle, leaving the rest of the buffer as
+    /// the guest last wrote it. Use for primitives that touch a bounded region
+    /// (text, a filled rect) so a concurrent image blit into the same buffer is
+    /// not clobbered by a whole-buffer write of a stale snapshot.
+    pub fn flush_rect(mut self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+        self.flushed = true;
+
+        let raw = self.canvas.image().raw();
+        self.framebuffer.write_rect(self.context, &raw, x, y, w, h)
     }
 }
 
