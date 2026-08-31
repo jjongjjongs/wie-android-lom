@@ -1584,8 +1584,16 @@ async fn resolve_own_fields(core: &mut ArmCore, context: &InitSvcContext) -> Res
         let name_ptr: u32 = read_generic(core, entry)?;
         let descriptor_ptr: u32 = read_generic(core, entry + 4)?;
         if name_ptr == 0 || descriptor_ptr == 0 {
-            // Blank rows appear between real ones; there is nothing to resolve
-            // here, so leave the placeholder and keep walking to the bound.
+            // A blank row is the trailing word of a wide (long/double) field
+            // whose first word is the row before it; native resolution fills it
+            // with the previous slot plus one. Leaving the synthetic placeholder
+            // here let a long's high word land on an unrelated field - Legend of
+            // Master's `f.eu` (a long) wrote its high word over `f.aQ`, whose
+            // synthetic placeholder happened to name the same slot.
+            if index > 0 {
+                let previous: u16 = read_generic(core, output + (index - 1) * 2)?;
+                write_generic(core, output + index * 2, previous.wrapping_add(1))?;
+            }
             continue;
         }
 
