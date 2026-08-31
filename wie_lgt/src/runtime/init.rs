@@ -95,6 +95,9 @@ type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
 /// `(virtual_methods input, virtual_method_offsets output, first own row, one
 /// past the last row)` captured from import `0x14` for own-method resolution.
 type OwnVirtualResolve = Arc<Mutex<Option<(u32, u32, u32, u32)>>>;
+/// `(fields input, field_offsets output, first own row, one past the last row)`
+/// captured from import `0x14` for own-instance-field resolution.
+type OwnFieldResolve = Arc<Mutex<Option<(u32, u32, u32, u32)>>>;
 type SyntheticClasses = Arc<Mutex<BTreeMap<u32, String>>>;
 type HeavyLinkedClasses = Arc<Mutex<BTreeSet<u32>>>;
 /// Native monitor ownership keyed by the guest object's address.
@@ -246,6 +249,11 @@ struct InitSvcContext {
     /// are registered and activated so a class bridged after `0x14` still has
     /// its own-method references filled.
     own_virtual_resolve: OwnVirtualResolve,
+    /// The application's own instance-field reference resolution, captured from
+    /// import `0x14`: `(fields input, field_offsets output, first own row, one
+    /// past the last row)`. Re-run alongside `own_virtual_resolve` so a class
+    /// bridged after `0x14` still has its own-field references filled.
+    own_field_resolve: OwnFieldResolve,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,6 +296,7 @@ fn register_init_svc_handler(
             vm_monitors: Default::default(),
             main_class_name,
             own_virtual_resolve: Default::default(),
+            own_field_resolve: Default::default(),
         },
     )
 }
@@ -585,6 +594,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             // references (recorded at import 0x14) unresolved; fill any this
             // class now satisfies.
             resolve_own_virtual_methods(core, context).await?;
+            resolve_own_fields(core, context).await?;
 
             activated.write(core, lr)
         }
@@ -777,9 +787,23 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let end = start + table.virtual_method_offset_capacity().unwrap_or(1024);
             *context.own_virtual_resolve.lock() = Some((arguments[3], table.outputs.virtual_method_offsets, start, end));
 
+            // Instance fields work the same way: the platform field rows the
+            // class table declares are resolved in `install_dispatch`, and the
+            // application's own classes append their own field references to the
+            // same table past that range. Those trailing rows are the compiled
+            // code's real instance slots - a synthetic placeholder there makes a
+            // field load reach the wrong (often out-of-range) word and read a
+            // null the reference build never sees. Record the range and resolve
+            // it by name against the registered classes, re-running as they
+            // appear.
+            let field_start = table.fields.len() as u32;
+            let field_end = table.field_offset_capacity();
+            *context.own_field_resolve.lock() = Some((arguments[1], table.outputs.field_offsets, field_start, field_end));
+
             *context.imported_classes.lock() = Some(table);
 
             resolve_own_virtual_methods(core, context).await?;
+            resolve_own_fields(core, context).await?;
 
             ().write(core, lr)
         }
@@ -1511,6 +1535,60 @@ async fn resolve_own_virtual_methods(core: &mut ArmCore, context: &InitSvcContex
         if let Some(slot) = slot {
             write_generic(core, output + index * 2, slot as u16)?;
             tracing::debug!("resolved own virtual method {name}{descriptor} at row {index} -> slot {slot}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Fills the trailing `field_offsets` rows that belong to the application's own
+/// classes, the field-side twin of [`resolve_own_virtual_methods`].
+///
+/// Import `0x14` resolves only the platform field rows the class table declares;
+/// the compiled application appends references to its own instance fields to the
+/// same output array, past that range. Each such row is a real instance slot the
+/// compiled code also reaches through a fixed offset elsewhere, so the two must
+/// agree - `install_dispatch`'s synthetic placeholder there makes a table-driven
+/// load land on a different word (often past the instance, reading a null the
+/// reference build never sees, as Legend of Master's `f.d` did).
+///
+/// Each row is resolved by name and descriptor against the registered
+/// application classes, whose field slots the class metadata carries. Unlike the
+/// method table, the field table has interspersed blank rows, so a blank is
+/// skipped rather than treated as a terminator, and the layout-derived capacity
+/// bounds the walk.
+async fn resolve_own_fields(core: &mut ArmCore, context: &InitSvcContext) -> Result<()> {
+    let Some((fields, output, start, end)) = *context.own_field_resolve.lock() else {
+        return Ok(());
+    };
+    if fields == 0 || output == 0 {
+        return Ok(());
+    }
+
+    for index in start..end {
+        let entry = fields + index * 8;
+        let name_ptr: u32 = read_generic(core, entry)?;
+        let descriptor_ptr: u32 = read_generic(core, entry + 4)?;
+        if name_ptr == 0 || descriptor_ptr == 0 {
+            // Blank rows appear between real ones; there is nothing to resolve
+            // here, so leave the placeholder and keep walking to the bound.
+            continue;
+        }
+
+        let name = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, name_ptr)?).into_owned();
+        let descriptor = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, descriptor_ptr)?).into_owned();
+
+        let slot = context
+            .app_classes
+            .lock()
+            .iter()
+            .flat_map(|class| class.members.iter())
+            .find(|member| member.is_field() && member.name() == name && member.descriptor() == descriptor)
+            .map(|member| member.slot());
+
+        if let Some(slot) = slot {
+            write_generic(core, output + index * 2, slot as u16)?;
+            tracing::debug!("resolved own field {name}:{descriptor} at row {index} -> slot {slot}");
         }
     }
 
