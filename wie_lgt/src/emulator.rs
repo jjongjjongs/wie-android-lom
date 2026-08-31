@@ -192,6 +192,7 @@ impl LgtEmulator {
         };
 
         apply_offline_auth_patch(&aid, &mut binary_mod);
+        apply_baseball2009_auth_patch(&aid, &mut binary_mod);
 
         // If the user supplied the firmware BIOS, map and bind it, drive its
         // init as its own task so a bring-up crash cannot corrupt the game
@@ -256,6 +257,61 @@ fn apply_offline_auth_patch(aid: &str, binary_mod: &mut [u8]) {
         }
         (0, _) => tracing::warn!("Super Action Hero 3 auth patch site not found; leaving binary.mod unchanged"),
         (n, _) => tracing::warn!("Super Action Hero 3 auth pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
+    }
+}
+
+/// 2009 프로야구 (`0002E749`) gates play on an offline subscriber check: it
+/// decrypts the phone number the copy was licensed to from its own data and
+/// only starts if `PHONENUMBER` equals it (or the licensed number is the SDK
+/// master `19988999999`). Every copy is licensed to the original buyer's SIM,
+/// so under emulation - where we cannot report that exact per-copy number - the
+/// title parks on the ez-i "인증에 실패하였습니다" screen and never reaches its
+/// menu.
+///
+/// The verifier is `... bl strcmp(PHONENUMBER, licensed); cmp r0,#0; beq ok;
+/// bl strcmp(master, licensed); cmp r0,#0; bne fail; ...` returning 1 on
+/// success. Turning the first `beq ok` into an unconditional branch makes the
+/// SIM comparison always take the success path, so any copy authenticates
+/// regardless of the reporting number - the same offline-auth bypass approach
+/// as the Super Action Hero 3 patch above (and the reference player's own auth
+/// shim).
+///
+/// Applied only to that title, only when the exact 22-byte verifier window is
+/// present exactly once and the branch byte is the expected `beq` (`0xd0`), so
+/// nothing else can be touched by accident.
+fn apply_baseball2009_auth_patch(aid: &str, binary_mod: &mut [u8]) {
+    if !aid.eq_ignore_ascii_case("0002E749") {
+        return;
+    }
+
+    // bl strncmp ; cmp r0,#0 ; beq ok ; ldr r0,[pc,#0x38] ; adds r1,r4,#0 ;
+    // movs r2,#0xc ; bl strncmp ; cmp r0,#0 ; bne fail
+    const WINDOW: [u8; 22] = [
+        0x3e, 0xf0, 0x30, 0xfc, 0x00, 0x28, 0x09, 0xd0, 0x0e, 0x48, 0x21, 0x1c, 0x0c, 0x22, 0x3e, 0xf0, 0x29, 0xfc, 0x00, 0x28, 0x06, 0xd1,
+    ];
+    // Offset within the window of the `beq` branch's high byte.
+    const BRANCH_OFFSET: usize = 7;
+    const BEQ_HI: u8 = 0xd0; // 1101 = B<EQ>
+    const B_HI: u8 = 0xe0; // 11100 = unconditional B (same 9-halfword offset)
+
+    let mut site = None;
+    let mut count = 0usize;
+    for (index, window) in binary_mod.windows(WINDOW.len()).enumerate() {
+        if window == WINDOW {
+            count += 1;
+            site.get_or_insert(index);
+        }
+    }
+
+    match (count, site) {
+        (1, Some(start)) => {
+            let target = start + BRANCH_OFFSET;
+            debug_assert_eq!(binary_mod[target], BEQ_HI);
+            binary_mod[target] = B_HI;
+            tracing::info!("Applied 2009 프로야구 offline authentication patch at binary.mod offset {target}");
+        }
+        (0, _) => tracing::warn!("2009 프로야구 auth patch site not found; leaving binary.mod unchanged"),
+        (n, _) => tracing::warn!("2009 프로야구 auth pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
     }
 }
 
@@ -466,7 +522,30 @@ impl LgtAppInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::is_incompatible_bundled_save;
+    use super::{apply_baseball2009_auth_patch, is_incompatible_bundled_save};
+
+    const BASEBALL_AUTH_WINDOW: [u8; 22] = [
+        0x3e, 0xf0, 0x30, 0xfc, 0x00, 0x28, 0x09, 0xd0, 0x0e, 0x48, 0x21, 0x1c, 0x0c, 0x22, 0x3e, 0xf0, 0x29, 0xfc, 0x00, 0x28, 0x06, 0xd1,
+    ];
+
+    #[test]
+    fn baseball_auth_patch_flips_only_its_titles_branch() {
+        // The gated title flips the beq (0xd0) into an unconditional b (0xe0).
+        let mut binary = BASEBALL_AUTH_WINDOW.to_vec();
+        apply_baseball2009_auth_patch("0002E749", &mut binary);
+        assert_eq!(binary[7], 0xe0);
+
+        // A different title leaves the same bytes untouched.
+        let mut other = BASEBALL_AUTH_WINDOW.to_vec();
+        apply_baseball2009_auth_patch("00027565", &mut other);
+        assert_eq!(other, BASEBALL_AUTH_WINDOW);
+
+        // No site present: nothing changes.
+        let mut empty = alloc::vec![0u8; 64];
+        let snapshot = empty.clone();
+        apply_baseball2009_auth_patch("0002E749", &mut empty);
+        assert_eq!(empty, snapshot);
+    }
 
     #[test]
     fn drops_only_the_baseball_2009_savefile() {
