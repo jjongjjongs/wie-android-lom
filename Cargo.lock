@@ -3519,7 +3519,6 @@ dependencies = [
  "image",
  "lazy_static",
  "num-traits",
- "png",
  "smaf",
  "smaf_player",
  "spin",

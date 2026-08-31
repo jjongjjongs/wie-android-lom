@@ -1015,20 +1015,7 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
         .map_err(|x| WieError::FatalError(x.to_string()))?
         .decode()
         .map_err(|x| WieError::FatalError(x.to_string()))?;
-    let mut rgba = image.into_rgba8();
-
-    // KTF/WIPI-era indexed images without their own transparency chunk follow the
-    // platform convention that palette index 0 is the transparent colour. The
-    // `image` crate flattens such a PNG to opaque RGBA, so re-apply the convention
-    // by punching that colour back out - otherwise a fully index-0 tile (a black
-    // dialogue-panel spacer, say) paints an opaque block over whatever is beneath.
-    if let Some(key) = png_index0_transparent_color(data) {
-        for pixel in rgba.pixels_mut() {
-            if pixel.0[0] == key[0] && pixel.0[1] == key[1] && pixel.0[2] == key[2] {
-                pixel.0[3] = 0;
-            }
-        }
-    }
+    let rgba = image.into_rgba8();
 
     let data = rgba.pixels().flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]]).collect::<Vec<_>>();
 
@@ -1037,35 +1024,6 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
         rgba.height(),
         pod_collect_to_vec(&data),
     )) as Box<_>)
-}
-
-/// For a PNG whose colour type is indexed and which carries no `tRNS`
-/// transparency chunk, returns the RGB of palette entry 0, which this platform
-/// treats as the transparent colour. Returns `None` for any other PNG (including
-/// one that declares its own `tRNS`, whose transparency the decoder already
-/// honours) so the convention only fills the gap the file itself leaves.
-fn png_index0_transparent_color(data: &[u8]) -> Option<[u8; 3]> {
-    extern crate std;
-    use std::io::Cursor;
-
-    if data.len() < 4 || &data[..4] != b"\x89PNG" {
-        return None;
-    }
-
-    let decoder = png::Decoder::new(Cursor::new(data));
-    let reader = decoder.read_info().ok()?;
-    let info = reader.info();
-
-    if info.color_type != png::ColorType::Indexed || info.trns.is_some() {
-        return None;
-    }
-
-    let palette = info.palette.as_ref()?;
-    if palette.len() < 3 {
-        return None;
-    }
-
-    Some([palette[0], palette[1], palette[2]])
 }
 
 pub fn string_width(string: &str, pt_size: f32) -> f32 {
