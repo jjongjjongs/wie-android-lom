@@ -459,7 +459,48 @@ pub async fn flush_lcd(
 
     screen.paint(&*src_canvas);
 
+    // Reset the presented region to black so the next frame starts clean.
+    //
+    // These titles double-buffer: they draw a whole frame into an off-screen
+    // framebuffer and flush it to the LCD. Some (e.g. Demon Hunter's loading
+    // screen) redraw only what changes each frame - a portrait blitted straight
+    // into the buffer plus a few lines of text - and rely on the back buffer no
+    // longer holding the previous frame. Presenting does not consume the buffer
+    // here, so without this the old text stays put and each new frame's text is
+    // drawn over it, smearing into an unreadable pile. Titles that repaint the
+    // full frame overwrite the cleared region and are unaffected.
+    clear_framebuffer_region(context, &framebuffer, x as i32, y as i32, w as i32, h as i32)?;
+
     Ok(())
+}
+
+/// Zeroes the `[x, x+w) x [y, y+h)` rectangle of `framebuffer`, clamped to its
+/// bounds. Only the presented region is cleared, so a title that flushes a
+/// sub-rectangle keeps the rest of its buffer intact.
+fn clear_framebuffer_region(context: &mut dyn WIPICContext, framebuffer: &FrameBuffer, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
+    let fb_w = framebuffer.0.width as i32;
+    let fb_h = framebuffer.0.height as i32;
+    let bytes_per_pixel = (framebuffer.0.bpp / 8) as i32;
+    let bpl = framebuffer.0.bpl as i32;
+
+    let x0 = x.clamp(0, fb_w);
+    let y0 = y.clamp(0, fb_h);
+    let x1 = (x.saturating_add(w)).clamp(0, fb_w);
+    let y1 = (y.saturating_add(h)).clamp(0, fb_h);
+    if x1 <= x0 || y1 <= y0 || bytes_per_pixel <= 0 || bpl <= 0 {
+        return Ok(());
+    }
+
+    let mut data = framebuffer.data(context)?;
+    let row_start = (x0 * bytes_per_pixel) as usize;
+    let row_end = (x1 * bytes_per_pixel) as usize;
+    for row in y0..y1 {
+        let base = (row * bpl) as usize;
+        if let Some(slice) = data.get_mut(base + row_start..base + row_end) {
+            slice.fill(0);
+        }
+    }
+    framebuffer.write(context, &data)
 }
 
 pub async fn get_pixel_from_rgb(_context: &mut dyn WIPICContext, r: i32, g: i32, b: i32) -> Result<WIPICWord> {
