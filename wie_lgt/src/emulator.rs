@@ -192,7 +192,7 @@ impl LgtEmulator {
         };
 
         apply_offline_auth_patch(&aid, &mut binary_mod);
-        apply_baseball2009_auth_patch(&aid, &mut binary_mod);
+        apply_gamevil_baseball_auth_patch(&aid, &mut binary_mod);
 
         // If the user supplied the firmware BIOS, map and bind it, drive its
         // init as its own task so a bring-up crash cannot corrupt the game
@@ -260,44 +260,76 @@ fn apply_offline_auth_patch(aid: &str, binary_mod: &mut [u8]) {
     }
 }
 
-/// 2009 프로야구 (`0002E749`) gates play on an offline subscriber check: it
-/// decrypts the phone number the copy was licensed to from its own data and
-/// only starts if `PHONENUMBER` equals it (or the licensed number is the SDK
-/// master `19988999999`). Every copy is licensed to the original buyer's SIM,
-/// so under emulation - where we cannot report that exact per-copy number - the
-/// title parks on the ez-i "인증에 실패하였습니다" screen and never reaches its
-/// menu.
+/// GAMEVIL's 프로야구 baseball titles (2009 `0002E749`, 2010 `0002C663`) gate
+/// play on an offline subscriber check: the title decrypts the phone number its
+/// copy was licensed to from its own data and only starts if `PHONENUMBER`
+/// equals it (or the licensed number is the SDK master `19988999999`). Every
+/// copy is licensed to the original buyer's SIM, and that per-copy number is not
+/// stored in plaintext anywhere in the archive, so under emulation we cannot
+/// report it and the title parks on the ez-i "인증에 실패하였습니다" screen
+/// (2010 hangs on a blank screen before it, until its stale bundled saves are
+/// skipped) and never reaches its menu.
 ///
-/// The verifier is `... bl strcmp(PHONENUMBER, licensed); cmp r0,#0; beq ok;
-/// bl strcmp(master, licensed); cmp r0,#0; bne fail; ...` returning 1 on
-/// success. Turning the first `beq ok` into an unconditional branch makes the
-/// SIM comparison always take the success path, so any copy authenticates
-/// regardless of the reporting number - the same offline-auth bypass approach
-/// as the Super Action Hero 3 patch above (and the reference player's own auth
-/// shim).
+/// The verifier is the same routine in both titles, only compiled to different
+/// addresses:
 ///
-/// Applied only to that title, only when the exact 22-byte verifier window is
-/// present exactly once and the branch byte is the expected `beq` (`0xd0`), so
-/// nothing else can be touched by accident.
-fn apply_baseball2009_auth_patch(aid: &str, binary_mod: &mut [u8]) {
-    if !aid.eq_ignore_ascii_case("0002E749") {
+/// ```text
+///   bl strncmp(PHONENUMBER, licensed) ; cmp r0,#0 ; beq ok
+///   ldr r0,[pc,#N] ; adds r1,r4,#0 ; movs r2,#0xc
+///   bl strncmp(master, licensed)      ; cmp r0,#0 ; bne fail
+///   ...                                              ; ok: movs r0,#1 (success)
+/// ```
+///
+/// Turning the first `beq ok` into an unconditional branch makes the SIM
+/// comparison always take the success path, so any copy authenticates
+/// regardless of the reported number - the same offline-auth bypass approach as
+/// the Super Action Hero 3 patch above (and the reference player's own auth
+/// shim). The two `bl` targets and the `ldr` literal offset differ between the
+/// titles, so those bytes are wildcards; the surrounding two `cmp r0,#0` /
+/// branch pairs make the 18-byte window specific to this verifier.
+///
+/// Applied only to those titles, only when the window is present exactly once
+/// and the branch byte is the expected `beq` (`0xd0`), so nothing else can be
+/// touched by accident.
+fn apply_gamevil_baseball_auth_patch(aid: &str, binary_mod: &mut [u8]) {
+    if !matches!(aid.to_ascii_uppercase().as_str(), "0002E749" | "0002C663") {
         return;
     }
 
-    // bl strncmp ; cmp r0,#0 ; beq ok ; ldr r0,[pc,#0x38] ; adds r1,r4,#0 ;
-    // movs r2,#0xc ; bl strncmp ; cmp r0,#0 ; bne fail
-    const WINDOW: [u8; 22] = [
-        0x3e, 0xf0, 0x30, 0xfc, 0x00, 0x28, 0x09, 0xd0, 0x0e, 0x48, 0x21, 0x1c, 0x0c, 0x22, 0x3e, 0xf0, 0x29, 0xfc, 0x00, 0x28, 0x06, 0xd1,
+    // cmp r0,#0 ; beq +9 ; ldr r0,[pc,#N] ; adds r1,r4,#0 ; movs r2,#0xc ;
+    // bl strncmp ; cmp r0,#0 ; bne fail. `None` masks the per-title `bl` target
+    // and the `ldr` literal-pool offset (the low byte of `?? 48`).
+    const PATTERN: [Option<u8>; 18] = [
+        Some(0x00),
+        Some(0x28),
+        Some(0x09),
+        Some(0xd0),
+        None,
+        Some(0x48),
+        Some(0x21),
+        Some(0x1c),
+        Some(0x0c),
+        Some(0x22),
+        None,
+        None,
+        None,
+        None,
+        Some(0x00),
+        Some(0x28),
+        Some(0x06),
+        Some(0xd1),
     ];
     // Offset within the window of the `beq` branch's high byte.
-    const BRANCH_OFFSET: usize = 7;
+    const BRANCH_OFFSET: usize = 3;
     const BEQ_HI: u8 = 0xd0; // 1101 = B<EQ>
-    const B_HI: u8 = 0xe0; // 11100 = unconditional B (same 9-halfword offset)
+    const B_HI: u8 = 0xe0; // 11100 = unconditional B (same +9-halfword offset)
+
+    let matches = |window: &[u8]| window.iter().zip(PATTERN).all(|(&byte, expect)| expect.is_none_or(|e| e == byte));
 
     let mut site = None;
     let mut count = 0usize;
-    for (index, window) in binary_mod.windows(WINDOW.len()).enumerate() {
-        if window == WINDOW {
+    for (index, window) in binary_mod.windows(PATTERN.len()).enumerate() {
+        if matches(window) {
             count += 1;
             site.get_or_insert(index);
         }
@@ -308,32 +340,45 @@ fn apply_baseball2009_auth_patch(aid: &str, binary_mod: &mut [u8]) {
             let target = start + BRANCH_OFFSET;
             debug_assert_eq!(binary_mod[target], BEQ_HI);
             binary_mod[target] = B_HI;
-            tracing::info!("Applied 2009 프로야구 offline authentication patch at binary.mod offset {target}");
+            tracing::info!("Applied GAMEVIL 프로야구 offline authentication patch at binary.mod offset {target}");
         }
-        (0, _) => tracing::warn!("2009 프로야구 auth patch site not found; leaving binary.mod unchanged"),
-        (n, _) => tracing::warn!("2009 프로야구 auth pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
+        (0, _) => tracing::warn!("GAMEVIL 프로야구 auth patch site not found; leaving binary.mod unchanged"),
+        (n, _) => tracing::warn!("GAMEVIL 프로야구 auth pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
     }
 }
 
 /// Whether a bundled data-dir file is a save the title itself rejects, so
 /// seeding it would brick start-up rather than restore progress.
 ///
-/// 2009 프로야구 (`0002E749`) reads `SaveFile.dat` on launch and runs its own
-/// integrity check over the bytes (a pure, phone-number-independent computation
-/// verified against PHONENUMBER/PHONEMODEL - neither changes the outcome). A
-/// save this check rejects makes the title draw "Error code :: -1005" and call
-/// `MC_knlExit`, so it never reaches its menu. The archive ships a foreign
-/// `SaveFile.dat` (dumped from another handset) that fails this check: the
-/// title's *own* freshly written save re-validates cleanly, so this is stale
-/// data, not an emulation fault. With no save present the title opens
-/// `SaveFile.dat` for create instead of read and starts fresh, exactly as a
+/// GAMEVIL's 프로야구 titles ship foreign saves (dumped from another handset)
+/// that their own start-up integrity check rejects:
+///
+/// - 2009 프로야구 (`0002E749`) reads `SaveFile.dat`, runs a pure,
+///   phone-number-independent check over the bytes (verified against
+///   PHONENUMBER/PHONEMODEL - neither changes the outcome), and on failure draws
+///   "Error code :: -1005" and calls `MC_knlExit`.
+/// - 2010 프로야구 (`0002C663`) reads its `game_*.sav` set and, on a bad save,
+///   never leaves a blank screen (it loops before it even reaches its ez-i auth
+///   step).
+///
+/// In both, the title's *own* freshly written save re-validates cleanly, so
+/// this is stale data, not an emulation fault. With no save present the title
+/// opens the file for create instead of read and starts fresh, exactly as a
 /// clean install does - so drop the incompatible bundled copy and let it do
 /// that. A real save the player later writes lives in the platform layer and is
 /// unaffected.
 ///
-/// Scoped to the title's aid and the one filename, so nothing else is touched.
+/// Scoped to each title's aid and its own save filenames, so nothing else is
+/// touched.
 fn is_incompatible_bundled_save(aid: &str, filename: &str) -> bool {
-    aid.eq_ignore_ascii_case("0002E749") && filename.eq_ignore_ascii_case("SaveFile.dat")
+    match aid.to_ascii_uppercase().as_str() {
+        "0002E749" => filename.eq_ignore_ascii_case("SaveFile.dat"),
+        "0002C663" => {
+            let lower = filename.to_ascii_lowercase();
+            lower.starts_with("game_") && lower.ends_with(".sav")
+        }
+        _ => false,
+    }
 }
 
 /// SEED (`00027565`) opens `SEED_OP.dat` on launch to decide whether it has
@@ -522,41 +567,57 @@ impl LgtAppInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_baseball2009_auth_patch, is_incompatible_bundled_save};
+    use super::{apply_gamevil_baseball_auth_patch, is_incompatible_bundled_save};
 
-    const BASEBALL_AUTH_WINDOW: [u8; 22] = [
-        0x3e, 0xf0, 0x30, 0xfc, 0x00, 0x28, 0x09, 0xd0, 0x0e, 0x48, 0x21, 0x1c, 0x0c, 0x22, 0x3e, 0xf0, 0x29, 0xfc, 0x00, 0x28, 0x06, 0xd1,
+    // The 2009 verifier window (2010 differs only in the wildcard `bl`/`ldr`
+    // bytes); `09 d0` at index 2-3 is the `beq` to flip.
+    const BASEBALL_2009_AUTH_WINDOW: [u8; 18] = [
+        0x00, 0x28, 0x09, 0xd0, 0x0e, 0x48, 0x21, 0x1c, 0x0c, 0x22, 0x3e, 0xf0, 0x29, 0xfc, 0x00, 0x28, 0x06, 0xd1,
+    ];
+    // The 2010 verifier window: different `bl` target and `ldr` literal offset.
+    const BASEBALL_2010_AUTH_WINDOW: [u8; 18] = [
+        0x00, 0x28, 0x09, 0xd0, 0x0f, 0x48, 0x21, 0x1c, 0x0c, 0x22, 0x62, 0xf0, 0x94, 0xfb, 0x00, 0x28, 0x06, 0xd1,
     ];
 
     #[test]
-    fn baseball_auth_patch_flips_only_its_titles_branch() {
-        // The gated title flips the beq (0xd0) into an unconditional b (0xe0).
-        let mut binary = BASEBALL_AUTH_WINDOW.to_vec();
-        apply_baseball2009_auth_patch("0002E749", &mut binary);
-        assert_eq!(binary[7], 0xe0);
+    fn baseball_auth_patch_flips_both_titles_branch() {
+        // Both gated titles flip the beq (0xd0) into an unconditional b (0xe0).
+        for (aid, window) in [("0002E749", BASEBALL_2009_AUTH_WINDOW), ("0002C663", BASEBALL_2010_AUTH_WINDOW)] {
+            let mut binary = window.to_vec();
+            apply_gamevil_baseball_auth_patch(aid, &mut binary);
+            assert_eq!(binary[3], 0xe0, "aid {aid} branch not flipped");
+        }
 
         // A different title leaves the same bytes untouched.
-        let mut other = BASEBALL_AUTH_WINDOW.to_vec();
-        apply_baseball2009_auth_patch("00027565", &mut other);
-        assert_eq!(other, BASEBALL_AUTH_WINDOW);
+        let mut other = BASEBALL_2009_AUTH_WINDOW.to_vec();
+        apply_gamevil_baseball_auth_patch("00027565", &mut other);
+        assert_eq!(other, BASEBALL_2009_AUTH_WINDOW);
 
         // No site present: nothing changes.
         let mut empty = alloc::vec![0u8; 64];
         let snapshot = empty.clone();
-        apply_baseball2009_auth_patch("0002E749", &mut empty);
+        apply_gamevil_baseball_auth_patch("0002E749", &mut empty);
         assert_eq!(empty, snapshot);
     }
 
     #[test]
-    fn drops_only_the_baseball_2009_savefile() {
+    fn drops_only_the_baseball_saves() {
         // 2009 프로야구's foreign SaveFile.dat is dropped so it starts fresh.
         assert!(is_incompatible_bundled_save("0002E749", "SaveFile.dat"));
         // aid match is case-insensitive, as app_info casing varies.
         assert!(is_incompatible_bundled_save("0002e749", "SaveFile.dat"));
-
-        // Other files in the same title are kept.
+        // Other files in that title are kept.
         assert!(!is_incompatible_bundled_save("0002E749", "level.dat"));
-        assert!(!is_incompatible_bundled_save("0002E749", "speed.dat"));
+
+        // 2010 프로야구's foreign game_*.sav set is dropped.
+        assert!(is_incompatible_bundled_save("0002C663", "game_o.sav"));
+        assert!(is_incompatible_bundled_save("0002C663", "game_vs.sav"));
+        // Its other data-dir files are kept.
+        assert!(!is_incompatible_bundled_save("0002C663", "speed.dat"));
+        assert!(!is_incompatible_bundled_save("0002C663", "audio.adt"));
+        // 2010's rule does not apply to 2009 (which has no game_*.sav anyway).
+        assert!(!is_incompatible_bundled_save("0002E749", "game_o.sav"));
+
         // Other titles keep their SaveFile.dat.
         assert!(!is_incompatible_bundled_save("00027565", "SaveFile.dat"));
     }
