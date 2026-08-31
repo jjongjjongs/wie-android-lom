@@ -102,7 +102,33 @@ async fn subscriber_number(context: &mut dyn WIPICContext) -> String {
         return number;
     }
 
+    // Some titles (MapleStory 해적편/시그너스 among them) ship a plain
+    // `certification` file that is simply the subscriber number as ASCII digits,
+    // and reject the game unless PHONENUMBER equals it byte for byte (a strcmp
+    // of the two). Report that number so an unmodified title authenticates
+    // without a per-game value.
+    if let Ok(cert) = context.read_resource("certification").await
+        && let Some(number) = parse_ascii_phone_number(&cert)
+    {
+        tracing::info!("recovered subscriber number from certification: {number:?}");
+        return number;
+    }
+
     FALLBACK.to_string()
+}
+
+/// Reads a `certification` file that is just the subscriber number as ASCII
+/// digits (optionally NUL-terminated or padded). Returns `None` when it is not a
+/// plain phone number, so a differently-formatted certification is ignored and
+/// the caller falls back to its placeholder.
+fn parse_ascii_phone_number(data: &[u8]) -> Option<String> {
+    let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+    let number = core::str::from_utf8(&data[..end]).ok()?.trim();
+    if (10..=15).contains(&number.len()) && number.bytes().all(|b| b.is_ascii_digit()) {
+        Some(number.to_string())
+    } else {
+        None
+    }
 }
 
 pub async fn set_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, ptr_value: WIPICWord) -> Result<()> {
@@ -377,7 +403,7 @@ mod test {
 
     use crate::{WIPICContext, context::test::TestContext, method::MethodImpl};
 
-    use super::{alloc, calloc, free, get_resource, get_resource_id, get_system_property, sprintk};
+    use super::{alloc, calloc, free, get_resource, get_resource_id, get_system_property, parse_ascii_phone_number, sprintk};
 
     #[futures_test::test]
     async fn test_sprintk() -> Result<()> {
@@ -420,6 +446,34 @@ mod test {
         assert_eq!(String::from_utf8(result).unwrap(), "01046119269");
 
         Ok(())
+    }
+
+    #[futures_test::test]
+    async fn test_phonenumber_from_certification_file() -> Result<()> {
+        // A title whose `certification` file is the subscriber number as ASCII
+        // digits should see PHONENUMBER report exactly that, so its own
+        // strcmp(certification, PHONENUMBER) authentication passes.
+        let mut context = TestContext::new().with_resource("certification", b"01000000000\0");
+        let id = context.alloc_raw(16).unwrap();
+        let out = context.alloc_raw(16).unwrap();
+
+        write_null_terminated_string_bytes(&mut context, id, b"PHONENUMBER").unwrap();
+
+        assert_eq!(get_system_property(&mut context, id, out, 16).await.unwrap(), 0);
+        let result = read_null_terminated_string_bytes(&context, out).unwrap();
+        assert_eq!(String::from_utf8(result).unwrap(), "01000000000");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ascii_phone_number() {
+        assert_eq!(parse_ascii_phone_number(b"01000000000\0").as_deref(), Some("01000000000"));
+        assert_eq!(parse_ascii_phone_number(b"01046119269").as_deref(), Some("01046119269"));
+        // Not a plain number: ignored so the caller keeps its placeholder.
+        assert_eq!(parse_ascii_phone_number(b"not-a-number"), None);
+        assert_eq!(parse_ascii_phone_number(b"123"), None);
+        assert_eq!(parse_ascii_phone_number(b""), None);
     }
 
     #[futures_test::test]
