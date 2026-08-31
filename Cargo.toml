@@ -56,11 +56,12 @@ polling = { version = "^3.11" }
 spin = { version = "^0.12", features = ["spin_mutex", "rwlock"], default-features = false }
 tracing = { version = "^0.1", default-features = false, features = ["attributes"] }
 
-java_class_proto = { git = "https://github.com/dlunch/RustJava.git" }
-java_constants = { git = "https://github.com/dlunch/RustJava.git" }
-java_runtime = { git = "https://github.com/dlunch/RustJava.git" }
-jvm = { git = "https://github.com/dlunch/RustJava.git" }
-jvm_rust = { git = "https://github.com/dlunch/RustJava.git" }
+# Fork of dlunch/RustJava pinned to a String.equals(Object) fix; see jjongjjongs/RustJava@wie-string-equals-fix.
+java_class_proto = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "d9905d83eb20b72e187f4832cd3074fad1669190" }
+java_constants = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "d9905d83eb20b72e187f4832cd3074fad1669190" }
+java_runtime = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "d9905d83eb20b72e187f4832cd3074fad1669190" }
+jvm = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "d9905d83eb20b72e187f4832cd3074fad1669190" }
+jvm_rust = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "d9905d83eb20b72e187f4832cd3074fad1669190" }
 wipi_types = { git = "https://github.com/dlunch/wipi.git" }
 
 wie_backend = { path = "wie_backend" }
