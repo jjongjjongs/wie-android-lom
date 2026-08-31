@@ -134,10 +134,6 @@ pub async fn clip_get_info(
 pub async fn clip_put_data(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, buf: WIPICWord, buf_size: WIPICWord) -> Result<i32> {
     tracing::debug!("MC_mdaClipPutData({ptr_clip:#x}, {buf:#x}, {buf_size:#x})");
 
-    if ptr_clip == 0 {
-        return Ok(-1);
-    }
-
     let mut data = vec![0; buf_size as _];
     context.read_bytes(buf, &mut data)?;
 
@@ -152,6 +148,15 @@ pub async fn clip_put_data(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, 
 
     let handle = handle.unwrap();
     tracing::info!("[media] MC_mdaClipPutData(clip={ptr_clip:#x}, size={buf_size:#x}, magic={magic:02x?}) load_smaf -> handle {handle:#x}");
+
+    // Titles that never allocate a clip object load their audio under the
+    // implicit clip 0; bind the loaded handle to the default player so the
+    // clip-0 play/volume/stop paths can reach it (otherwise every such effect is
+    // silent). Titles that use real clip objects store the handle in the object.
+    if ptr_clip == 0 {
+        context.system().audio().set_default_clip(handle);
+        return Ok(buf_size as _);
+    }
 
     let mut clip: MdaClip = read_generic(context, ptr_clip)?;
     clip.handle = handle;
@@ -180,6 +185,12 @@ pub async fn clip_get_volume(_context: &mut dyn WIPICContext, clip: WIPICWord) -
 
 pub async fn clip_set_volume(context: &mut dyn WIPICContext, clip: WIPICWord, volume: WIPICWord) -> Result<WIPICWord> {
     if clip == 0 {
+        // Default-player titles set the volume of the clip-0 handle.
+        let default = context.system().audio().default_clip();
+        if let Some(handle) = default {
+            let level = (volume & 0xFF).min(100) as u8;
+            let _ = context.system().audio().set_volume(handle, level);
+        }
         return Ok(0);
     }
 
@@ -207,6 +218,17 @@ pub async fn get_volume(_context: &mut dyn WIPICContext) -> Result<WIPICWord> {
 
 pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: WIPICWord) -> Result<i32> {
     if ptr_clip == 0 {
+        // Default-player titles (clip 0) play the handle their MC_mdaClipPutData
+        // bound to the default clip. No clip object means no completion
+        // callback; those titles drive stop/replay themselves.
+        let default = context.system().audio().default_clip();
+        if let Some(handle) = default {
+            tracing::info!("[media] MC_mdaPlay(clip=0, repeat={repeat}) default handle={handle:#x}");
+            let system = context.system();
+            if let Err(error) = system.audio().play_with_completion(system, handle, repeat != 0) {
+                tracing::error!("Failed to play default clip: {error:?}");
+            }
+        }
         return Ok(0);
     }
 
@@ -342,6 +364,11 @@ pub async fn stop(context: &mut dyn WIPICContext, ptr_clip: WIPICWord) -> Result
     tracing::debug!("MC_mdaStop({ptr_clip:#x})");
 
     if ptr_clip == 0 {
+        // Default-player titles stop the clip-0 handle before loading the next.
+        let default = context.system().audio().default_clip();
+        if let Some(handle) = default {
+            context.system().audio().stop(handle);
+        }
         return Ok(0);
     }
 

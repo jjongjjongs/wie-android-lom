@@ -27,6 +27,7 @@ pub struct Audio {
     volumes: BTreeMap<AudioHandle, Arc<AtomicU8>>,
     playing: BTreeMap<AudioHandle, Arc<AtomicBool>>,
     last_audio_handle: AudioHandle,
+    default_clip_handle: Option<AudioHandle>,
 }
 
 impl Audio {
@@ -37,7 +38,24 @@ impl Audio {
             volumes: BTreeMap::new(),
             playing: BTreeMap::new(),
             last_audio_handle: 0,
+            default_clip_handle: None,
         }
+    }
+
+    /// The handle bound to the implicit "clip 0" default player.
+    ///
+    /// Some titles never allocate a clip object and drive the whole MC_mda*
+    /// sequence with `clip == 0` - a single reusable player (나는마왕이다2, for
+    /// one, loads and plays every effect and BGM this way). The clip's audio
+    /// still has to live under a real handle for the sink to play it, so the one
+    /// most recently loaded under clip 0 is remembered here and read back by the
+    /// clip-0 play/volume/stop paths.
+    pub fn set_default_clip(&mut self, handle: AudioHandle) {
+        self.default_clip_handle = Some(handle);
+    }
+
+    pub fn default_clip(&self) -> Option<AudioHandle> {
+        self.default_clip_handle
     }
 
     pub fn load_smaf(&mut self, data: &[u8]) -> Result<AudioHandle, AudioError> {
@@ -524,5 +542,22 @@ mod tests {
         player.play(&mut system, &sink, &stop_flag, true).await;
 
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn default_clip_binds_the_last_clip_zero_load() {
+        let mut audio = super::Audio::new(Box::new(NoopAudioSink));
+        // Nothing bound until a clip-0 load happens.
+        assert_eq!(audio.default_clip(), None);
+
+        // A clip-0 title loads its data under a real handle and binds it as the
+        // default player; the most recent load wins.
+        let first = audio.load_smaf(b"first").unwrap();
+        audio.set_default_clip(first);
+        assert_eq!(audio.default_clip(), Some(first));
+
+        let second = audio.load_smaf(b"second").unwrap();
+        audio.set_default_clip(second);
+        assert_eq!(audio.default_clip(), Some(second));
     }
 }
