@@ -106,12 +106,13 @@ impl WIPIKeyCode {
 }
 
 /// WIPI `Card.keyNotify(int type, int key)` event types (org.kwis.msp.lcdui).
-/// A title compares the type against these, so they must match the platform:
-/// a key press is 2, not 1. The LGT `CletWrapperCard` re-bases these onto its
-/// own clet event ids, so keep the two in step when changing them.
-const KEY_PRESSED: i32 = 2;
-const KEY_RELEASED: i32 = 3;
-const KEY_REPEATED: i32 = 4;
+/// A title compares the type against these: 시드's compiled keyNotify dispatches
+/// `type == 1` as a press and `type == 2` as a release (`cmp r5, #1` / `#2` at
+/// its entry), so a press must be 1. The LGT `CletWrapperCard` re-bases these
+/// onto its own clet event ids, so keep the two in step when changing them.
+const KEY_PRESSED: i32 = 1;
+const KEY_RELEASED: i32 = 2;
+const KEY_REPEATED: i32 = 3;
 
 // class net.wie.CardCanvas
 pub struct CardCanvas;
