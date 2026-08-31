@@ -105,6 +105,14 @@ impl WIPIKeyCode {
     }
 }
 
+/// WIPI `Card.keyNotify(int type, int key)` event types (org.kwis.msp.lcdui).
+/// A title compares the type against these, so they must match the platform:
+/// a key press is 2, not 1. The LGT `CletWrapperCard` re-bases these onto its
+/// own clet event ids, so keep the two in step when changing them.
+const KEY_PRESSED: i32 = 2;
+const KEY_RELEASED: i32 = 3;
+const KEY_REPEATED: i32 = 4;
+
 // class net.wie.CardCanvas
 pub struct CardCanvas;
 
@@ -190,7 +198,7 @@ impl CardCanvas {
 
         for i in (0..length).rev() {
             let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (1i32, key_code)).await?;
+            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (KEY_PRESSED, key_code)).await?;
 
             if !propagate {
                 break;
@@ -210,7 +218,7 @@ impl CardCanvas {
 
         for i in (0..length).rev() {
             let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (3i32, key_code)).await?;
+            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (KEY_REPEATED, key_code)).await?;
 
             if !propagate {
                 break;
@@ -230,7 +238,7 @@ impl CardCanvas {
 
         for i in (0..length).rev() {
             let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (2i32, key_code)).await?;
+            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (KEY_RELEASED, key_code)).await?;
 
             if !propagate {
                 break;

@@ -69,7 +69,7 @@ impl CletWrapperCard {
         tracing::debug!("net.wie.CletWrapperCard::keyNotify({this:?}, {type}, {key})");
 
         let handle_clet_event: i32 = jvm.get_field(&this, "handleCletEvent", "I").await?;
-        let r#type = r#type + 501; // TODO constants
+        let r#type = r#type + 500; // WIPI key types (2/3/4) re-based onto LGT clet event ids (502/503/504)
         let _: () = context
             .core
             .run_function(handle_clet_event as _, &[r#type as _, key as _, 0 as _])
