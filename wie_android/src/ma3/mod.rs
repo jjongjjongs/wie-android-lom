@@ -524,8 +524,16 @@ impl SynthMixer {
 
     /// Installs a pre-rendered song for `id`, replacing an earlier one under the
     /// same handle. `samples` is interleaved stereo at [`SAMPLE_RATE`].
+    ///
+    /// A looping song is background music, and the handset drives all of it from
+    /// one sequencer, so starting one stops any other that is still looping - a
+    /// title that changes screens by playing a new track on a fresh clip without
+    /// stopping the old one (Legend of Master's job-select music over the title
+    /// loop) would otherwise pile the two loops on top of each other. One-shot
+    /// songs are effects fired over the music and still mix in, matching the
+    /// reference.
     pub fn set_song(&mut self, id: u32, samples: Vec<i16>, repeat: bool) {
-        self.songs.retain(|song| song.id != id);
+        self.songs.retain(|song| song.id != id && !(repeat && song.repeat));
         self.songs.push(SongPlayback {
             id,
             samples,
@@ -854,6 +862,23 @@ mod tests {
         // A new effect under the same handle replaces the old one, not the music.
         mixer.set_song(2, vec![5, 5], false);
         assert_eq!(mixer.render(1), Some(vec![105, 105]));
+    }
+
+    #[test]
+    fn a_new_loop_replaces_the_previous_background_music() {
+        let mut mixer = SynthMixer::new();
+        // A two-frame one-shot effect and a looping background track are playing.
+        mixer.set_song(1, vec![10, 10, 10, 10], false);
+        mixer.set_song(2, vec![100, 100], true);
+        assert_eq!(mixer.render(1), Some(vec![110, 110]), "effect and music mix");
+
+        // A new track on a fresh handle - a screen change that plays its own
+        // music without stopping the old loop - takes over the background music
+        // instead of stacking a second loop, but leaves the one-shot effect.
+        mixer.set_song(3, vec![50, 50], true);
+        assert_eq!(mixer.render(1), Some(vec![60, 60]), "old loop gone, effect stays");
+        // The one-shot effect ends; only the new loop remains.
+        assert_eq!(mixer.render(1), Some(vec![50, 50]));
     }
 
     /// A four operator voice, as one of the library's own files sends it.
