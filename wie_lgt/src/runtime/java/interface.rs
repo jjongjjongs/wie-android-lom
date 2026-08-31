@@ -1063,20 +1063,38 @@ pub fn primitive_element_size(atype: u32) -> Option<u32> {
 /// of its own here, so it dispatches through the fallback table like anything
 /// else the application never declared.
 pub async fn vm_instantiate_array(handles: &JavaHandles, array_class: &ArrayClasses, class: u32, length: u32) -> Result<u32> {
-    let (element_size, vtable) = match array_class.lock().get(&class).copied() {
-        Some(info) => (info.element_size, info.vtable),
+    let (element_size, vtable, element_type) = match array_class.lock().get(&class).copied() {
+        Some(info) => (info.element_size, info.vtable, array_element_descriptor(info.atype)),
         None => {
             tracing::warn!("vm_instantiate_array({class:#x}, {length}) names no array class; assuming references");
 
-            (REFERENCE_SIZE, handles.fallback_dispatch_table())
+            (REFERENCE_SIZE, handles.fallback_dispatch_table(), b'L')
         }
     };
 
     let array = handles.allocate_array(vtable, length, element_size)?;
+    handles.record_array_element_type(array, element_type);
 
     tracing::debug!("vm_instantiate_array({class:#x}, {length}) -> {array:#x}, {element_size} bytes an element");
 
     Ok(array)
+}
+
+/// Maps a `newarray` atype to the JVM descriptor byte for its element, so a
+/// compiled array can name its type to a method that takes it as `Object`.
+/// LoM's tag 1 and any unrecognised tag are treated as references.
+fn array_element_descriptor(atype: u32) -> u8 {
+    match atype {
+        4 => b'Z',
+        5 => b'C',
+        6 => b'F',
+        7 => b'D',
+        8 => b'B',
+        9 => b'S',
+        10 => b'I',
+        11 => b'J',
+        _ => b'L',
+    }
 }
 
 #[cfg(test)]
@@ -1084,7 +1102,17 @@ mod tests {
     use wie_core_arm::{Allocator, ArmCore};
     use wie_util::{ByteWrite, read_generic, write_generic};
 
-    use super::write_continuation_slot;
+    use super::{array_element_descriptor, write_continuation_slot};
+
+    #[test]
+    fn atype_maps_to_its_element_descriptor() {
+        assert_eq!(array_element_descriptor(5), b'C');
+        assert_eq!(array_element_descriptor(8), b'B');
+        assert_eq!(array_element_descriptor(10), b'I');
+        // LoM tag 1 and any unrecognised tag are references.
+        assert_eq!(array_element_descriptor(1), b'L');
+        assert_eq!(array_element_descriptor(0), b'L');
+    }
 
     #[test]
     fn continuation_slot_advances_wide_field_second_word() {

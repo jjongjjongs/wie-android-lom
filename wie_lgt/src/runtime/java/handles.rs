@@ -54,6 +54,11 @@ pub struct JavaHandles {
     /// Instance identity to handle, so a value coming back from the JVM can be
     /// handed to the compiled code as the address it already knows.
     addresses: Arc<Mutex<BTreeMap<usize, u32>>>,
+    /// Element descriptor byte (`b'C'`, `b'B'`, ...) for each array the compiled
+    /// code allocated itself. A compiled array has no JVM instance to name its
+    /// type, so a method that takes it as `Object` (`System.arraycopy`) needs
+    /// this to wrap it as the right JVM array rather than guessing.
+    array_element_types: Arc<Mutex<BTreeMap<u32, u8>>>,
 }
 
 impl JavaHandles {
@@ -66,7 +71,19 @@ impl JavaHandles {
             fallback_dispatch_table: Arc::new(AtomicU32::new(0)),
             entries: Default::default(),
             addresses: Default::default(),
+            array_element_types: Default::default(),
         }
+    }
+
+    /// Records the element type of a compiled-code-allocated array, so a later
+    /// call taking it as `Object` can wrap it as the right JVM array.
+    pub fn record_array_element_type(&self, handle: u32, element: u8) {
+        self.array_element_types.lock().insert(handle, element);
+    }
+
+    /// The element descriptor byte of a compiled array, if one was recorded.
+    pub fn array_element_type(&self, handle: u32) -> Option<u8> {
+        self.array_element_types.lock().get(&handle).copied()
     }
 
     /// Records how many words an instance's field array needs.

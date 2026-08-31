@@ -310,7 +310,31 @@ async fn marshal_arguments(
                         u32::MAX
                     };
 
-                    if data != 0 && length <= MAX_WRAPPED_ARRAY_BYTES {
+                    // A compiled `char[]` handed to a method that takes it as
+                    // `Object` (`System.arraycopy`'s buffers) must be copied out
+                    // as chars: reading its 16-bit units as bytes would halve its
+                    // length and fail the JVM's char type-check on store.
+                    if data != 0 && length <= MAX_WRAPPED_ARRAY_BYTES && handles.array_element_type(handle) == Some(b'C') {
+                        let chars = handles.read_char_array(handle)?;
+                        let length = chars.len();
+
+                        let mut array = match jvm.instantiate_array("C", length).await {
+                            Ok(array) => array,
+                            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+                        };
+
+                        if let Err(error) = jvm.store_array(&mut array, 0, chars).await {
+                            return Err(JvmSupport::to_wie_err(jvm, error).await);
+                        }
+
+                        char_writebacks.push(CharArrayWriteback {
+                            guest_handle: handle,
+                            array: array.clone().into(),
+                            length,
+                        });
+
+                        JavaValue::Object(Some(array))
+                    } else if data != 0 && length <= MAX_WRAPPED_ARRAY_BYTES {
                         let bytes = handles.read_byte_array(handle)?;
                         let byte_length = bytes.len();
 
