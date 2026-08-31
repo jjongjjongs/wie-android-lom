@@ -143,6 +143,8 @@ impl LgtEmulator {
             }
         }
 
+        seed_consent_savefile(&system, aid);
+
         Allocator::init(&mut core)?;
 
         let main_class_name = main_class_name.map(|x| x.replace('.', "/"));
@@ -251,6 +253,34 @@ fn apply_offline_auth_patch(aid: &str, binary_mod: &mut [u8]) {
         (0, _) => tracing::warn!("Super Action Hero 3 auth patch site not found; leaving binary.mod unchanged"),
         (n, _) => tracing::warn!("Super Action Hero 3 auth pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
     }
+}
+
+/// SEED (`00027565`) opens `SEED_OP.dat` on launch to decide whether it has
+/// already recorded the player's SMS-billing consent. Without that file the
+/// title parks on the 수신동의 (consent) screen, whose YES branch drives an
+/// online SMS handshake that cannot complete under emulation, so the game never
+/// reaches its own menu.
+///
+/// The save is a fixed 64-byte options block; the consent record is the pair of
+/// 32-bit words at offset 32 and 36, and the title treats "both words non-zero"
+/// as "consent already given" and skips straight to its title menu. Seed exactly
+/// that — a zeroed block with the consent words set — into the *virtual* layer,
+/// so a real save the player later writes shadows it (platform reads win over
+/// the virtual layer) and every other option stays at its zero default.
+///
+/// Scoped to SEED's aid, so no other title is touched.
+fn seed_consent_savefile(system: &System, aid: &str) {
+    if !aid.eq_ignore_ascii_case("00027565") {
+        return;
+    }
+
+    // 64-byte options block: zeroed but for the consent words at offset 32/36.
+    const CONSENT_OFFSET: usize = 32;
+    let mut save = alloc::vec![0u8; 64];
+    save[CONSENT_OFFSET..CONSENT_OFFSET + 8].fill(1);
+
+    tracing::info!("Seeding SEED consent save so the SMS-consent screen is skipped");
+    system.filesystem().add_virtual("SEED_OP.dat", save);
 }
 
 /// Log the hottest 64 KiB PC regions from the sampler as a share of samples.
