@@ -102,6 +102,25 @@ async fn write_back_byte_arrays(jvm: &Jvm, handles: &JavaHandles, writebacks: &[
     Ok(())
 }
 
+struct CharArrayWriteback {
+    guest_handle: u32,
+    array: ClassInstanceRef<Array<u16>>,
+    length: usize,
+}
+
+async fn write_back_char_arrays(jvm: &Jvm, handles: &JavaHandles, writebacks: &[CharArrayWriteback]) -> Result<()> {
+    for writeback in writebacks {
+        let chars: Vec<u16> = match jvm.load_array(&writeback.array, 0, writeback.length).await {
+            Ok(chars) => chars,
+            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+        };
+
+        handles.write_char_array(writeback.guest_handle, &chars)?;
+    }
+
+    Ok(())
+}
+
 /// Copies imported native-ABI instance fields from the guest object's word
 /// block into the JVM object before an imported Java method observes them.
 async fn sync_guest_fields_to_jvm(jvm: &Jvm, handles: &JavaHandles, handle: u32) -> Result<()> {
@@ -180,6 +199,7 @@ async fn marshal_arguments(
     parameters: &[String],
     first_word: usize,
     writebacks: &mut Vec<ByteArrayWriteback>,
+    char_writebacks: &mut Vec<CharArrayWriteback>,
 ) -> Result<Vec<JavaValue>> {
     let slots: usize = parameters.iter().map(|x| if is_wide(x) { 2 } else { 1 }).sum();
     let words = read_arguments(core, slots + first_word)?;
@@ -220,6 +240,41 @@ async fn marshal_arguments(
                         }
 
                         writebacks.push(ByteArrayWriteback {
+                            guest_handle: handle,
+                            array: array.clone().into(),
+                            length,
+                        });
+
+                        JavaValue::Object(Some(array))
+                    }
+                }
+            }
+
+            // A guest `char[]` (e.g. `String.<init>([C)`). Its elements are
+            // 16-bit units, so reading them as bytes would keep only their low
+            // halves and hand the JVM a `char[]` half the intended length whose
+            // slots then fail the char type-check. Copy them as chars into a
+            // real JVM `[C`.
+            b'[' if parameter == "[C" => {
+                let handle = words[word];
+
+                match handles.get(handle) {
+                    Some(instance) => JavaValue::Object(Some(instance)),
+                    None if handle == 0 => JavaValue::Object(None),
+                    None => {
+                        let chars = handles.read_char_array(handle)?;
+                        let length = chars.len();
+
+                        let mut array = match jvm.instantiate_array("C", length).await {
+                            Ok(array) => array,
+                            Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+                        };
+
+                        if let Err(error) = jvm.store_array(&mut array, 0, chars).await {
+                            return Err(JvmSupport::to_wie_err(jvm, error).await);
+                        }
+
+                        char_writebacks.push(CharArrayWriteback {
                             guest_handle: handle,
                             array: array.clone().into(),
                             length,
@@ -346,7 +401,8 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     if name == "<init>" {
         let this = core.read_param(0)?;
         let mut writebacks = Vec::new();
-        let arguments = marshal_arguments(core, jvm, handles, &parameters, 1, &mut writebacks).await?;
+        let mut char_writebacks = Vec::new();
+        let arguments = marshal_arguments(core, jvm, handles, &parameters, 1, &mut writebacks, &mut char_writebacks).await?;
 
         // An object already bound to an instance is being initialized, not
         // created: this is a subclass running its superclass constructor, and
@@ -364,6 +420,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
             }
 
             write_back_byte_arrays(jvm, handles, &writebacks).await?;
+            write_back_char_arrays(jvm, handles, &char_writebacks).await?;
             sync_jvm_fields_to_guest(jvm, handles, this).await?;
 
             return Ok(this);
@@ -377,6 +434,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         };
 
         write_back_byte_arrays(jvm, handles, &writebacks).await?;
+        write_back_char_arrays(jvm, handles, &char_writebacks).await?;
         handles.bind(this, instance);
         sync_jvm_fields_to_guest(jvm, handles, this).await?;
 
@@ -398,7 +456,8 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     let first_word = usize::from(receiver.is_some());
 
     let mut writebacks = Vec::new();
-    let arguments = marshal_arguments(core, jvm, handles, &parameters, first_word, &mut writebacks).await?;
+    let mut char_writebacks = Vec::new();
+    let arguments = marshal_arguments(core, jvm, handles, &parameters, first_word, &mut writebacks, &mut char_writebacks).await?;
 
     let receiver_handle = receiver.as_ref().map(|_| core.read_param(0)).transpose()?;
 
@@ -419,6 +478,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     match result {
         Ok(value) => {
             write_back_byte_arrays(jvm, handles, &writebacks).await?;
+            write_back_char_arrays(jvm, handles, &char_writebacks).await?;
 
             if let Some(handle) = receiver_handle {
                 sync_jvm_fields_to_guest(jvm, handles, handle).await?;

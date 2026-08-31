@@ -198,6 +198,43 @@ impl JavaHandles {
         Ok(bytes.into_iter().map(|value| value as i8).collect())
     }
 
+    /// Copies a guest-side `char[]` into host memory.
+    ///
+    /// Same header as any array, but each element is a little-endian 16-bit
+    /// unit, so the block spans `count * 2` bytes rather than `count`. Used for
+    /// imported methods whose descriptor says `[C` (e.g. `String.<init>([C)`),
+    /// where reading the elements as bytes would keep only their low halves and
+    /// hand the JVM a `char[]` half the intended length.
+    pub fn read_char_array(&self, handle: u32) -> Result<Vec<u16>> {
+        let core = self.core.clone();
+
+        let data: u32 = read_generic(&core, handle + INSTANCE_FIELDS_OFFSET)?;
+        let length: u32 = read_generic(&core, data)?;
+
+        let mut bytes = vec![0u8; length as usize * 2];
+        core.read_bytes(data + ARRAY_HEADER_SIZE, &mut bytes)?;
+
+        Ok(bytes.chunks_exact(2).map(|unit| u16::from_le_bytes([unit[0], unit[1]])).collect())
+    }
+
+    /// Copies JVM char-array contents back into a guest-side `char[]`.
+    pub fn write_char_array(&self, handle: u32, chars: &[u16]) -> Result<()> {
+        let mut core = self.core.clone();
+
+        let data: u32 = read_generic(&core, handle + INSTANCE_FIELDS_OFFSET)?;
+        let length: u32 = read_generic(&core, data)?;
+        let count = chars.len().min(length as usize);
+
+        let mut bytes = Vec::with_capacity(count * 2);
+        for unit in &chars[..count] {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+
+        core.write_bytes(data + ARRAY_HEADER_SIZE, &bytes)?;
+
+        Ok(())
+    }
+
     /// Copies JVM byte-array contents back into a guest-side byte array.
     pub fn write_byte_array(&self, handle: u32, bytes: &[i8]) -> Result<()> {
         let mut core = self.core.clone();
