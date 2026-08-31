@@ -378,6 +378,62 @@ fn marshal_return(handles: &JavaHandles, value: JavaValue) -> Result<u32> {
     })
 }
 
+/// Mirrors a primitive array a platform method returned into guest memory.
+///
+/// The compiled code usually hands platform methods arrays it allocated
+/// itself, so their `[length][elements]` block already lives in guest memory.
+/// An array a platform method *returns* is a fresh JVM object whose guest
+/// handle carries only the generic field block `insert` leaves behind, so the
+/// compiled code reading its elements directly (as the LGT text word-wrapper
+/// does with `String.toCharArray()`) would see an empty array. Copy the JVM
+/// contents into a proper guest block so a direct read matches the JVM side.
+async fn materialize_primitive_array_result(jvm: &Jvm, handles: &JavaHandles, handle: u32) -> Result<()> {
+    if handle == 0 {
+        return Ok(());
+    }
+
+    let Some(instance) = handles.get(handle) else {
+        return Ok(());
+    };
+
+    let name = instance.class_definition().name();
+    let Some(element) = name.strip_prefix('[') else {
+        return Ok(());
+    };
+
+    let length = match jvm.array_length(&instance).await {
+        Ok(length) => length as u32,
+        Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+    };
+
+    macro_rules! load_le {
+        ($ty:ty, $to_bytes:expr) => {{
+            let values: Vec<$ty> = match jvm.load_array(&instance, 0, length as usize).await {
+                Ok(values) => values,
+                Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
+            };
+            values.iter().flat_map($to_bytes).collect::<Vec<u8>>()
+        }};
+    }
+
+    // Only primitive arrays are mirrored: their elements are self-contained
+    // bytes. A reference array's elements are handles that would each need
+    // their own materialisation, and the compiled code reaches those through
+    // platform calls rather than by reading the block directly.
+    let bytes = match element.as_bytes()[0] {
+        b'C' => load_le!(u16, |value: &u16| value.to_le_bytes()),
+        b'B' | b'Z' => load_le!(i8, |value: &i8| [*value as u8]),
+        b'S' => load_le!(i16, |value: &i16| value.to_le_bytes()),
+        b'I' => load_le!(i32, |value: &i32| value.to_le_bytes()),
+        b'F' => load_le!(f32, |value: &f32| value.to_le_bytes()),
+        b'J' => load_le!(i64, |value: &i64| value.to_le_bytes()),
+        b'D' => load_le!(f64, |value: &f64| value.to_le_bytes()),
+        _ => return Ok(()),
+    };
+
+    handles.materialize_array_block(handle, length, &bytes)
+}
+
 /// Invokes an imported method and returns the word to put in `r0`.
 ///
 /// `receiver` is `None` for a static method. A `<init>` row is a constructor:
@@ -484,7 +540,10 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
                 sync_jvm_fields_to_guest(jvm, handles, handle).await?;
             }
 
-            marshal_return(handles, value)
+            let handle = marshal_return(handles, value)?;
+            materialize_primitive_array_result(jvm, handles, handle).await?;
+
+            Ok(handle)
         }
         Err(error) => Err(JvmSupport::to_wie_err(jvm, error).await),
     }

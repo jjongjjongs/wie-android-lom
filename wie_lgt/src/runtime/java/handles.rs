@@ -250,6 +250,26 @@ impl JavaHandles {
         Ok(())
     }
 
+    /// Gives an array handle a `[length][elements]` block holding `elements`,
+    /// so the compiled code can read its contents directly.
+    ///
+    /// A handle built by [`Self::insert`] carries only the generic field block
+    /// [`Self::allocate_instance`] leaves at +0x08; an array returned from a
+    /// platform method (`String.toCharArray`, say) whose elements the compiled
+    /// code then reads itself needs the same `+0x00 length, +0x04 elements`
+    /// block a [`Self::allocate_array`] array has. The JVM object stays the
+    /// backing store for platform calls; this only mirrors it into guest memory.
+    pub fn materialize_array_block(&self, handle: u32, length: u32, elements: &[u8]) -> Result<()> {
+        let mut core = self.core.clone();
+
+        let data = Allocator::alloc(&mut core, ARRAY_HEADER_SIZE + elements.len() as u32)?;
+        write_generic(&mut core, data, length)?;
+        core.write_bytes(data + ARRAY_HEADER_SIZE, elements)?;
+        write_generic(&mut core, handle + INSTANCE_FIELDS_OFFSET, data)?;
+
+        Ok(())
+    }
+
     /// The table to give an object whose class declares none.
     pub fn fallback_dispatch_table(&self) -> u32 {
         self.fallback_dispatch_table.load(Ordering::SeqCst)
@@ -303,5 +323,34 @@ impl JavaHandles {
     /// with the retained object rather than copying it.
     pub fn get(&self, handle: u32) -> Option<Box<dyn ClassInstance>> {
         self.entries.lock().get(&handle).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wie_core_arm::{Allocator, ArmCore};
+
+    use super::JavaHandles;
+
+    #[test]
+    fn materialized_array_block_reads_back_as_a_char_array() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+
+        let handles = JavaHandles::new(core.clone());
+
+        // A handle whose +0x08 block is the generic three-word field block an
+        // instance built by `insert` gets: reading it as a char array sees a
+        // zero-length array, exactly the empty string the word-wrapper crashed on.
+        let handle = handles.allocate_instance(0).unwrap();
+        assert!(handles.read_char_array(handle).unwrap().is_empty());
+
+        // Mirroring the JVM contents into the handle gives it a real
+        // `[length][elements]` block the compiled code can read directly.
+        let chars = [0xac00u16, 0x0041, 0xd55c];
+        let bytes: alloc::vec::Vec<u8> = chars.iter().flat_map(|value| value.to_le_bytes()).collect();
+        handles.materialize_array_block(handle, chars.len() as u32, &bytes).unwrap();
+
+        assert_eq!(handles.read_char_array(handle).unwrap(), chars);
     }
 }
