@@ -26,10 +26,12 @@ const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
 /// changes, so a device log shows whether the title's directly-written images
 /// reach the presented buffer without flooding.
 static DIAG_LAST_BUCKET: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(-2);
+static DIAG_FLUSH_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// DIAG: summarise a presented frame - how many pixels are non-black, how many
-/// distinct colours, and the most common non-black colour - and log it at INFO
-/// when the non-black bucket changes. Temporary instrumentation.
+/// distinct colours, and the most common non-black colour. Logs at INFO on any
+/// non-black bucket change and, so a log captured at any moment still carries a
+/// recent sample, every 120th flush regardless. Temporary instrumentation.
 fn diag_probe_flush(buf_addr: u32, image: &dyn Image) {
     use alloc::collections::BTreeMap;
     use core::sync::atomic::Ordering;
@@ -46,8 +48,6 @@ fn diag_probe_flush(buf_addr: u32, image: &dyn Image) {
         }
     }
 
-    // Bucket by order of magnitude of non-black pixels so steady frames are quiet
-    // but a transition (black <-> image) always logs.
     let bucket = match non_black {
         0 => 0,
         1..=200 => 1,
@@ -55,7 +55,9 @@ fn diag_probe_flush(buf_addr: u32, image: &dyn Image) {
         2001..=10000 => 3,
         _ => 4,
     };
-    if DIAG_LAST_BUCKET.swap(bucket, Ordering::Relaxed) == bucket as i64 {
+    let bucket_changed = DIAG_LAST_BUCKET.swap(bucket, Ordering::Relaxed) != bucket as i64;
+    let periodic = DIAG_FLUSH_COUNT.fetch_add(1, Ordering::Relaxed) % 120 == 0;
+    if !bucket_changed && !periodic {
         return;
     }
 
@@ -823,6 +825,7 @@ fn diag_probe_repaint(buf_addr: u32, image: &dyn Image) {
     use alloc::collections::BTreeMap;
     use core::sync::atomic::Ordering;
     static LAST: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(-2);
+    static COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
     let colors = image.colors();
     let mut non_black = 0usize;
@@ -841,7 +844,9 @@ fn diag_probe_repaint(buf_addr: u32, image: &dyn Image) {
         2001..=10000 => 3,
         _ => 4,
     };
-    if LAST.swap(bucket, Ordering::Relaxed) == bucket as i64 {
+    let bucket_changed = LAST.swap(bucket, Ordering::Relaxed) != bucket as i64;
+    let periodic = COUNT.fetch_add(1, Ordering::Relaxed) % 120 == 0;
+    if !bucket_changed && !periodic {
         return;
     }
     let mut top: Vec<(u32, u32)> = counts.into_iter().collect();
