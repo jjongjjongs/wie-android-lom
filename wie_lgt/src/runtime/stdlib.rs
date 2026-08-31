@@ -197,10 +197,46 @@ async fn strcmp(core: &mut ArmCore, _: &mut (), ptr_str1: u32, ptr_str2: u32) ->
 async fn atoi(core: &mut ArmCore, _: &mut (), ptr_str: u32) -> Result<u32> {
     tracing::debug!("atoi({ptr_str:#x})");
 
-    let string = read_null_terminated_string_bytes(core, ptr_str)?;
-    let string = String::from_utf8(string).unwrap();
+    let bytes = read_null_terminated_string_bytes(core, ptr_str)?;
 
-    Ok(string.parse().unwrap_or(0))
+    Ok(c_atoi(&bytes) as u32)
+}
+
+/// C `atoi`: skip leading whitespace, take an optional sign, then the run of
+/// leading decimal digits, stopping at the first non-digit. `String::parse`
+/// (the previous implementation) instead required the *whole* string to be a
+/// number, so a title reading a number followed by other bytes on the line -
+/// or a negative number, which never fits `u32` - got 0. That fed a bad size
+/// into a later `calloc` (크로이센 computed a negative element count and asked
+/// for ~4 GiB, crashing with an allocation failure).
+fn c_atoi(bytes: &[u8]) -> i32 {
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+
+    let sign = match bytes.get(i) {
+        Some(b'-') => {
+            i += 1;
+            -1i64
+        }
+        Some(b'+') => {
+            i += 1;
+            1
+        }
+        _ => 1,
+    };
+
+    let mut value = 0i64;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        value = value * 10 + i64::from(bytes[i] - b'0');
+        // Saturate rather than wrap; C leaves overflow undefined but titles do
+        // not rely on a specific wrapped value, and this keeps the result sane.
+        value = value.min(i64::from(i32::MAX) + 1);
+        i += 1;
+    }
+
+    (sign * value) as i32
 }
 
 async fn time(core: &mut ArmCore, system: &mut System, ptr_time: u32) -> Result<u32> {
@@ -590,4 +626,32 @@ async fn snprintf(core: &mut ArmCore, _: &mut (), dest: u32, size: u32, format: 
     }
 
     Ok(result.len() as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::c_atoi;
+
+    #[test]
+    fn c_atoi_parses_leading_number_and_stops() {
+        assert_eq!(c_atoi(b"1156"), 1156);
+        // Stops at the first non-digit instead of failing the whole parse.
+        assert_eq!(c_atoi(b"1156 42"), 1156);
+        assert_eq!(c_atoi(b"1156\nrest"), 1156);
+        assert_eq!(c_atoi(b"42abc"), 42);
+    }
+
+    #[test]
+    fn c_atoi_handles_sign_and_whitespace() {
+        assert_eq!(c_atoi(b"-1156"), -1156);
+        assert_eq!(c_atoi(b"+7"), 7);
+        assert_eq!(c_atoi(b"   -8xyz"), -8);
+    }
+
+    #[test]
+    fn c_atoi_non_numeric_is_zero() {
+        assert_eq!(c_atoi(b""), 0);
+        assert_eq!(c_atoi(b"abc"), 0);
+        assert_eq!(c_atoi(b"-"), 0);
+    }
 }
