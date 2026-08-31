@@ -122,6 +122,10 @@ impl LgtEmulator {
 
         for (filename, data) in files {
             let filename = filename.trim_start_matches("P/");
+            if is_incompatible_bundled_save(aid, filename) {
+                tracing::info!("skipping incompatible bundled save {filename:?}; the title will start fresh");
+                continue;
+            }
             system.filesystem().add_virtual(filename, data.clone())
         }
 
@@ -253,6 +257,27 @@ fn apply_offline_auth_patch(aid: &str, binary_mod: &mut [u8]) {
         (0, _) => tracing::warn!("Super Action Hero 3 auth patch site not found; leaving binary.mod unchanged"),
         (n, _) => tracing::warn!("Super Action Hero 3 auth pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
     }
+}
+
+/// Whether a bundled data-dir file is a save the title itself rejects, so
+/// seeding it would brick start-up rather than restore progress.
+///
+/// 2009 프로야구 (`0002E749`) reads `SaveFile.dat` on launch and runs its own
+/// integrity check over the bytes (a pure, phone-number-independent computation
+/// verified against PHONENUMBER/PHONEMODEL - neither changes the outcome). A
+/// save this check rejects makes the title draw "Error code :: -1005" and call
+/// `MC_knlExit`, so it never reaches its menu. The archive ships a foreign
+/// `SaveFile.dat` (dumped from another handset) that fails this check: the
+/// title's *own* freshly written save re-validates cleanly, so this is stale
+/// data, not an emulation fault. With no save present the title opens
+/// `SaveFile.dat` for create instead of read and starts fresh, exactly as a
+/// clean install does - so drop the incompatible bundled copy and let it do
+/// that. A real save the player later writes lives in the platform layer and is
+/// unaffected.
+///
+/// Scoped to the title's aid and the one filename, so nothing else is touched.
+fn is_incompatible_bundled_save(aid: &str, filename: &str) -> bool {
+    aid.eq_ignore_ascii_case("0002E749") && filename.eq_ignore_ascii_case("SaveFile.dat")
 }
 
 /// SEED (`00027565`) opens `SEED_OP.dat` on launch to decide whether it has
@@ -436,5 +461,24 @@ impl LgtAppInfo {
         }
 
         Self { aid, pid, mclass }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_incompatible_bundled_save;
+
+    #[test]
+    fn drops_only_the_baseball_2009_savefile() {
+        // 2009 프로야구's foreign SaveFile.dat is dropped so it starts fresh.
+        assert!(is_incompatible_bundled_save("0002E749", "SaveFile.dat"));
+        // aid match is case-insensitive, as app_info casing varies.
+        assert!(is_incompatible_bundled_save("0002e749", "SaveFile.dat"));
+
+        // Other files in the same title are kept.
+        assert!(!is_incompatible_bundled_save("0002E749", "level.dat"));
+        assert!(!is_incompatible_bundled_save("0002E749", "speed.dat"));
+        // Other titles keep their SaveFile.dat.
+        assert!(!is_incompatible_bundled_save("00027565", "SaveFile.dat"));
     }
 }
