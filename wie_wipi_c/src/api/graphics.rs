@@ -459,37 +459,7 @@ pub async fn flush_lcd(
 
     screen.paint(&*src_canvas);
 
-    // Present-and-reset: the LCD (front) now owns this frame, so the off-screen
-    // buffer (back) is released for the next frame by clearing it.
-    //
-    // These titles double-buffer against a single off-screen framebuffer: they
-    // render a frame into it and flush it to the LCD. `MC_grpFlushLcd` is the
-    // frame boundary - the reference's runtime hands the game a fresh back
-    // buffer after each flush, so a title is free to redraw only what changes.
-    // Demon Hunter's loading screen does exactly that: it blits a portrait
-    // straight into the buffer and draws a few lines of text, trusting the rest
-    // of the buffer to be clear. wie kept the buffer intact across the flush, so
-    // the previous frame's text stayed and each new frame piled its text on top,
-    // smearing into an unreadable mess. Resetting the back buffer on present
-    // restores the frame boundary; titles that repaint the whole frame simply
-    // overwrite the cleared buffer and are unaffected.
-    reset_back_buffer(context, &framebuffer)?;
-
     Ok(())
-}
-
-/// Clears an off-screen framebuffer to black after it has been presented, so the
-/// next frame starts from a known-empty back buffer. Bounds are taken from the
-/// framebuffer's own geometry, so a malformed descriptor clears nothing rather
-/// than writing out of range.
-fn reset_back_buffer(context: &mut dyn WIPICContext, framebuffer: &FrameBuffer) -> Result<()> {
-    if framebuffer.0.bpp == 0 || framebuffer.0.bpl == 0 || framebuffer.0.height == 0 {
-        return Ok(());
-    }
-
-    let mut data = framebuffer.data(context)?;
-    data.fill(0);
-    framebuffer.write(context, &data)
 }
 
 pub async fn get_pixel_from_rgb(_context: &mut dyn WIPICContext, r: i32, g: i32, b: i32) -> Result<WIPICWord> {
