@@ -632,6 +632,20 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             if value != 0 {
                 let array_class = object_class_root(core, array)?;
+
+                // The store's type check names the array's component class. For
+                // a multidimensional array that component is an array of one
+                // dimension less, which the application may never have asked for
+                // on its own - Legend of Master builds a `[[L...;` directly and
+                // stores 1-D arrays into it - so synthesize it here, the same
+                // way `vm_get_array_class` would, rather than aborting the run.
+                let component_shape = context.array_classes.lock().get(&array_class).copied();
+                if let Some(info) = component_shape
+                    && info.dimensions > 1
+                {
+                    get_array_class(core, context, info.dimensions - 1, info.element_class, info.atype)?;
+                }
+
                 let target_class = array_component_class(&context.array_classes, array_class)?;
                 let source_class = object_class_root(core, value)?;
 
