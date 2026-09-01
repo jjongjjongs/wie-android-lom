@@ -117,6 +117,13 @@ const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
 const CLASS_DISPATCH_TABLE: u32 = 0x0c;
 const CLASS_DISPATCH_SLOTS: u32 = 0x26;
 
+/// A class root sits directly after its `METADATA_SIZE`-byte metadata block; the
+/// block keeps the class name and superclass pointer at these offsets. Mirrors
+/// the constants `app_classes` parses metadata with.
+const CLASS_METADATA_SIZE: u32 = 0x4c;
+const CLASS_METADATA_NAME: u32 = 0x08;
+const CLASS_METADATA_SUPERCLASS: u32 = 0x10;
+
 /// Guard on how far a class hierarchy is walked looking for a platform class.
 const MAX_SUPERCLASS_DEPTH: usize = 32;
 
@@ -1905,6 +1912,43 @@ fn platform_superclass_dispatch_table(context: &InitSvcContext, root: u32) -> u3
 /// first implementation of the same slot. Application superclass tables may
 /// themselves contain zero placeholders, so keep walking until an
 /// implementation or a platform class is reached.
+/// Reads a class root's superclass name directly from guest metadata, for a
+/// class that is not in `app_classes`. The metadata block sits `CLASS_METADATA_SIZE`
+/// bytes before the root; its superclass field is either another class root (an
+/// application superclass) or a pointer to a name string (a platform superclass).
+fn superclass_name_from_metadata(core: &ArmCore, root: u32) -> Result<Option<String>> {
+    let metadata: u32 = read_generic(core, root + 8)?;
+    if metadata == 0 {
+        return Ok(None);
+    }
+
+    let pointer: u32 = read_generic(core, metadata + CLASS_METADATA_SUPERCLASS)?;
+    if pointer == 0 {
+        return Ok(None);
+    }
+
+    // An application superclass points at another root; the name lives in that
+    // root's own metadata block. Anything else is a direct name-string pointer.
+    let name_ptr = {
+        let super_metadata: u32 = read_generic(core, pointer + 8)?;
+        if super_metadata != 0 && super_metadata.checked_add(CLASS_METADATA_SIZE) == Some(pointer) {
+            read_generic(core, super_metadata + CLASS_METADATA_NAME)?
+        } else {
+            pointer
+        }
+    };
+    if name_ptr == 0 {
+        return Ok(None);
+    }
+
+    let bytes = read_null_terminated_string_bytes(core, name_ptr)?;
+    if bytes.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+    }
+}
+
 fn inherited_dispatch_entry(core: &ArmCore, context: &InitSvcContext, root: u32, slot: u32, fallback: u32) -> Result<u32> {
     let app_classes = context.app_classes.lock();
     let imported_classes = context.imported_classes.lock();
@@ -1920,7 +1964,18 @@ fn inherited_dispatch_entry_from_tables(
     slot: u32,
     fallback: u32,
 ) -> Result<u32> {
-    let mut superclass = app_classes.iter().find(|x| x.root == root).and_then(|x| x.superclass.clone());
+    // The chain is normally seeded from the registered class. Some classes are
+    // activated (their dispatch table is built from their guest metadata) without
+    // ever being added to `app_classes` - Legend of Master's monster class `v` is
+    // one: it declares no methods of its own and inherits its update method from
+    // superclass `c`. When the class is not registered, recover its superclass
+    // straight from guest metadata so the walk still reaches `c`, rather than
+    // giving up and leaving the slot on the unknown-slot trap (a no-op that froze
+    // every monster in place).
+    let mut superclass = match app_classes.iter().find(|x| x.root == root) {
+        Some(class) => class.superclass.clone(),
+        None => superclass_name_from_metadata(core, root)?,
+    };
 
     for _ in 0..MAX_SUPERCLASS_DEPTH {
         let Some(name) = superclass else { break };
