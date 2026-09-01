@@ -569,7 +569,12 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
             c.sl
         );
         if array != 0 {
-            tracing::warn!("XXXITEM array header+elems:{}", dump(array, 0));
+            // Dump the item array wide (32 words): a buffer full of the loaded
+            // .dat records looks like data; a buffer of zeros means the item
+            // table was never populated - the distinction the diagnosis needs.
+            for row in 0..4u32 {
+                tracing::warn!("XXXITEM array[{array:#x}]+{:#05x}:{}", row * 32, dump(array, row * 32));
+            }
             if index >= 0 {
                 let item: u32 = read_generic(core, array.wrapping_add((index as u32) * 4)).unwrap_or(0);
                 tracing::warn!("XXXITEM item=array[{index}]={item:#x} words:{}", dump(item, 0));
