@@ -43,6 +43,13 @@ pub static JIT_FALLBACKS: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic
 /// which syscall category dominates the round-trip cost.
 pub static SVC_CATEGORY_COUNT: [::core::sync::atomic::AtomicU64; 256] = [const { ::core::sync::atomic::AtomicU64::new(0) }; 256];
 
+/// Live guest threads and the peak seen, for the perf meter. Each guest thread
+/// owns a fixed-size native stack (see `thread::STACK_SIZE`), so a climbing live
+/// count is what exhausts the heap; the peak shows the high-water mark that a
+/// title's concurrency demands.
+pub static LIVE_THREADS: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic::AtomicU64::new(0);
+pub static PEAK_THREADS: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic::AtomicU64::new(0);
+
 pub use self::{
     allocator::Allocator,
     binary_patches::install_binary_patches,

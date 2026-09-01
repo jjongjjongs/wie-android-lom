@@ -192,6 +192,12 @@ impl ArmCore {
             thread_id
         };
 
+        {
+            use ::core::sync::atomic::Ordering::Relaxed;
+            let live = crate::LIVE_THREADS.fetch_add(1, Relaxed) + 1;
+            crate::PEAK_THREADS.fetch_max(live, Relaxed);
+        }
+
         tracing::info!("Create thread: {thread_id}");
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -212,6 +218,10 @@ impl ArmCore {
             let mut inner = self.inner.lock();
             inner.threads.remove(&thread_id)
         };
+
+        if _thread_state.is_some() {
+            crate::LIVE_THREADS.fetch_sub(1, ::core::sync::atomic::Ordering::Relaxed);
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(debug) = self.debug_inner() {

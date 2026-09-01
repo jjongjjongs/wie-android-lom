@@ -519,8 +519,13 @@ impl Emulator for LgtEmulator {
             let svc_per_s = svc as f64 * 1000.0 / dt_ms as f64;
             let runs_per_s = runs as f64 * 1000.0 / dt_ms as f64;
             let fb_per_s = fb as f64 * 1000.0 / dt_ms as f64;
+            // Live/peak guest threads: each owns a 1 MB native stack, so a
+            // climbing live count is what exhausts the heap (see the allocation
+            // failure that stops LGT titles with many concurrent threads).
+            let live_threads = wie_core_arm::LIVE_THREADS.load(core::sync::atomic::Ordering::Relaxed);
+            let peak_threads = wie_core_arm::PEAK_THREADS.load(core::sync::atomic::Ordering::Relaxed);
             tracing::info!(
-                "[perf] {mips:.1} MIPS, {tps:.1} tick/s, {svc_per_s:.0} svc/s, {runs_per_s:.0} run/s, {fb_per_s:.0} fallback/s ({executed} insn / {ticks} ticks in {dt_ms} ms)"
+                "[perf] {mips:.1} MIPS, {tps:.1} tick/s, {svc_per_s:.0} svc/s, {runs_per_s:.0} run/s, {fb_per_s:.0} fallback/s, threads={live_threads} (peak {peak_threads}) ({executed} insn / {ticks} ticks in {dt_ms} ms)"
             );
             report_hot_regions();
             report_hot_svc(dt_ms);
