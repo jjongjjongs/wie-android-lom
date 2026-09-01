@@ -723,9 +723,24 @@ impl ArmEngine for JitEngine {
         // corrupted return address / function pointer. Log the block we came from.
         let mut last_pc: u32 = 0;
         let mut warned_wild = false;
+        let mut warned_lr = false;
 
         let result = loop {
             let pc = self.ctx.regs[15];
+
+            // The block that just ran (`last_pc`) left LR pointing into the
+            // heap/stack window - never a valid return address. This is one step
+            // upstream of the wild jump: the block here is the load (ldm/pop/ldr)
+            // that corrupted LR, and its own PC / the current thread's SP show
+            // whether the value came cross-thread.
+            if !warned_lr {
+                let lr = self.ctx.regs[14];
+                if (0x4000_0000..0x7000_0000).contains(&lr) {
+                    warned_lr = true;
+                    let sp = self.ctx.regs[13];
+                    tracing::warn!("LR corrupted to {lr:#x} by block {last_pc:#x}; now at pc={pc:#x} sp={sp:#x}");
+                }
+            }
 
             if !warned_wild && (0x4000_0000..0x7000_0000).contains(&pc) {
                 warned_wild = true;
