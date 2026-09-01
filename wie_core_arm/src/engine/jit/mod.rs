@@ -716,8 +716,24 @@ impl ArmEngine for JitEngine {
         self.ctx.code_pages = self.code_pages.as_ptr();
         self.ctx.pages = self.mem.pages_base();
 
+        // XXX temporary: pinpoint a jump into non-code memory (the LoM f.paint
+        // wild branch). Code only ever lives in the clet image (< 0x0100_0000)
+        // or the firmware (>= 0x7000_0000); the heap/stack range in between is
+        // never executable, so reaching it means a corrupted return address or
+        // function pointer. Log the block we came from once.
+        let mut last_pc: u32 = 0;
+        let mut warned_wild = false;
+
         let result = loop {
             let pc = self.ctx.regs[15];
+
+            if !warned_wild && (0x0100_0000..0x7000_0000).contains(&pc) {
+                warned_wild = true;
+                let lr = self.ctx.regs[14];
+                let sp = self.ctx.regs[13];
+                tracing::warn!("wild jump to {pc:#x} from block {last_pc:#x} lr={lr:#x} sp={sp:#x}");
+            }
+            last_pc = pc;
 
             if pc == 0x08 && (self.ctx.cpsr & 0x1f) == 0x13 {
                 self.store_back(mode);
