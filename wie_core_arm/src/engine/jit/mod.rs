@@ -716,22 +716,25 @@ impl ArmEngine for JitEngine {
         self.ctx.code_pages = self.code_pages.as_ptr();
         self.ctx.pages = self.mem.pages_base();
 
-        // XXX temporary: pinpoint a jump into non-code memory (the LoM f.paint
-        // wild branch). Code only ever lives in the clet image (< 0x0100_0000)
-        // or the firmware (>= 0x7000_0000); the heap/stack range in between is
-        // never executable, so reaching it means a corrupted return address or
-        // function pointer. Log the block we came from once.
+        // XXX temporary: pinpoint the LoM f.paint wild branch. This clet keeps
+        // executable ARM thunks in .data (around 0x0140_6xxx), so "not .text" is
+        // not enough to mean non-code. The heap/stack window (>= 0x4000_0000, and
+        // below the firmware at 0x7000_0000) never holds code, so a PC there is a
+        // corrupted return address / function pointer. Log the block we came from.
         let mut last_pc: u32 = 0;
         let mut warned_wild = false;
 
         let result = loop {
             let pc = self.ctx.regs[15];
 
-            if !warned_wild && (0x0100_0000..0x7000_0000).contains(&pc) {
+            if !warned_wild && (0x4000_0000..0x7000_0000).contains(&pc) {
                 warned_wild = true;
                 let lr = self.ctx.regs[14];
                 let sp = self.ctx.regs[13];
-                tracing::warn!("wild jump to {pc:#x} from block {last_pc:#x} lr={lr:#x} sp={sp:#x}");
+                let s0 = self.mem.load_u32(sp).unwrap_or(0);
+                let s4 = self.mem.load_u32(sp.wrapping_add(4)).unwrap_or(0);
+                let s8 = self.mem.load_u32(sp.wrapping_add(8)).unwrap_or(0);
+                tracing::warn!("wild jump to {pc:#x} from block {last_pc:#x} lr={lr:#x} sp={sp:#x} [sp]={s0:#x} [sp+4]={s4:#x} [sp+8]={s8:#x}");
             }
             last_pc = pc;
 
