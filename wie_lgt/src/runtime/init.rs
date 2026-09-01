@@ -605,6 +605,21 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let class_vtable = context.java_handles.fallback_dispatch_table();
             write_generic(core, data + 12, instance_vtable)?;
 
+            // Register the table just built under this class's name, so a
+            // JVM-side instance of the application class dispatches through it
+            // - and carries its real class identity in vtable word zero - when
+            // it crosses into compiled code. Without this, `handles.insert`
+            // pins the root-0 fallback on the instance: its class then reads as
+            // 0, an identity `class_is_assignable_to` cannot name, so every
+            // instanceof/aastore check on it falls back to "assume assignable"
+            // and every virtual call routes through the wrong table. Skip it
+            // when synthesis could only return the fallback anyway.
+            if instance_vtable != class_vtable
+                && let Some(name) = class_identity_name(context, root)
+            {
+                context.java_handles.set_dispatch_table(&name, instance_vtable);
+            }
+
             let activated = Allocator::alloc(core, 12)?;
             write_generic(core, activated, class_vtable)?;
             write_generic(core, activated + 4, 0u32)?;
