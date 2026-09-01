@@ -539,6 +539,48 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     let mut char_writebacks = Vec::new();
     let arguments = marshal_arguments(core, jvm, handles, &parameters, first_word, &mut writebacks, &mut char_writebacks).await?;
 
+    // XXX temporary: the item-display arraycopy reads a null source, so the
+    // inventory item's 12-byte definition is missing. Dump the compiled
+    // caller's registers and the item array/index they point at (from f.paint:
+    // array=[sl+8], index=[r4+0x2ec] signed halfword, item=array[index]) to
+    // find why the definition is null. Removed once item data is populated.
+    if class_name == "java/lang/System" && name == "arraycopy" && matches!(arguments.first(), Some(JavaValue::Object(None))) {
+        let c = core.save_context();
+        let dump = |base: u32, off: u32| -> String {
+            let mut s = String::new();
+            for k in 0..8u32 {
+                match read_generic::<u32, _>(core, base.wrapping_add(off + k * 4)) {
+                    Ok(v) => s.push_str(&format!(" {v:08x}")),
+                    Err(_) => {
+                        s.push_str(" ----");
+                        break;
+                    }
+                }
+            }
+            s
+        };
+        let index: i32 = read_generic::<u16, _>(core, c.r4.wrapping_add(0x2ec))
+            .map(|x| x as i16 as i32)
+            .unwrap_or(-999);
+        let array: u32 = read_generic(core, c.sl.wrapping_add(8)).unwrap_or(0);
+        tracing::warn!(
+            "XXXITEM arraycopy(null): r4={:#x} sl={:#x} index[r4+0x2ec]={index} array[sl+8]={array:#x}",
+            c.r4,
+            c.sl
+        );
+        if array != 0 {
+            tracing::warn!("XXXITEM array header+elems:{}", dump(array, 0));
+            if index >= 0 {
+                let item: u32 = read_generic(core, array.wrapping_add((index as u32) * 4)).unwrap_or(0);
+                tracing::warn!("XXXITEM item=array[{index}]={item:#x} words:{}", dump(item, 0));
+                if item != 0 {
+                    let fields: u32 = read_generic(core, item.wrapping_add(8)).unwrap_or(0);
+                    tracing::warn!("XXXITEM item.fields[item+8]={fields:#x} words:{}", dump(fields, 0));
+                }
+            }
+        }
+    }
+
     let receiver_handle = receiver.as_ref().map(|_| core.read_param(0)).transpose()?;
 
     if let Some(handle) = receiver_handle {
