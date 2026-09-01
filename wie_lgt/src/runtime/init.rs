@@ -1149,6 +1149,51 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // longjmp(save_point, exception_object).
         InitSvcId::VmThrowArrayIndexOutOfBoundsException => {
             let message = core.read_param(1)?;
+
+            // XXX temporary: the inventory throws AIOOBE while navigating because
+            // an item array is short/empty (the potions' data never populated it).
+            // Dump the compiled caller (lr = which bounds check) and the arrays
+            // its registers point at, so the empty/short array is identified.
+            {
+                let c = core.save_context();
+                tracing::warn!(
+                    "XXXAIOOBE lr={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} sl={:#x} fp={:#x}",
+                    c.lr,
+                    c.r0,
+                    c.r1,
+                    c.r2,
+                    c.r3,
+                    c.r4,
+                    c.r5,
+                    c.sl,
+                    c.fp
+                );
+                for (nm, r) in [
+                    ("r0", c.r0),
+                    ("r1", c.r1),
+                    ("r2", c.r2),
+                    ("r3", c.r3),
+                    ("r4", c.r4),
+                    ("r5", c.r5),
+                    ("sl", c.sl),
+                    ("fp", c.fp),
+                ] {
+                    if (0x0140_0000..0x0180_0000).contains(&r) || (0x4000_0000..0x5000_0000).contains(&r) {
+                        let mut s = String::new();
+                        for k in 0..8u32 {
+                            match read_generic::<u32, _>(core, r.wrapping_add(k * 4)) {
+                                Ok(v) => s.push_str(&format!(" {v:08x}")),
+                                Err(_) => {
+                                    s.push_str(" --");
+                                    break;
+                                }
+                            }
+                        }
+                        tracing::warn!("XXXAIOOBE {nm}={r:#x} ->{s}");
+                    }
+                }
+            }
+
             let class_name = "java/lang/ArrayIndexOutOfBoundsException";
             let vtable = synthetic_platform_vtable(core, context, class_name)?;
 
