@@ -19,7 +19,7 @@
 
 use alloc::{format, string::String, vec::Vec};
 
-use jvm::{Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult};
+use jvm::{Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
@@ -583,6 +583,17 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
                     tracing::warn!("XXXITEM item.fields[item+8]={fields:#x} words:{}", dump(fields, 0));
                 }
             }
+        }
+    }
+
+    // XXX temporary: log which resources the title loads (name + presence), so a
+    // partial item-definition table can be traced to a resource that failed to
+    // load. Removed once the item data is understood.
+    if name == "getResourceAsStream" || name == "getResource" {
+        if let Some(JavaValue::Object(Some(s))) = arguments.first() {
+            let s = s.clone();
+            let rs = JavaLangString::to_rust_string(jvm, &s).await.unwrap_or_default();
+            tracing::warn!("XXXRES {class_name}.{name}({rs:?})");
         }
     }
 
