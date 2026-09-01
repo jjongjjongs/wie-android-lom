@@ -47,6 +47,13 @@ impl File for FileImpl {
 
         self.cursor.fetch_add(read as u64, Ordering::SeqCst);
 
+        // XXX temporary: dump save-file reads so a broken save/load round-trip
+        // (the inventory read back empty) is visible. Removed once fixed.
+        {
+            let hex: alloc::string::String = buf[..read.min(64)].iter().map(|b| alloc::format!("{b:02x}")).collect();
+            tracing::warn!("XXXFILE read {:?} off={cursor} want={} got={read}: {hex}", self.path, buf.len());
+        }
+
         Ok(read)
     }
 
@@ -59,6 +66,13 @@ impl File for FileImpl {
         let written = self.system.filesystem().write(&self.path, cursor, buf).await;
 
         self.cursor.fetch_add(written as u64, Ordering::SeqCst);
+
+        // XXX temporary: dump save-file writes so what the save actually stores
+        // can be compared against what the load reads back. Removed once fixed.
+        {
+            let hex: alloc::string::String = buf[..buf.len().min(64)].iter().map(|b| alloc::format!("{b:02x}")).collect();
+            tracing::warn!("XXXFILE write {:?} off={cursor} len={} wrote={written}: {hex}", self.path, buf.len());
+        }
 
         Ok(written)
     }
