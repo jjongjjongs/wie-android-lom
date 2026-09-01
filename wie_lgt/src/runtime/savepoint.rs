@@ -105,6 +105,17 @@ impl SavePointState {
             context.cpsr &= !0x20;
         }
 
+        // XXX temporary: a captured LR in the heap/stack window is never a valid
+        // return address; longjmp would later resume through it and jump wild.
+        if (0x4000_0000..0x7000_0000).contains(&context.lr) {
+            tracing::warn!(
+                "XXXSJ setjmp({address:#x}) thread={thread_id} captured suspicious lr={:#x} sp={:#x} pc={:#x}",
+                context.lr,
+                context.sp,
+                context.pc
+            );
+        }
+
         point.continuation = Some(context);
         Ok(())
     }
@@ -164,6 +175,14 @@ impl SavePointState {
             // longjmp; treat it as uncaught and propagate the same way.
             return Err(WieError::JavaException(exception));
         };
+
+        // XXX temporary: show what longjmp is about to resume through.
+        tracing::warn!(
+            "XXXLJ longjmp thread={thread_id} restoring lr={:#x} sp={:#x} pc={:#x}",
+            context.lr,
+            context.sp,
+            context.pc
+        );
 
         let return_pc = context.pc;
         core.restore_context(&context);
