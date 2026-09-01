@@ -352,6 +352,114 @@ fn capture_legend_of_master() {
     run("LoM", include_bytes!("../../test_games/legend_of_master.zip"), 48000);
 }
 
+/// Drives a title through a scripted key sequence, so a screen deep in the
+/// game (a menu, the tutorial, an inventory) can be reached and captured.
+///
+/// `WIE_SCRIPT` is a comma-separated list of `tick:KEY` presses, e.g.
+/// `300:OK,5200:OK,39000:OK`; each holds the key for 20 ticks. `WIE_TICKS`
+/// caps the run (default 60000). `WIE_SHOT_DIR`, when set, gets a `step_<n>.ppm`
+/// written ~300 ticks after each press so every step's screen is visible, plus
+/// `final.ppm` at the end.
+fn run_scripted(label: &str, archive: &[u8], ticks_limit: u32, script: &[(u32, wie_backend::KeyCode)]) {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .try_init();
+
+    let exited = Arc::new(AtomicBool::new(false));
+    let exited_clone = exited.clone();
+    let screen = CaptureScreen::default();
+
+    let platform = Box::new(CapturePlatform {
+        inner: TestPlatform::with_event_handler(move |event| match event {
+            TestPlatformEvent::Stdout(buf) => eprint!("[stdout] {}", String::from_utf8_lossy(&buf)),
+            TestPlatformEvent::OpenUrl(url) => eprintln!("[open-url] {url}"),
+            TestPlatformEvent::Exit => exited_clone.store(true, Ordering::SeqCst),
+        }),
+        screen: screen.clone(),
+        clock: Arc::new(AtomicU64::new(0)),
+    });
+
+    let files = extract_zip(archive).expect("archive");
+    let options = Options {
+        enable_gdbserver: false,
+        profile: None,
+    };
+    let mut emulator = if wie_lgt::LgtEmulator::loadable_archive(&files) {
+        wie_lgt::LgtEmulator::from_archive(platform, files, options)
+    } else {
+        wie_lgt::LgtEmulator::from_jar(platform, label, archive.to_vec(), label, label, None, options)
+    }
+    .expect("load");
+
+    let shot_dir = std::env::var("WIE_SHOT_DIR").ok();
+    let write_ppm = |path: &str, screen: &CaptureScreen| {
+        let c = screen.captured.lock().unwrap();
+        if c.last_pixels.is_empty() {
+            return;
+        }
+        let mut ppm = format!("P6\n{} {}\n255\n", c.width, c.height).into_bytes();
+        ppm.extend_from_slice(&c.last_pixels);
+        let _ = std::fs::write(path, ppm);
+    };
+
+    let mut ticks = 0u32;
+    while !exited.load(Ordering::SeqCst) && ticks < ticks_limit {
+        if ticks % 40 == 0 {
+            emulator.handle_event(Event::Redraw);
+        }
+
+        for (step, &(at, key)) in script.iter().enumerate() {
+            if ticks == at {
+                eprintln!("[{label}] step {step}: press {key:?} at tick {ticks}");
+                emulator.handle_event(Event::Keydown(key));
+            }
+            if ticks == at + 20 {
+                emulator.handle_event(Event::Keyup(key));
+            }
+            if let Some(dir) = &shot_dir {
+                if ticks == at + 300 {
+                    write_ppm(&format!("{dir}/step_{step}.ppm"), &screen);
+                    eprintln!("[{label}] step {step}: shot at tick {ticks}");
+                }
+            }
+        }
+
+        if let Err(error) = emulator.tick() {
+            eprintln!("[{label}] stopped after {ticks} ticks: {error}");
+            break;
+        }
+        ticks += 1;
+    }
+
+    if let Some(dir) = &shot_dir {
+        write_ppm(&format!("{dir}/final.ppm"), &screen);
+    }
+    if let Ok(path) = std::env::var("WIE_LAST_PPM") {
+        write_ppm(&path, &screen);
+    }
+    let c = screen.captured.lock().unwrap();
+    eprintln!("[{label}] {ticks} ticks, {} frames, last sig={:016x}", c.frames, c.last_sig);
+}
+
+/// Drives LoM with a scripted key sequence from `WIE_SCRIPT` (`tick:KEY,...`),
+/// so the tutorial and inventory can be reached from a test. Diagnostic.
+#[test]
+#[ignore = "diagnostic"]
+fn capture_lom_scripted() {
+    let script: Vec<(u32, wie_backend::KeyCode)> = std::env::var("WIE_SCRIPT")
+        .expect("set WIE_SCRIPT=tick:KEY,tick:KEY,...")
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|pair| {
+            let (tick, key) = pair.split_once(':').expect("tick:KEY");
+            (tick.trim().parse().expect("tick"), key_by_name(key.trim()).expect("key name"))
+        })
+        .collect();
+    let ticks: u32 = std::env::var("WIE_TICKS").ok().and_then(|x| x.parse().ok()).unwrap_or(60000);
+    run_scripted("LoM", include_bytes!("../../test_games/legend_of_master.zip"), ticks, &script);
+}
+
 /// Runs every archive under `$WIE_ARCHIVES`, which can be a directory or a
 /// list of paths separated by `:`.
 ///

@@ -16,6 +16,7 @@ pub fn prefixed_archive_runs() {
     let exited_clone = exited.clone();
     let platform = Box::new(TestPlatform::with_event_handler(move |event| match event {
         TestPlatformEvent::Stdout(buf) => stdout_clone.lock().unwrap().extend(buf),
+        TestPlatformEvent::OpenUrl(_) => {}
         TestPlatformEvent::Exit => exited_clone.store(true, Ordering::SeqCst),
     }));
 

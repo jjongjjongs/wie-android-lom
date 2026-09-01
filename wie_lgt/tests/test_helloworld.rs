@@ -22,6 +22,7 @@ pub fn test_helloworld() -> Result<()> {
         TestPlatformEvent::Stdout(buf) => {
             stdout_clone.lock().unwrap().extend(buf);
         }
+        TestPlatformEvent::OpenUrl(_) => {}
         TestPlatformEvent::Exit => {
             exited_clone.store(true, Ordering::SeqCst);
         }

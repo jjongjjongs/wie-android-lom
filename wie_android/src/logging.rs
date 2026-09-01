@@ -29,8 +29,8 @@ static INIT: Once = Once::new();
 /// bookkeeping (`wie_core_arm`) drop to info/warn; every graphics service's
 /// per-op drawing stays at info; and the LGT paint-loop housekeeping that dwarfs
 /// everything else - `vm_activate_class`/`vm_thread_reschedule`/
-/// `vm_check_stack_overflow` and the per-call method-bridge trace, ~95% of a
-/// capture - is routed to the `wie_lgt::hot` target and held at warn. Faults and
+/// `vm_check_stack_overflow`, the bulk of a capture - is routed to the
+/// `wie_lgt::hot` target and held at warn. Faults and
 /// unimplemented calls in those crates log at warn/error, so they still show, and
 /// the input path (event queue, canvas, clet) stays at debug so a press is
 /// always captured. Setting `RUST_LOG`, or the in-app log filter (e.g.
