@@ -1015,7 +1015,13 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
         .map_err(|x| WieError::FatalError(x.to_string()))?
         .decode()
         .map_err(|x| WieError::FatalError(x.to_string()))?;
-    let rgba = image.into_rgba8();
+    let mut rgba = image.into_rgba8();
+
+    if rgba.width() <= 15 && rgba.height() <= 15 && png_is_single_index0_tile(data) {
+        for pixel in rgba.pixels_mut() {
+            pixel.0[3] = 0;
+        }
+    }
 
     let data = rgba.pixels().flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]]).collect::<Vec<_>>();
 
@@ -1024,6 +1030,46 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
         rgba.height(),
         pod_collect_to_vec(&data),
     )) as Box<_>)
+}
+
+/// A tiny degenerate indexed PNG - one whose palette holds a single entry and
+/// which declares no `tRNS` - is entirely palette index 0. KTF/WIPI titles treat
+/// that index as the transparent colour, so such a tile is a fully transparent
+/// spacer the clet paints where it wants nothing drawn. The `image` crate
+/// flattens it to an opaque one-colour block instead; left opaque it buries
+/// whatever sits under it - the centred narration text of LGT's Legend of Master
+/// is hidden by a band of these 14x14 all-black tiles painted over it. The size
+/// bound keeps this to the small overlay tiles: a title also fills solid areas of
+/// its tile-map with 16x16 single-colour tiles that are meant to stay opaque.
+fn png_is_single_index0_tile(data: &[u8]) -> bool {
+    if data.len() < 8 || &data[..4] != b"\x89PNG" {
+        return false;
+    }
+
+    let mut i = 8usize;
+    let mut indexed = false;
+    let mut has_trns = false;
+    let mut palette_entries = 0u32;
+
+    while i + 8 <= data.len() {
+        let len = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
+        let chunk_type = &data[i + 4..i + 8];
+
+        match chunk_type {
+            b"IHDR" if i + 8 + 13 <= data.len() => indexed = data[i + 8 + 9] == 3,
+            b"PLTE" => palette_entries = (len / 3) as u32,
+            b"tRNS" => has_trns = true,
+            b"IDAT" | b"IEND" => break,
+            _ => {}
+        }
+
+        i = match i.checked_add(12).and_then(|x| x.checked_add(len)) {
+            Some(next) => next,
+            None => return false,
+        };
+    }
+
+    indexed && !has_trns && palette_entries == 1
 }
 
 pub fn string_width(string: &str, pt_size: f32) -> f32 {
