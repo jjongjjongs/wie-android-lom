@@ -308,6 +308,21 @@ fn register_init_svc_handler(
     )
 }
 
+/// Writes the result of a bridged Java method call back to the compiled caller.
+///
+/// A Java method reached through the bridge can throw. Route that exception the
+/// way the game's own `vm_throw_exception` does - longjmp to a compiled catch
+/// if one is armed, otherwise propagate it as a real Java exception for a Java
+/// catch higher up (`compiled_class` re-surfaces it) - instead of letting it
+/// end the title. A plain value or a non-exception fault is handled as before.
+fn write_java_result(core: &mut ArmCore, save_points: &SavePointState, result: Result<u32>, lr: u32) -> Result<()> {
+    match result {
+        Ok(value) => value.write(core, lr),
+        Err(WieError::JavaException(exception)) => save_points.throw(core, exception),
+        Err(error) => Err(error),
+    }
+}
+
 async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: SvcId) -> Result<()> {
     let wipic_category = &context.wipic_category;
     let stdlib_category = &context.stdlib_category;
@@ -347,37 +362,42 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
     if id.0 >= JAVA_STATIC_METHOD_SVC_BASE && id.0 < JAVA_STATIC_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let index = id.0 - JAVA_STATIC_METHOD_SVC_BASE;
-        let result = invoke_imported_static(core, context, index).await?;
+        let result = invoke_imported_static(core, context, index).await;
+        let save_points = context.save_points.clone();
 
-        return result.write(core, lr);
+        return write_java_result(core, &save_points, result, lr);
     }
 
     if id.0 >= JAVA_VIRTUAL_METHOD_SVC_BASE && id.0 < JAVA_VIRTUAL_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let index = id.0 - JAVA_VIRTUAL_METHOD_SVC_BASE;
-        let result = invoke_imported_virtual(core, context, index).await?;
+        let result = invoke_imported_virtual(core, context, index).await;
+        let save_points = context.save_points.clone();
 
-        return result.write(core, lr);
+        return write_java_result(core, &save_points, result, lr);
     }
 
     if id.0 >= JAVA_UNKNOWN_SLOT_SVC_BASE && id.0 < JAVA_UNKNOWN_SLOT_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let encoded = id.0 - JAVA_UNKNOWN_SLOT_SVC_BASE;
-        let result = call_unknown_slot(core, context, encoded / DISPATCH_TABLE_SLOTS, encoded % DISPATCH_TABLE_SLOTS).await?;
+        let result = call_unknown_slot(core, context, encoded / DISPATCH_TABLE_SLOTS, encoded % DISPATCH_TABLE_SLOTS).await;
+        let save_points = context.save_points.clone();
 
-        return result.write(core, lr);
+        return write_java_result(core, &save_points, result, lr);
     }
 
     if id.0 >= JAVA_INTERFACE_METHOD_SVC_BASE && id.0 < JAVA_INTERFACE_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let index = id.0 - JAVA_INTERFACE_METHOD_SVC_BASE;
-        let result = invoke_imported_interface(core, context, index).await?;
+        let result = invoke_imported_interface(core, context, index).await;
+        let save_points = context.save_points.clone();
 
-        return result.write(core, lr);
+        return write_java_result(core, &save_points, result, lr);
     }
 
     if id.0 >= JAVA_RESERVED_SLOT_SVC_BASE && id.0 < JAVA_RESERVED_SLOT_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
         let index = id.0 - JAVA_RESERVED_SLOT_SVC_BASE;
-        let result = call_reserved_slot(core, context, index).await?;
+        let result = call_reserved_slot(core, context, index).await;
+        let save_points = context.save_points.clone();
 
-        return result.write(core, lr);
+        return write_java_result(core, &save_points, result, lr);
     }
 
     // Diagnostic fallback for Java-interface indices that do not yet have a
@@ -2628,6 +2648,10 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
 
         return match method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await {
             Ok(result) => Ok(result),
+            // A thrown Java exception must reach the dispatcher so it can longjmp
+            // to a compiled catch or propagate; only genuine dispatch failures
+            // are swallowed to keep an unknown slot from ending the run.
+            Err(error @ WieError::JavaException(_)) => Err(error),
             Err(error) => {
                 tracing::warn!(
                     "LGT {}.{}{} at slot {slot} failed: {error}",

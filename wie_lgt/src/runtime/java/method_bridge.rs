@@ -19,7 +19,7 @@
 
 use alloc::{format, string::String, vec::Vec};
 
-use jvm::{Array, ClassInstanceRef, JavaValue, Jvm, Result as JvmResult};
+use jvm::{Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult};
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
@@ -569,6 +569,13 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
 
             Ok(handle)
         }
-        Err(error) => Err(JvmSupport::to_wie_err(jvm, error).await),
+        // The bridged Java method threw. Register the exception so a guest
+        // handle names it, and surface it as `WieError::JavaException` so the
+        // dispatcher can route it through the compiled save-point chain (a
+        // try/catch in the caller) or, failing that, hand it to a Java catch
+        // higher up - rather than the fatal a stringified trace would become,
+        // which ends the whole title (e.g. System.arraycopy on a null array
+        // thrown from a compiled paint callback).
+        Err(JavaError::JavaException(exception)) => Err(WieError::JavaException(handles.address_of(exception)?)),
     }
 }
