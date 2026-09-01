@@ -15,6 +15,15 @@ pub struct FileImpl {
 
 impl FileImpl {
     pub async fn new(system: System, path: &str, write: bool) -> Result<Self, IOError> {
+        // XXX temporary: the main save file (LG_FN1) reads back empty. Log every
+        // open with whether it already existed and its size, so a save that
+        // never persisted the file is told apart from one that wrote it empty.
+        {
+            let existed = system.filesystem().exists(path).await;
+            let size = system.filesystem().size(path).await;
+            tracing::warn!("XXXFILE open {path:?} write={write} existed={existed} size={size:?}");
+        }
+
         if !system.filesystem().exists(path).await {
             if write {
                 // A writable handle to a new file: register it empty now so it
