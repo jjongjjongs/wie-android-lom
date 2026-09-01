@@ -388,43 +388,24 @@ pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm
     Ok(())
 }
 
-/// Install the synchronous fast path for the read-only getters that dominate
-/// software-rendering loops. A title's direct framebuffer blit queries the
-/// destination geometry and pokes the per-op graphics stub `0xcf` once per pixel
-/// or row: on Demon Hunter's loading screen these were the near-entirety of
-/// WIPI-C traffic — `unk3`/`0xcf` ~15k/s and `MC_grpGetFrameBuffer{Width,Height}`
-/// ~12k/s each, ~75% of all SVCs. Handling them here — before the generic async
-/// dispatch — skips the per-call context clone plus the two `async_trait` future
-/// allocations the async handler pays, which for these trivial calls cost far
-/// more than the work itself and starve the blit.
-///
-/// Only calls whose result is *identical* to the generic handler are fast-pathed:
-/// `GetFrameBufferPointer`/`Width`/`Height` read the field the handle points at
-/// (`data_ptr` is identity), `GetImageFrameBuffer` returns the handle unchanged
-/// (a `WIPICImage` starts with its framebuffer), and `unk3` is a 0-returning
-/// stub. `GetFrameBufferBpp`/`Bpl` are deliberately left on the generic path:
-/// the vendor `Bpp` ignores its argument and returns a fixed depth because titles
-/// call it with a non-handle register value, so dereferencing the handle here
-/// would read garbage (this was the regression that reverted the earlier, wider
-/// fast path).
+/// Install the synchronous fast path for the two getters that dominate
+/// software-rendering loops (`MC_grpGetFrameBufferPointer` and
+/// `MC_grpGetImageFrameBuffer`), together the near-entirety of WIPI-C traffic.
+/// Handling them here — before the generic async dispatch — skips the per-call
+/// context clone plus the two `async_trait` future allocations the async handler
+/// pays, which for these trivial getters cost far more than the work itself.
 fn install_fast_wipic_svc(core: &ArmCore) {
     use alloc::sync::Arc;
 
     const ID_GET_FRAMEBUFFER_POINTER: u32 = WIPICSvcId::GetFramebufferPointer as u32;
-    const ID_GET_FRAMEBUFFER_WIDTH: u32 = WIPICSvcId::GetFramebufferWidth as u32;
-    const ID_GET_FRAMEBUFFER_HEIGHT: u32 = WIPICSvcId::GetFramebufferHeight as u32;
     const ID_GET_IMAGE_FRAMEBUFFER: u32 = WIPICSvcId::GetImageFramebuffer as u32;
-    const ID_UNK3: u32 = WIPICSvcId::Unk3 as u32;
 
     core.set_fast_svc_handler(Arc::new(move |core: &mut ArmCore, category: u32, _lr: u32| -> Result<bool> {
         if category != SVC_CATEGORY_WIPIC {
             return Ok(false);
         }
         let id = core.read_svc_id();
-        if !matches!(
-            id,
-            ID_GET_FRAMEBUFFER_POINTER | ID_GET_FRAMEBUFFER_WIDTH | ID_GET_FRAMEBUFFER_HEIGHT | ID_GET_IMAGE_FRAMEBUFFER | ID_UNK3
-        ) {
+        if id != ID_GET_FRAMEBUFFER_POINTER && id != ID_GET_IMAGE_FRAMEBUFFER {
             return Ok(false);
         }
         WIPIC_SVC_COUNT[(id as usize).min(WIPIC_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -434,28 +415,27 @@ fn install_fast_wipic_svc(core: &ArmCore) {
         // the stub's `bx lr` and is even — using it would clear the Thumb bit in
         // `set_next_pc` and resume the caller in ARM state on Thumb code.
         let (_, ret) = core.read_pc_lr()?;
-        let result = match id {
-            // `unk3`/`0xcf` is a stub the generic handler answers with 0.
-            ID_UNK3 => 0,
-            // WIPICImage begins with its framebuffer, so the image handle doubles
-            // as a framebuffer handle — returned unchanged.
-            ID_GET_IMAGE_FRAMEBUFFER => core.read_param(0)?,
-            // The remaining getters read a field of the WIPICFramebuffer the
-            // handle points at (data_ptr is identity), matching the generic
-            // handlers including their null-handle behavior.
-            _ => {
+        match id {
+            ID_GET_FRAMEBUFFER_POINTER => {
+                // MC_grpGetFrameBufferPointer: return WIPICFramebuffer.buf. The
+                // handle is the struct's guest address (data_ptr is identity);
+                // read the struct and return `buf`, exactly as the generic
+                // handler does (including its null-handle behavior).
                 let handle = core.read_param(0)?;
                 let framebuffer: WIPICFramebuffer = read_generic(core, handle)?;
-                match id {
-                    ID_GET_FRAMEBUFFER_WIDTH => framebuffer.width,
-                    ID_GET_FRAMEBUFFER_HEIGHT => framebuffer.height,
-                    _ => framebuffer.buf.0,
-                }
+                core.write_return_value(&[framebuffer.buf.0])?;
+                core.set_next_pc(ret)?;
+                Ok(true)
             }
-        };
-        core.write_return_value(&[result])?;
-        core.set_next_pc(ret)?;
-        Ok(true)
+            // ID_GET_IMAGE_FRAMEBUFFER: WIPICImage begins with its framebuffer,
+            // so the image handle doubles as a framebuffer handle — return as is.
+            _ => {
+                let arg = core.read_param(0)?;
+                core.write_return_value(&[arg])?;
+                core.set_next_pc(ret)?;
+                Ok(true)
+            }
+        }
     }));
 }
 
