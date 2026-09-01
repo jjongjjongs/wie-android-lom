@@ -22,13 +22,20 @@ static INIT: Once = Once::new();
 /// platform and loader crates - the low-frequency lifecycle, resource and
 /// class-loading detail that explains why a title fails to start or misbehaves.
 ///
-/// Only the two known floods are held back, because at debug/trace they bury the
-/// rest and slow the game: the ARM interpreter's per-instruction trace
-/// (`arm32_cpu`) and the JIT's per-block bookkeeping (`wie_core_arm`) drop to
-/// info/warn, and the graphics service's per-frame drawing stays at info. Faults
-/// and unimplemented calls in those crates log at warn/error, so they still
-/// show. Setting `RUST_LOG`, or the in-app log filter, overrides this entirely.
-const DEFAULT_LOG_DIRECTIVE: &str = "debug,wie_lgt=trace,wie_lgt::runtime::wipi_c=debug,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,arm32_cpu=warn";
+/// The known per-frame floods are held back, because at debug/trace they bury the
+/// rest and slow the game - and, worse, fill the bounded capture so fast that a
+/// key press a second earlier has already scrolled out of it. The ARM
+/// interpreter's per-instruction trace (`arm32_cpu`) and the JIT's per-block
+/// bookkeeping (`wie_core_arm`) drop to info/warn; every graphics service's
+/// per-op drawing stays at info; and the LGT paint-loop housekeeping that dwarfs
+/// everything else - `vm_activate_class`/`vm_thread_reschedule`/
+/// `vm_check_stack_overflow` and the per-call method-bridge trace, ~95% of a
+/// capture - is routed to the `wie_lgt::hot` target and held at warn. Faults and
+/// unimplemented calls in those crates log at warn/error, so they still show, and
+/// the input path (event queue, canvas, clet) stays at debug so a press is
+/// always captured. Setting `RUST_LOG`, or the in-app log filter (e.g.
+/// `wie_lgt::hot=trace`), overrides this entirely.
+const DEFAULT_LOG_DIRECTIVE: &str = "debug,wie_lgt=trace,wie_lgt::hot=warn,wie_lgt::runtime::wipi_c=debug,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,wie_wipi_java::classes::org::kwis::msp::lcdui::graphics=info,wie_midp::classes::javax::microedition::lcdui::graphics=info,arm32_cpu=warn";
 
 /// Lets the player swap the log filter at runtime, so capturing a module's
 /// debug/trace detail no longer means editing the default above and rebuilding.

@@ -546,11 +546,11 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     }
 
     let result = if let Some(instance) = receiver {
-        tracing::debug!("LGT invoke virtual {class_name}.{name}{descriptor}");
+        tracing::debug!(target: "wie_lgt::hot", "LGT invoke virtual {class_name}.{name}{descriptor}");
 
         jvm.invoke_virtual::<_, JavaValue>(&instance, name, descriptor, arguments).await
     } else {
-        tracing::debug!("LGT invoke static {class_name}.{name}{descriptor}");
+        tracing::debug!(target: "wie_lgt::hot", "LGT invoke static {class_name}.{name}{descriptor}");
 
         jvm.invoke_static::<_, JavaValue>(class_name, name, descriptor, arguments).await
     };

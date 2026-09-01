@@ -468,7 +468,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         }
         InitSvcId::VmCheckStackOverflow => {
             let words = core.read_param(0)?;
-            tracing::trace!("vm_check_stack_overflow({words})");
+            tracing::trace!(target: "wie_lgt::hot", "vm_check_stack_overflow({words})");
 
             // Native vm_check_stack_overflow obtains the current exec-env.
             // Creating that exec-env initializes this thread's first deadline.
@@ -479,7 +479,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             0u32.write(core, lr)
         }
         InitSvcId::VmThreadReschedule => {
-            tracing::trace!("vm_thread_reschedule()");
+            tracing::trace!(target: "wie_lgt::hot", "vm_thread_reschedule()");
 
             if vm_thread_reschedule_due(&context.vm_reschedule_count) {
                 let thread_id = vm_exec_env_thread_id(core);
@@ -578,7 +578,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let table = core.read_param(1)?;
 
             if let Some(&activated) = context.java_activated_classes.lock().get(&root) {
-                tracing::debug!("LGT vm_activate_class(root={root:#x}, table={table:#x}) -> cached={activated:#x}");
+                tracing::trace!(target: "wie_lgt::hot", "LGT vm_activate_class(root={root:#x}, table={table:#x}) -> cached={activated:#x}");
                 return activated.write(core, lr);
             }
 
