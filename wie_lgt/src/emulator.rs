@@ -532,6 +532,7 @@ impl Emulator for LgtEmulator {
             crate::runtime::wipi_c::report_hot_wipic(dt_ms);
             crate::runtime::stdlib::report_hot_stdlib(dt_ms);
             crate::runtime::init::report_hot_init(dt_ms);
+            crate::runtime::java::method_bridge::report_hot_java(dt_ms);
             self.perf_last_ms = now_ms;
             self.perf_last_instr = instr;
             self.perf_ticks = 0;

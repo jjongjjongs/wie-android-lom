@@ -3,7 +3,7 @@ pub mod firmware_jni;
 pub mod firmware_libc;
 pub mod firmware_link;
 pub mod init;
-mod java;
+pub(crate) mod java;
 mod savepoint;
 pub(crate) mod stdlib;
 mod svc_ids;

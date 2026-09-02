@@ -17,9 +17,12 @@
 //! two slots each. They are converted using the method descriptor, since the
 //! raw words carry no type information.
 
+use alloc::collections::BTreeMap;
+use alloc::string::ToString;
 use alloc::{format, string::String, vec::Vec};
 
 use jvm::{Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult};
+use spin::Mutex;
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
@@ -29,6 +32,49 @@ use super::{
     class_table::{ClassTable, is_wide, split_descriptor},
     handles::JavaHandles,
 };
+
+/// Per-bridged-Java-method call counts (`class.name`), so the perf meter can
+/// name which methods a JVM-bound title spends its time invoking. When two
+/// SVC-plumbing optimizations left an `init`-bound title's MIPS unmoved, the
+/// remaining cost has to be the RustJava execution of the methods the game
+/// calls — this says which ones, so the next step targets real hot methods
+/// instead of guessing.
+static JAVA_CALL_COUNT: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+
+fn note_java_call(class_name: &str, name: &str) {
+    let mut counts = JAVA_CALL_COUNT.lock();
+    // `entry` needs an owned key; only the first call for a method allocates,
+    // afterwards it is a lookup-and-increment.
+    if let Some(count) = counts.get_mut(&*format!("{class_name}.{name}")) {
+        *count += 1;
+    } else {
+        counts.insert(format!("{class_name}.{name}"), 1);
+    }
+}
+
+/// Log the top bridged Java methods by call rate, draining the counters.
+pub fn report_hot_java(dt_ms: u64) {
+    use core::fmt::Write;
+
+    let drained: Vec<(String, u64)> = {
+        let mut counts = JAVA_CALL_COUNT.lock();
+        core::mem::take(&mut *counts).into_iter().collect()
+    };
+    if drained.is_empty() {
+        return;
+    }
+
+    let mut top: Vec<(String, u64)> = drained;
+    top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    top.truncate(6);
+
+    let mut line = "[java]".to_string();
+    for (name, count) in &top {
+        let per_s = *count as f64 * 1000.0 / dt_ms as f64;
+        let _ = write!(line, " {name}={per_s:.0}/s");
+    }
+    tracing::info!("{line}");
+}
 
 /// A row of the class table, lifted out so the table's lock is not held while
 /// the JVM runs - a call can re-enter the runtime and want it again.
@@ -576,6 +622,8 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     if let Some(handle) = receiver_handle {
         sync_guest_fields_to_jvm(jvm, handles, handle).await?;
     }
+
+    note_java_call(class_name, name);
 
     let result = if let Some(instance) = receiver {
         // Held at warn by default (via the `wie_lgt::hot` target): one line per
