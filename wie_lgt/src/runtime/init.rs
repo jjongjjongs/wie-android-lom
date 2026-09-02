@@ -136,7 +136,7 @@ const VM_RESCHEDULE_COUNT_THRESHOLD: u32 = 100;
 /// blocking until a notify, so an infinite wait becomes a timed one of this
 /// length; a worker that is never notified still advances (a spurious wakeup)
 /// instead of hanging the title.
-const LGT_BARE_WAIT_BOUND_MS: i64 = 20;
+const LGT_BARE_WAIT_BOUND_MS: u64 = 20;
 
 /// `unit_sched_time` is configuration 31 (4 ms); a new native exec-env stores
 /// five units in its scheduling interval, i.e. 20 ms.
@@ -2695,14 +2695,30 @@ async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext,
     // A bare `wait()` blocks until a notify. Many WIPI titles run their game
     // loop on a worker that does `synchronized(o){ o.wait() }` and expect the
     // platform to keep it moving; the reference's `wait(0)` does not hard-block
-    // but returns after a scheduling quantum. Give an infinite wait a bounded
-    // timeout so such a worker still progresses - a spurious wakeup the JVM
-    // already permits - instead of hanging the title (Fantasy Knight / Battle
-    // Monster). An explicitly timed `wait(ms)` keeps the title's own timeout.
-    let result = if member.descriptor == "()V"
-        && let Some(instance) = handles.get(this)
-    {
-        match jvm.invoke_virtual(&instance, "wait", "(JI)V", (LGT_BARE_WAIT_BOUND_MS, 0i32)).await {
+    // but returns after a scheduling quantum. Turn an infinite wait into a
+    // bounded native sleep so such a worker still progresses - a spurious wakeup
+    // the JVM already permits - instead of hanging the title (Fantasy Knight /
+    // Battle Monster).
+    //
+    // Sleep natively rather than via RustJava's timed `wait(ms)`: the latter
+    // spawns a one-shot notifier thread per call, and a worker looping on
+    // `wait()` would then churn a thread every iteration. Since the compiled
+    // `synchronized` already owns both monitors (native `vm_monitors` and, when
+    // an instance exists, the JVM monitor), surrender the JVM monitor for the
+    // sleep and reclaim it on wake, exactly as a real `wait` would. An
+    // explicitly timed `wait(ms)` keeps the title's own timeout via the JVM.
+    let jvm_instance = if member.descriptor == "()V" && depth != 0 {
+        handles.get(this)
+    } else {
+        None
+    };
+
+    let result = if let Some(instance) = &jvm_instance {
+        if let Err(error) = jvm.monitor_exit(instance).await {
+            return Err(wie_jvm_support::JvmSupport::to_wie_err(&jvm, error).await);
+        }
+        context.system.sleep(LGT_BARE_WAIT_BOUND_MS).await;
+        match jvm.monitor_enter(instance).await {
             Ok(()) => Ok(0),
             Err(error) => Err(wie_jvm_support::JvmSupport::to_wie_err(&jvm, error).await),
         }
@@ -2710,9 +2726,9 @@ async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext,
         method_bridge::invoke(core, &jvm, &handles, member, Some(this)).await
     };
 
-    // Reclaim the native monitor a wait surrendered. RustJava has already
-    // reacquired the JVM monitor by the time it returns, so this only mirrors
-    // that on the native side, restoring the pre-wait recursion depth.
+    // Reclaim the native monitor the wait surrendered, restoring the pre-wait
+    // recursion depth. The JVM monitor is already back (reacquired above, or by
+    // RustJava for a timed wait).
     if depth != 0 {
         while !vm_monitor_try_enter(&context.vm_monitors, this, thread_id) {
             context.system.yield_now().await;
