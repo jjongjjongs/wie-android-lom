@@ -137,14 +137,22 @@ impl BaseClip {
             let system = context.system();
             let (completed, stopped) = system.audio().play_with_completion(system, audio_handle as u32, repeat).unwrap();
 
-            context.spawn(
-                jvm,
-                Box::new(ClipCompletionRunner {
-                    clip: this,
-                    completed,
-                    stopped,
-                }),
-            )?;
+            // The completion callback only fires at end-of-media, which a looping
+            // clip never reaches - so a repeating clip needs no watcher. Skipping
+            // it also avoids piling up a watcher task per call for a title that
+            // restarts its looping BGM every frame (시드): the identical re-plays
+            // coalesce audio-side and share one never-set stop flag, so a watcher
+            // spawned each frame would wait forever and exhaust the thread stacks.
+            if !repeat {
+                context.spawn(
+                    jvm,
+                    Box::new(ClipCompletionRunner {
+                        clip: this,
+                        completed,
+                        stopped,
+                    }),
+                )?;
+            }
         } else {
             let _: () = jvm.invoke_virtual(&player, "start", "(Z)V", (repeat,)).await?;
         }
