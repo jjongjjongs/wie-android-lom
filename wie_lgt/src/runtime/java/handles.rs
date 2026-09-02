@@ -310,6 +310,17 @@ impl JavaHandles {
 
         let handle = self.allocate_instance(vtable)?;
 
+        // XXX temporary: an app class (obfuscated single/short lower-case name,
+        // e.g. `d`) crossing JVM->guest here gets a fresh, zeroed field block and
+        // never runs its compiled constructor, so its array fields are null. The
+        // save serializer then throws NPE on such an object. Log app-class
+        // crossings so the empty item object can be traced to what created it.
+        // Platform classes (java/*, javax/*, org/*, net/*) are expected to cross
+        // and are not logged. Removed once the round-trip is fixed.
+        if !class.contains('/') {
+            tracing::warn!("XXXINSERT app-class {class:?} -> handle {handle:#x} (fresh zeroed field block, no guest constructor)");
+        }
+
         self.addresses.lock().insert(instance.identity(), handle);
         self.entries.lock().insert(handle, instance);
 
