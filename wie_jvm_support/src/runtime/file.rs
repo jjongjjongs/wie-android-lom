@@ -22,7 +22,13 @@ impl FileImpl {
                 // first write. WIPI titles open a fresh non-volatile store for
                 // reading right after creating it, and that reopen would
                 // otherwise fail with NotFound.
-                system.filesystem().add_virtual(path, alloc::vec::Vec::new());
+                //
+                // Register it in the writable platform layer (an empty write),
+                // not the virtual packaged-resource overlay: `add_virtual`
+                // would leave a stub that `remove` - which only clears the
+                // platform layer - cannot delete, so the file would linger and
+                // still report as existing after deletion.
+                system.filesystem().write(path, 0, &[]).await;
             } else {
                 return Err(IOError::NotFound);
             }
