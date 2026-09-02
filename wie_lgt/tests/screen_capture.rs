@@ -108,7 +108,19 @@ impl Platform for CapturePlatform {
     /// Advancing on read is what the executor's own tests do, and it ties
     /// emulated time to work done rather than to how fast the host is.
     fn now(&self) -> Instant {
-        Instant::from_epoch_millis(self.clock.fetch_add(1, Ordering::SeqCst))
+        // Milliseconds added per read. The default of 1 ties emulated time to
+        // work done (see above). A title with a real-time splash/pause loop
+        // (poll currentTimeMillis + sleep) needs emulated time to advance faster
+        // than one ms per read or it never elapses; set WIE_CLOCK_MS to test
+        // whether such a title is genuinely stuck or just clock-limited here.
+        static STEP: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+            std::env::var("WIE_CLOCK_MS")
+                .ok()
+                .and_then(|x| x.parse().ok())
+                .filter(|&x| x >= 1)
+                .unwrap_or(1)
+        });
+        Instant::from_epoch_millis(self.clock.fetch_add(*STEP, Ordering::SeqCst))
     }
     fn database_repository(&self) -> &dyn DatabaseRepository {
         self.inner.database_repository()
