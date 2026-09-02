@@ -318,7 +318,16 @@ impl JavaHandles {
         // Platform classes (java/*, javax/*, org/*, net/*) are expected to cross
         // and are not logged. Removed once the round-trip is fixed.
         if !class.contains('/') {
-            tracing::warn!("XXXINSERT app-class {class:?} -> handle {handle:#x} (fresh zeroed field block, no guest constructor)");
+            let c = self.core.save_context();
+            tracing::warn!(
+                "XXXINSERT app-class {class:?} -> handle {handle:#x} (fresh zeroed field block) guest lr={:#x} pc={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x}",
+                c.lr,
+                c.pc,
+                c.r0,
+                c.r1,
+                c.r2,
+                c.r3
+            );
         }
 
         self.addresses.lock().insert(instance.identity(), handle);
