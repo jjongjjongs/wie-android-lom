@@ -1104,6 +1104,32 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             let exception = context.java_handles.address_of(exception)?;
 
+            // XXX temporary: the save routine opens LG_FN1, allocates the save
+            // buffer, then a compiler-inserted null check throws here, so the
+            // data blob is never written. Dump the guest return address and
+            // registers so the exact dereference (which object is null) can be
+            // located in binary.mod. Removed once the null source is fixed.
+            {
+                let c = core.save_context();
+                tracing::warn!(
+                    "XXXNPE lr={:#x} pc={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} r6={:#x} r7={:#x} r8={:#x} sb={:#x} sl={:#x} fp={:#x}",
+                    c.lr,
+                    c.pc,
+                    c.r0,
+                    c.r1,
+                    c.r2,
+                    c.r3,
+                    c.r4,
+                    c.r5,
+                    c.r6,
+                    c.r7,
+                    c.r8,
+                    c.sb,
+                    c.sl,
+                    c.fp
+                );
+            }
+
             tracing::debug!("vm_throw_null_pointer_exception({message:#x}) -> longjmp({exception:#x})");
             context.save_points.throw(core, exception)
         }
