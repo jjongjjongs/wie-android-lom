@@ -44,9 +44,15 @@ struct ActiveSmaf {
     /// Hash of the SMAF bytes, to recognize a byte-identical re-play.
     hash: u64,
     repeat: bool,
-    /// The handle the sink is currently playing under (remapped on each seamless
-    /// re-play, since the title allocates a fresh handle every time).
+    /// The handle the title currently knows the clip by (remapped on each
+    /// seamless re-play, since it allocates a fresh handle every time). Used to
+    /// match the title's `stop`, which names this latest handle.
     handle: AudioHandle,
+    /// The handle the sink actually plays the stream under - fixed at the first
+    /// `play_smaf` and never remapped, because a seamless re-play keeps that
+    /// original stream. Stopping the clip must target THIS handle, not the
+    /// latest one the title allocated (which the sink never played).
+    sink_handle: AudioHandle,
     stop_flag: Arc<AtomicBool>,
     completed: Arc<AtomicBool>,
     /// Reaper polls remaining before a deferred stop actually stops the sink;
@@ -172,6 +178,7 @@ impl Audio {
                     hash,
                     repeat,
                     handle: audio_handle,
+                    sink_handle: audio_handle,
                     stop_flag: stop_flag.clone(),
                     completed: completed.clone(),
                     pending_stop_polls: None,
@@ -277,7 +284,9 @@ impl Audio {
     /// Stops the active looping clip's sink playback immediately and forgets it.
     fn flush_active(&mut self) {
         if let Some(active) = self.active.take() {
-            self.sink.stop_smaf(active.handle);
+            // Stop the stream the sink actually plays, not the latest handle the
+            // title allocated - they differ once a looping clip has re-played.
+            self.sink.stop_smaf(active.sink_handle);
             active.stop_flag.store(true, Ordering::Relaxed);
             self.playing.remove(&active.handle);
         }
@@ -561,6 +570,8 @@ mod tests {
         now: AtomicUsize,
         smaf_play: Arc<AtomicUsize>,
         smaf_stop: Arc<AtomicUsize>,
+        smaf_last_played: Arc<AtomicUsize>,
+        smaf_last_stopped: Arc<AtomicUsize>,
     }
 
     impl NullPlatform {
@@ -572,6 +583,8 @@ mod tests {
                 now: AtomicUsize::new(0),
                 smaf_play: Arc::new(AtomicUsize::new(0)),
                 smaf_stop: Arc::new(AtomicUsize::new(0)),
+                smaf_last_played: Arc::new(AtomicUsize::new(usize::MAX)),
+                smaf_last_stopped: Arc::new(AtomicUsize::new(usize::MAX)),
             }
         }
     }
@@ -597,6 +610,8 @@ mod tests {
             Box::new(SmafCountingSink {
                 play: self.smaf_play.clone(),
                 stop: self.smaf_stop.clone(),
+                last_played: self.smaf_last_played.clone(),
+                last_stopped: self.smaf_last_stopped.clone(),
             })
         }
 
@@ -634,6 +649,10 @@ mod tests {
     struct SmafCountingSink {
         play: Arc<AtomicUsize>,
         stop: Arc<AtomicUsize>,
+        /// The handle passed to the most recent `play_smaf` / `stop_smaf`, so a
+        /// test can assert a stop targets the stream the sink actually played.
+        last_played: Arc<AtomicUsize>,
+        last_stopped: Arc<AtomicUsize>,
     }
 
     impl AudioSink for SmafCountingSink {
@@ -645,13 +664,15 @@ mod tests {
         fn midi_pitch_bend(&self, _voice: u32, _channel_id: u8, _value: u16) {}
         fn midi_sysex(&self, _voice: u32, _data: &[u8]) {}
 
-        fn play_smaf(&self, _id: u32, _data: &[u8], _repeat: bool) -> Option<u32> {
+        fn play_smaf(&self, id: u32, _data: &[u8], _repeat: bool) -> Option<u32> {
             self.play.fetch_add(1, Ordering::SeqCst);
+            self.last_played.store(id as usize, Ordering::SeqCst);
             Some(16_000)
         }
 
-        fn stop_smaf(&self, _id: u32) {
+        fn stop_smaf(&self, id: u32) {
             self.stop.fetch_add(1, Ordering::SeqCst);
+            self.last_stopped.store(id as usize, Ordering::SeqCst);
         }
     }
 
@@ -688,40 +709,62 @@ mod tests {
 
     /// A system whose sink pre-renders SMAF, plus the (play, stop) counters that
     /// sink increments.
-    fn new_system_with_smaf_counters() -> (System, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    struct SmafCounters {
+        play: Arc<AtomicUsize>,
+        stop: Arc<AtomicUsize>,
+        last_played: Arc<AtomicUsize>,
+        last_stopped: Arc<AtomicUsize>,
+    }
+
+    fn new_system_with_smaf_counters() -> (System, SmafCounters) {
         let platform = NullPlatform::new();
-        let play = platform.smaf_play.clone();
-        let stop = platform.smaf_stop.clone();
+        let counters = SmafCounters {
+            play: platform.smaf_play.clone(),
+            stop: platform.smaf_stop.clone(),
+            last_played: platform.smaf_last_played.clone(),
+            last_stopped: platform.smaf_last_stopped.clone(),
+        };
         let system = System::new(Box::new(platform), "test-pid", "test-aid", DefaultTaskRunner);
-        (system, play, stop)
+        (system, counters)
     }
 
     #[test]
     fn identical_looping_replay_does_not_restart_the_sink() {
-        let (system, play, stop) = new_system_with_smaf_counters();
+        let (system, counters) = new_system_with_smaf_counters();
 
-        // First BGM start: the sink begins playing the looping clip.
+        // First BGM start: the sink begins playing the looping clip under h1.
         let h1 = system.audio().load_smaf(b"BGM-DATA").unwrap();
         system.audio().play_with_completion(&system, h1, true).unwrap();
-        assert_eq!(play.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.play.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.last_played.load(Ordering::SeqCst), h1 as usize);
 
         // The title tears the player down and rebuilds it with byte-identical
         // data (stop, close, load, play) - exactly 시드's per-frame pattern. The
-        // sink must NOT be restarted or stopped: the playback continues.
+        // sink must NOT be restarted or stopped: the playback continues, and the
+        // stream stays under h1 even as the title allocates fresh handles.
+        let mut latest = h1;
         for _ in 0..5 {
-            system.audio().stop(h1);
-            let _ = system.audio().close(h1);
-            let handle = system.audio().load_smaf(b"BGM-DATA").unwrap();
-            system.audio().play_with_completion(&system, handle, true).unwrap();
+            system.audio().stop(latest);
+            let _ = system.audio().close(latest);
+            latest = system.audio().load_smaf(b"BGM-DATA").unwrap();
+            system.audio().play_with_completion(&system, latest, true).unwrap();
         }
-        assert_eq!(play.load(Ordering::SeqCst), 1, "identical re-plays should coalesce");
-        assert_eq!(stop.load(Ordering::SeqCst), 0, "no stop while re-playing identical data");
+        assert_eq!(counters.play.load(Ordering::SeqCst), 1, "identical re-plays should coalesce");
+        assert_eq!(counters.stop.load(Ordering::SeqCst), 0, "no stop while re-playing identical data");
+        assert_ne!(latest, h1, "the title allocated fresh handles");
 
-        // A genuinely different looping clip stops the old one and starts anew.
+        // A genuinely different looping clip must stop the ORIGINAL stream (h1,
+        // what the sink actually plays) - not the latest handle the title used,
+        // which the sink never played - then start the new one.
         let other = system.audio().load_smaf(b"OTHER-BGM").unwrap();
         system.audio().play_with_completion(&system, other, true).unwrap();
-        assert_eq!(play.load(Ordering::SeqCst), 2);
-        assert_eq!(stop.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.play.load(Ordering::SeqCst), 2);
+        assert_eq!(counters.stop.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            counters.last_stopped.load(Ordering::SeqCst),
+            h1 as usize,
+            "the stop must target the stream the sink played (h1), not a later handle"
+        );
     }
 
     #[futures_test::test]
