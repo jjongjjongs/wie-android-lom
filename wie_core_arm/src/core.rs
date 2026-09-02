@@ -273,6 +273,40 @@ impl ArmCore {
         }
     }
 
+    /// Collects conservative GC roots from every live thread.
+    ///
+    /// Returns each thread's register values (candidate root words) and the
+    /// in-use portion of its stack as a `[low, high)` range for the caller to
+    /// scan word by word. The currently executing thread's registers come from
+    /// the engine (its saved context is stale); other threads use their saved
+    /// context. `pc`/`cpsr` are omitted as they never hold heap references.
+    pub fn gc_thread_roots(&self) -> (Vec<u32>, Vec<(u32, u32)>) {
+        let current = self.save_context();
+        let current_thread = self.current_thread_id();
+
+        let inner = self.inner.lock();
+
+        let mut registers = Vec::new();
+        let mut ranges = Vec::new();
+
+        for (&thread_id, state) in inner.threads.iter() {
+            let context = if Some(thread_id) == current_thread { &current } else { &state.context };
+
+            registers.extend_from_slice(&[
+                context.r0, context.r1, context.r2, context.r3, context.r4, context.r5, context.r6, context.r7, context.r8, context.sb, context.sl,
+                context.fp, context.ip, context.lr,
+            ]);
+
+            let low = state.stack_base as u32;
+            let high = low + state.stack_size as u32;
+            if context.sp >= low && context.sp <= high {
+                ranges.push((context.sp, high));
+            }
+        }
+
+        (registers, ranges)
+    }
+
     pub fn enter_thread_context(&self, thread_id: ThreadId) -> ThreadContextGuard {
         ThreadContextGuard::new(self.clone(), thread_id)
     }

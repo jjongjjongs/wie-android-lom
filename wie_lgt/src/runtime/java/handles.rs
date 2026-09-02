@@ -5,14 +5,21 @@
 //! given a small guest allocation whose address is the handle, and the
 //! instance is retained here under that address.
 
-use alloc::{boxed::Box, collections::BTreeMap, string::String, sync::Arc, vec, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    string::String,
+    sync::Arc,
+    vec,
+    vec::Vec,
+};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use jvm::ClassInstance;
 use spin::Mutex;
 
 use wie_core_arm::{Allocator, ArmCore};
-use wie_util::{ByteRead, ByteWrite, Result, read_generic, write_generic};
+use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
 
 /// Instance header the compiled code relies on:
 ///
@@ -59,6 +66,20 @@ pub struct JavaHandles {
     /// type, so a method that takes it as `Object` (`System.arraycopy`) needs
     /// this to wrap it as the right JVM array rather than guessing.
     array_element_types: Arc<Mutex<BTreeMap<u32, u8>>>,
+    /// Every guest object/array this hands out, for the garbage collector. The
+    /// key is the instance handle; the value is the block it points to and its
+    /// size. Raw allocations (thread stacks, save points, firmware structures)
+    /// never appear here, so the collector can only ever reclaim real objects.
+    gc_objects: Arc<Mutex<BTreeMap<u32, GcObject>>>,
+}
+
+/// One collector-managed guest object: its `+0x08` payload block (fields for an
+/// instance, `[length, elements]` for an array) and the byte size of that block.
+#[derive(Clone, Copy)]
+pub struct GcObject {
+    pub payload: u32,
+    pub payload_size: u32,
+    pub is_array: bool,
 }
 
 impl JavaHandles {
@@ -72,6 +93,7 @@ impl JavaHandles {
             entries: Default::default(),
             addresses: Default::default(),
             array_element_types: Default::default(),
+            gc_objects: Default::default(),
         }
     }
 
@@ -147,7 +169,7 @@ impl JavaHandles {
         // Native vm_gc_calloc(4, 0) still has to leave the object with a valid
         // +0x08 pointer for guest code. Reserve one word while exposing zero
         // logical field slots.
-        let fields = Allocator::alloc(&mut core, slots.max(1) * 4)?;
+        let fields = self.alloc_reporting_leaks(&mut core, slots.max(1) * 4)?;
         for slot in 0..slots {
             write_generic(&mut core, fields + slot * 4, 0u32)?;
         }
@@ -156,6 +178,15 @@ impl JavaHandles {
         write_generic(&mut core, instance, vtable)?;
         write_generic(&mut core, instance + 4, 0u32)?;
         write_generic(&mut core, instance + INSTANCE_FIELDS_OFFSET, fields)?;
+
+        self.gc_objects.lock().insert(
+            instance,
+            GcObject {
+                payload: fields,
+                payload_size: slots.max(1) * 4,
+                is_array: false,
+            },
+        );
 
         Ok(instance)
     }
@@ -178,7 +209,7 @@ impl JavaHandles {
         let mut core = self.core.clone();
 
         let size = length * element_size;
-        let data = Allocator::alloc(&mut core, ARRAY_HEADER_SIZE + size)?;
+        let data = self.alloc_reporting_leaks(&mut core, ARRAY_HEADER_SIZE + size)?;
 
         write_generic(&mut core, data, length)?;
         core.write_bytes(data + ARRAY_HEADER_SIZE, &vec![0; size as usize])?;
@@ -188,7 +219,118 @@ impl JavaHandles {
         write_generic(&mut core, instance + 4, 0u32)?;
         write_generic(&mut core, instance + INSTANCE_FIELDS_OFFSET, data)?;
 
+        self.gc_objects.lock().insert(
+            instance,
+            GcObject {
+                payload: data,
+                payload_size: ARRAY_HEADER_SIZE + size,
+                is_array: true,
+            },
+        );
+
         Ok(instance)
+    }
+
+    /// Allocates a guest block, running the collector's dry-run report if the
+    /// heap is exhausted so a crash log shows how much is reclaimable.
+    fn alloc_reporting_leaks(&self, core: &mut ArmCore, size: u32) -> Result<u32> {
+        match Allocator::alloc(core, size) {
+            Ok(address) => Ok(address),
+            Err(WieError::AllocationFailure) => {
+                self.gc_dry_run();
+                Err(WieError::AllocationFailure)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Conservative mark-and-report pass for the collector, in dry-run mode.
+    ///
+    /// It marks every managed object reachable from the live guest state - each
+    /// thread's registers and in-use stack, then the object graph reached from
+    /// there - and logs how many objects, and how many bytes, are NOT reachable
+    /// and would therefore be reclaimable. Nothing is freed: this validates the
+    /// mark phase against a real leak before any sweep is turned on. The scan is
+    /// conservative (any word that happens to equal a managed handle is treated
+    /// as a reference), so it can only ever over-estimate what is live, never
+    /// free something that is still in use.
+    pub fn gc_dry_run(&self) {
+        let objects = self.gc_objects.lock();
+        if objects.is_empty() {
+            return;
+        }
+
+        let (registers, stack_ranges) = self.core.gc_thread_roots();
+        let core = self.core.clone();
+
+        // Every register value, and every word in an in-use stack, is a
+        // candidate reference into the heap.
+        let mut seeds: Vec<u32> = registers.clone();
+        for &(low, high) in &stack_ranges {
+            let mut address = low & !3;
+            while address < high {
+                if let Ok(word) = read_generic::<u32, _>(&core, address) {
+                    seeds.push(word);
+                }
+                address += 4;
+            }
+        }
+
+        let marked = self.gc_reachable(&objects, &seeds);
+
+        let mut dead = 0u32;
+        let mut dead_arrays = 0u32;
+        let mut dead_bytes: u64 = 0;
+        for (handle, object) in objects.iter() {
+            if !marked.contains(handle) {
+                dead += 1;
+                dead_arrays += u32::from(object.is_array);
+                dead_bytes += u64::from(object.payload_size + INSTANCE_HEADER_SIZE);
+            }
+        }
+
+        tracing::error!(
+            "GC dry-run: {} managed objects, {} reachable, {} unreachable ({} arrays) (would free ~{} bytes) from {} register + {} stack-range roots",
+            objects.len(),
+            marked.len(),
+            dead,
+            dead_arrays,
+            dead_bytes,
+            registers.len(),
+            stack_ranges.len(),
+        );
+    }
+
+    /// The managed objects reachable from `seeds` (candidate root words),
+    /// following each object's payload words as further candidate references.
+    /// Conservative: any word equal to a managed handle is treated as a live
+    /// reference, so the result never under-approximates the live set.
+    fn gc_reachable(&self, objects: &BTreeMap<u32, GcObject>, seeds: &[u32]) -> BTreeSet<u32> {
+        let core = self.core.clone();
+        let mut marked: BTreeSet<u32> = BTreeSet::new();
+        let mut worklist: Vec<u32> = Vec::new();
+
+        for &word in seeds {
+            if objects.contains_key(&word) && marked.insert(word) {
+                worklist.push(word);
+            }
+        }
+
+        while let Some(handle) = worklist.pop() {
+            let object = objects[&handle];
+            let mut offset = 0;
+            while offset < object.payload_size {
+                if let Ok(word) = read_generic::<u32, _>(&core, object.payload + offset)
+                    && objects.contains_key(&word)
+                    && marked.insert(word)
+                {
+                    worklist.push(word);
+                }
+                offset += 4;
+            }
+        }
+
+        marked
     }
 
     /// Copies a guest-side byte array into host memory.
@@ -346,8 +488,9 @@ impl JavaHandles {
 #[cfg(test)]
 mod tests {
     use wie_core_arm::{Allocator, ArmCore};
+    use wie_util::read_generic;
 
-    use super::JavaHandles;
+    use super::{INSTANCE_FIELDS_OFFSET, JavaHandles};
 
     #[test]
     fn materialized_array_block_reads_back_as_a_char_array() {
@@ -369,5 +512,34 @@ mod tests {
         handles.materialize_array_block(handle, chars.len() as u32, &bytes).unwrap();
 
         assert_eq!(handles.read_char_array(handle).unwrap(), chars);
+    }
+
+    #[test]
+    fn gc_reachable_follows_references_and_drops_unreferenced_objects() {
+        use wie_util::write_generic;
+
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+        let handles = JavaHandles::new(core.clone());
+
+        // Three objects; make `a` reference `b` by writing b's handle into a's
+        // field block. `c` is referenced by nobody.
+        let a = handles.allocate_instance_with_fields(0, 4).unwrap();
+        let b = handles.allocate_instance_with_fields(0, 4).unwrap();
+        let c = handles.allocate_instance_with_fields(0, 4).unwrap();
+
+        let a_fields: u32 = read_generic(&core, a + INSTANCE_FIELDS_OFFSET).unwrap();
+        write_generic(&mut core, a_fields, b).unwrap();
+
+        let objects = handles.gc_objects.lock();
+
+        // Rooting `a` keeps a and b; c is unreachable.
+        let reachable = handles.gc_reachable(&objects, &[a]);
+        assert!(reachable.contains(&a));
+        assert!(reachable.contains(&b));
+        assert!(!reachable.contains(&c));
+
+        // With no roots, nothing is reachable.
+        assert!(handles.gc_reachable(&objects, &[]).is_empty());
     }
 }
