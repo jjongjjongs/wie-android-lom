@@ -254,6 +254,59 @@ fn vm_thread_reschedule_due(count: &Mutex<u32>) -> bool {
     }
 }
 
+/// Fast-path counterpart to [`vm_thread_reschedule_due`]. Consumes one tick of
+/// the reschedule counter when one is available — the common no-yield case,
+/// ~99 calls in every 100 — and returns `true`. When the counter is exhausted
+/// it returns `false` *without touching it*, so the async handler's
+/// `vm_thread_reschedule_due` still sees the zero, resets the counter, and does
+/// the deadline check and executor yield exactly once. Splitting it this way
+/// lets the sync fast path service the overwhelming majority of reschedule
+/// SVCs (a lock and a decrement) without the async dispatch, while the rare
+/// yielding call — which must `.await` — falls through unchanged.
+fn vm_thread_reschedule_fast_tick(count: &Mutex<u32>) -> bool {
+    let mut count = count.lock();
+    if *count > 0 {
+        *count -= 1;
+        true
+    } else {
+        false
+    }
+}
+
+/// Synchronous fast path for `vm_thread_reschedule`, the hottest init SVC on a
+/// green-thread-heavy title (~10k/s on CHSeed, where it is the single dominant
+/// syscall). See [`vm_thread_reschedule_fast_tick`]. Returns `Ok(true)` when
+/// fully serviced, `Ok(false)` to defer to the generic handler (either a
+/// different init SVC, or the ~1/100 reschedule that may actually yield). The
+/// caller has already matched `SVC_CATEGORY_INIT`.
+fn try_fast_thread_reschedule(core: &mut ArmCore, count: &Mutex<u32>) -> Result<bool> {
+    if core.read_svc_id() != InitSvcId::VmThreadReschedule as u32 {
+        return Ok(false);
+    }
+    if !vm_thread_reschedule_fast_tick(count) {
+        return Ok(false);
+    }
+    note_init_svc(InitSvcId::VmThreadReschedule as u32);
+    let (_, ret) = core.read_pc_lr()?;
+    core.write_return_value(&[0])?;
+    core.set_next_pc(ret)?;
+    Ok(true)
+}
+
+/// Install the single `fast_svc` handler, routing each hot SVC category to its
+/// synchronous fast path before the generic async dispatch: WIPI-C framebuffer
+/// getters and init's `vm_thread_reschedule`. This owns the one `fast_svc`
+/// slot, so it also covers what `register_wipic_svc_handler` used to install.
+fn install_fast_svc(core: &ArmCore, vm_reschedule_count: Arc<Mutex<u32>>) {
+    core.set_fast_svc_handler(Arc::new(move |core: &mut ArmCore, category: u32, _lr: u32| -> Result<bool> {
+        match category {
+            SVC_CATEGORY_WIPIC => crate::runtime::wipi_c::try_fast_wipic_getter(core),
+            SVC_CATEGORY_INIT => try_fast_thread_reschedule(core, &vm_reschedule_count),
+            _ => Ok(false),
+        }
+    }));
+}
+
 fn vm_exec_env_thread_id(core: &ArmCore) -> ThreadId {
     // Match SavePointState: zero represents bootstrap/native-loader execution
     // before an ArmCoreThreadWrapper owns the register context.
@@ -406,6 +459,11 @@ fn register_init_svc_handler(
     // the guest roots miss but the JVM still holds.
     java_handles.set_jvm(jvm.clone());
 
+    // Shared with the fast_svc path so both service the same reschedule
+    // counter; the sync fast path must see the async handler's resets and
+    // vice versa.
+    let vm_reschedule_count = Arc::new(Mutex::new(VM_RESCHEDULE_COUNT_THRESHOLD));
+
     core.register_svc_handler(
         SVC_CATEGORY_INIT,
         handle_init_svc,
@@ -428,14 +486,20 @@ fn register_init_svc_handler(
             save_points: save_points.clone(),
             synthetic_classes: Default::default(),
             heavy_linked_classes: Default::default(),
-            vm_reschedule_count: Arc::new(Mutex::new(VM_RESCHEDULE_COUNT_THRESHOLD)),
+            vm_reschedule_count: vm_reschedule_count.clone(),
             vm_reschedule_deadlines_ms: Default::default(),
             vm_monitors: Default::default(),
             main_class_name,
             own_virtual_resolve: Default::default(),
             own_field_resolve: Default::default(),
         },
-    )
+    )?;
+
+    // Owns the single fast_svc slot: routes WIPI-C getters and this category's
+    // vm_thread_reschedule to their sync fast paths. Installed here, after both
+    // the WIPI-C and init async handlers are registered.
+    install_fast_svc(core, vm_reschedule_count);
+    Ok(())
 }
 
 /// Writes the result of a bridged Java method call back to the compiled caller.

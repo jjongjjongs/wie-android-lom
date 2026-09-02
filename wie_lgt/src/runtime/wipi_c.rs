@@ -384,75 +384,73 @@ pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm
             filesystem::new_state(),
         ),
     )?;
-    install_fast_wipic_svc(core);
+    // The synchronous fast path for the hottest WIPI-C getters is installed by
+    // `register_init_svc_handler`, which owns the single `fast_svc` slot and
+    // routes each SVC category (WIPI-C here, init's thread-reschedule there) to
+    // the right handler. See `try_fast_wipic_getter`.
     Ok(())
 }
 
-/// Install the synchronous fast path for the handful of trivial getters that
-/// dominate software-rendering loops. Device traces show a game's inner blit
-/// loop calls the framebuffer-property getters at tens of thousands per second
+/// Synchronous fast path for the handful of trivial getters that dominate
+/// software-rendering loops. Device traces show a game's inner blit loop calls
+/// the framebuffer-property getters at tens of thousands per second
 /// (`MC_grpGetFrameBufferWidth` ~25k/s, `...Bpp` ~15k/s, `...Pointer` ~8k/s,
-/// `...Height` ~4k/s) — together the near-entirety of WIPI-C traffic. Handling
+/// `...Height` ~4k/s) — together the near-entirety of WIPI-C traffic. Servicing
 /// them here — before the generic async dispatch — skips the per-call context
 /// clone plus the two `async_trait` future allocations the async handler pays,
-/// which for these one-field reads cost far more than the work itself.
-fn install_fast_wipic_svc(core: &ArmCore) {
-    use alloc::sync::Arc;
-
+/// which for these one-field reads cost far more than the work itself. Returns
+/// `Ok(true)` when the call was fully serviced, `Ok(false)` to defer to the
+/// generic handler. The caller has already matched `SVC_CATEGORY_WIPIC`.
+pub(crate) fn try_fast_wipic_getter(core: &mut ArmCore) -> Result<bool> {
     const ID_GET_FRAMEBUFFER_POINTER: u32 = WIPICSvcId::GetFramebufferPointer as u32;
     const ID_GET_IMAGE_FRAMEBUFFER: u32 = WIPICSvcId::GetImageFramebuffer as u32;
     const ID_GET_FRAMEBUFFER_WIDTH: u32 = WIPICSvcId::GetFramebufferWidth as u32;
     const ID_GET_FRAMEBUFFER_HEIGHT: u32 = WIPICSvcId::GetFramebufferHeight as u32;
     const ID_GET_FRAMEBUFFER_BPP: u32 = WIPICSvcId::GetFramebufferBpp as u32;
 
-    core.set_fast_svc_handler(Arc::new(move |core: &mut ArmCore, category: u32, _lr: u32| -> Result<bool> {
-        if category != SVC_CATEGORY_WIPIC {
-            return Ok(false);
+    let id = core.read_svc_id();
+    if !matches!(
+        id,
+        ID_GET_FRAMEBUFFER_POINTER | ID_GET_IMAGE_FRAMEBUFFER | ID_GET_FRAMEBUFFER_WIDTH | ID_GET_FRAMEBUFFER_HEIGHT | ID_GET_FRAMEBUFFER_BPP
+    ) {
+        return Ok(false);
+    }
+    WIPIC_SVC_COUNT[(id as usize).min(WIPIC_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    // Return straight to the caller, exactly as the generic handler does:
+    // the target is the *link register* (the game's Thumb return address,
+    // low bit set), not the SVC-exception return address, which points at
+    // the stub's `bx lr` and is even — using it would clear the Thumb bit in
+    // `set_next_pc` and resume the caller in ARM state on Thumb code.
+    let (_, ret) = core.read_pc_lr()?;
+    let result = match id {
+        // MC_grpGetFrameBufferPointer/Width/Height: read the field the
+        // generic handler returns from the WIPICFramebuffer. The handle is
+        // the struct's guest address (data_ptr is identity), so read it
+        // directly — including the generic path's null-handle behavior.
+        ID_GET_FRAMEBUFFER_POINTER => {
+            let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
+            framebuffer.buf.0
         }
-        let id = core.read_svc_id();
-        if !matches!(
-            id,
-            ID_GET_FRAMEBUFFER_POINTER | ID_GET_IMAGE_FRAMEBUFFER | ID_GET_FRAMEBUFFER_WIDTH | ID_GET_FRAMEBUFFER_HEIGHT | ID_GET_FRAMEBUFFER_BPP
-        ) {
-            return Ok(false);
+        ID_GET_FRAMEBUFFER_WIDTH => {
+            let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
+            framebuffer.width
         }
-        WIPIC_SVC_COUNT[(id as usize).min(WIPIC_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        // Return straight to the caller, exactly as the generic handler does:
-        // the target is the *link register* (the game's Thumb return address,
-        // low bit set), not the SVC-exception return address, which points at
-        // the stub's `bx lr` and is even — using it would clear the Thumb bit in
-        // `set_next_pc` and resume the caller in ARM state on Thumb code.
-        let (_, ret) = core.read_pc_lr()?;
-        let result = match id {
-            // MC_grpGetFrameBufferPointer/Width/Height: read the field the
-            // generic handler returns from the WIPICFramebuffer. The handle is
-            // the struct's guest address (data_ptr is identity), so read it
-            // directly — including the generic path's null-handle behavior.
-            ID_GET_FRAMEBUFFER_POINTER => {
-                let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
-                framebuffer.buf.0
-            }
-            ID_GET_FRAMEBUFFER_WIDTH => {
-                let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
-                framebuffer.width
-            }
-            ID_GET_FRAMEBUFFER_HEIGHT => {
-                let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
-                framebuffer.height
-            }
-            // MC_grpGetFrameBufferBpp ignores its argument and reports the
-            // display depth from a global, exactly as the vendor does; titles
-            // call it with whatever register is live, not a real handle, so it
-            // must not dereference the argument.
-            ID_GET_FRAMEBUFFER_BPP => graphics::FRAMEBUFFER_DEPTH,
-            // ID_GET_IMAGE_FRAMEBUFFER: WIPICImage begins with its framebuffer,
-            // so the image handle doubles as a framebuffer handle — return as is.
-            _ => core.read_param(0)?,
-        };
-        core.write_return_value(&[result])?;
-        core.set_next_pc(ret)?;
-        Ok(true)
-    }));
+        ID_GET_FRAMEBUFFER_HEIGHT => {
+            let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
+            framebuffer.height
+        }
+        // MC_grpGetFrameBufferBpp ignores its argument and reports the
+        // display depth from a global, exactly as the vendor does; titles
+        // call it with whatever register is live, not a real handle, so it
+        // must not dereference the argument.
+        ID_GET_FRAMEBUFFER_BPP => graphics::FRAMEBUFFER_DEPTH,
+        // ID_GET_IMAGE_FRAMEBUFFER: WIPICImage begins with its framebuffer,
+        // so the image handle doubles as a framebuffer handle — return as is.
+        _ => core.read_param(0)?,
+    };
+    core.write_return_value(&[result])?;
+    core.set_next_pc(ret)?;
+    Ok(true)
 }
 
 async fn clet_register(core: &mut ArmCore, jvm: &mut Jvm, function_table: u32, a1: u32) -> Result<()> {
