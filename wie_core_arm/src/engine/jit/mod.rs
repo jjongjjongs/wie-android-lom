@@ -933,6 +933,28 @@ impl ArmEngine for JitEngine {
                     other => break Err(WieError::FatalError(format!("bad JIT exit {other}"))),
                 }
             } else {
+                // A Thumb `SVC` is the platform-call trampoline the game hits on
+                // every syscall — by far the hottest fallback. Rather than enter
+                // the interpreter for it (which takes the exception, switching to
+                // the supervisor bank and forcing a slow banked re-sync both in
+                // and back out, plus an extra loop iteration to notice PC==0x08),
+                // produce the supervisor result directly. The only architectural
+                // effect the async handler consumes is {category, return address,
+                // saved CPSR}; `run_function` overwrites PC/CPSR from those before
+                // resuming, and `store_back` keeps r0..r14 (the call arguments)
+                // synced via the fast slice copy. This is exactly what the
+                // interpreter path yields, minus the round-trip.
+                if let Some(hw) = self.mem.load_u16(pc)
+                    && hw & 0xff00 == 0xdf00
+                {
+                    self.store_back(mode);
+                    return Ok(EngineRunResult::Svc {
+                        category: (hw & 0xff) as u32,
+                        lr: pc.wrapping_add(2),
+                        spsr: self.ctx.cpsr,
+                    });
+                }
+
                 // Fallback: one interpreter step on the real CPU.
                 self.note_fallback(pc);
                 self.store_back(mode);
@@ -1435,6 +1457,33 @@ mod tests {
         regs[0] = 5;
         regs[13] = DATA + 0x8000;
         assert_same_arm(&code, &regs, CODE + 8);
+    }
+
+    #[test]
+    fn jit_thumb_svc_fast_path() {
+        // A compiled Thumb op followed by an `SVC`: the block runs `movs r0,#7`
+        // and the JIT hands the syscall back directly instead of round-tripping
+        // through the interpreter's exception entry. The result the async handler
+        // consumes must match the architectural exception exactly.
+        // CODE+0: movs r0,#7 (0x2007); CODE+2: svc #0x2a (0xdf2a).
+        let code = thumb(&[0x2007, 0xdf2a]);
+        let mut e = setup(JitEngine::new(), &code, &[0u32; 15]);
+        let result = loop {
+            match e.run(0, 1_000_000) {
+                Ok(EngineRunResult::CountExhausted) => continue,
+                other => break other.unwrap(),
+            }
+        };
+        match result {
+            EngineRunResult::Svc { category, lr, spsr } => {
+                assert_eq!(category, 0x2a, "category is the SVC immediate");
+                assert_eq!(lr, CODE + 4, "return address is the halfword past the SVC");
+                assert_ne!(spsr & 0x20, 0, "saved CPSR keeps the Thumb bit");
+            }
+            _ => panic!("expected SVC from the fast path"),
+        }
+        // The op before the SVC is retired and its result visible to the handler.
+        assert_eq!(e.reg_read(ArmRegister::R0), 7);
     }
 
     // `0xe7ff` is `b .` to the following halfword: a trailing one gives a trace a
