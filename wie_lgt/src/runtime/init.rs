@@ -112,6 +112,95 @@ type VmMonitors = Arc<Mutex<BTreeMap<u32, (ThreadId, u32)>>>;
 const UNRESOLVED_IMPORT_SVC_BASE: u32 = 0x1000_0000;
 const UNRESOLVED_IMPORT_FIELD_MASK: u32 = 0x0fff;
 
+/// Per-init-SVC call counts, so the perf meter can name which VM/bridge call
+/// dominates when `init` is the hot syscall category. Unlike `wipi-c` or
+/// `stdlib`, the init category is not one flat API: its low ids are the
+/// `InitSvcId` VM primitives (monitor enter/exit, stack check, instantiate,
+/// reschedule, …) while its high id ranges are the native→JVM method-call
+/// bridges (static/virtual/interface/…). Bucketing both apart tells a game
+/// that calls Java tens of thousands of times a second (bridge-bound, not
+/// fast-path-able) from one hammering a single VM primitive (which may be).
+const INIT_ID_MAX: usize = 0x100;
+pub(crate) static INIT_SVC_COUNT: [core::sync::atomic::AtomicU64; INIT_ID_MAX] = [const { core::sync::atomic::AtomicU64::new(0) }; INIT_ID_MAX];
+
+/// Aggregate counters for the high id ranges, indexed as in `INIT_RANGE_NAMES`.
+pub(crate) static INIT_RANGE_COUNT: [core::sync::atomic::AtomicU64; 7] = [const { core::sync::atomic::AtomicU64::new(0) }; 7];
+const INIT_RANGE_NAMES: [&str; 7] = [
+    "java-diag",
+    "java-static",
+    "java-reserved",
+    "java-virtual",
+    "java-unknown",
+    "java-interface",
+    "unresolved-import",
+];
+
+/// Tally one init SVC by id, folding the high method-bridge ranges into their
+/// aggregate bucket (see `INIT_RANGE_NAMES`).
+fn note_init_svc(id: u32) {
+    use core::sync::atomic::Ordering::Relaxed;
+
+    if (id as usize) < INIT_ID_MAX {
+        INIT_SVC_COUNT[id as usize].fetch_add(1, Relaxed);
+        return;
+    }
+    let bucket = if id >= UNRESOLVED_IMPORT_SVC_BASE {
+        6
+    } else if id >= JAVA_INTERFACE_METHOD_SVC_BASE {
+        5
+    } else if id >= JAVA_UNKNOWN_SLOT_SVC_BASE {
+        4
+    } else if id >= JAVA_VIRTUAL_METHOD_SVC_BASE {
+        3
+    } else if id >= JAVA_RESERVED_SLOT_SVC_BASE {
+        2
+    } else if id >= JAVA_STATIC_METHOD_SVC_BASE {
+        1
+    } else {
+        0 // JAVA_DIAG_SVC_BASE range (and the unused 0x100..0x1000 gap)
+    };
+    INIT_RANGE_COUNT[bucket].fetch_add(1, Relaxed);
+}
+
+/// Log the top init SVCs by call rate, draining the counters, so the exact
+/// hot VM primitive or method-bridge behind an `init`-bound title is named.
+pub(crate) fn report_hot_init(dt_ms: u64) {
+    use core::fmt::Write;
+    use core::sync::atomic::Ordering::Relaxed;
+
+    let mut entries: Vec<(String, u64)> = Vec::new();
+    for (id, slot) in INIT_SVC_COUNT.iter().enumerate() {
+        let count = slot.swap(0, Relaxed);
+        if count == 0 {
+            continue;
+        }
+        let name = match InitSvcId::try_from(SvcId(id as u32)) {
+            Ok(name) => format!("{name:?}"),
+            Err(_) => format!("{id:#x}"),
+        };
+        entries.push((name, count));
+    }
+    for (bucket, slot) in INIT_RANGE_COUNT.iter().enumerate() {
+        let count = slot.swap(0, Relaxed);
+        if count == 0 {
+            continue;
+        }
+        entries.push((String::from(INIT_RANGE_NAMES[bucket]), count));
+    }
+    if entries.is_empty() {
+        return;
+    }
+    entries.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    entries.truncate(6);
+
+    let mut line = String::from("[init]");
+    for (name, count) in &entries {
+        let per_s = *count as f64 * 1000.0 / dt_ms as f64;
+        let _ = write!(line, " {name}={per_s:.0}/s");
+    }
+    tracing::info!("{line}");
+}
+
 /// Where a class's metadata keeps its dispatch table and how many slots that
 /// table has.
 const CLASS_DISPATCH_TABLE: u32 = 0x0c;
@@ -365,6 +454,7 @@ fn write_java_result(core: &mut ArmCore, save_points: &SavePointState, result: R
 }
 
 async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: SvcId) -> Result<()> {
+    note_init_svc(id.0);
     let wipic_category = &context.wipic_category;
     let stdlib_category = &context.stdlib_category;
     let jvm = &mut context.jvm;

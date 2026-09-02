@@ -1,6 +1,6 @@
 use wie_core_arm::SvcId;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[repr(u32)]
 pub enum InitSvcId {
     GetImportTable = 0,
