@@ -87,6 +87,39 @@ pub struct JavaHandles {
     /// corrupt live state, so the sweep never reclaims a JVM-reachable object.
     /// Set once the JVM exists; until then the sweep stays disabled.
     jvm: Arc<Mutex<Option<Jvm>>>,
+    /// Instance identities explicitly pinned across a bridge crossing. While the
+    /// compiled code is inside a bridged JVM method, that method's receiver and
+    /// object arguments live only as Rust-stack values (or in a suspended
+    /// future) - reachable from neither the guest roots nor a JVM thread frame
+    /// the collector scans. The sweep would free one and hand the guest a freed
+    /// address (observed: a live String reclaimed mid-`StringBuffer.<init>`,
+    /// then reused for a byte array, so `value.toCharArray()` hit `[B`). Each
+    /// crossing pins its objects here for its duration. Identity to nesting
+    /// count, since the same object can be pinned by nested crossings.
+    bridge_pins: Arc<Mutex<BTreeMap<usize, u32>>>,
+}
+
+/// Keeps a set of instance identities pinned against the collector for as long
+/// as it is held, then releases them - so a bridge crossing can protect its
+/// receiver and arguments for exactly the duration of the call, across `await`s.
+#[must_use = "the pin is released as soon as the guard is dropped"]
+pub struct BridgePin {
+    pins: Arc<Mutex<BTreeMap<usize, u32>>>,
+    identities: Vec<usize>,
+}
+
+impl Drop for BridgePin {
+    fn drop(&mut self) {
+        let mut pins = self.pins.lock();
+        for identity in &self.identities {
+            if let Some(count) = pins.get_mut(identity) {
+                *count -= 1;
+                if *count == 0 {
+                    pins.remove(identity);
+                }
+            }
+        }
+    }
 }
 
 /// One collector-managed guest object: its `+0x08` payload block (fields for an
@@ -112,6 +145,7 @@ impl JavaHandles {
             gc_objects: Default::default(),
             gc_static_roots: Default::default(),
             jvm: Default::default(),
+            bridge_pins: Default::default(),
         }
     }
 
@@ -119,6 +153,24 @@ impl JavaHandles {
     /// Until this is set, [`Self::gc_collect`] reclaims nothing.
     pub fn set_jvm(&self, jvm: Jvm) {
         *self.jvm.lock() = Some(jvm);
+    }
+
+    /// Pins the given instance identities against the collector until the
+    /// returned guard is dropped. A bridge crossing pins its receiver and object
+    /// arguments so the sweep cannot reclaim them while they live only on the
+    /// Rust call stack (or in a suspended future), invisible to the guest and
+    /// JVM roots the collector scans.
+    pub fn pin_identities(&self, identities: Vec<usize>) -> BridgePin {
+        {
+            let mut pins = self.bridge_pins.lock();
+            for &identity in &identities {
+                *pins.entry(identity).or_insert(0) += 1;
+            }
+        }
+        BridgePin {
+            pins: self.bridge_pins.clone(),
+            identities,
+        }
     }
 
     /// Registers a guest memory range `[start, end)` whose words the collector
@@ -362,12 +414,16 @@ impl JavaHandles {
     /// appear in the registry, so thread stacks, save points and firmware
     /// structures are never touched. Returns the count and byte total reclaimed.
     ///
-    /// The JVM pin is what makes this safe: an object can be dead to every guest
-    /// root while the JVM holds it transiently (mid-construction, or inside a
-    /// JVM-side collection), reachable from none of the roots [`Self::gc_seeds`]
-    /// scans. Freeing such an object corrupts live state - a headless run of an
-    /// earlier guest-only sweep crashed `Lm.startApp` on exactly that. Until the
-    /// JVM is registered with [`Self::set_jvm`], this reclaims nothing.
+    /// Two pins make this safe. The JVM pin: an object can be dead to every
+    /// guest root while the JVM holds it transiently (mid-construction, or inside
+    /// a JVM-side collection), reachable from none of the roots
+    /// [`Self::gc_seeds`] scans. The bridge pin ([`Self::pin_identities`]): an
+    /// object passed across a bridge crossing lives only as a Rust-stack value
+    /// for the call's duration, reachable from neither the guest nor a scanned
+    /// JVM frame. Freeing either corrupts live state - a guest-only sweep crashed
+    /// `Lm.startApp`, and a JVM-pinned-only sweep freed a `StringBuffer.<init>`
+    /// String argument mid-call. Until the JVM is registered with
+    /// [`Self::set_jvm`], this reclaims nothing.
     pub fn gc_collect(&self) -> (u32, u64) {
         let Some(jvm) = self.jvm.lock().clone() else {
             // No JVM-reachability source yet: a guest-only sweep is unsafe, so
@@ -394,6 +450,7 @@ impl JavaHandles {
         }
 
         let marked = self.gc_reachable(&objects, &seeds);
+        let bridge_pins = self.bridge_pins.lock();
         let entries = self.entries.lock();
         let dead: Vec<u32> = objects
             .keys()
@@ -402,14 +459,19 @@ impl JavaHandles {
                 if marked.contains(handle) {
                     return false;
                 }
-                // Guest-unreachable, but keep it if the JVM still holds it.
+                // Guest-unreachable, but keep it if the JVM still holds it or a
+                // bridge crossing has pinned it (its Rust-stack argument).
                 match entries.get(handle) {
-                    Some(instance) => !jvm_pinned.contains(&instance.identity()),
+                    Some(instance) => {
+                        let identity = instance.identity();
+                        !jvm_pinned.contains(&identity) && !bridge_pins.contains_key(&identity)
+                    }
                     None => true,
                 }
             })
             .collect();
         drop(entries);
+        drop(bridge_pins);
 
         let mut freed = 0u32;
         let mut freed_bytes: u64 = 0;
@@ -701,5 +763,30 @@ mod tests {
         let c = handles.allocate_instance_with_fields(0, 8).unwrap();
         assert_ne!(c, 0);
         assert_eq!(handles.gc_objects.lock().len(), 1);
+    }
+
+    #[test]
+    fn bridge_pins_are_reference_counted_across_nested_guards() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+        let handles = JavaHandles::new(core.clone());
+
+        // The same identity pinned by two overlapping crossings stays pinned
+        // until BOTH release it, so an inner crossing returning does not expose
+        // an argument the outer crossing still holds.
+        let outer = handles.pin_identities(alloc::vec![0x111, 0x222]);
+        {
+            let inner = handles.pin_identities(alloc::vec![0x222]);
+            assert_eq!(handles.bridge_pins.lock().get(&0x222).copied(), Some(2));
+            assert_eq!(handles.bridge_pins.lock().get(&0x111).copied(), Some(1));
+            drop(inner);
+        }
+        // Inner released: 0x222 back to a single pin, 0x111 untouched.
+        assert_eq!(handles.bridge_pins.lock().get(&0x222).copied(), Some(1));
+        assert_eq!(handles.bridge_pins.lock().get(&0x111).copied(), Some(1));
+
+        drop(outer);
+        // Both released: the map is empty again, nothing left pinned.
+        assert!(handles.bridge_pins.lock().is_empty());
     }
 }

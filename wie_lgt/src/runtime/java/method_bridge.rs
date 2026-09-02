@@ -471,6 +471,23 @@ async fn materialize_primitive_array_result(jvm: &Jvm, handles: &JavaHandles, ha
 /// `receiver` is `None` for a static method. A `<init>` row is a constructor:
 /// the compiled code expects a new instance back, so it is handled as a
 /// construction rather than an invocation.
+/// Instance identities of the object arguments in `arguments`, so a bridge
+/// crossing can pin them against the collector for the call's duration.
+///
+/// While a bridged JVM method runs, these objects live only as Rust-stack
+/// values here - reachable from neither the guest roots nor a JVM thread frame
+/// the collector scans - so a sweep triggered by an allocation inside the call
+/// would otherwise reclaim one and hand the guest a freed address.
+fn argument_identities(arguments: &[JavaValue]) -> Vec<usize> {
+    arguments
+        .iter()
+        .filter_map(|value| match value {
+            JavaValue::Object(Some(instance)) => Some(instance.identity()),
+            _ => None,
+        })
+        .collect()
+}
+
 pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member: &ResolvedMember, receiver: Option<u32>) -> Result<u32> {
     let ResolvedMember {
         class_name,
@@ -491,6 +508,12 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         let mut writebacks = Vec::new();
         let mut char_writebacks = Vec::new();
         let arguments = marshal_arguments(core, jvm, handles, &parameters, 1, &mut writebacks, &mut char_writebacks).await?;
+
+        // Pin the constructor's object arguments for the call's duration: an
+        // allocation inside the constructor can trigger a sweep, and these live
+        // only on this Rust stack (observed freeing a live String argument to
+        // StringBuffer.<init>, later reused as a byte array).
+        let _pin = handles.pin_identities(argument_identities(&arguments));
 
         // An object already bound to an instance is being initialized, not
         // created: this is a subclass running its superclass constructor, and
@@ -546,6 +569,15 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     let mut writebacks = Vec::new();
     let mut char_writebacks = Vec::new();
     let arguments = marshal_arguments(core, jvm, handles, &parameters, first_word, &mut writebacks, &mut char_writebacks).await?;
+
+    // Pin the receiver and object arguments for the call's duration: an
+    // allocation inside the callee can trigger a sweep, and these live only on
+    // this Rust stack, invisible to the guest and JVM roots the collector scans.
+    let mut pinned = argument_identities(&arguments);
+    if let Some(instance) = &receiver {
+        pinned.push(instance.identity());
+    }
+    let _pin = handles.pin_identities(pinned);
 
     let receiver_handle = receiver.as_ref().map(|_| core.read_param(0)).transpose()?;
 
