@@ -631,11 +631,15 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     }
 
     let result = if let Some(instance) = receiver {
-        tracing::debug!("LGT invoke virtual {class_name}.{name}{descriptor}");
+        // Held at warn by default (via the `wie_lgt::hot` target): one line per
+        // guest method call is the single biggest capture flood, and it buries
+        // the rare semantic events (file I/O, item grants) a save/load trace
+        // needs. Raise `wie_lgt::hot=trace` to see the per-call sequence.
+        tracing::debug!(target: "wie_lgt::hot", "LGT invoke virtual {class_name}.{name}{descriptor}");
 
         jvm.invoke_virtual::<_, JavaValue>(&instance, name, descriptor, arguments).await
     } else {
-        tracing::debug!("LGT invoke static {class_name}.{name}{descriptor}");
+        tracing::debug!(target: "wie_lgt::hot", "LGT invoke static {class_name}.{name}{descriptor}");
 
         jvm.invoke_static::<_, JavaValue>(class_name, name, descriptor, arguments).await
     };

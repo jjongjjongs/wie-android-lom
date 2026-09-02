@@ -27,15 +27,19 @@ static INIT: Once = Once::new();
 /// key press a second earlier has already scrolled out of it. The ARM
 /// interpreter's per-instruction trace (`arm32_cpu`) and the JIT's per-block
 /// bookkeeping (`wie_core_arm`) drop to info/warn; every graphics service's
-/// per-op drawing stays at info; and the LGT paint-loop housekeeping that dwarfs
+/// per-op drawing stays at info; the standard-library call echo
+/// (`java_runtime`: every `Vector.size`, `arraycopy`, `String`, stream read the
+/// game makes) drops to info; and the LGT paint-loop housekeeping that dwarfs
 /// everything else - `vm_activate_class`/`vm_thread_reschedule`/
-/// `vm_check_stack_overflow`, the bulk of a capture - is routed to the
-/// `wie_lgt::hot` target and held at warn. Faults and
+/// `vm_check_stack_overflow` and the per-call `LGT invoke virtual/static` echo,
+/// the bulk of a capture - is routed to the `wie_lgt::hot` target and held at
+/// warn. Together these are what let a whole save/load cycle (millions of calls)
+/// fit the bounded capture instead of scrolling the save moment out. Faults and
 /// unimplemented calls in those crates log at warn/error, so they still show, and
 /// the input path (event queue, canvas, clet) stays at debug so a press is
 /// always captured. Setting `RUST_LOG`, or the in-app log filter (e.g.
 /// `wie_lgt::hot=trace`), overrides this entirely.
-const DEFAULT_LOG_DIRECTIVE: &str = "debug,wie_lgt=trace,wie_lgt::hot=warn,wie_lgt::runtime::wipi_c=debug,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,wie_wipi_java::classes::org::kwis::msp::lcdui::graphics=info,wie_midp::classes::javax::microedition::lcdui::graphics=info,arm32_cpu=warn";
+const DEFAULT_LOG_DIRECTIVE: &str = "debug,wie_lgt=trace,wie_lgt::hot=warn,wie_lgt::runtime::wipi_c=debug,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,wie_wipi_java::classes::org::kwis::msp::lcdui::graphics=info,wie_midp::classes::javax::microedition::lcdui::graphics=info,java_runtime=info,arm32_cpu=warn";
 
 /// Lets the player swap the log filter at runtime, so capturing a module's
 /// debug/trace detail no longer means editing the default above and rebuilding.
@@ -119,8 +123,8 @@ pub fn set_filter(directive: &str) -> core::result::Result<(), String> {
 /// Lines kept, and bytes. A run that overruns either drops its oldest, which
 /// is the right end to lose: a title that fails at startup fits whole, and one
 /// that hangs is diagnosed from where it stopped.
-const MAX_LINES: usize = 20_000;
-const MAX_BYTES: usize = 2 << 20;
+const MAX_LINES: usize = 300_000;
+const MAX_BYTES: usize = 48 << 20;
 
 #[derive(Default)]
 struct Record {
