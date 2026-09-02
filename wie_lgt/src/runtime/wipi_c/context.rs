@@ -59,6 +59,14 @@ impl WIPICContext for LgtWIPICContext {
     }
 
     fn free(&mut self, memory: WIPICIndirectPtr) -> Result<()> {
+        // Freeing a null (or otherwise header-less) pointer is a no-op, matching
+        // C `free(NULL)` and the reference firmware's MC_knlFree; without this
+        // guard the header subtraction underflows and panics. Metal Slug
+        // Survival frees a null handle during startup.
+        if memory.0 < size_of::<WIPICWord>() as WIPICWord {
+            return Ok(());
+        }
+
         let base_address = memory.0 - size_of::<WIPICWord>() as WIPICWord;
 
         let size: WIPICWord = read_generic(&self.core, base_address)?;
