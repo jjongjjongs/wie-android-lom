@@ -162,6 +162,71 @@ fn note_init_svc(id: u32) {
     INIT_RANGE_COUNT[bucket].fetch_add(1, Relaxed);
 }
 
+/// Wall-clock milliseconds spent inside the async init handler, split by the
+/// same buckets as [`SVCTIME_NAMES`]. Call counts alone cannot say where a
+/// title's second goes — a syscall that fires 12k/s but returns instantly costs
+/// nothing, while one at 4k/s that each executes a Java method can be the whole
+/// frame. `now()` is millisecond-granular, far coarser than one call, but summed
+/// over thousands of calls a period the rounding averages out to the true total.
+static SVCTIME_MS: [core::sync::atomic::AtomicU64; 7] = [const { core::sync::atomic::AtomicU64::new(0) }; 7];
+const SVCTIME_NAMES: [&str; 7] = [
+    "reschedule",
+    "stack-check",
+    "java-virtual",
+    "java-static",
+    "java-interface",
+    "activate-class",
+    "other",
+];
+
+/// Which [`SVCTIME_MS`] bucket an init SVC id falls in.
+fn svctime_bucket(id: u32) -> usize {
+    if id >= JAVA_INTERFACE_METHOD_SVC_BASE && id < JAVA_INTERFACE_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        4
+    } else if id >= JAVA_VIRTUAL_METHOD_SVC_BASE && id < JAVA_VIRTUAL_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        2
+    } else if id >= JAVA_STATIC_METHOD_SVC_BASE && id < JAVA_STATIC_METHOD_SVC_BASE + JAVA_METHOD_SVC_LIMIT {
+        3
+    } else if id == InitSvcId::VmThreadReschedule as u32 {
+        0
+    } else if id == InitSvcId::VmCheckStackOverflow as u32 {
+        1
+    } else if id == InitSvcId::VmActivateClass as u32 {
+        5
+    } else {
+        6
+    }
+}
+
+/// Accumulates the wall time of one init-SVC handler into its bucket on drop,
+/// so every early return in `handle_init_svc` is measured. Holds a `System`
+/// clone (cheap, `Arc`-backed) to sample the millisecond clock.
+struct SvcTimer {
+    system: System,
+    start_ms: u64,
+    bucket: usize,
+}
+
+impl SvcTimer {
+    fn new(system: System, id: u32) -> Self {
+        let start_ms = system.platform().now().raw();
+        Self {
+            system,
+            start_ms,
+            bucket: svctime_bucket(id),
+        }
+    }
+}
+
+impl Drop for SvcTimer {
+    fn drop(&mut self) {
+        let elapsed = self.system.platform().now().raw().saturating_sub(self.start_ms);
+        if elapsed != 0 {
+            SVCTIME_MS[self.bucket].fetch_add(elapsed, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 /// Log the top init SVCs by call rate, draining the counters, so the exact
 /// hot VM primitive or method-bridge behind an `init`-bound title is named.
 pub(crate) fn report_hot_init(dt_ms: u64) {
@@ -199,6 +264,24 @@ pub(crate) fn report_hot_init(dt_ms: u64) {
         let _ = write!(line, " {name}={per_s:.0}/s");
     }
     tracing::info!("{line}");
+
+    // Wall-time breakdown: how many ms of each real second each bucket ate.
+    let mut times: Vec<(&str, u64)> = SVCTIME_MS
+        .iter()
+        .enumerate()
+        .map(|(bucket, slot)| (SVCTIME_NAMES[bucket], slot.swap(0, Relaxed)))
+        .filter(|(_, ms)| *ms != 0)
+        .collect();
+    if times.is_empty() {
+        return;
+    }
+    times.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    let mut time_line = String::from("[svctime]");
+    for (name, ms) in &times {
+        let ms_per_s = *ms as f64 * 1000.0 / dt_ms as f64;
+        let _ = write!(time_line, " {name}={ms_per_s:.0}ms/s");
+    }
+    tracing::info!("{time_line}");
 }
 
 /// Where a class's metadata keeps its dispatch table and how many slots that
@@ -520,6 +603,7 @@ fn write_java_result(core: &mut ArmCore, save_points: &SavePointState, result: R
 
 async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: SvcId) -> Result<()> {
     note_init_svc(id.0);
+    let _svc_timer = SvcTimer::new(context.system.clone(), id.0);
     let wipic_category = &context.wipic_category;
     let stdlib_category = &context.stdlib_category;
     let jvm = &mut context.jvm;
