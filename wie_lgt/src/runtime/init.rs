@@ -1128,6 +1128,23 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     c.sl,
                     c.fp
                 );
+                // The save serializer dereferences r8.field[0x54] (a null array).
+                // Dump r8's identity word and its field block so the object's
+                // class and exactly which sibling fields (0x38..0x5c) are null vs
+                // populated is visible - telling a never-assigned field apart
+                // from one our runtime cleared.
+                let obj = c.r8;
+                let identity: u32 = read_generic(core, obj).unwrap_or(0);
+                let fields: u32 = read_generic(core, obj.wrapping_add(8)).unwrap_or(0);
+                tracing::warn!("XXXNPE obj={obj:#x} identity[obj+0]={identity:#x} fieldblock[obj+8]={fields:#x}");
+                if fields != 0 {
+                    let mut row = alloc::string::String::new();
+                    for off in (0x30u32..0x64).step_by(4) {
+                        let v: u32 = read_generic(core, fields.wrapping_add(off)).unwrap_or(0xdead);
+                        row.push_str(&format!(" +{off:#04x}={v:#x}"));
+                    }
+                    tracing::warn!("XXXNPE r8.fields{row}");
+                }
             }
 
             tracing::debug!("vm_throw_null_pointer_exception({message:#x}) -> longjmp({exception:#x})");
