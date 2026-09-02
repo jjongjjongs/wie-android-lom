@@ -234,6 +234,64 @@ pub struct JitEngine {
     /// this pinpoints the exact instruction the compiler should learn next,
     /// without another guess-and-check round trip on device.
     other_hist: [u64; 256],
+    /// Histogram of why an ARM-state instruction was declined by `decode_arm`,
+    /// keyed by [`arm_decline_category`]. LGT titles run entirely in ARM state,
+    /// so when `arm-mode` dominates the profile this names the exact ARM op class
+    /// the compiler should learn next (e.g. halfword transfers, multiply).
+    arm_decline_hist: [u64; NUM_ARM_DECLINE],
+}
+
+/// ARM decline reasons, ordered to match [`arm_decline_category`].
+const ARM_DECLINE_NAMES: [&str; 9] = [
+    "hw-xfer",     // 0: LDRH/STRH/LDRSB/LDRSH (halfword & signed transfers)
+    "mul",         // 1: MUL/MLA
+    "mul-long",    // 2: UMULL/SMULL/…
+    "psr",         // 3: MRS/MSR
+    "swp",         // 4: SWP/SWPB
+    "clz",         // 5: CLZ
+    "pc-operand",  // 6: data-proc / transfer using r15 as operand or dest
+    "uncond-ext",  // 7: cond==0xF extension space
+    "swi/cop/und", // 8: SVC, coprocessor, undefined
+];
+const NUM_ARM_DECLINE: usize = ARM_DECLINE_NAMES.len();
+
+/// Classify why `decode_arm` declined `inst` (an ARM-state word), as an index
+/// into [`ARM_DECLINE_NAMES`]. Mirrors the `None` arms of `decode_arm`.
+fn arm_decline_category(inst: u32) -> usize {
+    let cond = (inst >> 28) & 0xf;
+    let m = |mask: u32, test: u32| inst & mask == test;
+    if m(0x0fff_0ff0, 0x016f_0f10) {
+        return 5; // CLZ
+    }
+    if m(0x0fb0_0ff0, 0x0100_0090) {
+        return 4; // SWP
+    }
+    if m(0x0fb0_0000, 0x0320_0000) || m(0x0f90_0ff0, 0x0100_0000) {
+        return 3; // MSR imm / MRS,MSR reg
+    }
+    if m(0x0fc0_00f0, 0x0000_0090) {
+        return 1; // Multiply
+    }
+    if m(0x0f80_00f0, 0x0080_0090) {
+        return 2; // MulLong
+    }
+    if m(0x0e40_0f90, 0x0000_0090) || m(0x0e40_0090, 0x0040_0090) {
+        return 0; // halfword / signed transfers
+    }
+    if cond == 0xf {
+        return 7; // unconditional extension space
+    }
+    // Data-processing / single-transfer that decode_arm declines only for a
+    // PC-relative operand or destination (the encodings it otherwise accepts).
+    if m(0x0e00_0010, 0x0000_0000)
+        || m(0x0e00_0090, 0x0000_0010)
+        || m(0x0e00_0000, 0x0200_0000)
+        || m(0x0e00_0000, 0x0400_0000)
+        || m(0x0e00_0010, 0x0600_0000)
+    {
+        return 6;
+    }
+    8 // SWI, coprocessor, undefined, other
 }
 
 // The raw pointers in `JitCtx` are refreshed at the start of every `run` and
@@ -255,6 +313,7 @@ impl JitEngine {
             fallbacks: [0; NUM_FALLBACK],
             fallback_total: 0,
             other_hist: [0; 256],
+            arm_decline_hist: [0; NUM_ARM_DECLINE],
             smc_flushes: 0,
             smc_invalidations: 0,
         }
@@ -293,24 +352,38 @@ impl JitEngine {
                     let _ = write!(other_top, " {:#04x}xx={}", h, self.other_hist[h]);
                 }
             }
-            if other_top.is_empty() {
-                tracing::info!(
-                    "[jit] {} fallbacks (smc-flushes={} inval={}); top: {}",
-                    self.fallback_total,
-                    self.smc_flushes,
-                    self.smc_invalidations,
-                    top.trim_end()
-                );
-            } else {
-                tracing::info!(
-                    "[jit] {} fallbacks (smc-flushes={} inval={}); top: {}; other:{}",
-                    self.fallback_total,
-                    self.smc_flushes,
-                    self.smc_invalidations,
-                    top.trim_end(),
-                    other_top
-                );
+            // When ARM-state fallbacks dominate, name the declined ARM op classes
+            // so the next log says which ARM instruction to teach the compiler.
+            let mut arm_top = alloc::string::String::new();
+            if self.fallbacks[ARM_MODE] > 0 {
+                let mut ai: [usize; NUM_ARM_DECLINE] = core::array::from_fn(|i| i);
+                ai.sort_unstable_by_key(|&i| core::cmp::Reverse(self.arm_decline_hist[i]));
+                use core::fmt::Write;
+                for &i in ai.iter().take(4) {
+                    if self.arm_decline_hist[i] == 0 {
+                        break;
+                    }
+                    let _ = write!(arm_top, " {}={}", ARM_DECLINE_NAMES[i], self.arm_decline_hist[i]);
+                }
             }
+
+            tracing::info!(
+                "[jit] {} fallbacks (smc-flushes={} inval={}); top: {}{}{}",
+                self.fallback_total,
+                self.smc_flushes,
+                self.smc_invalidations,
+                top.trim_end(),
+                if other_top.is_empty() {
+                    alloc::string::String::new()
+                } else {
+                    alloc::format!("; other:{other_top}")
+                },
+                if arm_top.is_empty() {
+                    alloc::string::String::new()
+                } else {
+                    alloc::format!("; arm:{arm_top}")
+                },
+            );
         }
     }
 
@@ -795,6 +868,9 @@ impl ArmEngine for JitEngine {
                     }
                     if yield_to_jit && self.mem.load_u32(apc).is_some_and(|w| decode_arm(w, apc).is_some()) {
                         break None; // a compilable ARM op starts here; let the JIT take it
+                    }
+                    if let Some(word) = self.mem.load_u32(apc) {
+                        self.arm_decline_hist[arm_decline_category(word)] += 1;
                     }
                     self.record_fallback(ARM_MODE);
                     let mut wrapper = self.mem.as_arm32cpu_memory();
