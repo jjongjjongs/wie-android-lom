@@ -573,7 +573,7 @@ fn emit_arm_half_xfer(a: &mut Asm, op: &ArmOp, pc: u32) {
     // A halfword access ignores bit 0 of the address (ARM force-alignment); the
     // writeback keeps the unaligned value.
     if halfword {
-        a64!(a ; bic w1, w1, #1);
+        a64!(a ; and w1, w1, #0xffff_fffe);
     }
     let do_wb = (!pre || wb) && base_pc.is_none() && (!load || rd != rn);
 
