@@ -37,6 +37,23 @@ pub(crate) enum ArmOp {
         base_pc: Option<u32>,
         offset: Off,
     },
+    /// Halfword / signed byte load or store (LDRH/STRH/LDRSB/LDRSH). `signed`
+    /// sign-extends a load; `halfword` selects 16-bit (else the 8-bit LDRSB).
+    /// `rn == 15` uses a constant PC base. The offset reuses [`Off`]: an
+    /// immediate, or a bare register as `ShiftImm { ty: 0, amount: 0 }`.
+    HalfXfer {
+        cond: u8,
+        load: bool,
+        signed: bool,
+        halfword: bool,
+        rd: u8,
+        rn: u8,
+        pre: bool,
+        up: bool,
+        wb: bool,
+        base_pc: Option<u32>,
+        offset: Off,
+    },
     /// Block transfer (LDM/STM), S bit clear. A load including r15 ends the
     /// trace.
     Block {
@@ -169,10 +186,10 @@ pub(crate) fn decode_arm(inst: u32, pc: u32) -> Option<ArmOp> {
         return decode_single_xfer(inst, pc);
     }
     if m(0x0e40_0f90, 0x0000_0090) {
-        return None; // HwSgnXferR
+        return decode_half_xfer(inst, pc, false); // HwSgnXfer, register offset
     }
     if m(0x0e40_0090, 0x0040_0090) {
-        return None; // HwSgnXferI
+        return decode_half_xfer(inst, pc, true); // HwSgnXfer, immediate offset
     }
     // Block data transfer (LDM/STM).
     if m(0x0e00_0000, 0x0800_0000) {
@@ -370,6 +387,68 @@ fn decode_single_xfer(inst: u32, pc: u32) -> Option<ArmOp> {
         cond: bits(inst, 28, 4) as u8,
         load,
         byte,
+        rd,
+        rn,
+        pre,
+        up,
+        wb,
+        base_pc,
+        offset,
+    })
+}
+
+fn decode_half_xfer(inst: u32, pc: u32, imm_offset: bool) -> Option<ArmOp> {
+    let pre = bits(inst, 24, 1) != 0;
+    let up = bits(inst, 23, 1) != 0;
+    let wb = bits(inst, 21, 1) != 0;
+    let load = bits(inst, 20, 1) != 0;
+    let rn = bits(inst, 16, 4) as u8;
+    let rd = bits(inst, 12, 4) as u8;
+
+    // rd == PC as a halfword/signed target is rare and undefined here; fall back.
+    if rd == 15 {
+        return None;
+    }
+
+    // SH selects the width/sign. 01 = H (LDRH/STRH), 10 = SB, 11 = SH; a signed
+    // form is load-only (the store space there is LDRD/STRD, which is not
+    // emitted).
+    let (signed, halfword) = match bits(inst, 5, 2) {
+        0b01 => (false, true),
+        0b10 => (true, false),
+        0b11 => (true, true),
+        _ => return None,
+    };
+    if signed && !load {
+        return None;
+    }
+
+    let base_pc = if rn == 15 {
+        // A PC base only works without writeback (post-index always writes back).
+        if wb || !pre {
+            return None;
+        }
+        Some(pc.wrapping_add(8))
+    } else {
+        None
+    };
+
+    let offset = if imm_offset {
+        Off::Imm((bits(inst, 8, 4) << 4) | bits(inst, 0, 4))
+    } else {
+        let rm = bits(inst, 0, 4) as u8;
+        if rm == 15 {
+            return None;
+        }
+        // A bare register offset, expressed as an unshifted register.
+        Off::ShiftImm { rm, ty: 0, amount: 0 }
+    };
+
+    Some(ArmOp::HalfXfer {
+        cond: bits(inst, 28, 4) as u8,
+        load,
+        signed,
+        halfword,
         rd,
         rn,
         pre,

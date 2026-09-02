@@ -1378,6 +1378,42 @@ mod tests {
     }
 
     #[test]
+    fn jit_arm_half_xfer() {
+        // Store then load back as halfword / signed halfword / signed byte, both
+        // immediate and register offset, pre and post index. r0's low half has
+        // the sign bit set so sign extension is exercised.
+        let code = arm(&[
+            0xe1c100b0, // strh  r0, [r1]
+            0xe1d120b0, // ldrh  r2, [r1]
+            0xe1d130f0, // ldrsh r3, [r1]
+            0xe1d140d0, // ldrsb r4, [r1]
+            0xe18150b2, // strh  r5, [r1, r2]   (register offset)
+            0xe19160b2, // ldrh  r6, [r1, r2]
+            0xe0d170b2, // ldrh  r7, [r1], r2   (post-index, writeback)
+            0xe1e180b4, // strh  r8, [r1, #4]!  (pre-index writeback)
+        ]);
+        let mut regs = [0u32; 15];
+        regs[0] = 0x0000_8234;
+        regs[1] = DATA + 0x40;
+        regs[5] = 0x0000_55aa;
+        regs[8] = 0x0000_1357;
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 32);
+    }
+
+    #[test]
+    fn jit_arm_half_xfer_unaligned_faults_match() {
+        // A halfword transfer ignores address bit 0, so an odd base accesses the
+        // aligned-down address - and an unmapped one faults there. Both engines
+        // must agree on that fault address.
+        let code = arm(&[0xe0f2e1f9]); // ldrsh lr, [r2], #25 (post-index)
+        let mut regs = [0u32; 15];
+        regs[2] = 0x5883_a79b; // odd, unmapped
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 4);
+    }
+
+    #[test]
     fn jit_arm_pc_relative_branch() {
         // add pc, pc, #8 folds to a constant branch (mov pc, #target). Landing
         // pad after the skipped word sets r0 so the outcome is observable.

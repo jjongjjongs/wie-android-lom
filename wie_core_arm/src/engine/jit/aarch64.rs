@@ -398,6 +398,7 @@ fn emit_arm(a: &mut Asm, op: &ArmOp, pc: u32) {
             }
         }
         ArmOp::LoadStore { .. } => emit_arm_load_store(a, op, pc),
+        ArmOp::HalfXfer { .. } => emit_arm_half_xfer(a, op, pc),
         ArmOp::Block { cond, .. } => {
             let guarded = emit_arm_guard(a, cond);
             emit_arm_block_body(a, op, pc);
@@ -514,6 +515,95 @@ fn emit_arm_load_store(a: &mut Asm, op: &ArmOp, pc: u32) {
         }
         a64!(a ; mov x0, x19);
         emit_call(a, if byte { jit_store8 } else { jit_store32 } as *const () as u64);
+        a64!(a ; ldr w9, [x19, #FAULTED] ; cbz w9, >nofault);
+        mov_imm32!(a, w12, pc.wrapping_add(4));
+        a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::FAULT ; b ->epilogue ; nofault:);
+        a64!(a ; ldr w9, [x19, #SMC] ; cbz w9, >nosmc);
+        mov_imm32!(a, w12, pc.wrapping_add(4));
+        a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::SMC ; b ->epilogue ; nosmc:);
+    }
+    if guarded {
+        a64!(a ; skip:);
+    }
+}
+
+fn emit_arm_half_xfer(a: &mut Asm, op: &ArmOp, pc: u32) {
+    let ArmOp::HalfXfer {
+        cond,
+        load,
+        signed,
+        halfword,
+        rd,
+        rn,
+        pre,
+        up,
+        wb,
+        base_pc,
+        offset,
+    } = *op
+    else {
+        unreachable!()
+    };
+    let guarded = emit_arm_guard(a, cond);
+
+    // offset -> w2 (immediate, or the bare register with no shift)
+    match offset {
+        Off::Imm(v) => mov_imm32!(a, w2, v),
+        Off::ShiftImm { rm, ty, amount } => {
+            emit_arm_shift_call(a, rm, ty, amount as u32, false, None);
+            a64!(a ; mov w2, w10);
+        }
+    }
+    // base -> w9
+    match base_pc {
+        Some(v) => mov_imm32!(a, w9, v),
+        None => a64!(a ; ldr w9, [x19, #ro(rn)]),
+    }
+    // post/pre address -> w10 (post/writeback value) and w1 (access address)
+    if up {
+        a64!(a ; add w10, w9, w2);
+    } else {
+        a64!(a ; sub w10, w9, w2);
+    }
+    if pre {
+        a64!(a ; mov w1, w10);
+    } else {
+        a64!(a ; mov w1, w9);
+    }
+    // A halfword access ignores bit 0 of the address (ARM force-alignment); the
+    // writeback keeps the unaligned value.
+    if halfword {
+        a64!(a ; bic w1, w1, #1);
+    }
+    let do_wb = (!pre || wb) && base_pc.is_none() && (!load || rd != rn);
+
+    if load {
+        if do_wb {
+            a64!(a ; str w10, [x19, #ro(rn)]);
+        }
+        a64!(a ; mov x0, x19);
+        emit_call(a, if halfword { jit_load16 } else { jit_load8 } as *const () as u64);
+        if signed {
+            if halfword {
+                a64!(a ; sxth w0, w0);
+            } else {
+                a64!(a ; sxtb w0, w0);
+            }
+        }
+        a64!(a
+            ; str w0, [x19, #ro(rd)]
+            ; ldr w9, [x19, #FAULTED]
+            ; cbz w9, >nofault
+        );
+        mov_imm32!(a, w12, pc.wrapping_add(4));
+        a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::FAULT ; b ->epilogue ; nofault:);
+    } else {
+        a64!(a ; ldr w2, [x19, #ro(rd)]); // value before writeback
+        if do_wb {
+            a64!(a ; str w10, [x19, #ro(rn)]);
+        }
+        a64!(a ; mov x0, x19);
+        emit_call(a, jit_store16 as *const () as u64);
         a64!(a ; ldr w9, [x19, #FAULTED] ; cbz w9, >nofault);
         mov_imm32!(a, w12, pc.wrapping_add(4));
         a64!(a ; str w12, [x19, #PC] ; movz w0, #exit::FAULT ; b ->epilogue ; nofault:);

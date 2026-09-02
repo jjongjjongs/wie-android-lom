@@ -423,6 +423,7 @@ fn emit_arm(a: &mut Asm, op: &ArmOp, pc: u32) {
             }
         }
         ArmOp::LoadStore { .. } => emit_arm_load_store(a, op, pc),
+        ArmOp::HalfXfer { .. } => emit_arm_half_xfer(a, op, pc),
         ArmOp::Block { .. } => {
             let guarded = emit_arm_guard(a, block_cond(op));
             emit_arm_block_body(a, op, pc);
@@ -562,6 +563,116 @@ fn emit_arm_load_store(a: &mut Asm, op: &ArmOp, pc: u32) {
         let helper = if byte { jit_store8 } else { jit_store32 } as *const () as i64;
         dynasm!(a
             ; mov edx, edi              // value
+            ; mov rdi, rbx
+            ; mov rax, QWORD helper
+            ; call rax
+            ; mov ecx, [rbx + FAULTED]
+            ; test ecx, ecx
+            ; jz >nofault
+            ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+            ; mov eax, exit::FAULT as i32
+            ; jmp ->epilogue
+            ; nofault:
+            ; mov ecx, [rbx + SMC]
+            ; test ecx, ecx
+            ; jz >nosmc
+            ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+            ; mov eax, exit::SMC as i32
+            ; jmp ->epilogue
+            ; nosmc:
+        );
+    }
+    if guarded {
+        dynasm!(a ; skip:);
+    }
+}
+
+/// Halfword / signed-byte transfer (LDRH/STRH/LDRSB/LDRSH), mirroring
+/// [`emit_arm_load_store`] but with a 16- or 8-bit access and sign extension.
+fn emit_arm_half_xfer(a: &mut Asm, op: &ArmOp, pc: u32) {
+    let ArmOp::HalfXfer {
+        cond,
+        load,
+        signed,
+        halfword,
+        rd,
+        rn,
+        pre,
+        up,
+        wb,
+        base_pc,
+        offset,
+    } = *op
+    else {
+        unreachable!()
+    };
+    let guarded = emit_arm_guard(a, cond);
+
+    match offset {
+        Off::Imm(v) => dynasm!(a ; mov edx, v as i32),
+        Off::ShiftImm { rm, ty, amount } => {
+            emit_arm_shift_call(a, rm, ty, amount as i32, false, None);
+            dynasm!(a ; mov edx, r10d);
+        }
+    }
+    match base_pc {
+        Some(v) => dynasm!(a ; mov ecx, v as i32),
+        None => dynasm!(a ; mov ecx, [rbx + ro(rn)]),
+    }
+    dynasm!(a ; mov eax, ecx);
+    if up {
+        dynasm!(a ; add eax, edx);
+    } else {
+        dynasm!(a ; sub eax, edx);
+    }
+    if pre {
+        dynasm!(a ; mov esi, eax);
+    } else {
+        dynasm!(a ; mov esi, ecx);
+    }
+    // A halfword access ignores bit 0 of the address (ARM force-alignment); the
+    // writeback keeps the unaligned value.
+    if halfword {
+        dynasm!(a ; and esi, -2);
+    }
+
+    let do_wb = (!pre || wb) && base_pc.is_none() && (!load || rd != rn);
+
+    if load {
+        if do_wb {
+            dynasm!(a ; mov [rbx + ro(rn)], eax);
+        }
+        let helper = if halfword { jit_load16 } else { jit_load8 } as *const () as i64;
+        dynasm!(a
+            ; mov rdi, rbx
+            ; mov rax, QWORD helper
+            ; call rax
+        );
+        if signed {
+            if halfword {
+                dynasm!(a ; movsx eax, ax);
+            } else {
+                dynasm!(a ; movsx eax, al);
+            }
+        }
+        dynasm!(a
+            ; mov [rbx + ro(rd)], eax
+            ; mov ecx, [rbx + FAULTED]
+            ; test ecx, ecx
+            ; jz >nofault
+            ; mov DWORD [rbx + PC], pc.wrapping_add(4) as i32
+            ; mov eax, exit::FAULT as i32
+            ; jmp ->epilogue
+            ; nofault:
+        );
+    } else {
+        dynasm!(a ; mov edi, [rbx + ro(rd)]);
+        if do_wb {
+            dynasm!(a ; mov [rbx + ro(rn)], eax);
+        }
+        let helper = jit_store16 as *const () as i64;
+        dynasm!(a
+            ; mov edx, edi
             ; mov rdi, rbx
             ; mov rax, QWORD helper
             ; call rax
