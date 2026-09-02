@@ -34,6 +34,11 @@ const INSTANCE_FIELDS_OFFSET: u32 = 8;
 /// Words an array's block spends on its length before the elements start.
 const ARRAY_HEADER_SIZE: u32 = 4;
 
+/// The guest global-data region (`ArmCore` maps 16 KiB here). Scanned as GC
+/// roots so an object referenced only from a global is not treated as garbage.
+const GUEST_GLOBAL_DATA_BASE: u32 = 0x7fff0000;
+const GUEST_GLOBAL_DATA_SIZE: u32 = 0x4000;
+
 #[derive(Clone, Debug)]
 pub struct JavaFieldBinding {
     pub class_name: String,
@@ -245,43 +250,39 @@ impl JavaHandles {
         Ok(instance)
     }
 
-    /// Allocates a guest block, running the collector's dry-run report if the
-    /// heap is exhausted so a crash log shows how much is reclaimable.
+    /// Allocates a guest block; if the heap is exhausted, runs the collector to
+    /// reclaim unreachable objects and retries once before giving up.
     fn alloc_reporting_leaks(&self, core: &mut ArmCore, size: u32) -> Result<u32> {
         match Allocator::alloc(core, size) {
             Ok(address) => Ok(address),
             Err(WieError::AllocationFailure) => {
-                self.gc_dry_run();
+                // Report only. A live sweep here is NOT yet safe: objects held
+                // transiently on the JVM side (mid-construction, or inside a JVM
+                // collection) are reachable from neither the guest registers,
+                // stacks, statics nor globals this collector scans, so freeing
+                // "unreachable" objects can reclaim a live one - a headless run
+                // with an aggressive sweep crashed Lm.startApp on exactly that.
+                // Enabling `gc_collect` needs a JVM-reachability root source.
+                self.gc_report();
                 Err(WieError::AllocationFailure)
             }
             Err(error) => Err(error),
         }
     }
 
-    /// Conservative mark-and-report pass for the collector, in dry-run mode.
-    ///
-    /// It marks every managed object reachable from the live guest state - each
-    /// thread's registers and in-use stack, then the object graph reached from
-    /// there - and logs how many objects, and how many bytes, are NOT reachable
-    /// and would therefore be reclaimable. Nothing is freed: this validates the
-    /// mark phase against a real leak before any sweep is turned on. The scan is
-    /// conservative (any word that happens to equal a managed handle is treated
-    /// as a reference), so it can only ever over-estimate what is live, never
-    /// free something that is still in use.
-    pub fn gc_dry_run(&self) {
-        let objects = self.gc_objects.lock();
-        if objects.is_empty() {
-            return;
-        }
-
+    /// Candidate GC root words: every thread's registers, the in-use span of
+    /// every stack, each registered static-field block, and the small guest
+    /// global-data region. Any of these words that equals a managed handle is a
+    /// live reference.
+    fn gc_seeds(&self) -> Vec<u32> {
         let (registers, stack_ranges) = self.core.gc_thread_roots();
         let core = self.core.clone();
 
-        // Every register value, and every word in an in-use stack or a
-        // registered static-field block, is a candidate reference into the heap.
-        let mut seeds: Vec<u32> = registers.clone();
+        let mut seeds: Vec<u32> = registers;
         let static_roots = self.gc_static_roots.lock().clone();
-        for &(low, high) in stack_ranges.iter().chain(static_roots.iter()) {
+        let global_data = (GUEST_GLOBAL_DATA_BASE, GUEST_GLOBAL_DATA_BASE + GUEST_GLOBAL_DATA_SIZE);
+
+        for &(low, high) in stack_ranges.iter().chain(static_roots.iter()).chain(core::iter::once(&global_data)) {
             let mut address = low & !3;
             while address < high {
                 if let Ok(word) = read_generic::<u32, _>(&core, address) {
@@ -291,6 +292,21 @@ impl JavaHandles {
             }
         }
 
+        seeds
+    }
+
+    /// Reports what the collector would reclaim, without freeing anything.
+    ///
+    /// Marks conservatively from [`Self::gc_seeds`] and logs how many managed
+    /// objects, and how many bytes, are unreachable. Safe to run at any time;
+    /// used on allocation failure so a crash log carries the collector's view.
+    fn gc_report(&self) {
+        let objects = self.gc_objects.lock();
+        if objects.is_empty() {
+            return;
+        }
+
+        let seeds = self.gc_seeds();
         let marked = self.gc_reachable(&objects, &seeds);
 
         let mut dead = 0u32;
@@ -305,16 +321,68 @@ impl JavaHandles {
         }
 
         tracing::error!(
-            "GC dry-run: {} managed objects, {} reachable, {} unreachable ({} arrays) (would free ~{} bytes) from {} register + {} stack + {} static-range roots",
+            "GC report: {} managed objects, {} reachable, {} unreachable ({} arrays, ~{} bytes)",
             objects.len(),
             marked.len(),
             dead,
             dead_arrays,
             dead_bytes,
-            registers.len(),
-            stack_ranges.len(),
-            static_roots.len(),
         );
+    }
+
+    /// Reclaims every managed object unreachable from the live guest state.
+    ///
+    /// Marks conservatively from [`Self::gc_seeds`], then frees the guest
+    /// allocations (instance header and payload block) of every unmarked object
+    /// and drops its bridge bookkeeping, so a surviving JVM instance is
+    /// re-materialized with a fresh handle if the compiled code ever needs it
+    /// again. Only allocations handed out as objects appear in the registry, so
+    /// thread stacks, save points and firmware structures are never touched.
+    /// Returns the count and byte total reclaimed.
+    ///
+    /// NOT YET SAFE TO CALL in normal operation: objects held transiently on
+    /// the JVM side (mid-construction, or inside a JVM collection) are reachable
+    /// from none of the roots [`Self::gc_seeds`] scans, so this can free a live
+    /// one. Enabling it needs a JVM-reachability root source; kept (and tested)
+    /// as the basis for that work.
+    #[allow(dead_code)]
+    pub fn gc_collect(&self) -> (u32, u64) {
+        let seeds = self.gc_seeds();
+        let mut core = self.core.clone();
+
+        let mut objects = self.gc_objects.lock();
+        if objects.is_empty() {
+            return (0, 0);
+        }
+
+        let marked = self.gc_reachable(&objects, &seeds);
+        let dead: Vec<u32> = objects.keys().copied().filter(|handle| !marked.contains(handle)).collect();
+
+        let mut freed = 0u32;
+        let mut freed_bytes: u64 = 0;
+
+        for handle in dead {
+            let Some(object) = objects.remove(&handle) else {
+                continue;
+            };
+
+            // Release the JVM instance held under this handle (dropping our
+            // reference so RustJava can collect it) and forget its identity, so
+            // a later crossing allocates a fresh handle rather than this freed
+            // address.
+            if let Some(instance) = self.entries.lock().remove(&handle) {
+                self.addresses.lock().remove(&instance.identity());
+            }
+            self.array_element_types.lock().remove(&handle);
+
+            let _ = Allocator::free(&mut core, object.payload, object.payload_size);
+            let _ = Allocator::free(&mut core, handle, INSTANCE_HEADER_SIZE);
+
+            freed += 1;
+            freed_bytes += u64::from(object.payload_size + INSTANCE_HEADER_SIZE);
+        }
+
+        (freed, freed_bytes)
     }
 
     /// The managed objects reachable from `seeds` (candidate root words),
@@ -557,5 +625,28 @@ mod tests {
 
         // With no roots, nothing is reachable.
         assert!(handles.gc_reachable(&objects, &[]).is_empty());
+    }
+
+    #[test]
+    fn gc_collect_frees_unreachable_objects_and_returns_the_memory() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+        let handles = JavaHandles::new(core.clone());
+
+        let _a = handles.allocate_instance_with_fields(0, 8).unwrap();
+        let _b = handles.allocate_array(0, 64, 4).unwrap();
+        assert_eq!(handles.gc_objects.lock().len(), 2);
+
+        // No live threads means no roots, so both objects are unreachable and
+        // the collector reclaims them and clears its registry.
+        let (freed, freed_bytes) = handles.gc_collect();
+        assert_eq!(freed, 2);
+        assert!(freed_bytes > 0);
+        assert!(handles.gc_objects.lock().is_empty());
+
+        // The freed memory is usable again.
+        let c = handles.allocate_instance_with_fields(0, 8).unwrap();
+        assert_ne!(c, 0);
+        assert_eq!(handles.gc_objects.lock().len(), 1);
     }
 }
