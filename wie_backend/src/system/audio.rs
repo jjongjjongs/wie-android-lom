@@ -28,6 +28,47 @@ pub struct Audio {
     playing: BTreeMap<AudioHandle, Arc<AtomicBool>>,
     last_audio_handle: AudioHandle,
     default_clip_handle: Option<AudioHandle>,
+    /// The clip currently rendering through the sink's pre-rendered path, kept
+    /// so a title that tears the player down and rebuilds it every frame with
+    /// byte-identical looping data (시드 restarts its BGM in `paint`) does not
+    /// restart the audio from zero each time - the identical re-play continues
+    /// the existing playback instead. See [`Self::play_with_completion`].
+    active: Option<ActiveSmaf>,
+    /// Whether the deferred-stop reaper task has been spawned (once per Audio).
+    reaper_started: bool,
+}
+
+/// A pre-rendered SMAF clip playing through the sink, tracked so an immediate
+/// identical re-play is seamless and a real stop is honored after a short grace.
+struct ActiveSmaf {
+    /// Hash of the SMAF bytes, to recognize a byte-identical re-play.
+    hash: u64,
+    repeat: bool,
+    /// The handle the sink is currently playing under (remapped on each seamless
+    /// re-play, since the title allocates a fresh handle every time).
+    handle: AudioHandle,
+    stop_flag: Arc<AtomicBool>,
+    completed: Arc<AtomicBool>,
+    /// Reaper polls remaining before a deferred stop actually stops the sink;
+    /// `None` while playing. A re-play clears it, so continuous re-play never
+    /// stops; a genuine stop with no re-play flushes after the grace.
+    pending_stop_polls: Option<u32>,
+}
+
+/// Reaper poll interval and the grace (in polls) before a deferred stop takes
+/// effect - long enough to bridge a per-frame tear-down/rebuild, short enough
+/// that a real stop is barely audible as a tail.
+const REAPER_POLL_MS: u64 = 100;
+const PENDING_STOP_GRACE_POLLS: u32 = 3;
+
+fn smaf_hash(data: &[u8]) -> u64 {
+    // FNV-1a, enough to tell one clip's bytes from another.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &byte in data {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 impl Audio {
@@ -39,6 +80,8 @@ impl Audio {
             playing: BTreeMap::new(),
             last_audio_handle: 0,
             default_clip_handle: None,
+            active: None,
+            reaper_started: false,
         }
     }
 
@@ -85,6 +128,31 @@ impl Audio {
             None => return Err(AudioError::InvalidHandle),
         };
         let volume = self.volumes.get(&audio_handle).ok_or(AudioError::InvalidHandle)?.clone();
+        let hash = smaf_hash(&data);
+
+        // Seamless re-play: a looping clip torn down and rebuilt with identical
+        // bytes (시드 restarts its BGM every paint) keeps the existing sink
+        // playback instead of restarting from zero. Adopt the fresh handle and
+        // cancel any deferred stop.
+        if repeat
+            && let Some(active) = self.active.as_mut()
+            && active.repeat
+            && active.hash == hash
+        {
+            active.pending_stop_polls = None;
+            active.handle = audio_handle;
+            let (completed, stop_flag) = (active.completed.clone(), active.stop_flag.clone());
+            self.sink.set_master_volume(volume.load(Ordering::Relaxed));
+            self.playing.insert(audio_handle, stop_flag.clone());
+            return Ok((completed, stop_flag));
+        }
+
+        // A different looping clip replaces the active one: stop it for real
+        // first. A one-shot (SFX) never becomes active and never disturbs a
+        // looping BGM playing alongside it.
+        if repeat {
+            self.flush_active();
+        }
 
         self.stop(audio_handle);
         self.sink.set_master_volume(volume.load(Ordering::Relaxed));
@@ -97,26 +165,49 @@ impl Audio {
         // sink plays the pre-rendered stream and this task only watches for the
         // stop flag (looping) or the clip's length (one-shot).
         if let Some(duration_ms) = self.sink.play_smaf(audio_handle, &data, repeat) {
-            let system_clone = system.clone();
-            let sink_clone = self.sink.clone();
-            let stop_flag_clone = stop_flag.clone();
-            let completed_clone = completed.clone();
-            system.spawn(async move || {
-                let mut elapsed = 0u64;
-                loop {
-                    if stop_flag_clone.load(Ordering::Relaxed) {
-                        break;
+            if repeat {
+                // Track the looping clip so an identical re-play coalesces and a
+                // real stop is honored by the reaper after a short grace.
+                self.active = Some(ActiveSmaf {
+                    hash,
+                    repeat,
+                    handle: audio_handle,
+                    stop_flag: stop_flag.clone(),
+                    completed: completed.clone(),
+                    pending_stop_polls: None,
+                });
+                self.ensure_reaper(system);
+
+                let system_clone = system.clone();
+                let stop_flag_clone = stop_flag.clone();
+                system.spawn(async move || {
+                    while !stop_flag_clone.load(Ordering::Relaxed) {
+                        system_clone.sleep(50).await;
                     }
-                    if !repeat && elapsed >= u64::from(duration_ms) {
-                        completed_clone.store(true, Ordering::Release);
-                        break;
+                    Ok(())
+                });
+            } else {
+                let system_clone = system.clone();
+                let sink_clone = self.sink.clone();
+                let stop_flag_clone = stop_flag.clone();
+                let completed_clone = completed.clone();
+                system.spawn(async move || {
+                    let mut elapsed = 0u64;
+                    loop {
+                        if stop_flag_clone.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        if elapsed >= u64::from(duration_ms) {
+                            completed_clone.store(true, Ordering::Release);
+                            break;
+                        }
+                        system_clone.sleep(50).await;
+                        elapsed += 50;
                     }
-                    system_clone.sleep(50).await;
-                    elapsed += 50;
-                }
-                sink_clone.stop_smaf(audio_handle);
-                Ok(())
-            });
+                    sink_clone.stop_smaf(audio_handle);
+                    Ok(())
+                });
+            }
             return Ok((completed, stop_flag));
         }
 
@@ -164,9 +255,65 @@ impl Audio {
     }
 
     pub fn stop(&mut self, audio_handle: AudioHandle) {
+        // Defer stopping the active looping clip: the title tears it down and
+        // rebuilds it every frame, so an immediate stop would restart the audio
+        // from zero. The reaper stops it for real once no identical re-play has
+        // arrived within the grace window.
+        if let Some(active) = self.active.as_mut()
+            && active.handle == audio_handle
+        {
+            if active.pending_stop_polls.is_none() {
+                active.pending_stop_polls = Some(0);
+            }
+            self.playing.remove(&audio_handle);
+            return;
+        }
+
         if let Some(stop_flag) = self.playing.remove(&audio_handle) {
             stop_flag.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// Stops the active looping clip's sink playback immediately and forgets it.
+    fn flush_active(&mut self) {
+        if let Some(active) = self.active.take() {
+            self.sink.stop_smaf(active.handle);
+            active.stop_flag.store(true, Ordering::Relaxed);
+            self.playing.remove(&active.handle);
+        }
+    }
+
+    /// Spawns the one deferred-stop reaper for this `Audio`. It polls the active
+    /// looping clip and, once a deferred stop has stood for the grace window
+    /// with no identical re-play cancelling it, stops the sink for real.
+    fn ensure_reaper(&mut self, system: &System) {
+        if self.reaper_started {
+            return;
+        }
+        self.reaper_started = true;
+
+        let system_clone = system.clone();
+        system.spawn(async move || {
+            loop {
+                system_clone.sleep(REAPER_POLL_MS).await;
+
+                let mut audio = system_clone.audio();
+                let flush = match audio.active.as_mut() {
+                    Some(active) => match active.pending_stop_polls {
+                        Some(polls) if polls + 1 >= PENDING_STOP_GRACE_POLLS => true,
+                        Some(polls) => {
+                            active.pending_stop_polls = Some(polls + 1);
+                            false
+                        }
+                        None => false,
+                    },
+                    None => false,
+                };
+                if flush {
+                    audio.flush_active();
+                }
+            }
+        });
     }
 
     pub fn close(&mut self, audio_handle: AudioHandle) -> Result<(), AudioError> {
@@ -412,6 +559,8 @@ mod tests {
         database_repository: NullDatabaseRepository,
         filesystem: NullFilesystem,
         now: AtomicUsize,
+        smaf_play: Arc<AtomicUsize>,
+        smaf_stop: Arc<AtomicUsize>,
     }
 
     impl NullPlatform {
@@ -421,6 +570,8 @@ mod tests {
                 database_repository: NullDatabaseRepository,
                 filesystem: NullFilesystem,
                 now: AtomicUsize::new(0),
+                smaf_play: Arc::new(AtomicUsize::new(0)),
+                smaf_stop: Arc::new(AtomicUsize::new(0)),
             }
         }
     }
@@ -443,7 +594,10 @@ mod tests {
         }
 
         fn audio_sink(&self) -> Box<dyn AudioSink> {
-            Box::new(NoopAudioSink)
+            Box::new(SmafCountingSink {
+                play: self.smaf_play.clone(),
+                stop: self.smaf_stop.clone(),
+            })
         }
 
         fn write_stdout(&self, _buf: &[u8]) {}
@@ -475,6 +629,32 @@ mod tests {
         fn midi_sysex(&self, _voice: u32, _data: &[u8]) {}
     }
 
+    /// A sink with a pre-rendered SMAF path that counts how many times a clip is
+    /// started and stopped, to observe the coalescing of identical re-plays.
+    struct SmafCountingSink {
+        play: Arc<AtomicUsize>,
+        stop: Arc<AtomicUsize>,
+    }
+
+    impl AudioSink for SmafCountingSink {
+        fn play_wave(&self, _channel: u8, _sampling_rate: u32, _wave_data: &[i16]) {}
+        fn midi_note_on(&self, _voice: u32, _channel_id: u8, _note: u8, _velocity: u8) {}
+        fn midi_note_off(&self, _voice: u32, _channel_id: u8, _note: u8, _velocity: u8) {}
+        fn midi_program_change(&self, _voice: u32, _channel_id: u8, _program: u8) {}
+        fn midi_control_change(&self, _voice: u32, _channel_id: u8, _control: u8, _value: u8) {}
+        fn midi_pitch_bend(&self, _voice: u32, _channel_id: u8, _value: u16) {}
+        fn midi_sysex(&self, _voice: u32, _data: &[u8]) {}
+
+        fn play_smaf(&self, _id: u32, _data: &[u8], _repeat: bool) -> Option<u32> {
+            self.play.fetch_add(1, Ordering::SeqCst);
+            Some(16_000)
+        }
+
+        fn stop_smaf(&self, _id: u32) {
+            self.stop.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     struct CountingSink {
         program_change_count: Arc<AtomicUsize>,
         stop_after: usize,
@@ -504,6 +684,44 @@ mod tests {
 
     fn new_system() -> System {
         System::new(Box::new(NullPlatform::new()), "test-pid", "test-aid", DefaultTaskRunner)
+    }
+
+    /// A system whose sink pre-renders SMAF, plus the (play, stop) counters that
+    /// sink increments.
+    fn new_system_with_smaf_counters() -> (System, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let platform = NullPlatform::new();
+        let play = platform.smaf_play.clone();
+        let stop = platform.smaf_stop.clone();
+        let system = System::new(Box::new(platform), "test-pid", "test-aid", DefaultTaskRunner);
+        (system, play, stop)
+    }
+
+    #[test]
+    fn identical_looping_replay_does_not_restart_the_sink() {
+        let (system, play, stop) = new_system_with_smaf_counters();
+
+        // First BGM start: the sink begins playing the looping clip.
+        let h1 = system.audio().load_smaf(b"BGM-DATA").unwrap();
+        system.audio().play_with_completion(&system, h1, true).unwrap();
+        assert_eq!(play.load(Ordering::SeqCst), 1);
+
+        // The title tears the player down and rebuilds it with byte-identical
+        // data (stop, close, load, play) - exactly 시드's per-frame pattern. The
+        // sink must NOT be restarted or stopped: the playback continues.
+        for _ in 0..5 {
+            system.audio().stop(h1);
+            let _ = system.audio().close(h1);
+            let handle = system.audio().load_smaf(b"BGM-DATA").unwrap();
+            system.audio().play_with_completion(&system, handle, true).unwrap();
+        }
+        assert_eq!(play.load(Ordering::SeqCst), 1, "identical re-plays should coalesce");
+        assert_eq!(stop.load(Ordering::SeqCst), 0, "no stop while re-playing identical data");
+
+        // A genuinely different looping clip stops the old one and starts anew.
+        let other = system.audio().load_smaf(b"OTHER-BGM").unwrap();
+        system.audio().play_with_completion(&system, other, true).unwrap();
+        assert_eq!(play.load(Ordering::SeqCst), 2);
+        assert_eq!(stop.load(Ordering::SeqCst), 1);
     }
 
     #[futures_test::test]
