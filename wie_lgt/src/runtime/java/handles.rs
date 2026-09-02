@@ -15,7 +15,7 @@ use alloc::{
 };
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use jvm::ClassInstance;
+use jvm::{ClassInstance, Jvm};
 use spin::Mutex;
 
 use wie_core_arm::{Allocator, ArmCore};
@@ -81,6 +81,12 @@ pub struct JavaHandles {
     /// registers and stacks so an object referenced only from a static field is
     /// not mistaken for garbage.
     gc_static_roots: Arc<Mutex<Vec<(u32, u32)>>>,
+    /// The JVM whose own reachability pins objects the guest roots miss. An
+    /// object can be dead to every guest root while the JVM still holds it
+    /// (mid-construction, or inside a JVM-side collection); freeing it would
+    /// corrupt live state, so the sweep never reclaims a JVM-reachable object.
+    /// Set once the JVM exists; until then the sweep stays disabled.
+    jvm: Arc<Mutex<Option<Jvm>>>,
 }
 
 /// One collector-managed guest object: its `+0x08` payload block (fields for an
@@ -105,7 +111,14 @@ impl JavaHandles {
             array_element_types: Default::default(),
             gc_objects: Default::default(),
             gc_static_roots: Default::default(),
+            jvm: Default::default(),
         }
+    }
+
+    /// Records the JVM whose reachability pins live objects during a sweep.
+    /// Until this is set, [`Self::gc_collect`] reclaims nothing.
+    pub fn set_jvm(&self, jvm: Jvm) {
+        *self.jvm.lock() = Some(jvm);
     }
 
     /// Registers a guest memory range `[start, end)` whose words the collector
@@ -256,13 +269,20 @@ impl JavaHandles {
         match Allocator::alloc(core, size) {
             Ok(address) => Ok(address),
             Err(WieError::AllocationFailure) => {
-                // Report only. A live sweep here is NOT yet safe: objects held
-                // transiently on the JVM side (mid-construction, or inside a JVM
-                // collection) are reachable from neither the guest registers,
-                // stacks, statics nor globals this collector scans, so freeing
-                // "unreachable" objects can reclaim a live one - a headless run
-                // with an aggressive sweep crashed Lm.startApp on exactly that.
-                // Enabling `gc_collect` needs a JVM-reachability root source.
+                // Heap exhausted: reclaim objects dead to both the guest roots
+                // and the JVM's own graph, then retry once. The JVM pin keeps
+                // the sweep from freeing an object the JVM still holds (see
+                // `gc_collect`); if the JVM is not yet registered the sweep is a
+                // no-op and this still surfaces the failure.
+                let (freed, freed_bytes) = self.gc_collect();
+                if freed > 0 {
+                    tracing::info!("GC reclaimed {freed} objects ({freed_bytes} bytes) on allocation failure; retrying");
+                    if let Ok(address) = Allocator::alloc(core, size) {
+                        return Ok(address);
+                    }
+                }
+                // Still no room (or nothing to reclaim): log the collector's
+                // view to make a leak visible in the crash log.
                 self.gc_report();
                 Err(WieError::AllocationFailure)
             }
@@ -330,23 +350,41 @@ impl JavaHandles {
         );
     }
 
-    /// Reclaims every managed object unreachable from the live guest state.
+    /// Reclaims every managed object unreachable from **both** the live guest
+    /// state and the JVM's own object graph.
     ///
-    /// Marks conservatively from [`Self::gc_seeds`], then frees the guest
-    /// allocations (instance header and payload block) of every unmarked object
-    /// and drops its bridge bookkeeping, so a surviving JVM instance is
-    /// re-materialized with a fresh handle if the compiled code ever needs it
-    /// again. Only allocations handed out as objects appear in the registry, so
-    /// thread stacks, save points and firmware structures are never touched.
-    /// Returns the count and byte total reclaimed.
+    /// Marks conservatively from [`Self::gc_seeds`], additionally pins every
+    /// object the JVM still reaches (via [`Jvm::gc_reachable_identities`]), then
+    /// frees the guest allocations (instance header and payload block) of every
+    /// object that survives neither and drops its bridge bookkeeping, so a
+    /// surviving JVM instance is re-materialized with a fresh handle if the
+    /// compiled code ever needs it again. Only allocations handed out as objects
+    /// appear in the registry, so thread stacks, save points and firmware
+    /// structures are never touched. Returns the count and byte total reclaimed.
     ///
-    /// NOT YET SAFE TO CALL in normal operation: objects held transiently on
-    /// the JVM side (mid-construction, or inside a JVM collection) are reachable
-    /// from none of the roots [`Self::gc_seeds`] scans, so this can free a live
-    /// one. Enabling it needs a JVM-reachability root source; kept (and tested)
-    /// as the basis for that work.
-    #[allow(dead_code)]
+    /// The JVM pin is what makes this safe: an object can be dead to every guest
+    /// root while the JVM holds it transiently (mid-construction, or inside a
+    /// JVM-side collection), reachable from none of the roots [`Self::gc_seeds`]
+    /// scans. Freeing such an object corrupts live state - a headless run of an
+    /// earlier guest-only sweep crashed `Lm.startApp` on exactly that. Until the
+    /// JVM is registered with [`Self::set_jvm`], this reclaims nothing.
     pub fn gc_collect(&self) -> (u32, u64) {
+        let Some(jvm) = self.jvm.lock().clone() else {
+            // No JVM-reachability source yet: a guest-only sweep is unsafe, so
+            // reclaim nothing rather than risk freeing a JVM-held object.
+            return (0, 0);
+        };
+
+        // Pin objects the JVM still reaches. Gathered before taking the object
+        // lock so a JVM read lock is never held across our heap mutation.
+        let jvm_pinned: BTreeSet<usize> = jvm.gc_reachable_identities().into_iter().collect();
+        self.gc_collect_with_pins(&jvm_pinned)
+    }
+
+    /// The sweep itself: frees every managed object reachable from neither the
+    /// guest roots nor `jvm_pinned` (JVM instance identities to keep). Split out
+    /// so the mechanics can be exercised without standing up a JVM.
+    fn gc_collect_with_pins(&self, jvm_pinned: &BTreeSet<usize>) -> (u32, u64) {
         let seeds = self.gc_seeds();
         let mut core = self.core.clone();
 
@@ -356,7 +394,22 @@ impl JavaHandles {
         }
 
         let marked = self.gc_reachable(&objects, &seeds);
-        let dead: Vec<u32> = objects.keys().copied().filter(|handle| !marked.contains(handle)).collect();
+        let entries = self.entries.lock();
+        let dead: Vec<u32> = objects
+            .keys()
+            .copied()
+            .filter(|handle| {
+                if marked.contains(handle) {
+                    return false;
+                }
+                // Guest-unreachable, but keep it if the JVM still holds it.
+                match entries.get(handle) {
+                    Some(instance) => !jvm_pinned.contains(&instance.identity()),
+                    None => true,
+                }
+            })
+            .collect();
+        drop(entries);
 
         let mut freed = 0u32;
         let mut freed_bytes: u64 = 0;
@@ -637,9 +690,9 @@ mod tests {
         let _b = handles.allocate_array(0, 64, 4).unwrap();
         assert_eq!(handles.gc_objects.lock().len(), 2);
 
-        // No live threads means no roots, so both objects are unreachable and
-        // the collector reclaims them and clears its registry.
-        let (freed, freed_bytes) = handles.gc_collect();
+        // No live threads means no roots, and no JVM pins, so both objects are
+        // unreachable and the collector reclaims them and clears its registry.
+        let (freed, freed_bytes) = handles.gc_collect_with_pins(&alloc::collections::BTreeSet::new());
         assert_eq!(freed, 2);
         assert!(freed_bytes > 0);
         assert!(handles.gc_objects.lock().is_empty());

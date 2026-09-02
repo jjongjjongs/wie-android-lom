@@ -305,6 +305,9 @@ fn register_init_svc_handler(
     main_class_name: Option<Arc<str>>,
 ) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
+    // Give the collector the JVM's reachability so its sweep can pin objects
+    // the guest roots miss but the JVM still holds.
+    java_handles.set_jvm(jvm.clone());
 
     core.register_svc_handler(
         SVC_CATEGORY_INIT,

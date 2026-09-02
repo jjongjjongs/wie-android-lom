@@ -56,12 +56,12 @@ polling = { version = "^3.11" }
 spin = { version = "^0.12", features = ["spin_mutex", "rwlock"], default-features = false }
 tracing = { version = "^0.1", default-features = false, features = ["attributes"] }
 
-# Fork of dlunch/RustJava pinned to fixes for String.equals(Object) and System.arraycopy null args; see jjongjjongs/RustJava@wie-fixes.
-java_class_proto = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "452b7c53bdd61992d8610b108560b4e9ecd7ad5c" }
-java_constants = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "452b7c53bdd61992d8610b108560b4e9ecd7ad5c" }
-java_runtime = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "452b7c53bdd61992d8610b108560b4e9ecd7ad5c" }
-jvm = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "452b7c53bdd61992d8610b108560b4e9ecd7ad5c" }
-jvm_rust = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "452b7c53bdd61992d8610b108560b4e9ecd7ad5c" }
+# Fork of dlunch/RustJava pinned to fixes for String.equals(Object) and System.arraycopy null args, plus Jvm::gc_reachable_identities for guest-heap GC; see jjongjjongs/RustJava@claude/gc-reachable-identities.
+java_class_proto = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "2e3b71852180c41998e53e3383ad72a62f4e0de3" }
+java_constants = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "2e3b71852180c41998e53e3383ad72a62f4e0de3" }
+java_runtime = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "2e3b71852180c41998e53e3383ad72a62f4e0de3" }
+jvm = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "2e3b71852180c41998e53e3383ad72a62f4e0de3" }
+jvm_rust = { git = "https://github.com/jjongjjongs/RustJava.git", rev = "2e3b71852180c41998e53e3383ad72a62f4e0de3" }
 wipi_types = { git = "https://github.com/dlunch/wipi.git" }
 
 wie_backend = { path = "wie_backend" }

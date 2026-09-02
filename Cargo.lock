@@ -414,7 +414,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 [[package]]
 name = "classfile"
 version = "0.0.1"
-source = "git+https://github.com/jjongjjongs/RustJava.git?rev=452b7c53bdd61992d8610b108560b4e9ecd7ad5c#452b7c53bdd61992d8610b108560b4e9ecd7ad5c"
+source = "git+https://github.com/jjongjjongs/RustJava.git?rev=2e3b71852180c41998e53e3383ad72a62f4e0de3#2e3b71852180c41998e53e3383ad72a62f4e0de3"
 dependencies = [
  "java_constants",
  "nom 8.0.0",
@@ -1339,7 +1339,7 @@ dependencies = [
 [[package]]
 name = "java_class_proto"
 version = "0.0.1"
-source = "git+https://github.com/jjongjjongs/RustJava.git?rev=452b7c53bdd61992d8610b108560b4e9ecd7ad5c#452b7c53bdd61992d8610b108560b4e9ecd7ad5c"
+source = "git+https://github.com/jjongjjongs/RustJava.git?rev=2e3b71852180c41998e53e3383ad72a62f4e0de3#2e3b71852180c41998e53e3383ad72a62f4e0de3"
 dependencies = [
  "async-trait",
  "dyn-clone",
@@ -1350,7 +1350,7 @@ dependencies = [
 [[package]]
 name = "java_constants"
 version = "0.0.1"
-source = "git+https://github.com/jjongjjongs/RustJava.git?rev=452b7c53bdd61992d8610b108560b4e9ecd7ad5c#452b7c53bdd61992d8610b108560b4e9ecd7ad5c"
+source = "git+https://github.com/jjongjjongs/RustJava.git?rev=2e3b71852180c41998e53e3383ad72a62f4e0de3#2e3b71852180c41998e53e3383ad72a62f4e0de3"
 dependencies = [
  "bitflags 2.13.1",
 ]
@@ -1358,7 +1358,7 @@ dependencies = [
 [[package]]
 name = "java_runtime"
 version = "0.0.1"
-source = "git+https://github.com/jjongjjongs/RustJava.git?rev=452b7c53bdd61992d8610b108560b4e9ecd7ad5c#452b7c53bdd61992d8610b108560b4e9ecd7ad5c"
+source = "git+https://github.com/jjongjjongs/RustJava.git?rev=2e3b71852180c41998e53e3383ad72a62f4e0de3#2e3b71852180c41998e53e3383ad72a62f4e0de3"
 dependencies = [
  "async-trait",
  "bytemuck",
@@ -1487,7 +1487,7 @@ dependencies = [
 [[package]]
 name = "jvm"
 version = "0.0.1"
-source = "git+https://github.com/jjongjjongs/RustJava.git?rev=452b7c53bdd61992d8610b108560b4e9ecd7ad5c#452b7c53bdd61992d8610b108560b4e9ecd7ad5c"
+source = "git+https://github.com/jjongjjongs/RustJava.git?rev=2e3b71852180c41998e53e3383ad72a62f4e0de3#2e3b71852180c41998e53e3383ad72a62f4e0de3"
 dependencies = [
  "anyhow",
  "async-recursion",
@@ -1506,7 +1506,7 @@ dependencies = [
 [[package]]
 name = "jvm_rust"
 version = "0.0.1"
-source = "git+https://github.com/jjongjjongs/RustJava.git?rev=452b7c53bdd61992d8610b108560b4e9ecd7ad5c#452b7c53bdd61992d8610b108560b4e9ecd7ad5c"
+source = "git+https://github.com/jjongjjongs/RustJava.git?rev=2e3b71852180c41998e53e3383ad72a62f4e0de3#2e3b71852180c41998e53e3383ad72a62f4e0de3"
 dependencies = [
  "async-recursion",
  "async-trait",
