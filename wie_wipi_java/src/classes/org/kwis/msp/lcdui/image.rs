@@ -2,7 +2,7 @@ use alloc::{boxed::Box, vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto, MethodBody};
 use java_constants::{FieldAccessFlags, MethodAccessFlags};
-use java_runtime::classes::java::lang::String;
+use java_runtime::classes::{java::io::InputStream, java::lang::String};
 use jvm::{
     Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult,
     runtime::{JavaIoInputStream, JavaLangString},
@@ -287,17 +287,28 @@ impl Image {
                 resource_name.insert(0, '/');
             }
 
-            let resource_name = JavaLangString::from_rust_string(jvm, &resource_name).await?;
+            let resource_java_name = JavaLangString::from_rust_string(jvm, &resource_name).await?;
             let image = jvm.new_class("org/kwis/msp/lcdui/Image", "()V", ()).await?;
             let class = jvm.invoke_virtual(&image, "getClass", "()Ljava/lang/Class;", ()).await?;
-            let resource_stream = jvm
+            let resource_stream: ClassInstanceRef<InputStream> = jvm
                 .invoke_virtual(
                     &class,
                     "getResourceAsStream",
                     "(Ljava/lang/String;)Ljava/io/InputStream;",
-                    (resource_name,),
+                    (resource_java_name,),
                 )
                 .await?;
+
+            // A missing resource makes getResourceAsStream return null. Reading
+            // it as a non-null stream host-panics; the reference surfaces the
+            // failure to the game as an IOException instead. Iljimae builds
+            // image names for resources that are not always present and relies
+            // on catching this rather than the VM dying.
+            if resource_stream.is_null() {
+                return Err(jvm
+                    .exception("java/io/IOException", &alloc::format!("createImage: resource not found: {resource_name}"))
+                    .await);
+            }
 
             let data = JavaIoInputStream::read_until_end(jvm, &resource_stream).await?;
             let data_len = data.len();
