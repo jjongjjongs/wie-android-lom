@@ -223,16 +223,35 @@ impl RecordStore {
         Ok(store.into())
     }
 
-    async fn delete_record_store(_jvm: &Jvm, _context: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<()> {
-        tracing::warn!("stub javax.microedition.rms.RecordStore::deleteRecordStore({name:?})");
+    async fn delete_record_store(jvm: &Jvm, context: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<()> {
+        tracing::debug!("javax.microedition.rms.RecordStore::deleteRecordStore({name:?})");
+
+        let name = JavaLangString::to_rust_string(jvm, &name).await?;
+
+        let system = context.system();
+        let app_id = system.pid().to_owned();
+
+        // Drop the backing store. Deletion is idempotent: removing a store that
+        // was never created is a no-op success, which keeps a title that clears
+        // an as-yet-unwritten save from taking an exception the reference does
+        // not raise here.
+        system.platform().database_repository().delete(&name, &app_id).await;
 
         Ok(())
     }
 
-    async fn list_record_stores(jvm: &Jvm, _context: &mut WieJvmContext) -> JvmResult<ClassInstanceRef<Array<String>>> {
-        tracing::warn!("stub javax.microedition.rms.RecordStore::listRecordStores()");
+    async fn list_record_stores(jvm: &Jvm, context: &mut WieJvmContext) -> JvmResult<ClassInstanceRef<Array<String>>> {
+        tracing::debug!("javax.microedition.rms.RecordStore::listRecordStores()");
 
-        let result = jvm.instantiate_array("Ljava/lang/String;", 0).await?;
+        let system = context.system();
+        let app_id = system.pid().to_owned();
+        let names = system.platform().database_repository().list(&app_id).await;
+
+        let mut result = jvm.instantiate_array("Ljava/lang/String;", names.len()).await?;
+        for (index, name) in names.iter().enumerate() {
+            let name = JavaLangString::from_rust_string(jvm, name).await?;
+            jvm.store_array(&mut result, index, [name]).await?;
+        }
 
         Ok(result.into())
     }
@@ -297,6 +316,60 @@ mod test {
                 panic!("unknown record deletion succeeded");
             };
             assert!(jvm.is_instance(&*exception, "javax/microedition/rms/InvalidRecordIDException"));
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn delete_record_store_removes_it_from_the_listing() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
+            let name: ClassInstanceRef<String> = JavaLangString::from_rust_string(&jvm, "save-slot").await?.into();
+            let store: ClassInstanceRef<RecordStore> = jvm
+                .invoke_static(
+                    "javax/microedition/rms/RecordStore",
+                    "openRecordStore",
+                    "(Ljava/lang/String;Z)Ljavax/microedition/rms/RecordStore;",
+                    (name.clone(), true),
+                )
+                .await?;
+
+            // The backing store is materialized by the first record operation,
+            // so write one record before expecting it in the listing.
+            let mut data = jvm.instantiate_array("B", 1).await?;
+            jvm.store_array(&mut data, 0, [7i8]).await?;
+            let _: i32 = jvm.invoke_virtual(&store, "addRecord", "([BII)I", (data, 0, 1)).await?;
+
+            let listed: ClassInstanceRef<Array<String>> = jvm
+                .invoke_static("javax/microedition/rms/RecordStore", "listRecordStores", "()[Ljava/lang/String;", ())
+                .await?;
+            assert_eq!(jvm.array_length(&listed).await?, 1);
+            let first: ClassInstanceRef<String> = jvm.load_array(&listed, 0, 1).await?.pop().unwrap();
+            assert_eq!(JavaLangString::to_rust_string(&jvm, &first).await?.as_str(), "save-slot");
+
+            let _: () = jvm
+                .invoke_static(
+                    "javax/microedition/rms/RecordStore",
+                    "deleteRecordStore",
+                    "(Ljava/lang/String;)V",
+                    (name.clone(),),
+                )
+                .await?;
+
+            let after: ClassInstanceRef<Array<String>> = jvm
+                .invoke_static("javax/microedition/rms/RecordStore", "listRecordStores", "()[Ljava/lang/String;", ())
+                .await?;
+            assert_eq!(jvm.array_length(&after).await?, 0);
+
+            // Deleting an absent store is a no-op success, not an exception.
+            let _: () = jvm
+                .invoke_static(
+                    "javax/microedition/rms/RecordStore",
+                    "deleteRecordStore",
+                    "(Ljava/lang/String;)V",
+                    (name,),
+                )
+                .await?;
 
             Ok(())
         })

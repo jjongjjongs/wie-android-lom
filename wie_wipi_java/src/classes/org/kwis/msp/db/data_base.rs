@@ -252,8 +252,21 @@ impl DataBase {
         Ok(())
     }
 
-    async fn delete_data_base_with_flag(_: &Jvm, _: &mut WieJvmContext, data_base_name: ClassInstanceRef<String>, flag: i32) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.db.DataBase::deleteDataBase({data_base_name:?}, {flag})");
+    async fn delete_data_base_with_flag(jvm: &Jvm, _: &mut WieJvmContext, data_base_name: ClassInstanceRef<String>, flag: i32) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.db.DataBase::deleteDataBase({data_base_name:?}, {flag})");
+
+        // The flag selects the store's location (handset vs card); our record
+        // stores are keyed by name alone, so deletion is the same as the
+        // flagless form - which the stub silently skipped, leaving the store
+        // behind.
+        let _: () = jvm
+            .invoke_static(
+                "javax/microedition/rms/RecordStore",
+                "deleteRecordStore",
+                "(Ljava/lang/String;)V",
+                (data_base_name,),
+            )
+            .await?;
 
         Ok(())
     }
@@ -441,7 +454,9 @@ mod test {
             let databases: ClassInstanceRef<Array<String>> = jvm
                 .invoke_static("org/kwis/msp/db/DataBase", "listDataBases", "()[Ljava/lang/String;", ())
                 .await?;
-            assert_eq!(jvm.array_length(&databases).await?, 0);
+            assert_eq!(jvm.array_length(&databases).await?, 1);
+            let listed: ClassInstanceRef<String> = jvm.load_array(&databases, 0, 1).await?.pop().unwrap();
+            assert_eq!(JavaLangString::to_rust_string(&jvm, &listed).await?.as_str(), "storage-handset");
 
             let access_mode: i32 = jvm
                 .invoke_static("org/kwis/msp/db/DataBase", "getAccessMode", "(Ljava/lang/String;)I", (name.clone(),))
@@ -457,6 +472,12 @@ mod test {
             let _: () = jvm
                 .invoke_static("org/kwis/msp/db/DataBase", "deleteDataBase", "(Ljava/lang/String;I)V", (name, 1))
                 .await?;
+
+            // Deletion is now real: the store is gone from the listing.
+            let remaining: ClassInstanceRef<Array<String>> = jvm
+                .invoke_static("org/kwis/msp/db/DataBase", "listDataBases", "()[Ljava/lang/String;", ())
+                .await?;
+            assert_eq!(jvm.array_length(&remaining).await?, 0);
 
             Ok(())
         })
