@@ -18,7 +18,7 @@ use crate::context::WIPICContext;
 
 use self::{framebuffer::FrameBuffer, grp_context::WIPICGraphicsContextIdx, image::create_wipi_image};
 
-const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
+pub const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
 const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
 
 /// Read a WIPI-C string. `length == -1` means NUL-terminated; `length > 0`
