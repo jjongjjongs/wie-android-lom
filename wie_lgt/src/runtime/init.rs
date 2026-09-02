@@ -131,6 +131,13 @@ const MAX_SUPERCLASS_DEPTH: usize = 32;
 /// from configuration 32, whose LGT value is 100.
 const VM_RESCHEDULE_COUNT_THRESHOLD: u32 = 100;
 
+/// Upper bound applied to a bare `Object.wait()` from compiled code. The
+/// reference's `wait(0)` returns after a scheduling quantum rather than
+/// blocking until a notify, so an infinite wait becomes a timed one of this
+/// length; a worker that is never notified still advances (a spurious wakeup)
+/// instead of hanging the title.
+const LGT_BARE_WAIT_BOUND_MS: i64 = 20;
+
 /// `unit_sched_time` is configuration 31 (4 ms); a new native exec-env stores
 /// five units in its scheduling interval, i.e. 20 ms.
 const VM_RESCHEDULE_INTERVAL_MS: u64 = 20;
@@ -2685,7 +2692,23 @@ async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext,
     let thread_id = vm_exec_env_thread_id(core);
     let depth = vm_monitor_release_for_wait(&context.vm_monitors, this, thread_id);
 
-    let result = method_bridge::invoke(core, &jvm, &handles, member, Some(this)).await;
+    // A bare `wait()` blocks until a notify. Many WIPI titles run their game
+    // loop on a worker that does `synchronized(o){ o.wait() }` and expect the
+    // platform to keep it moving; the reference's `wait(0)` does not hard-block
+    // but returns after a scheduling quantum. Give an infinite wait a bounded
+    // timeout so such a worker still progresses - a spurious wakeup the JVM
+    // already permits - instead of hanging the title (Fantasy Knight / Battle
+    // Monster). An explicitly timed `wait(ms)` keeps the title's own timeout.
+    let result = if member.descriptor == "()V"
+        && let Some(instance) = handles.get(this)
+    {
+        match jvm.invoke_virtual(&instance, "wait", "(JI)V", (LGT_BARE_WAIT_BOUND_MS, 0i32)).await {
+            Ok(()) => Ok(0),
+            Err(error) => Err(wie_jvm_support::JvmSupport::to_wie_err(&jvm, error).await),
+        }
+    } else {
+        method_bridge::invoke(core, &jvm, &handles, member, Some(this)).await
+    };
 
     // Reclaim the native monitor a wait surrendered. RustJava has already
     // reacquired the JVM monitor by the time it returns, so this only mirrors
