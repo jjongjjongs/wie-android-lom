@@ -1362,6 +1362,33 @@ mod tests {
     }
 
     #[test]
+    fn jit_arm_pc_operands() {
+        // The compiler's PC idioms, folded to immediates by the frontend, must
+        // match the interpreter exactly:
+        //   mov lr, pc      (call return address)
+        //   add r0, pc, #4  (ADR)
+        //   sub r1, pc, #8
+        //   add r2, r3, pc  (PC as the register operand)
+        //   orr r4, pc, #1  (Thumb-target tagging)
+        let code = arm(&[0xe1a0e00f, 0xe28f0004, 0xe24f1008, 0xe083200f, 0xe38f4001]);
+        let mut regs = [0u32; 15];
+        regs[3] = 0x100;
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 20);
+    }
+
+    #[test]
+    fn jit_arm_pc_relative_branch() {
+        // add pc, pc, #8 folds to a constant branch (mov pc, #target). Landing
+        // pad after the skipped word sets r0 so the outcome is observable.
+        // CODE+0: add pc,pc,#8 -> pc = CODE+8+8 = CODE+16; CODE+16: mov r0,#0x11.
+        let code = arm(&[0xe28ff008, 0xe1a00000, 0xe1a00000, 0xe1a00000, 0xe3a00011]);
+        let mut regs = [0u32; 15];
+        regs[13] = DATA + 0x8000;
+        assert_same_arm(&code, &regs, CODE + 20);
+    }
+
+    #[test]
     fn jit_arm_loop_to_end() {
         // A short ARM loop that decrements r0 and branches back, then reaches the
         // `end` breakpoint via fall-through. Exercises repeated ARM stepping and

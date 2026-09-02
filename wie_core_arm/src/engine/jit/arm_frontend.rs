@@ -153,7 +153,7 @@ pub(crate) fn decode_arm(inst: u32, pc: u32) -> Option<ArmOp> {
         if cond == 0xf {
             return None;
         }
-        return decode_data_proc(inst);
+        return decode_data_proc(inst, pc);
     }
     if m(0x0fc0_00f0, 0x0000_0090) {
         return None; // Multiply
@@ -184,7 +184,48 @@ pub(crate) fn decode_arm(inst: u32, pc: u32) -> Option<ArmOp> {
     None // SWI, coprocessor, undefined
 }
 
-fn decode_data_proc(inst: u32) -> Option<ArmOp> {
+/// Applies an immediate ARM shift to a compile-time-constant value, returning
+/// `(result, shifter_carry)`. Used to fold a PC operand (whose value is the
+/// constant `pc + 8`) into an immediate. `RRX` (ROR #0) needs the live carry, so
+/// it is reported as unfoldable.
+fn shift_const(val: u32, ty: u8, amount: u8) -> Option<(u32, u32)> {
+    Some(match ty {
+        0 => {
+            // LSL
+            if amount == 0 {
+                (val, 0)
+            } else {
+                (val << amount, (val >> (32 - amount)) & 1)
+            }
+        }
+        1 => {
+            // LSR (#0 encodes #32)
+            if amount == 0 {
+                (0, (val >> 31) & 1)
+            } else {
+                (val >> amount, (val >> (amount - 1)) & 1)
+            }
+        }
+        2 => {
+            // ASR (#0 encodes #32)
+            if amount == 0 {
+                let filled = ((val as i32) >> 31) as u32;
+                (filled, (val >> 31) & 1)
+            } else {
+                (((val as i32) >> amount) as u32, (val >> (amount - 1)) & 1)
+            }
+        }
+        _ => {
+            // ROR; #0 is RRX (needs the live carry), so decline that one.
+            if amount == 0 {
+                return None;
+            }
+            (val.rotate_right(amount as u32), (val >> (amount - 1)) & 1)
+        }
+    })
+}
+
+fn decode_data_proc(inst: u32, pc: u32) -> Option<ArmOp> {
     let i = bits(inst, 25, 1);
     let r = bits(inst, 4, 1);
     let opcode = bits(inst, 21, 4) as u8;
@@ -198,6 +239,9 @@ fn decode_data_proc(inst: u32) -> Option<ArmOp> {
         return None;
     }
 
+    // The value r15 reads as, in ARM state, is this instruction's address + 8.
+    let pc_val = pc.wrapping_add(8);
+
     let op2 = if i == 1 {
         // Rotated immediate: value and shifter carry are both constant.
         let rot = bits(inst, 8, 4) * 2;
@@ -208,28 +252,70 @@ fn decode_data_proc(inst: u32) -> Option<ArmOp> {
     } else {
         let rm = bits(inst, 0, 4) as u8;
         let ty = bits(inst, 5, 2) as u8;
-        if rm == 15 {
-            return None; // PC as shifted operand: fall back
-        }
         if r == 0 {
-            Op2::ShiftImm {
-                rm,
-                ty,
-                amount: bits(inst, 7, 5) as u8,
+            let amount = bits(inst, 7, 5) as u8;
+            if rm == 15 {
+                // PC as the shifted operand is a compile-time constant - the
+                // `mov lr, pc` / `add rd, rx, pc` call and address idioms. Fold
+                // it to an immediate rather than fall back.
+                let (val, carry) = shift_const(pc_val, ty, amount)?;
+                Op2::Imm { val, carry }
+            } else {
+                Op2::ShiftImm { rm, ty, amount }
             }
         } else {
             let rs = bits(inst, 8, 4) as u8;
-            if rs == 15 {
-                return None;
+            if rm == 15 || rs == 15 {
+                return None; // PC shifted by a register is not constant
             }
             Op2::ShiftReg { rm, ty, rs }
         }
     };
 
-    // PC as the first ALU operand needs the pipeline constant; fall back for now.
+    // PC as the first ALU operand: its value is the constant `pc + 8`. When the
+    // second operand is also constant, fold the whole instruction to a `mov rd,
+    // #result` - the `add rd, pc, #imm` (ADR) address idiom and friends. MOV/MVN
+    // ignore rn, so PC there is harmless. Other rn == 15 forms (register operand,
+    // or a carry/flag-only op) stay a fall back.
     if rn == 15 {
-        return None;
+        if opcode == 0xD || opcode == 0xF {
+            // MOV/MVN ignore the first operand.
+            return Some(ArmOp::DataProc {
+                cond: bits(inst, 28, 4) as u8,
+                opcode,
+                s,
+                rd,
+                rn: 0,
+                op2,
+            });
+        }
+        if s {
+            return None; // folding the flags of a constant op is not worth it
+        }
+        let Op2::Imm { val: b, .. } = op2 else {
+            return None;
+        };
+        let a = pc_val;
+        let result = match opcode {
+            0x0 => a & b,             // AND
+            0x1 => a ^ b,             // EOR
+            0x2 => a.wrapping_sub(b), // SUB
+            0x3 => b.wrapping_sub(a), // RSB
+            0x4 => a.wrapping_add(b), // ADD
+            0xC => a | b,             // ORR
+            0xE => a & !b,            // BIC
+            _ => return None,         // ADC/SBC/RSC (carry) and CMP/TST/etc.
+        };
+        return Some(ArmOp::DataProc {
+            cond: bits(inst, 28, 4) as u8,
+            opcode: 0xD, // MOV
+            s: false,
+            rd,
+            rn: 0,
+            op2: Op2::Imm { val: result, carry: 0 },
+        });
     }
+
     Some(ArmOp::DataProc {
         cond: bits(inst, 28, 4) as u8,
         opcode,
