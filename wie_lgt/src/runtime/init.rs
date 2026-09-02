@@ -124,6 +124,14 @@ const CLASS_METADATA_SIZE: u32 = 0x4c;
 const CLASS_METADATA_NAME: u32 = 0x08;
 const CLASS_METADATA_SUPERCLASS: u32 = 0x10;
 
+/// Class-shared flags halfword (metadata `+0x00`), read by the reference
+/// `vm_class_is_assignable_to`: `0x1000` marks an array class, `0x200` an
+/// interface. Anything without these is a plain class whose assignability is a
+/// superclass-chain question.
+const CLASS_METADATA_FLAGS: u32 = 0x00;
+const CLASS_FLAG_ARRAY: u16 = 0x1000;
+const CLASS_FLAG_INTERFACE: u16 = 0x200;
+
 /// Guard on how far a class hierarchy is walked looking for a platform class.
 const MAX_SUPERCLASS_DEPTH: usize = 32;
 
@@ -2349,9 +2357,85 @@ async fn throw_vm_exception(core: &mut ArmCore, context: &mut InitSvcContext, cl
     context.save_points.throw(core, exception)
 }
 
+/// Whether `root` is a real linked `class_shared` block - an application class -
+/// rather than a synthetic platform or array token. A real class's metadata sits
+/// exactly `CLASS_METADATA_SIZE` bytes before its root, so that invariant, which
+/// `superclass_name_from_metadata` already relies on, identifies one.
+fn is_real_metadata_root(core: &ArmCore, root: u32) -> bool {
+    if root == 0 {
+        return false;
+    }
+    match read_generic::<u32, _>(core, root + 8) {
+        Ok(metadata) => metadata != 0 && metadata.checked_add(CLASS_METADATA_SIZE) == Some(root),
+        Err(_) => false,
+    }
+}
+
+/// Precise application-class assignability, mirroring the reference
+/// `vm_class_is_assignable_to` (0x146fa4) superclass walk over guest
+/// `class_shared` metadata instead of mapping to a RustJava class name.
+///
+/// Returns `Some(result)` only when both roots are real application metadata and
+/// the question is a plain class-hierarchy one. Arrays, interfaces, and any
+/// synthetic platform token yield `None`, leaving those to the name-based path
+/// (arrays bridge their element component there; interfaces need the transitive
+/// implements set; platform tokens have no walkable metadata). This is the fix
+/// for app-class type confusion: the name path assumes assignable for a class it
+/// cannot name, so an unrelated application class passes an `instanceof`/aastore
+/// check it should fail. The metadata walk answers those precisely.
+fn metadata_assignable(core: &ArmCore, source_root: u32, target_root: u32) -> Result<Option<bool>> {
+    if source_root == target_root {
+        return Ok(Some(true));
+    }
+    if !is_real_metadata_root(core, source_root) || !is_real_metadata_root(core, target_root) {
+        return Ok(None);
+    }
+
+    let source_meta: u32 = read_generic(core, source_root + 8)?;
+    let target_meta: u32 = read_generic(core, target_root + 8)?;
+    let source_flags: u16 = read_generic(core, source_meta + CLASS_METADATA_FLAGS)?;
+    let target_flags: u16 = read_generic(core, target_meta + CLASS_METADATA_FLAGS)?;
+
+    // Arrays and interfaces are out of scope for this walk (see the doc note).
+    if (source_flags | target_flags) & (CLASS_FLAG_ARRAY | CLASS_FLAG_INTERFACE) != 0 {
+        return Ok(None);
+    }
+
+    // Walk the source's superclass chain of real application roots. Every
+    // application superclass is stored as another root; the first platform
+    // superclass is a name-string pointer that fails the real-metadata
+    // invariant and ends the application chain. If the application-class target
+    // is not found on that chain, the source does not extend it.
+    let mut current = source_root;
+    for _ in 0..MAX_SUPERCLASS_DEPTH {
+        let metadata: u32 = read_generic(core, current + 8)?;
+        let superclass: u32 = read_generic(core, metadata + CLASS_METADATA_SUPERCLASS)?;
+
+        if superclass == target_root {
+            return Ok(Some(true));
+        }
+        if !is_real_metadata_root(core, superclass) {
+            return Ok(Some(false));
+        }
+        current = superclass;
+    }
+
+    // A chain deeper than the guard (cyclic or malformed): do not decide.
+    Ok(None)
+}
+
 async fn class_is_assignable_to(core: &ArmCore, context: &mut InitSvcContext, source_root: u32, target_root: u32) -> Result<bool> {
     if source_root == target_root {
         return Ok(true);
+    }
+
+    // Prefer the precise metadata walk for a plain application-class hierarchy
+    // question; it never uses a class name, so it is right where the name path's
+    // "assume assignable for an unknown class" fallback causes type confusion.
+    // Anything it cannot decide (arrays, interfaces, platform tokens) falls
+    // through to the name-based path below.
+    if let Some(result) = metadata_assignable(core, source_root, target_root)? {
+        return Ok(result);
     }
 
     // An unresolvable class must not end the run. This slot backs both
@@ -3466,6 +3550,68 @@ mod dlet_property_tests {
 
         assert!(dlet_set_process_local_property(&properties, 1, 200, 1, 0).is_err());
         assert!(dlet_set_process_local_property(&properties, 0, 200, 1, 4).is_err());
+    }
+}
+
+#[cfg(test)]
+mod assignability_tests {
+    use wie_core_arm::{Allocator, ArmCore};
+    use wie_util::write_generic;
+
+    use super::{CLASS_METADATA_FLAGS, CLASS_METADATA_SIZE, CLASS_METADATA_SUPERCLASS, metadata_assignable};
+
+    /// Lays out one application class's `class_shared` block and returns its
+    /// root. The root sits `CLASS_METADATA_SIZE` bytes after the metadata block,
+    /// the invariant that marks a real (non-synthetic) class; `+8` points back at
+    /// the metadata, `+0x00` is the flags halfword, `+0x10` the superclass.
+    fn write_class(core: &mut ArmCore, metadata: u32, flags: u16, superclass: u32) -> u32 {
+        let root = metadata + CLASS_METADATA_SIZE;
+        write_generic(core, root + 8, metadata).unwrap();
+        write_generic(core, metadata + CLASS_METADATA_FLAGS, flags).unwrap();
+        write_generic(core, metadata + CLASS_METADATA_SUPERCLASS, superclass).unwrap();
+        root
+    }
+
+    #[test]
+    fn superclass_chain_decides_application_class_assignability() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.map(0x40000000, 0x10000).unwrap();
+
+        // A platform superclass is a bare name-string pointer, not a real root:
+        // its `+8` does not point CLASS_METADATA_SIZE back at itself.
+        let platform = 0x4000_8000;
+        write_generic(&mut core, platform + 8, 0u32).unwrap();
+
+        // Base extends a platform class; Derived extends Base; Other extends the
+        // platform class independently.
+        let base = write_class(&mut core, 0x4000_1000, 0, platform);
+        let derived = write_class(&mut core, 0x4000_2000, 0, base);
+        let other = write_class(&mut core, 0x4000_3000, 0, platform);
+
+        // Up the chain is assignable; down and sideways are not.
+        assert_eq!(metadata_assignable(&core, derived, base).unwrap(), Some(true));
+        assert_eq!(metadata_assignable(&core, derived, derived).unwrap(), Some(true));
+        assert_eq!(metadata_assignable(&core, base, derived).unwrap(), Some(false));
+        assert_eq!(metadata_assignable(&core, derived, other).unwrap(), Some(false));
+        assert_eq!(metadata_assignable(&core, base, other).unwrap(), Some(false));
+    }
+
+    #[test]
+    fn synthetic_arrays_and_interfaces_defer_to_the_name_path() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.map(0x40000000, 0x10000).unwrap();
+
+        let platform = 0x4000_8000;
+        write_generic(&mut core, platform + 8, 0u32).unwrap();
+
+        let plain = write_class(&mut core, 0x4000_1000, 0, platform);
+        let interface = write_class(&mut core, 0x4000_2000, super::CLASS_FLAG_INTERFACE, platform);
+
+        // A synthetic token (no real metadata) is undecided here.
+        assert_eq!(metadata_assignable(&core, 0x1234, plain).unwrap(), None);
+        assert_eq!(metadata_assignable(&core, plain, 0x1234).unwrap(), None);
+        // An interface target is left to the name-based path.
+        assert_eq!(metadata_assignable(&core, plain, interface).unwrap(), None);
     }
 }
 
