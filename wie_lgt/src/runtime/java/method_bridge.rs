@@ -128,11 +128,7 @@ async fn sync_guest_fields_to_jvm(jvm: &Jvm, handles: &JavaHandles, handle: u32)
         return Ok(());
     };
 
-    for binding in handles.field_bindings() {
-        if !jvm.is_instance(&*instance, &binding.class_name) {
-            continue;
-        }
-
+    for binding in handles.applied_field_bindings(jvm, &*instance).iter() {
         let word = handles.read_field_word(handle, binding.slot)?;
 
         match binding.descriptor.as_str() {
@@ -160,11 +156,7 @@ async fn sync_jvm_fields_to_guest(jvm: &Jvm, handles: &JavaHandles, handle: u32)
         return Ok(());
     };
 
-    for binding in handles.field_bindings() {
-        if !jvm.is_instance(&*instance, &binding.class_name) {
-            continue;
-        }
-
+    for binding in handles.applied_field_bindings(jvm, &*instance).iter() {
         let word = match binding.descriptor.as_str() {
             "I" => {
                 let value: i32 = match jvm.get_field(&instance, &binding.name, &binding.descriptor).await {

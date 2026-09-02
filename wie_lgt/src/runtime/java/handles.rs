@@ -56,6 +56,13 @@ pub struct JavaHandles {
     /// Imported platform fields whose native ABI slot must stay coherent with
     /// the JVM instance retained under the same handle.
     field_bindings: Arc<Mutex<Vec<JavaFieldBinding>>>,
+    /// Per concrete class, the subset of `field_bindings` that applies to it
+    /// (its own and inherited imported fields), resolved once and reused. The
+    /// field sync that brackets every bridged method call would otherwise
+    /// re-scan the whole binding list — an `is_instance` hierarchy walk per
+    /// binding, twice a call — which on a title that calls into the JVM
+    /// thousands of times a second is the dominant bridge cost.
+    applied_field_bindings: Arc<Mutex<BTreeMap<String, Arc<Vec<JavaFieldBinding>>>>>,
     /// Class name to dispatch table, so an object handed to the compiled code
     /// can be given the table its virtual calls will go through.
     dispatch_tables: Arc<Mutex<BTreeMap<String, u32>>>,
@@ -137,6 +144,7 @@ impl JavaHandles {
             core,
             field_slots: Arc::new(AtomicU32::new(0)),
             field_bindings: Default::default(),
+            applied_field_bindings: Default::default(),
             dispatch_tables: Default::default(),
             fallback_dispatch_table: Arc::new(AtomicU32::new(0)),
             entries: Default::default(),
@@ -200,10 +208,31 @@ impl JavaHandles {
     /// Records imported platform fields that have native guest ABI slots.
     pub fn set_field_bindings(&self, bindings: Vec<JavaFieldBinding>) {
         *self.field_bindings.lock() = bindings;
+        self.applied_field_bindings.lock().clear();
     }
 
-    pub fn field_bindings(&self) -> Vec<JavaFieldBinding> {
-        self.field_bindings.lock().clone()
+    /// The field bindings that apply to `instance`'s concrete class — its own
+    /// and inherited imported fields — resolved on first use and cached by class
+    /// name. Replaces a full-list `is_instance` scan on every bridged call with
+    /// a single map lookup. `is_instance` is synchronous, so the one-time scan
+    /// holds the binding lock without crossing an `await`.
+    pub fn applied_field_bindings(&self, jvm: &Jvm, instance: &dyn ClassInstance) -> Arc<Vec<JavaFieldBinding>> {
+        let class_name = instance.class_definition().name();
+
+        if let Some(cached) = self.applied_field_bindings.lock().get(&class_name) {
+            return cached.clone();
+        }
+
+        let applied = Arc::new(
+            self.field_bindings
+                .lock()
+                .iter()
+                .filter(|binding| jvm.is_instance(instance, &binding.class_name))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        self.applied_field_bindings.lock().insert(class_name, applied.clone());
+        applied
     }
 
     /// Reads one word from an instance's guest-side field block.
