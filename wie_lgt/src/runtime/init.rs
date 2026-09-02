@@ -2676,7 +2676,9 @@ async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext,
     let handles = context.java_handles.clone();
     let jvm = context.jvm.clone();
 
-    if member.name != "wait" {
+    // Only `java/lang/Object.wait` surrenders the monitor; every other method
+    // (including a same-named method on another class) goes straight through.
+    if !(member.name == "wait" && member.class_name == "java/lang/Object") {
         return method_bridge::invoke(core, &jvm, &handles, member, Some(this)).await;
     }
 
@@ -2826,10 +2828,11 @@ async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContex
         return Err(WieError::FatalError(format!("Imported virtual method {index} has no descriptor")));
     };
 
-    let handles = context.java_handles.clone();
-    let jvm = context.jvm.clone();
-
-    method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await
+    // A compiled `synchronized(o){ o.wait() }` reaches `Object.wait` through the
+    // imported-virtual table, so it needs the same native-monitor handoff as the
+    // dispatch-slot path - otherwise the sleeping waiter keeps the native
+    // monitor and a notifier spins on `vm_monitor_enter` forever.
+    invoke_object_self_method(core, context, &member, this).await
 }
 
 pub async fn load_native(
