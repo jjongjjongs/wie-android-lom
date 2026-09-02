@@ -662,6 +662,68 @@ impl Graphics {
         Ok(())
     }
 
+    /// Blit `img` onto this Graphics' canvas, treating source pixels whose
+    /// RGB565 equals `color_key565` as transparent. This is the single-pass
+    /// backend path for WIPI's color-keyed `drawImage`: it replaces the
+    /// per-pixel ARGB array plus `drawRGB` round-trip (a JVM int-array
+    /// allocation and a second full pass over the pixels) that a color-keyed
+    /// sprite would otherwise pay on every call. Anchor, translation and clip
+    /// match [`draw_image`](Self::draw_image).
+    pub async fn draw_image_color_key(
+        jvm: &Jvm,
+        this: &mut ClassInstanceRef<Graphics>,
+        img: &ClassInstanceRef<Image>,
+        x: i32,
+        y: i32,
+        anchor: i32,
+        color_key565: u16,
+    ) -> JvmResult<()> {
+        if img.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "img is null").await);
+        }
+
+        let anchor = Anchor::from_bits_truncate(anchor);
+        let src_image = Image::image(jvm, img).await?;
+
+        let x_delta = if anchor.contains(Anchor::HCENTER) {
+            -((src_image.width() / 2) as i32)
+        } else if anchor.contains(Anchor::RIGHT) {
+            -(src_image.width() as i32)
+        } else {
+            0
+        };
+        let y_delta = if anchor.contains(Anchor::VCENTER) {
+            -((src_image.height() / 2) as i32)
+        } else if anchor.contains(Anchor::BOTTOM) {
+            -(src_image.height() as i32)
+        } else {
+            0
+        };
+
+        let translate_x: i32 = jvm.get_field(this, "translateX", "I").await?;
+        let translate_y: i32 = jvm.get_field(this, "translateY", "I").await?;
+
+        let x = translate_x + x + x_delta;
+        let y = translate_y + y + y_delta;
+
+        let clip = Self::clip(jvm, this).await?;
+        let mut canvas = Self::canvas(jvm, this).await?;
+
+        canvas.draw_with_color_key(
+            x as _,
+            y as _,
+            src_image.width(),
+            src_image.height(),
+            &*src_image,
+            0,
+            0,
+            clip,
+            color_key565,
+        );
+
+        Ok(())
+    }
+
     async fn draw_region(
         jvm: &Jvm,
         _: &mut WieJvmContext,

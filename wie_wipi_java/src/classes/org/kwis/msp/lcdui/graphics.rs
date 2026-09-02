@@ -631,8 +631,8 @@ impl Graphics {
             return Err(jvm.exception("java/lang/NullPointerException", "image is null").await);
         }
 
-        let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
-        let midp_image = Image::midp_image(jvm, &image).await?;
+        let mut midp_graphics: ClassInstanceRef<MidpGraphics> = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
+        let midp_image: ClassInstanceRef<MidpImage> = Image::midp_image(jvm, &image).await?;
         let transparent_color: i32 = jvm.get_field(&image, "transparentColor", "I").await?;
 
         // -1 is the native "no transparent color" sentinel.
@@ -648,63 +648,15 @@ impl Graphics {
                 .await;
         }
 
-        let backend_image = MidpImage::image(jvm, &midp_image).await?;
-        let width = backend_image.width() as i32;
-        let height = backend_image.height() as i32;
-
-        // MIDP/WIPI image anchors use the same bit values:
-        // HCENTER=1, VCENTER=2, LEFT=4, RIGHT=8, TOP=16, BOTTOM=32.
-        let draw_x = if anchor & 1 != 0 {
-            x - width / 2
-        } else if anchor & 8 != 0 {
-            x - width
-        } else {
-            x
-        };
-
-        let draw_y = if anchor & 2 != 0 {
-            y - height / 2
-        } else if anchor & 32 != 0 {
-            y - height
-        } else {
-            y
-        };
-
+        // Color-keyed sprite. Blit it directly onto the backend canvas, skipping
+        // pixels that match the key, instead of building an ARGB int array and
+        // routing it through `drawRGB` (a JVM array allocation and a second full
+        // pass over the pixels) on every call — the dominant cost of a title
+        // whose renderer draws thousands of keyed sprites a second.
         let key = transparent_color as u32;
-        let key565 = ((key >> 8) & 0xf800) | ((key >> 5) & 0x07e0) | ((key >> 3) & 0x001f);
+        let key565 = (((key >> 8) & 0xf800) | ((key >> 5) & 0x07e0) | ((key >> 3) & 0x001f)) as u16;
 
-        let pixel_count = match (width as usize).checked_mul(height as usize) {
-            Some(value) => value,
-            None => return Ok(()),
-        };
-        let mut rgb = Vec::with_capacity(pixel_count);
-
-        for source_y in 0..height {
-            for source_x in 0..width {
-                let pixel = backend_image.get_pixel(source_x, source_y);
-
-                let source565 = (((pixel.r as u32) << 8) & 0xf800) | (((pixel.g as u32) << 3) & 0x07e0) | (((pixel.b as u32) >> 3) & 0x001f);
-
-                let alpha = if source565 == key565 { 0 } else { pixel.a as u32 };
-
-                rgb.push(((alpha << 24) | ((pixel.r as u32) << 16) | ((pixel.g as u32) << 8) | pixel.b as u32) as i32);
-            }
-        }
-
-        let mut rgb_array = jvm.instantiate_array("I", rgb.len()).await?;
-        jvm.store_array(&mut rgb_array, 0, rgb).await?;
-
-        // drawRGB applies the existing MIDP translation, clipping and XOR path.
-        let _: () = jvm
-            .invoke_virtual(
-                &midp_graphics,
-                "drawRGB",
-                "([IIIIIIIZ)V",
-                (rgb_array, 0, width, draw_x, draw_y, width, height, true),
-            )
-            .await?;
-
-        Ok(())
+        MidpGraphics::draw_image_color_key(jvm, &mut midp_graphics, &midp_image, x, y, anchor, key565).await
     }
 
     async fn set_clip(

@@ -51,6 +51,11 @@ pub trait Canvas: Send {
     fn set_xor_mode(&mut self, xor_mode: bool);
     fn copy_area(&mut self, dx: i32, dy: i32, sx: i32, sy: i32, w: u32, h: u32, clip: Clip);
     fn draw(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip);
+    /// Like [`draw`](Self::draw), but pixels of `src` whose RGB565 value equals
+    /// `color_key565` are treated as transparent and skipped. This is the direct
+    /// path for a color-keyed sprite blit, avoiding the intermediate ARGB array
+    /// a `drawRGB` round-trip would allocate on every call.
+    fn draw_with_color_key(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip, color_key565: u16);
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color, clip: Clip);
     fn draw_text(
         &mut self,
@@ -553,6 +558,38 @@ where
 
                 // TODO blend multiple pixels at once for performance
                 self.blend_pixel(px, py, src.get_pixel((sx as i64 + x) as i32, (sy as i64 + y) as i32));
+            }
+        }
+    }
+
+    fn draw_with_color_key(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip, color_key565: u16) {
+        // Bounds exactly as `draw`; only the per-pixel body differs.
+        let x_start = 0i64.max(-(dx as i64)).max(-(sx as i64));
+        let x_end = (w as i64)
+            .min(self.image_buffer.width() as i64 - dx as i64)
+            .min(src.width() as i64 - sx as i64);
+        let y_start = 0i64.max(-(dy as i64)).max(-(sy as i64));
+        let y_end = (h as i64)
+            .min(self.image_buffer.height() as i64 - dy as i64)
+            .min(src.height() as i64 - sy as i64);
+
+        for y in y_start..y_end {
+            for x in x_start..x_end {
+                let px = (dx as i64 + x) as i32;
+                let py = (dy as i64 + y) as i32;
+                if px < clip.x || px >= clip.x + (clip.width as i32) || py < clip.y || py >= clip.y + (clip.height as i32) {
+                    continue;
+                }
+
+                let pixel = src.get_pixel((sx as i64 + x) as i32, (sy as i64 + y) as i32);
+                // RGB565 of the source pixel, matched against the key exactly as
+                // the WIPI drawImage color-key comparison does.
+                let pixel565 = (((pixel.r as u16) << 8) & 0xf800) | (((pixel.g as u16) << 3) & 0x07e0) | ((pixel.b as u16 >> 3) & 0x001f);
+                if pixel565 == color_key565 {
+                    continue;
+                }
+
+                self.blend_pixel(px, py, pixel);
             }
         }
     }
