@@ -61,7 +61,17 @@ pub(crate) struct ArmCoreInner {
     svc_stubs: BTreeMap<(u32, u32), u32>,
     next_stub_address: u32,
     profile: Option<ProfileState>,
+    /// Guest allocations of freed thread stacks, kept for reuse. Every spawned
+    /// task creates a thread with a 1 MB stack, so a busy title alloc/frees
+    /// these fast; recycling the allocation keeps that churn from fragmenting
+    /// the heap into sub-stack-sized holes.
+    stack_pool: Vec<u32>,
 }
+
+/// Upper bound on pooled thread stacks. Peak concurrency is small (a handful),
+/// so this is never reached in practice; it only caps memory if something spawns
+/// pathologically many concurrent threads.
+const THREAD_STACK_POOL_CAP: usize = 16;
 
 impl Drop for ArmCoreInner {
     fn drop(&mut self) {
@@ -135,6 +145,7 @@ impl ArmCore {
             svc_handlers: BTreeMap::new(),
             fast_svc: None,
             svc_stubs: BTreeMap::new(),
+            stack_pool: Vec::new(),
             next_stub_address: FUNCTIONS_BASE,
             profile,
         };
@@ -226,6 +237,39 @@ impl ArmCore {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(debug) = self.debug_inner() {
             debug.on_thread_deleted(thread_id);
+        }
+    }
+
+    /// Reuses a previously released thread stack, or allocates a fresh one.
+    ///
+    /// Thread stacks are large and every spawned task creates a thread, so a
+    /// busy title churns them fast; recycling the guest allocation keeps that
+    /// churn from fragmenting the heap into sub-stack-sized holes until a new
+    /// stack no longer fits (the Legend of Master mid-play allocation failure).
+    pub(crate) fn acquire_thread_stack(&mut self, size: u32) -> Result<u32> {
+        let pooled = self.inner.lock().stack_pool.pop();
+        if let Some(base) = pooled {
+            return Ok(base);
+        }
+
+        crate::Allocator::alloc(self, size)
+    }
+
+    /// Returns a thread stack to the pool for reuse, freeing it only if the pool
+    /// is already at capacity.
+    pub(crate) fn release_thread_stack(&mut self, base: u32, size: u32) {
+        let pooled = {
+            let mut inner = self.inner.lock();
+            if inner.stack_pool.len() < THREAD_STACK_POOL_CAP {
+                inner.stack_pool.push(base);
+                true
+            } else {
+                false
+            }
+        };
+
+        if !pooled && let Err(err) = crate::Allocator::free(self, base, size) {
+            tracing::error!("Failed to free thread stack: {err}");
         }
     }
 
@@ -856,6 +900,41 @@ mod tests {
         *seen_id = Some(id.0);
 
         Ok(())
+    }
+
+    #[test]
+    fn released_thread_stacks_are_pooled_and_reused() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        crate::Allocator::init(&mut core).unwrap();
+
+        let first = core.acquire_thread_stack(0x1000).unwrap();
+        core.release_thread_stack(first, 0x1000);
+        assert_eq!(core.inner.lock().stack_pool.len(), 1);
+
+        // A recycled stack comes back instead of a fresh allocation, so a busy
+        // title's thread churn does not fragment the heap with stack-sized holes.
+        let second = core.acquire_thread_stack(0x1000).unwrap();
+        assert_eq!(first, second);
+        assert!(core.inner.lock().stack_pool.is_empty());
+
+        // A distinct concurrent stack is a new allocation, not the pooled one.
+        let third = core.acquire_thread_stack(0x1000).unwrap();
+        assert_ne!(second, third);
+    }
+
+    #[test]
+    fn thread_stack_pool_is_capped() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        crate::Allocator::init(&mut core).unwrap();
+
+        let stacks: Vec<u32> = (0..THREAD_STACK_POOL_CAP + 4)
+            .map(|_| core.acquire_thread_stack(0x1000).unwrap())
+            .collect();
+        for stack in stacks {
+            core.release_thread_stack(stack, 0x1000);
+        }
+
+        assert_eq!(core.inner.lock().stack_pool.len(), THREAD_STACK_POOL_CAP);
     }
 
     #[test]
