@@ -1104,49 +1104,6 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 
             let exception = context.java_handles.address_of(exception)?;
 
-            // XXX temporary: the save routine opens LG_FN1, allocates the save
-            // buffer, then a compiler-inserted null check throws here, so the
-            // data blob is never written. Dump the guest return address and
-            // registers so the exact dereference (which object is null) can be
-            // located in binary.mod. Removed once the null source is fixed.
-            {
-                let c = core.save_context();
-                tracing::warn!(
-                    "XXXNPE lr={:#x} pc={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} r6={:#x} r7={:#x} r8={:#x} sb={:#x} sl={:#x} fp={:#x}",
-                    c.lr,
-                    c.pc,
-                    c.r0,
-                    c.r1,
-                    c.r2,
-                    c.r3,
-                    c.r4,
-                    c.r5,
-                    c.r6,
-                    c.r7,
-                    c.r8,
-                    c.sb,
-                    c.sl,
-                    c.fp
-                );
-                // The save serializer dereferences r8.field[0x54] (a null array).
-                // Dump r8's identity word and its field block so the object's
-                // class and exactly which sibling fields (0x38..0x5c) are null vs
-                // populated is visible - telling a never-assigned field apart
-                // from one our runtime cleared.
-                let obj = c.r8;
-                let identity: u32 = read_generic(core, obj).unwrap_or(0);
-                let fields: u32 = read_generic(core, obj.wrapping_add(8)).unwrap_or(0);
-                tracing::warn!("XXXNPE obj={obj:#x} identity[obj+0]={identity:#x} fieldblock[obj+8]={fields:#x}");
-                if fields != 0 {
-                    let mut row = alloc::string::String::new();
-                    for off in (0x30u32..0x64).step_by(4) {
-                        let v: u32 = read_generic(core, fields.wrapping_add(off)).unwrap_or(0xdead);
-                        row.push_str(&format!(" +{off:#04x}={v:#x}"));
-                    }
-                    tracing::warn!("XXXNPE r8.fields{row}");
-                }
-            }
-
             tracing::debug!("vm_throw_null_pointer_exception({message:#x}) -> longjmp({exception:#x})");
             context.save_points.throw(core, exception)
         }
@@ -1192,50 +1149,6 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
         // longjmp(save_point, exception_object).
         InitSvcId::VmThrowArrayIndexOutOfBoundsException => {
             let message = core.read_param(1)?;
-
-            // XXX temporary: the inventory throws AIOOBE while navigating because
-            // an item array is short/empty (the potions' data never populated it).
-            // Dump the compiled caller (lr = which bounds check) and the arrays
-            // its registers point at, so the empty/short array is identified.
-            {
-                let c = core.save_context();
-                tracing::warn!(
-                    "XXXAIOOBE lr={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} r4={:#x} r5={:#x} sl={:#x} fp={:#x}",
-                    c.lr,
-                    c.r0,
-                    c.r1,
-                    c.r2,
-                    c.r3,
-                    c.r4,
-                    c.r5,
-                    c.sl,
-                    c.fp
-                );
-                for (nm, r) in [
-                    ("r0", c.r0),
-                    ("r1", c.r1),
-                    ("r2", c.r2),
-                    ("r3", c.r3),
-                    ("r4", c.r4),
-                    ("r5", c.r5),
-                    ("sl", c.sl),
-                    ("fp", c.fp),
-                ] {
-                    if (0x0140_0000..0x0180_0000).contains(&r) || (0x4000_0000..0x5000_0000).contains(&r) {
-                        let mut s = String::new();
-                        for k in 0..8u32 {
-                            match read_generic::<u32, _>(core, r.wrapping_add(k * 4)) {
-                                Ok(v) => s.push_str(&format!(" {v:08x}")),
-                                Err(_) => {
-                                    s.push_str(" --");
-                                    break;
-                                }
-                            }
-                        }
-                        tracing::warn!("XXXAIOOBE {nm}={r:#x} ->{s}");
-                    }
-                }
-            }
 
             let class_name = "java/lang/ArrayIndexOutOfBoundsException";
             let vtable = synthetic_platform_vtable(core, context, class_name)?;

@@ -310,27 +310,6 @@ impl JavaHandles {
 
         let handle = self.allocate_instance(vtable)?;
 
-        // XXX temporary: an app class (obfuscated single/short lower-case name,
-        // e.g. `d`) crossing JVM->guest here gets a fresh, zeroed field block and
-        // never runs its compiled constructor, so its array fields are null. The
-        // save serializer then throws NPE on such an object. Log app-class
-        // crossings so the empty item object can be traced to what created it.
-        // Platform classes (java/*, javax/*, org/*, net/*) are expected to cross
-        // and are not logged. Removed once the round-trip is fixed.
-        if !class.contains('/') {
-            let c = self.core.save_context();
-            tracing::warn!(
-                "XXXINSERT app-class {class:?} identity={:#x} -> handle {handle:#x} (fresh zeroed field block) guest lr={:#x} pc={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x}",
-                instance.identity(),
-                c.lr,
-                c.pc,
-                c.r0,
-                c.r1,
-                c.r2,
-                c.r3
-            );
-        }
-
         self.addresses.lock().insert(instance.identity(), handle);
         self.entries.lock().insert(handle, instance);
 
@@ -343,15 +322,6 @@ impl JavaHandles {
     /// constructor on it, so the JVM instance only exists once the guest
     /// address does.
     pub fn bind(&self, handle: u32, instance: Box<dyn ClassInstance>) {
-        // XXX temporary: log app-class binds so the failing item object's
-        // identity (seen at XXXINSERT) can be matched to a bind here - telling a
-        // registration/lookup bug apart from an object created outside the
-        // binding paths. Removed once the round-trip is fixed.
-        let class = instance.class_definition().name();
-        if !class.contains('/') {
-            tracing::warn!("XXXBIND app-class {class:?} identity={:#x} -> handle {handle:#x}", instance.identity());
-        }
-
         self.addresses.lock().insert(instance.identity(), handle);
         self.entries.lock().insert(handle, instance);
     }

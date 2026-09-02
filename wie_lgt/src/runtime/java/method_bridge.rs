@@ -19,7 +19,7 @@
 
 use alloc::{format, string::String, vec::Vec};
 
-use jvm::{Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::{Array, ClassInstanceRef, JavaError, JavaValue, Jvm, Result as JvmResult};
 
 use wie_core_arm::ArmCore;
 use wie_jvm_support::JvmSupport;
@@ -546,91 +546,6 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
     let mut writebacks = Vec::new();
     let mut char_writebacks = Vec::new();
     let arguments = marshal_arguments(core, jvm, handles, &parameters, first_word, &mut writebacks, &mut char_writebacks).await?;
-
-    // XXX temporary: the item-display arraycopy reads a null source, so the
-    // inventory item's 12-byte definition is missing. Dump the compiled
-    // caller's registers and the item array/index they point at (from f.paint:
-    // array=[sl+8], index=[r4+0x2ec] signed halfword, item=array[index]) to
-    // find why the definition is null. Removed once item data is populated.
-    if class_name == "java/lang/System" && name == "arraycopy" && matches!(arguments.first(), Some(JavaValue::Object(None))) {
-        let c = core.save_context();
-        let dump = |base: u32, off: u32| -> String {
-            let mut s = String::new();
-            for k in 0..8u32 {
-                match read_generic::<u32, _>(core, base.wrapping_add(off + k * 4)) {
-                    Ok(v) => s.push_str(&format!(" {v:08x}")),
-                    Err(_) => {
-                        s.push_str(" ----");
-                        break;
-                    }
-                }
-            }
-            s
-        };
-        let index: i32 = read_generic::<u16, _>(core, c.r4.wrapping_add(0x2ec))
-            .map(|x| x as i16 as i32)
-            .unwrap_or(-999);
-        // `sl` is the object the compiled inventory code indexes: it reads
-        // table=[sl+8] then item=[table + index*4]. Report the object's identity
-        // word and how far the table is actually populated, so a too-small guest
-        // allocation (index past the real length) is told apart from a correct
-        // table with a wrong index.
-        let sl_identity: u32 = read_generic(core, c.sl).unwrap_or(0);
-        let array: u32 = read_generic(core, c.sl.wrapping_add(8)).unwrap_or(0);
-        tracing::warn!(
-            "XXXITEM arraycopy(null): r4={:#x} sl={:#x} sl.identity[sl+0]={sl_identity:#x} index[r4+0x2ec]={index} table[sl+8]={array:#x}",
-            c.r4,
-            c.sl
-        );
-        if array != 0 {
-            // Scan the table for its populated extent: walk entries until a long
-            // run of zeros, recording the count of non-null slots and the highest
-            // non-null index. `index` (202) being far past max_nonnull would mean
-            // the compiled code is indexing past the table our runtime built.
-            let mut count_nonnull = 0u32;
-            let mut max_nonnull: i32 = -1;
-            let mut zero_run = 0u32;
-            let mut scanned = 0u32;
-            while scanned < 512 && zero_run < 64 {
-                match read_generic::<u32, _>(core, array.wrapping_add(scanned * 4)) {
-                    Ok(0) => zero_run += 1,
-                    Ok(_) => {
-                        count_nonnull += 1;
-                        max_nonnull = scanned as i32;
-                        zero_run = 0;
-                    }
-                    Err(_) => break,
-                }
-                scanned += 1;
-            }
-            tracing::warn!("XXXITEM table extent: nonnull={count_nonnull} max_nonnull_index={max_nonnull} (index wanted={index})");
-            // Dump the first 32 words and the words around the wanted index.
-            for row in 0..4u32 {
-                tracing::warn!("XXXITEM table[{array:#x}]+{:#05x}:{}", row * 32, dump(array, row * 32));
-            }
-            if index >= 0 {
-                let around = (index as u32).saturating_sub(4) * 4;
-                tracing::warn!("XXXITEM table near[{index}] +{around:#05x}:{}", dump(array, around));
-                let item: u32 = read_generic(core, array.wrapping_add((index as u32) * 4)).unwrap_or(0);
-                tracing::warn!("XXXITEM item=table[{index}]={item:#x} words:{}", dump(item, 0));
-                if item != 0 {
-                    let fields: u32 = read_generic(core, item.wrapping_add(8)).unwrap_or(0);
-                    tracing::warn!("XXXITEM item.fields[item+8]={fields:#x} words:{}", dump(fields, 0));
-                }
-            }
-        }
-    }
-
-    // XXX temporary: log which resources the title loads (name + presence), so a
-    // partial item-definition table can be traced to a resource that failed to
-    // load. Removed once the item data is understood.
-    if name == "getResourceAsStream" || name == "getResource" {
-        if let Some(JavaValue::Object(Some(s))) = arguments.first() {
-            let s = s.clone();
-            let rs = JavaLangString::to_rust_string(jvm, &s).await.unwrap_or_default();
-            tracing::warn!("XXXRES {class_name}.{name}({rs:?})");
-        }
-    }
 
     let receiver_handle = receiver.as_ref().map(|_| core.read_param(0)).transpose()?;
 
