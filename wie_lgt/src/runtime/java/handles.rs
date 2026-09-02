@@ -71,6 +71,11 @@ pub struct JavaHandles {
     /// size. Raw allocations (thread stacks, save points, firmware structures)
     /// never appear here, so the collector can only ever reclaim real objects.
     gc_objects: Arc<Mutex<BTreeMap<u32, GcObject>>>,
+    /// Guest memory ranges that hold GC roots outside the thread stacks -
+    /// notably each activated class's static-field block. Scanned alongside the
+    /// registers and stacks so an object referenced only from a static field is
+    /// not mistaken for garbage.
+    gc_static_roots: Arc<Mutex<Vec<(u32, u32)>>>,
 }
 
 /// One collector-managed guest object: its `+0x08` payload block (fields for an
@@ -94,6 +99,15 @@ impl JavaHandles {
             addresses: Default::default(),
             array_element_types: Default::default(),
             gc_objects: Default::default(),
+            gc_static_roots: Default::default(),
+        }
+    }
+
+    /// Registers a guest memory range `[start, end)` whose words the collector
+    /// must treat as GC roots (a class's static-field block).
+    pub fn register_gc_static_root(&self, start: u32, end: u32) {
+        if end > start {
+            self.gc_static_roots.lock().push((start, end));
         }
     }
 
@@ -263,10 +277,11 @@ impl JavaHandles {
         let (registers, stack_ranges) = self.core.gc_thread_roots();
         let core = self.core.clone();
 
-        // Every register value, and every word in an in-use stack, is a
-        // candidate reference into the heap.
+        // Every register value, and every word in an in-use stack or a
+        // registered static-field block, is a candidate reference into the heap.
         let mut seeds: Vec<u32> = registers.clone();
-        for &(low, high) in &stack_ranges {
+        let static_roots = self.gc_static_roots.lock().clone();
+        for &(low, high) in stack_ranges.iter().chain(static_roots.iter()) {
             let mut address = low & !3;
             while address < high {
                 if let Ok(word) = read_generic::<u32, _>(&core, address) {
@@ -290,7 +305,7 @@ impl JavaHandles {
         }
 
         tracing::error!(
-            "GC dry-run: {} managed objects, {} reachable, {} unreachable ({} arrays) (would free ~{} bytes) from {} register + {} stack-range roots",
+            "GC dry-run: {} managed objects, {} reachable, {} unreachable ({} arrays) (would free ~{} bytes) from {} register + {} stack + {} static-range roots",
             objects.len(),
             marked.len(),
             dead,
@@ -298,6 +313,7 @@ impl JavaHandles {
             dead_bytes,
             registers.len(),
             stack_ranges.len(),
+            static_roots.len(),
         );
     }
 

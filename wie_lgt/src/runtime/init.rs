@@ -623,6 +623,13 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let data = Allocator::alloc(core, data_size)?;
             core.write_bytes(data, &vec![0; data_size as usize])?;
 
+            // The static-field words (past the 20-byte header) hold references
+            // to objects reachable only through statics; register them as GC
+            // roots so the collector does not mistake such an object for garbage.
+            if static_field_count > 0 {
+                context.java_handles.register_gc_static_root(data + 20, data + data_size);
+            }
+
             write_generic(core, data, 0u16)?;
             write_generic(core, data + 2, 0u16)?;
             write_generic(core, data + 4, 0u32)?;
