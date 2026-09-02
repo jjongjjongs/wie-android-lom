@@ -84,6 +84,13 @@ impl FileSystem {
     async fn is_file(jvm: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<bool> {
         tracing::debug!("org.kwis.msp.io.FileSystem::is_file({name:?})");
 
+        // A null path is not a file. The reference returns false rather than
+        // dereferencing it; `new File(null)` would otherwise reach a proxy that
+        // panics on the null argument. Iljimae (일지매) probes isFile(null).
+        if name.is_null() {
+            return Ok(false);
+        }
+
         let file = jvm.new_class("java/io/File", "(Ljava/lang/String;)V", (name,)).await?;
         let is_file = jvm.invoke_virtual(&file, "isFile", "()Z", ()).await?;
 

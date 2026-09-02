@@ -273,6 +273,13 @@ impl Image {
     async fn create_image_from_name(jvm: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<ClassInstanceRef<Image>> {
         tracing::debug!("org.kwis.msp.lcdui.Image::createImage({name:?})");
 
+        // A null resource name throws NullPointerException like real Java rather
+        // than reaching to_rust_string, which dereferences the null and panics
+        // the host. The reference never crashes the VM on this.
+        if name.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "createImage(null)").await);
+        }
+
         let mut resource_name = JavaLangString::to_rust_string(jvm, &name).await?;
 
         if !resource_name.contains(':') {
