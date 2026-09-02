@@ -116,38 +116,6 @@ impl MethodBody<JavaError, CompiledContext> for CompiledMethod {
             self.entry
         );
 
-        // TEMP DIAGNOSTIC (시드 per-frame re-init): compare the paint receiver's
-        // instance-field block frame-to-frame and log which slots changed
-        // (slot:old->new). A slot that resets (e.g. 1->0) every frame is the
-        // "already initialized" flag that is not persisting - the reason the game
-        // reloads resources and restarts the BGM every paint. INFO so it survives
-        // the device log filter. Revert once the condition is found.
-        if self.name == "paint" && self.takes_receiver && !words.is_empty() {
-            use alloc::collections::BTreeMap;
-            use spin::Mutex;
-            static LAST_FIELDS: Mutex<Option<BTreeMap<u32, Vec<u32>>>> = Mutex::new(None);
-
-            let handle = words[0];
-            let fields: Vec<u32> = (0..24).map(|slot| context.handles.read_field_word(handle, slot).unwrap_or(0)).collect();
-
-            let mut guard = LAST_FIELDS.lock();
-            let map = guard.get_or_insert_with(BTreeMap::new);
-            match map.get(&handle) {
-                None => tracing::info!("[paint-fields] {} receiver={handle:#x} initial={fields:#x?}", self.class_name),
-                Some(prev) if *prev != fields => {
-                    let mut changes = Vec::new();
-                    for (slot, &now) in fields.iter().enumerate() {
-                        if prev[slot] != now {
-                            changes.push(format!("{slot}:{:#x}->{:#x}", prev[slot], now));
-                        }
-                    }
-                    tracing::info!("[paint-fields] {} receiver={handle:#x} changed {}", self.class_name, changes.join(" "));
-                }
-                Some(_) => {}
-            }
-            map.insert(handle, fields);
-        }
-
         let result: u32 = match context.core.run_function(self.entry, &words).await {
             Ok(result) => result,
             // The compiled code threw a Java exception that no compiled save
