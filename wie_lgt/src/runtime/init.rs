@@ -185,6 +185,29 @@ fn vm_monitor_try_enter(monitors: &VmMonitors, object: u32, thread_id: ThreadId)
     }
 }
 
+/// Fully surrenders `object`'s native monitor before the owner blocks in
+/// `Object.wait`, returning the recursion depth to restore on wake.
+///
+/// `Object.wait` releases the monitor entirely and reacquires it when woken.
+/// The compiled `synchronized` block took ownership through the native
+/// `vm_monitors`, so that side must be surrendered too: while the waiter sleeps
+/// inside RustJava, a notifier's `vm_monitor_enter` would otherwise spin forever
+/// on a lock the sleeper still holds - the Fantasy Knight / Battle Monster
+/// startup deadlock. A zero return means the caller did not own the monitor
+/// (nothing to release or restore).
+fn vm_monitor_release_for_wait(monitors: &VmMonitors, object: u32, thread_id: ThreadId) -> u32 {
+    let mut monitors = monitors.lock();
+
+    match monitors.get(&object) {
+        Some((owner, depth)) if *owner == thread_id => {
+            let depth = *depth;
+            monitors.remove(&object);
+            depth
+        }
+        _ => 0,
+    }
+}
+
 /// Releases one recursion level if `thread_id` owns `object`.
 ///
 /// Native clears the owner and unlocks only when the recursion depth reaches
@@ -2639,6 +2662,42 @@ const OBJECT_DISPATCH_SLOTS: &[(&str, &str)] = &[
     ("wait", "()V"),
 ];
 
+/// Invokes a `java/lang/Object` self-method on `this`, handing the native
+/// monitor off across a blocking `wait`.
+///
+/// The compiled `synchronized` block owns `this` through the native
+/// `vm_monitors`, but `Object.wait` blocks inside RustJava's own monitor, which
+/// it releases and reacquires on its own. A real monitor is surrendered
+/// entirely by `wait`, so the native side must release it too and reclaim it on
+/// wake; otherwise a notifier spins on `vm_monitor_enter` forever while the
+/// waiter sleeps holding it. `notify`/`notifyAll` keep the monitor, matching the
+/// JVM. Non-blocking `Object` methods go straight through.
+async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext, member: &ResolvedMember, this: u32) -> Result<u32> {
+    let handles = context.java_handles.clone();
+    let jvm = context.jvm.clone();
+
+    if member.name != "wait" {
+        return method_bridge::invoke(core, &jvm, &handles, member, Some(this)).await;
+    }
+
+    let thread_id = vm_exec_env_thread_id(core);
+    let depth = vm_monitor_release_for_wait(&context.vm_monitors, this, thread_id);
+
+    let result = method_bridge::invoke(core, &jvm, &handles, member, Some(this)).await;
+
+    // Reclaim the native monitor a wait surrendered. RustJava has already
+    // reacquired the JVM monitor by the time it returns, so this only mirrors
+    // that on the native side, restoring the pre-wait recursion depth.
+    if depth != 0 {
+        while !vm_monitor_try_enter(&context.vm_monitors, this, thread_id) {
+            context.system.yield_now().await;
+        }
+        context.vm_monitors.lock().insert(this, (thread_id, depth));
+    }
+
+    result
+}
+
 /// Reports a call through a dispatch table slot the class does not declare.
 ///
 /// The compiled code emits fixed slot numbers for methods the platform is
@@ -2659,10 +2718,7 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
             descriptor: method_descriptor.into(),
         };
 
-        let handles = context.java_handles.clone();
-        let jvm = context.jvm.clone();
-
-        return match method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await {
+        return match invoke_object_self_method(core, context, &member, this).await {
             Ok(result) => Ok(result),
             // A thrown Java exception must reach the dispatcher so it can longjmp
             // to a compiled catch or propagate; only genuine dispatch failures
@@ -2692,13 +2748,10 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
             descriptor: (*descriptor).into(),
         };
 
-        let handles = context.java_handles.clone();
-        let jvm = context.jvm.clone();
-
         // An object the compiled code built for itself has no instance on the
         // JVM side to call these on.
-        if handles.get(this).is_some() {
-            return method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await;
+        if context.java_handles.get(this).is_some() {
+            return invoke_object_self_method(core, context, &member, this).await;
         }
 
         tracing::debug!("LGT java/lang/Object.{name}{descriptor} on {this:#x}, which has no instance");
@@ -3375,7 +3428,7 @@ mod application_dispatch_tests {
 
     use super::{
         AppClass, ArrayClassInfo, ArrayClasses, REFERENCE_SIZE, VmMonitors, assign_heavy_method_slots, inherited_dispatch_entry_from_tables,
-        vm_monitor_exit_owned, vm_monitor_try_enter,
+        vm_monitor_exit_owned, vm_monitor_release_for_wait, vm_monitor_try_enter,
     };
 
     fn core() -> ArmCore {
@@ -3527,6 +3580,45 @@ mod application_dispatch_tests {
         assert!(vm_monitor_exit_owned(&monitors, object, 11));
         assert!(vm_monitor_try_enter(&monitors, object, 12));
         assert_eq!(monitors.lock().get(&object).copied(), Some((12, 1)));
+    }
+
+    #[test]
+    fn wait_surrenders_native_monitor_and_reports_depth_for_reacquire() {
+        let monitors: VmMonitors = Default::default();
+        let object = 0x4884_0460;
+        let waiter = 2;
+
+        // The waiter holds the monitor twice (a nested synchronized/wait).
+        assert!(vm_monitor_try_enter(&monitors, object, waiter));
+        assert!(vm_monitor_try_enter(&monitors, object, waiter));
+
+        // Entering wait surrenders it entirely and reports the depth to restore.
+        let depth = vm_monitor_release_for_wait(&monitors, object, waiter);
+        assert_eq!(depth, 2);
+        assert!(!monitors.lock().contains_key(&object));
+
+        // A notifier can now take the lock the sleeping waiter used to pin - the
+        // condition that deadlocked before the handoff existed.
+        assert!(vm_monitor_try_enter(&monitors, object, 3));
+        assert!(!vm_monitor_try_enter(&monitors, object, waiter));
+        assert!(vm_monitor_exit_owned(&monitors, object, 3));
+
+        // On wake the waiter reclaims the lock and restores its recursion depth.
+        assert!(vm_monitor_try_enter(&monitors, object, waiter));
+        monitors.lock().insert(object, (waiter, depth));
+        assert_eq!(monitors.lock().get(&object).copied(), Some((waiter, 2)));
+    }
+
+    #[test]
+    fn wait_release_ignores_a_monitor_owned_by_another_thread() {
+        let monitors: VmMonitors = Default::default();
+        let object = 0x2000;
+
+        assert!(vm_monitor_try_enter(&monitors, object, 11));
+
+        // A non-owner entering wait must not steal or drop the owner's monitor.
+        assert_eq!(vm_monitor_release_for_wait(&monitors, object, 12), 0);
+        assert_eq!(monitors.lock().get(&object).copied(), Some((11, 1)));
     }
 
     #[test]
