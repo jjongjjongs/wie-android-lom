@@ -396,7 +396,15 @@ fn marshal_return(handles: &JavaHandles, value: JavaValue) -> Result<u32> {
         JavaValue::Long(x) => x as u32,
         JavaValue::Double(x) => x.to_bits() as u32,
         JavaValue::Object(x) => match x {
-            Some(instance) => handles.insert(instance)?,
+            // An object returned from a JVM method may already have a guest
+            // handle - e.g. a compiled `d` item stored in a JVM Vector and read
+            // back with elementAt. `address_of` returns that existing handle (and
+            // its populated field block); only a genuinely new object gets a fresh
+            // one. Using `insert` here instead allocated a fresh, zeroed instance
+            // every time, so a round-tripped item came back empty - its arrays
+            // null - which showed as a shell item and made the save serializer
+            // throw a NullPointerException on the missing data.
+            Some(instance) => handles.address_of(instance)?,
             None => 0,
         },
     })
