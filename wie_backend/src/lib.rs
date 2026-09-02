@@ -39,6 +39,14 @@ use wie_util::{Result, WieError};
 pub trait Emulator {
     fn handle_event(&mut self, event: Event);
     fn tick(&mut self) -> Result<()>;
+    /// Whether the emulator has no work to run until a timer fires. A host that
+    /// runs `tick` to a time budget can stop as soon as this is true and sleep
+    /// the remainder instead of busy-waiting. The default is a conservative
+    /// `false` (never idle), so a host keeps its existing run-to-budget
+    /// behaviour for any emulator that does not report idleness.
+    fn is_idle(&self) -> bool {
+        false
+    }
 }
 
 pub struct ProfileSample {

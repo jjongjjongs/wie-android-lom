@@ -179,6 +179,15 @@ impl Runner {
                 return String::new();
             }
 
+            // Nothing runnable until a timer fires: stop rather than busy-wait
+            // the rest of the budget. The host's inter-tick delay then acts as a
+            // real sleep. A CPU-bound title never reports idle, so it keeps
+            // running to the full budget — which is what lifts its duty cycle
+            // once the host delay is short.
+            if instance.emulator.is_idle() {
+                return String::new();
+            }
+
             if Instant::now() >= deadline {
                 return String::new();
             }

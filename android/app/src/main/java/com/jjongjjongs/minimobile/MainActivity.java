@@ -72,9 +72,18 @@ public final class MainActivity extends Activity {
     private static final int PICK_SAVE = 1003;
     private static final int REQUEST_CALL_PHONE = 1004;
 
-    /** How long a single tick may run, and how often ticks are scheduled. */
+    /**
+     * How long a single tick may run, and the delay scheduled after it finishes.
+     * A CPU-bound title runs the whole budget every tick, so the run/idle ratio
+     * is {@code BUDGET / (BUDGET + INTERVAL)}: the old 20/16 starved the emulator
+     * to 56% of real time and, because MIPS is measured over the wall clock, made
+     * a title that the JIT can drive at ~70 MIPS look like ~40 and feel slow. A
+     * short interval lifts the duty cycle to ~83% without pegging a menu: the
+     * native tick now returns the instant the emulator reports idle (every task
+     * asleep), so the interval becomes a real sleep whenever there is no work.
+     */
     private static final int TICK_BUDGET_MS = 20;
-    private static final int TICK_INTERVAL_MS = 16;
+    private static final int TICK_INTERVAL_MS = 4;
 
     /** Audio commands drained per tick, so a backlog cannot stall the loop. */
     private static final int MAX_AUDIO_PER_TICK = 32;

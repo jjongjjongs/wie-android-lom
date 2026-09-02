@@ -64,6 +64,13 @@ impl System {
         self.executor.tick(move || platform.now())
     }
 
+    /// Whether the emulator has nothing runnable until a timer fires (every
+    /// task asleep with its wake-up in the future). The host loop uses this to
+    /// stop early and sleep the leftover budget rather than busy-waiting.
+    pub fn is_idle(&self) -> bool {
+        self.executor.is_idle()
+    }
+
     pub fn spawn<C>(&self, callable: C)
     where
         C: AsyncCallable<Result<()>> + 'static + Send,
