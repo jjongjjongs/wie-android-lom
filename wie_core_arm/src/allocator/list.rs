@@ -1,4 +1,4 @@
-use alloc::format;
+use alloc::{collections::BTreeMap, format, string::String, vec::Vec};
 use core::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
@@ -139,8 +139,60 @@ impl ListAllocator {
         tracing::error!(
             "No free block for {size:#x} bytes in the {base_size:#x} byte heap at {base_address:#x} (live threads={live_threads}, peak={peak_threads})"
         );
+        // A heap exhausted by a leak looks very different from one merely
+        // fragmented: dump the live-block size profile so the dominant leaking
+        // allocation size is visible in the crash log.
+        tracing::error!("{}", Self::live_block_profile(core, base_address, base_size));
 
         Err(WieError::AllocationFailure)
+    }
+
+    /// Summarizes the in-use blocks by size class, for diagnosing an OOM. Walks
+    /// the block chain once; best-effort, so it stops at the first unreadable or
+    /// zero-size header rather than erroring during error reporting.
+    fn live_block_profile(core: &ArmCore, base_address: u32, base_size: u32) -> String {
+        let end = base_address + base_size;
+        let mut cursor = base_address;
+        let mut live_count: u32 = 0;
+        let mut live_bytes: u64 = 0;
+        let mut free_bytes: u64 = 0;
+        let mut largest_free: u32 = 0;
+        // size rounded up to a power of two -> (count, total bytes)
+        let mut buckets: BTreeMap<u32, (u32, u64)> = BTreeMap::new();
+
+        while cursor < end {
+            let Ok(header) = read_generic::<ListAllocationHeader, ArmCore>(core, cursor) else {
+                break;
+            };
+            let block = header.size();
+            if block == 0 {
+                break;
+            }
+            if header.in_use() {
+                live_count += 1;
+                live_bytes += u64::from(block);
+                let entry = buckets.entry(block.next_power_of_two()).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += u64::from(block);
+            } else {
+                free_bytes += u64::from(block);
+                largest_free = largest_free.max(block);
+            }
+            cursor += block;
+        }
+
+        let mut ranked: Vec<(u32, (u32, u64))> = buckets.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+        let top: Vec<String> = ranked
+            .iter()
+            .take(8)
+            .map(|(bucket, (count, bytes))| format!("~{bucket:#x}:{count}x={bytes}B"))
+            .collect();
+
+        format!(
+            "list heap profile: {live_count} live blocks using {live_bytes} B, {free_bytes} B free (largest free {largest_free:#x}); top sizes by bytes: {}",
+            top.join(", ")
+        )
     }
 }
 
