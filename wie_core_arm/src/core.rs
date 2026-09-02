@@ -28,6 +28,16 @@ const FUNCTIONS_BASE: u32 = 0x71000000;
 const FUNCTIONS_SIZE: usize = 0x100000;
 const SVC_STUB_SIZE: u32 = 16;
 pub const RUN_FUNCTION_LR: u32 = 0x7f000000;
+
+/// Instruction budget for one `engine.run` batch. The engine returns the moment
+/// it reaches `end` or hits an SVC, so this only bounds an uninterrupted compute
+/// stretch — a `CountExhausted` just re-enters the loop and runs again with no
+/// scheduling in between (the executor only yields at an SVC that awaits). A low
+/// budget therefore bought nothing but round-trip overhead: a CPU-heavy title
+/// (Zenonia runs ~92k `run` calls a second, a third of them budget-exhaustion
+/// re-entries) paid a register save/restore and lock cycle for each. Larger
+/// batches collapse those without changing when a run actually stops.
+const RUN_INSTRUCTION_BUDGET: u32 = 8000;
 pub const HEAP_BASE: u32 = 0x40000000;
 pub const HEAP_SIZE: u32 = 0x10000000;
 
@@ -437,7 +447,7 @@ impl ArmCore {
         loop {
             let result = {
                 let mut inner = self.inner.lock();
-                match inner.engine.run(RUN_FUNCTION_LR, 1000) {
+                match inner.engine.run(RUN_FUNCTION_LR, RUN_INSTRUCTION_BUDGET) {
                     Ok(result) => result,
                     Err(error) => {
                         let regs = [
