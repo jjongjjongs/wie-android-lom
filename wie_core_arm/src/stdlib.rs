@@ -6,6 +6,13 @@ const COPY_CHUNK: usize = 4096;
 const STR_SCAN_CHUNK: usize = 256;
 
 pub async fn memcpy(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
+    mem_copy(core, ptr_dst, ptr_src, len)
+}
+
+/// Synchronous body of [`memcpy`]. Neither this nor the copy it does ever
+/// suspends, so the hot fast-SVC path (see `wie_lgt`) calls it directly instead
+/// of driving the async wrapper's future.
+pub fn mem_copy(core: &mut ArmCore, ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
     let mut buf = [0u8; COPY_CHUNK];
     let mut offset: u32 = 0;
     while offset < len {
@@ -23,6 +30,11 @@ pub async fn memcpy(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, 
 /// would smear the leading bytes over the rest of it, so an overlap that runs
 /// the wrong way is copied from the back.
 pub async fn memmove(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
+    mem_move(core, ptr_dst, ptr_src, len)
+}
+
+/// Synchronous body of [`memmove`] (see [`mem_copy`]).
+pub fn mem_move(core: &mut ArmCore, ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
     // Only a destination inside the source needs the reverse pass; the other
     // direction, and no overlap at all, are safe to copy forwards.
     let overlaps_forward = ptr_dst > ptr_src && ptr_dst.wrapping_sub(ptr_src) < len;
@@ -76,6 +88,11 @@ pub async fn memcmp(core: &mut ArmCore, _: &mut (), ptr_a: u32, ptr_b: u32, len:
 }
 
 pub async fn memset(core: &mut ArmCore, _: &mut (), ptr_dst: u32, value: u32, len: u32) -> Result<()> {
+    mem_set(core, ptr_dst, value, len)
+}
+
+/// Synchronous body of [`memset`] (see [`mem_copy`]).
+pub fn mem_set(core: &mut ArmCore, ptr_dst: u32, value: u32, len: u32) -> Result<()> {
     let buf = [value as u8; COPY_CHUNK];
     let mut offset: u32 = 0;
     while offset < len {

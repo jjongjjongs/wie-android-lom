@@ -65,6 +65,39 @@ pub(crate) fn report_hot_stdlib(dt_ms: u64) {
     tracing::info!("{line}");
 }
 
+/// Synchronous fast path for the block-memory routines that dominate stdlib
+/// traffic in a rendering loop — `memcpy` ~20k/s and `memset` ~9k/s on Zenonia,
+/// with `memmove` alongside them. Their async wrappers never actually suspend
+/// (the copy is a plain chunked loop), so servicing them here — before the
+/// generic dispatch — skips the context clone and the two `async_trait` future
+/// allocations for no change in behaviour. Returns `Ok(true)` when serviced,
+/// `Ok(false)` to defer. The caller has already matched `SVC_CATEGORY_STDLIB`.
+pub(crate) fn try_fast_stdlib_mem(core: &mut ArmCore) -> Result<bool> {
+    const MEMCPY: u32 = StdlibSvcId::Memcpy as u32;
+    const MEMMOVE: u32 = StdlibSvcId::Memmove as u32;
+    const MEMSET: u32 = StdlibSvcId::Memset as u32;
+
+    let id = core.read_svc_id();
+    if !matches!(id, MEMCPY | MEMMOVE | MEMSET) {
+        return Ok(false);
+    }
+    STDLIB_SVC_COUNT[(id as usize).min(STDLIB_ID_MAX - 1)].fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let (_, ret) = core.read_pc_lr()?;
+    let a0 = core.read_param(0)?;
+    let a1 = core.read_param(1)?;
+    let a2 = core.read_param(2)?;
+    match id {
+        MEMCPY => stdlib::mem_copy(core, a0, a1, a2)?,
+        MEMMOVE => stdlib::mem_move(core, a0, a1, a2)?,
+        _ => stdlib::mem_set(core, a0, a1, a2)?,
+    }
+    // C returns the destination pointer, which is already in r0 on entry and the
+    // copy never touches it — exactly what the async `()` result leaves — so set
+    // the return address without overwriting r0.
+    core.set_next_pc(ret)?;
+    Ok(true)
+}
+
 #[derive(Clone)]
 struct StdlibSvcContext {
     system: System,

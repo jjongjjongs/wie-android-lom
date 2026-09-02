@@ -301,6 +301,7 @@ fn install_fast_svc(core: &ArmCore, vm_reschedule_count: Arc<Mutex<u32>>) {
     core.set_fast_svc_handler(Arc::new(move |core: &mut ArmCore, category: u32, _lr: u32| -> Result<bool> {
         match category {
             SVC_CATEGORY_WIPIC => crate::runtime::wipi_c::try_fast_wipic_getter(core),
+            SVC_CATEGORY_STDLIB => crate::runtime::stdlib::try_fast_stdlib_mem(core),
             SVC_CATEGORY_INIT => try_fast_thread_reschedule(core, &vm_reschedule_count),
             _ => Ok(false),
         }
