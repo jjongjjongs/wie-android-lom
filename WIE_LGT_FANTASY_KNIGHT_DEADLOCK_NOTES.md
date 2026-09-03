@@ -440,3 +440,31 @@ runtime-built vtables, the `*4+4` off-by-one).
    so `net.wie.CardCanvas`/MIDP (Seed, Zenonia, LoM) is untouched.
 3. Regression-gate on Seed / Zenonia / LoM plus the `wie_lgt` suite; keep g3/g6
    as the positive cases.
+
+### Empirical probe result: a direct handler poke is not enough
+
+Ran a temporary experiment: from the event pump (`net.wie.EventQueue.dispatchEvent`,
+the `EventLoopRunner` thread), on every dispatch invoke the active Jlet's own
+bootstrap handler `Game.b()V` via `jvm.invoke_virtual(currentJlet, "b", "()V")`.
+
+Observed: the call succeeds **once** (`invoked activeJlet.b()V OK`), and then the
+title goes from 30 painted frames to **1** — the pump stalls after the single
+invoke. So a direct handler poke is *not* a no-op (it reaches game code) but it
+does **not** cleanly wake the title; it stalls it. Two (non-exclusive) causes,
+both meaning the poke is the wrong shape for B:
+
+- **No card yet.** `Game.b()V` reads the current card from a `Game` field and
+  calls `M(card, -1)`; at bootstrap that field is null (no `Card` is ever
+  instantiated — confirmed in the dispatch census), so it drives `Game.b(null,…)`
+  and the worker's subsequent `Game.c(null,…)` present into a bad state.
+- **Wrong thread / monitor.** `Game.b()V` opens with import `0xb` (a monitor/
+  save-point primitive) and the worker's wake is a `synchronized`/`notify`
+  handshake; calling it from the `EventLoopRunner` thread rather than a real
+  event-delivery context can wedge the native monitor.
+
+Conclusion: **B must reproduce the platform's *proper* event-context delivery —
+the right thread plus the card-bootstrap path — not just call a game handler.**
+The crux narrows to: *what platform action creates/authors the Jlet's first card
+(or its equivalent surface) so that a delivered event has something to present?*
+No `Card` is instantiated anywhere in g3's startup, so that authoring is
+platform-driven on Jlet activation and is the specific piece still to pin.
