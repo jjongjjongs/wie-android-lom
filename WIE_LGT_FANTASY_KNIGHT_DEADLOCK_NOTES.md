@@ -838,3 +838,36 @@ advances and no key (UP/DOWN/LEFT/RIGHT/FIRE/NUM5) changes it. So the game is
 stuck internally - a loading/asset-wait or an event the Jlet path never receives
 - not a paint problem. This is the next distinct layer to investigate; the paint
 dispatch above is a prerequisite that is now in place.
+
+## Progression layer, pinned to the compiled game loop (not a platform gap)
+
+Traced the stall further. It is not an event/IO/decode gap:
+
+- **Not events.** `net.wie.EventQueue` pumps (getNextEvent/dispatchEvent ~40x),
+  but the only registered `JletEventListener` is the platform's own
+  `AnnunciatorComponent$AnnunciatorEventListener`, not the game's - the game does
+  not drive itself off Jlet events. No `Event::Notify` is generated (nothing
+  calls a card's `notifyEvent(III)`), but the game's card `e` doesn't override
+  `notifyEvent(III)V` either, so that path is not its progression trigger.
+- **Not IO/decode.** The game opens exactly one data file, reads it once, and
+  `createImage`s 8 PNGs from it that decode to valid dimensions; input reaches
+  the game (`w.keyNotify` fires on key events).
+- **The worker runs.** `b.run` (0x262c) is an active loop (0x2834 -> 0x2654 back
+  edge) that walks a linked list off instance fields and dispatches a per-object
+  virtual (`i()V`, own-virtual row 87 -> slot 41, correctly resolved) on each,
+  and drives `e.paint`.
+
+So the game boots, loads, paints and takes input, but its own state machine
+holds at a near-blank first screen: the settled frame is 71016 white + a 24px
+black bottom bar + a 6x6 top-left glyph (24 mid-tone px), byte-identical from
+tick ~500 to 4500, and no key changes it. The per-object worker list is
+effectively empty - the scene is never populated. Why it never advances is
+inside the compiled game logic (a load/init state variable or an update
+condition that never flips), reachable only by disassembling this title's init
++ update path; it is past the platform-level gaps (deadlock, main-class vtable,
+self-call resolver, card-paint dispatch) that are now fixed.
+
+A curiosity worth a look if this is picked up again: a larger emulated clock
+step (WIE_CLOCK_MS=20+) makes g3 paint zero frames rather than progressing
+faster, so the title's timing is coupled to the LGT reschedule/deadline model in
+a way the 1ms-per-read test clock does not reproduce cleanly.
