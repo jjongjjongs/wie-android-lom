@@ -715,10 +715,37 @@ impl JavaHandles {
 
 #[cfg(test)]
 mod tests {
+    use alloc::collections::BTreeSet;
+
     use wie_core_arm::{Allocator, ArmCore};
-    use wie_util::read_generic;
+    use wie_util::{read_generic, write_generic};
 
     use super::{INSTANCE_FIELDS_OFFSET, JavaHandles};
+
+    /// A guest word registered as a static root keeps the object its handle
+    /// names alive, exactly how an interned constant string survives once its
+    /// cache slot is rooted. An object reachable through no root is reclaimed.
+    #[test]
+    fn a_registered_static_root_word_keeps_its_object_alive() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+
+        let handles = JavaHandles::new(core.clone());
+
+        let kept = handles.allocate_instance(0).unwrap();
+        let orphan = handles.allocate_instance(0).unwrap();
+
+        // `kept`'s handle lives in a guest word (a constant-string cache slot);
+        // registering that word roots it.
+        let slot = Allocator::alloc(&mut core, 4).unwrap();
+        write_generic(&mut core, slot, kept).unwrap();
+        handles.register_gc_static_root(slot, slot + 4);
+
+        handles.gc_collect_with_pins(&BTreeSet::new());
+
+        assert!(handles.gc_objects.lock().contains_key(&kept), "an object rooted through a static-root word must survive");
+        assert!(!handles.gc_objects.lock().contains_key(&orphan), "an object reachable through no root is reclaimed");
+    }
 
     #[test]
     fn materialized_array_block_reads_back_as_a_char_array() {

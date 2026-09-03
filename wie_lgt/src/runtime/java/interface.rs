@@ -1003,6 +1003,17 @@ pub async fn vm_get_constant_string(core: &mut ArmCore, handles: &JavaHandles, j
     let handle = handles.insert(java_string)?;
     write_generic(core, cache, handle)?;
 
+    // The compiled code holds the interned string only through this cache word,
+    // which lives in the application's static data - a region the collector does
+    // not otherwise scan (unlike a class's static-field block, registered on
+    // activation). Without rooting it the string is unreachable the moment it
+    // leaves a bridge frame, so the collector reclaims it and the cached handle
+    // dangles: a later use marshals the freed slot as a raw `[B`, and e.g.
+    // `StringBuffer.append(String)` fails with `NoSuchFieldError [B.value:[C`
+    // (seen deep into Legend of Master). An interned constant lives for the run,
+    // so register its cache word as a permanent GC root.
+    handles.register_gc_static_root(cache, cache + 4);
+
     tracing::debug!("vm_get_constant_string({rust_string:?}) -> {handle:#x}, cached at {cache:#x}");
 
     Ok(handle)
