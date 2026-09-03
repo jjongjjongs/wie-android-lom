@@ -158,7 +158,10 @@ async fn handle_wipic_svc(
         WIPICSvcId::GetResourceId => kernel::get_resource_id.into_body(),
         WIPICSvcId::GetResource => kernel::get_resource.into_body(),
         WIPICSvcId::Unk2 => unk2.into_body(),
-        WIPICSvcId::Unk3 => unk3.into_body(),
+        // 0xcf is MC_grpGetContext (it sits between SetContext and PutPixel in
+        // the vendor's MC_grp table); a clet reads its drawing state back
+        // through it every frame.
+        WIPICSvcId::GetContext => graphics::get_context.into_body(),
         WIPICSvcId::GetImageProperty => graphics::get_image_property.into_body(),
         WIPICSvcId::GetImageFramebuffer => graphics::get_image_framebuffer.into_body(),
         WIPICSvcId::GetScreenFramebuffer => graphics::get_screen_framebuffer.into_body(),
@@ -502,19 +505,6 @@ async fn unk0(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u3
     tracing::warn!("stub unk0({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     // graphics
-
-    Ok(0)
-}
-
-async fn unk3(_context: &mut dyn WIPICContext, a0: u32, a1: u32, a2: u32, a3: u32) -> Result<u32> {
-    // 0xcf sits with the graphics context calls (InitContext/SetContext); it was
-    // hitting the unknown-SVC path and spamming a fatal log. Stubbed to 0, which
-    // is what the unknown path already returned.
-    //
-    // Logged at trace, not debug: a title calls this thousands of times a second
-    // and at debug it fills the whole captured log, pushing out the audio and
-    // graphics events that a saved log needs to be useful.
-    tracing::trace!("stub unk3/0xcf({a0:#x}, {a1:#x}, {a2:#x}, {a3:#x})");
 
     Ok(0)
 }

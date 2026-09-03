@@ -5,7 +5,7 @@ use wipi_types::wipic::WIPICWord;
 use crate::{WIPICContext, method::ParamConverter};
 
 #[repr(u32)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub enum WIPICGraphicsContextIdx {
     ClipIdx = 0,

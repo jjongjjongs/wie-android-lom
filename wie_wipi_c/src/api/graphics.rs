@@ -120,6 +120,57 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
     Ok(())
 }
 
+/// `MC_grpGetContext(p_grp_ctx, op, out_ptr)` - the read counterpart to
+/// `MC_grpSetContext`. A clet's blitter reads the live drawing state back
+/// (foreground colour, alpha, font, clip, offset...) so it can save and restore
+/// it around each primitive. Left a stub returning nothing, it zeroed the game's
+/// saved context, and the restore then corrupted every following draw - Demon
+/// Hunter smeared each screen over the last one and spun redrawing.
+///
+/// Behaviour mirrors `liblgt_system.so`'s `MC_grpGetContext`: the value is
+/// written *through* `out_ptr` (unlike `SetContext`, which passes scalars by
+/// value), the call is a no-op when either pointer is null, `TransPixelIdx`
+/// reads nothing back, and the clip is reported as `(x1, y1, x2 + 1, y2 + 1)`
+/// (the reference stores the bottom-right corner decremented and re-adds it).
+pub async fn get_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, op: WIPICGraphicsContextIdx, out_ptr: WIPICWord) -> Result<()> {
+    tracing::debug!("MC_grpGetContext({p_grp_ctx:#x}, {op:?}, {out_ptr:#x})");
+
+    if p_grp_ctx == 0 || out_ptr == 0 {
+        return Ok(());
+    }
+
+    let grp_ctx: WIPICGraphicsContext = read_generic(context, p_grp_ctx)?;
+    match op {
+        WIPICGraphicsContextIdx::ClipIdx => {
+            let clip = grp_ctx.clip;
+            write_generic(context, out_ptr, clip[0] as u32)?;
+            write_generic(context, out_ptr + 4, clip[1] as u32)?;
+            write_generic(context, out_ptr + 8, clip[2] as u32 + 1)?;
+            write_generic(context, out_ptr + 12, clip[3] as u32 + 1)?;
+        }
+        WIPICGraphicsContextIdx::FgPixelIdx => write_generic(context, out_ptr, grp_ctx.fgpxl)?,
+        WIPICGraphicsContextIdx::BgPixelIdx => write_generic(context, out_ptr, grp_ctx.bgpxl)?,
+        // The reference reads nothing back for op 3.
+        WIPICGraphicsContextIdx::TransPixelIdx => {}
+        WIPICGraphicsContextIdx::AlphaIdx => write_generic(context, out_ptr, grp_ctx.alpha)?,
+        WIPICGraphicsContextIdx::PixelopIdx => write_generic(context, out_ptr, grp_ctx.pixel_op_func_ptr)?,
+        WIPICGraphicsContextIdx::PixelParam1Idx => write_generic(context, out_ptr, grp_ctx.param1)?,
+        WIPICGraphicsContextIdx::FontIdx => write_generic(context, out_ptr, grp_ctx.font)?,
+        WIPICGraphicsContextIdx::StyleIdx => write_generic(context, out_ptr, grp_ctx.style)?,
+        WIPICGraphicsContextIdx::XorModeIdx => write_generic(context, out_ptr, grp_ctx.reserved)?,
+        WIPICGraphicsContextIdx::OffsetIdx => {
+            let offset = grp_ctx.offset;
+            write_generic(context, out_ptr, offset[0] as u32)?;
+            write_generic(context, out_ptr + 4, offset[1] as u32)?;
+        }
+        _ => {
+            tracing::warn!("MC_grpGetContext({p_grp_ctx:#x}, {op:?}, {out_ptr:#x}): unsupported op");
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn put_pixel(context: &mut dyn WIPICContext, dst_fb: WIPICIndirectPtr, x: i32, y: i32, p_gctx: WIPICWord) -> Result<()> {
     tracing::debug!("MC_grpPutPixel({:#x}, {x}, {y}, {p_gctx:?})", dst_fb.0);
 
@@ -1021,7 +1072,56 @@ pub async fn get_framebuffer_bpp(_context: &mut dyn WIPICContext, framebuffer: W
 
 #[cfg(test)]
 mod tests {
-    use super::destination_stride;
+    use wie_util::{read_generic, write_generic};
+
+    use super::WIPICGraphicsContextIdx as Idx;
+    use super::{destination_stride, get_context, init_context, set_context};
+    use crate::context::test::TestContext;
+
+    /// A clet saves the drawing state with `MC_grpGetContext` and later restores
+    /// it with `MC_grpSetContext`, so a get has to report back exactly what a set
+    /// stored. When this read nothing (the old stub), the saved state was zero and
+    /// the restore wrecked every later draw.
+    #[futures_test::test]
+    async fn get_context_reads_back_what_set_context_stored() {
+        const CTX: u32 = 0x1000;
+        const OUT: u32 = 0x2000;
+
+        let mut context = TestContext::new();
+        init_context(&mut context, CTX).await.unwrap();
+
+        // Scalars are passed to set by value and returned by get through a pointer.
+        for (op, value) in [
+            (Idx::FgPixelIdx, 0x1234u32),
+            (Idx::BgPixelIdx, 0x5678),
+            (Idx::AlphaIdx, 0x80),
+            (Idx::FontIdx, 0x42),
+            (Idx::StyleIdx, 0x3),
+        ] {
+            set_context(&mut context, CTX, op, value).await.unwrap();
+            get_context(&mut context, CTX, op, OUT).await.unwrap();
+            assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), value, "op {op:?}");
+        }
+
+        // The clip is a struct in memory both ways; the bottom-right corner is
+        // reported one past what is stored, matching liblgt_system.so.
+        write_generic(&mut context, OUT, [10u16, 20, 100, 200]).unwrap();
+        set_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
+        get_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 10);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 20);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 101);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 12).unwrap(), 201);
+    }
+
+    /// A null context or destination is a no-op, exactly as the vendor guards it,
+    /// not a memory fault.
+    #[futures_test::test]
+    async fn get_context_tolerates_null_pointers() {
+        let mut context = TestContext::new();
+        get_context(&mut context, 0, Idx::FgPixelIdx, 0x2000).await.unwrap();
+        get_context(&mut context, 0x1000, Idx::FgPixelIdx, 0).await.unwrap();
+    }
 
     /// A single pixel read into four bytes of stack, which is how a title asks
     /// whether it has walked into something. LGT's runtime takes `ipl = 1`.
