@@ -588,3 +588,40 @@ working card-push titles (Seed, Zenonia, LoM) are unaffected. The `startApp`
 self-call at `0x2288` reads `virtual_method_offsets[+0xb6]`, which resolves to
 slot 1 (`getClass`) — a legitimate call, not the setup trigger — so the setup
 trigger is a separate Jlet lifecycle slot, still to be pinned.
+
+## The general trigger root cause — `startApp`'s `this.a()V` self-call misresolves
+
+`Game.startApp` (`0x220c`) calls its own setup method **`this.a()V`** through a
+compiled self-call at `0x2288`: `slot = virtual_method_offsets[+0xb6]` (row 91 of
+the own-virtual reference table), then `this.vtable[slot]()`. Row 91 is
+`a` `()V` — the screen-setup method that creates the cards, docks one, and
+registers the JletEventListener. So `startApp` is *supposed* to author the first
+screen itself; the game is not waiting on any external event for setup.
+
+In our runtime that self-call dispatches to **slot 1 (`getClass`)** — a no-op —
+so the setup never runs, no card is authored, and the worker deadlocks. Cause,
+pinned by instrumentation:
+
+- `resolve_own_virtual_methods` resolves each own-virtual row by matching its
+  `name`+`descriptor` against the **first** registered app class that has such a
+  method (`app_classes.iter().flat_map(members).find(...)`).
+- `a()V` is ambiguous in this obfuscated title: candidates are `("v", slot 1)`,
+  `("w", 42)`, `("g", 42)`, `("k", 42)` — all card classes. **Row 91 belongs to
+  `Game`, but `Game` (and its Jlet superclass `b`) is not yet registered when the
+  row first resolves** (the registered set at that moment is `r,s,t,u,v,w,x,f,
+  g,h,i,j,k,l,m,n,o,p,q`), so the walk picks `v`'s slot 1.
+- The resolution re-runs as each class registers, but the loop **skips rows
+  already non-zero** (`if output[index] != 0 { continue }`), so once row 91 is
+  written to 1 it is never corrected when `Game` finally registers.
+
+### The fix (clean, general, same family as the field-resolution fix)
+
+The class table already carries, per class entry, `virtual_method_start` /
+`virtual_method_count` (`class_table.rs`: the 24-byte class entry, offsets
+`+0x0c`/`+0x0e`) — the exact range of own-virtual rows that class owns. Row 91
+falls in `Game`'s declared range. So resolve each own-virtual row against **the
+class whose declared `[virtual_method_start, +count)` range contains that row**,
+not the first global name match. That both disambiguates `a()V`/`b()V` and
+naturally defers a row until its owning class registers (its range appears only
+then). Must be regression-tested across the LGT suite (Seed, Zenonia, LoM) since
+it changes the shared own-virtual resolver.
