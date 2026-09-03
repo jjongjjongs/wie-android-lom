@@ -2046,6 +2046,99 @@ fn activate_main_class_dispatch_table(core: &mut ArmCore, context: &InitSvcConte
         tracing::debug!("Synthesized main-class dispatch table for {name}: root={root:#x}, table={table:#x}");
     }
 
+    // The whole chain is now linked; correct any self-call reference the global
+    // resolver froze at a reserved slot, resolving it against this class's own
+    // hierarchy. Done once, at the launched class, whose chain reaches every
+    // superclass that could own such a reference.
+    if depth == 0 {
+        reresolve_own_virtuals_against_class(core, context, root, name)?;
+    }
+
+    Ok(())
+}
+
+/// Resolves `(name, descriptor)` to a dispatch slot in the hierarchy rooted at
+/// the application class `root`, walking superclasses by name. Only real
+/// (non-reserved, > 9) linked slots are returned.
+fn virtual_slot_in_class_chain(core: &ArmCore, context: &InitSvcContext, root: u32, name: &str, descriptor: &str) -> Option<u32> {
+    let mut current = context.app_classes.lock().iter().find(|class| class.root == root).cloned()?;
+
+    for _ in 0..MAX_SUPERCLASS_DEPTH {
+        if let Some(slot) = current
+            .methods()
+            .find(|member| member.name() == name && member.descriptor() == descriptor && (member.slot() as u16 as i16) > 9)
+            .map(|member| member.slot())
+        {
+            return Some(slot);
+        }
+
+        let superclass = current.superclass.as_deref()?;
+        let next = context.app_classes.lock().iter().find(|class| class.name == superclass).cloned();
+        current = match next {
+            Some(class) => class,
+            None => app_classes::find_class(core, &context.image_ranges, superclass)?,
+        };
+    }
+
+    None
+}
+
+/// Corrects the own-virtual reference rows a launched class's own code makes but
+/// that the global resolver could not attribute.
+///
+/// `resolve_own_virtual_methods` fills each trailing own-virtual row by matching
+/// its name+descriptor against the *first* registered application class that has
+/// such a method. That is wrong for a one-letter method name shared across
+/// unrelated hierarchies: Battle Monster / Fantasy Knight's `Game` extends the
+/// Jlet base `b`, whose `startApp` calls `this.a()V` and `this.b()V` (own-virtual
+/// rows 90/91), but the first `a()V`/`b()V` in the registered set is a `Card`
+/// subclass, so the row froze at that class's slot - here the reserved slot 1
+/// (`getClass`), because the match landed on an unlinked marker. A real
+/// application method never occupies a reserved Object slot (1..=9), so such a
+/// row is unambiguously mis-resolved.
+///
+/// The launched class does own these self-call references (its base's `startApp`
+/// runs for its instances), and its own hierarchy - now fully linked and, for a
+/// heavy class, with its overrides synthesized into its dispatch table - gives
+/// the real slot. Re-point every reserved-slot row whose method resolves within
+/// this class's chain to that slot, so `this.a()V` reaches the launched class's
+/// `a()V` override (the screen-setup) instead of `getClass`. Rows the global
+/// resolver already placed at a real slot are left untouched, so a title whose
+/// own-virtual rows all resolved correctly is unaffected.
+fn reresolve_own_virtuals_against_class(core: &mut ArmCore, context: &InitSvcContext, root: u32, class_name: &str) -> Result<()> {
+    let Some((virtual_methods, output, start, end)) = *context.own_virtual_resolve.lock() else {
+        return Ok(());
+    };
+    if virtual_methods == 0 || output == 0 {
+        return Ok(());
+    }
+
+    for index in start..end {
+        let entry = virtual_methods + index * 8;
+        let name_ptr: u32 = read_generic(core, entry)?;
+        let descriptor_ptr: u32 = read_generic(core, entry + 4)?;
+        if name_ptr == 0 || descriptor_ptr == 0 {
+            break;
+        }
+
+        let current: u16 = read_generic(core, output + index * 2)?;
+        // Only rows frozen at a reserved Object slot are candidates: a genuine
+        // application method never lands at slots 1..=9.
+        if !(1..=9).contains(&current) {
+            continue;
+        }
+
+        let name = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, name_ptr)?).into_owned();
+        let descriptor = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, descriptor_ptr)?).into_owned();
+
+        if let Some(slot) = virtual_slot_in_class_chain(core, context, root, &name, &descriptor)
+            && slot as u16 != current
+        {
+            write_generic(core, output + index * 2, slot as u16)?;
+            tracing::debug!("Re-resolved own virtual {name}{descriptor} at row {index}: slot {current} -> {slot} (via {class_name})");
+        }
+    }
+
     Ok(())
 }
 
