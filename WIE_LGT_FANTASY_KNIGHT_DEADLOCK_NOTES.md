@@ -507,3 +507,41 @@ context** — авторing its first card and clearing `Game.r` itself. This av
 the cross-thread monitor wedge the direct-poke experiment hit. The remaining
 task is to identify that poll import (instrument the init-SVC / event-manager
 calls the worker makes at `0x2654`–`0x2684`) and give it the initial event.
+
+### Correction: the worker has NO event poll — it is a pure consumer
+
+Probed which SVCs the worker makes with `lr` in `run()`'s `0x2654`–`0x26c4`
+range. The result is only **four SVCs, once each**: `0x23`
+(`VmCheckStackOverflow`) at `0x2650`, `0x25` (`VmMonitorEnter`) at `0x2674`,
+and `0x21` (`VmAllocSavePoint`/setjmp) at `0x2684` and `0x26c4`. Those are the
+`synchronized(this){ try { … } }` prologue, **not** an event poll. After them
+the worker only loops on `Game.wait()`.
+
+So the earlier reading of `0x2654` as an "event-poll body" was wrong — **the
+worker never polls events**. It is purely `synchronized(this){ try {
+while(Game.r != 0) wait(); … } }`. This retracts the "make the worker's own poll
+return the bootstrap event" idea: there is no poll to feed.
+
+### Consequence for B: the producer must be an external thread that authors the card
+
+The wake producer (`Game.b` → `Game.r = 0` + `notify`) can only come from a
+**separate thread** that (1) holds `this`'s monitor, (2) has a card to hand
+`Game.b`, and (3) delivers on a real event context. On the reference that thread
+is the native VM's event/scheduler running inside `startWipiN`, which authors
+the game's first card autonomously and delivers into the game's own dispatch.
+Our `net.wie.EventLoopRunner` is the counterpart thread, but it delivers to an
+empty `net.wie.CardCanvas` and has no game-side receiver for a cardless Jlet.
+
+Both reference sources are now exhausted for the *card-authoring* step:
+- **classes.dex**: no Java-side bootstrap trigger (native-autonomous).
+- **native RE**: the authoring lives in the firmware event-manager/scheduler
+  (`global[0x152210 + 0xa94]`, `dscheduler_*`), behind runtime-built vtables and
+  the `*4+4` off-by-one — the documented error-prone zone.
+
+So B's remaining step — *reproduce the native VM's autonomous first-card
+authoring for a cardless Jlet* — is a sizeable firmware-scheduler port, not a
+small additive branch. It is the honest boundary of this investigation. The
+recommended options are (1) commit to porting the firmware event-manager's
+autonomous bootstrap, (2) accept g3/g6 as fully-diagnosed and deferred and move
+to other failing titles (g4 crash, g5 class-0x0), or (3) revisit once the
+generic vtable-synthesis work (task) makes the game's own dispatch reachable.
