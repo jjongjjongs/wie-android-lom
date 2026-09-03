@@ -669,3 +669,39 @@ This is the concrete next implementation. It has been proven to unblock the
 title end to end (the `a()`+`b()` experiment), and the docked-card rendering it
 depends on is already committed, so once the self-call resolves correctly the
 screen renders without any game-specific hardcoding.
+
+## Correction: the startApp self-call is NOT the screen-setup trigger
+
+Implemented owner-scoped own-virtual resolution (resolve a colliding one-letter
+method reference against the Jlet subclass being activated, via
+`class_extends_jlet` + the activating root's own members) and confirmed by
+instrumentation that it works mechanically: `startApp`'s self-call row 91
+(`a()V`), previously frozen at slot 1 (`getClass`), re-resolves to slot 21 once
+the Jlet base class `b` is activated (`jlet_owner name=b a()V_slot=21`, output
+`0x15007b4`, row 91 in range). With row 91 = 21 the self-call dispatches
+directly (no SVC) to that method.
+
+**But g3 still does not boot** (0 cards, black). The reason is a wrong earlier
+assumption: **the self-call's `a()V` (now slot 21) is `b.a()V`, not the
+screen-setup `Game.a()V` (`0x1138`).**
+
+- The launch class `Game` does **not** override `startApp` (only its base `b`
+  owns `startApp` `0x220c`), so `b.startApp` runs for a `Game` instance and its
+  compiled `this.a()V` binds to **`b`'s** `a()V` (dispatch slot 21), a different
+  method from `Game.a()V`.
+- `Game.a()V` (`0x1138`) - the method the `a()`+`b()` experiment proved authors
+  the cards - is a separate method that `b.startApp` never calls. And `Game`
+  never activates as a Jlet subclass in our runtime (only `b` does), so its slot
+  is never even consulted.
+
+So the `getClass` collision is a genuine resolver bug (a real method must not
+resolve to `getClass`), but repairing it does not start the title, because the
+screen-setup `Game.a()V` is invoked through a still-unidentified path - not the
+`startApp` self-reference this investigation had pinned on. The owner-scoped
+resolver change was reverted (unverified against the full suite, and it does not
+achieve the boot); the docked-card rendering remains committed and correct.
+
+**Next lead:** find what invokes `Game.a()V` (`0x1138`) on the reference - it is
+slot-dispatched only, `Game` overrides no lifecycle method, so the caller is
+either `Game`'s own `b()V`/event handler or a platform callback on `Game`'s
+(not `b`'s) vtable that our runtime never issues.
