@@ -1,8 +1,7 @@
 use alloc::vec;
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use java_runtime::classes::java::lang::{Class, String};
-use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::{
@@ -296,12 +295,15 @@ impl CardCanvas {
 
         let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
 
-        // HACK: disable java level paint on clet app
-        let class: ClassInstanceRef<Class> = jvm.invoke_virtual(&c, "getClass", "()Ljava/lang/Class;", ()).await?;
-        let class_name: ClassInstanceRef<String> = jvm.invoke_virtual(&class, "getName", "()Ljava/lang/String;", ()).await?;
-        let class_name_str = JavaLangString::to_rust_string(jvm, &class_name).await?;
-
-        if class_name_str == "CletCard" || class_name_str == "net/wie/CletWrapperCard" {
+        // HACK: disable java level paint on clet app. A clet draws straight to
+        // the LCD framebuffer through the WIPI-C graphics API and flushes it
+        // itself, so the MIDP layer must not also flush its own (empty) screen
+        // image over the top - that repaints the clet's frame to black.
+        //
+        // `is_instance` is matched against the internal (slashed) class name and
+        // follows the superclass chain; comparing `Class.getName()` here would
+        // silently miss, since that returns the dotted form `net.wie.CletWrapperCard`.
+        if jvm.is_instance(&**c, "net/wie/CletWrapperCard") {
             let wipi_display: ClassInstanceRef<Display> = jvm
                 .invoke_static("org/kwis/msp/lcdui/Display", "getDefaultDisplay", "()Lorg/kwis/msp/lcdui/Display;", ())
                 .await?;

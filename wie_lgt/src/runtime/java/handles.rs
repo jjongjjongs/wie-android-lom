@@ -743,8 +743,14 @@ mod tests {
 
         handles.gc_collect_with_pins(&BTreeSet::new());
 
-        assert!(handles.gc_objects.lock().contains_key(&kept), "an object rooted through a static-root word must survive");
-        assert!(!handles.gc_objects.lock().contains_key(&orphan), "an object reachable through no root is reclaimed");
+        assert!(
+            handles.gc_objects.lock().contains_key(&kept),
+            "an object rooted through a static-root word must survive"
+        );
+        assert!(
+            !handles.gc_objects.lock().contains_key(&orphan),
+            "an object reachable through no root is reclaimed"
+        );
     }
 
     #[test]
