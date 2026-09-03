@@ -157,6 +157,66 @@ paints the game's own displayable; we paint an empty wrapper. The game never
 the *current displayable for a Jlet must default to the Jlet/its main surface*,
 whose `vtable[34]` is the game paint/handler.
 
+### Ground-truth runtime trace (our emulator, g3 `00026F54.jar`)
+
+Ran g3 headless (`screen_capture::capture_archives`, 1200 ticks,
+`RUST_LOG=wie_wipi_java=debug,wie_midp=debug`). The trace confirms the whole
+diagnosis end-to-end and pins the divergence in *our* code, not just the
+reference:
+
+1. `Game.<init>` → `Jlet.<init>` → `Display.<init>` (creates a `net.wie.CardCanvas`
+   and `MidpDisplay.setCurrent(cardCanvas)`) → `EventQueue.<init>`.
+2. `Game.startApp` calls only `getDefaultDisplay` ×2, `Jlet.getActiveJlet`,
+   `getDisplay(null)`. **No `pushCard`, no `addJletEventListener`, no card
+   created** — the "minimal startApp" the static RE predicted, now confirmed at
+   runtime. (The worker `Thread` is started and parks on `b.r` immediately.)
+3. From then on the only activity is `net.wie.EventLoopRunner` pumping
+   `net.wie.EventQueue.getNextEvent/dispatchEvent` → the **MIDP**
+   `Display.handlePaintEvent` → `Canvas.handlePaintEvent` → `net.wie.CardCanvas.paint`.
+   `CardCanvas` holds **zero** cards, so every frame paints one flat colour
+   (30 frames, "busiest frame … with 1 distinct colour" = black).
+4. The intro OK key reaches `Canvas.handleKeyEvent → CardCanvas.keyPressed(148)`
+   and dies there (no card to receive it).
+
+The decisive observation: **the game's own `org.kwis.msp.lcdui.EventQueue(Game)`
+is never pumped by anyone**, and the `net.wie` pump never routes to any
+`org.kwis` game handler — it only paints the MIDP `CardCanvas`. The game's
+worker (which is the only code that would ever `getNextEvent`/`dispatchEvent` on
+the game queue, or push the first card) is parked before it runs a single
+instruction. Chicken-and-egg, confirmed empirically.
+
+Contrast with card-based titles (Seed, Zenonia), which **do** `pushCard` during
+their own startup, so the `CardCanvas` has a card and painting it runs game
+code. g3/g6 push nothing, so nothing game-side ever runs.
+
+### `Game.b()V` (`0x13a8`) is invoked purely by runtime virtual dispatch
+
+Scanned the whole `binary.mod` (BL targets + literal-pool words, bias
+`vaddr = file + 0xFCC`) for references to `0x13a8`: the **only** hit is its own
+28-byte method-descriptor entry in `.data` at vaddr `0x14000e8`
+(`+0x00`=classptr `0x140004c` Game, `+0x04`=name, `+0x08`=desc `()V`,
+`+0x0c`=flags `0x10011`, `+0x14`=code `0x13a8`). There is **no `bl 0x13a8` and no
+literal `0x13a8`** anywhere else, so `Game.b()V` is reached *only* through a
+compiled `ldr pc,[recv,#slot*4+4]` whose code word is filled from this table at
+class-activation time. That is why an xref search can never find its caller, and
+why the "who calls the bootstrap handler" question is unanswerable by static
+xref alone — it needs the activation/slot-assignment logic simulated.
+
+Corollary, checked against `platform_metadata.rs`: **`Jlet` and `EventQueue`
+have *no* virtual dispatch methods** (`DISPATCH_METHODS_257`/`_246` are empty;
+`startApp`/`pauseApp`/`resumeApp` are non-virtual). So `Game.b()V` is **not** a
+platform `Jlet` lifecycle override the platform could call directly — it is a
+*game-internal* virtual the game invokes from its own event-dispatch path. The
+reference `EventQueue.dispatchEvent` (`0x1f95fc`) opens with an **unconditional**
+`r4 = eventqueue.field@8.field@0x10; lr=pc; ldr pc,[r4_class,#0x4c]` (slot 18)
+*before* the event-type switch — a per-dispatch call into some object every time
+an event is delivered. That, or the repaint→`serviceRepaints`(slot 33) path, is
+where the game's own dispatch runs and eventually hits `Game.b()V`. The reframed
+conclusion: **the fix is not "paint the empty CardCanvas differently"; it is
+that dispatched events must reach the active Jlet's own `org.kwis` dispatch
+(which then virtual-dispatches into game code), which our `net.wie`→MIDP pump
+never does.**
+
 ### The open question (next step)
 
 Reproduce the reference's current-displayable routing for these Jlet titles:
