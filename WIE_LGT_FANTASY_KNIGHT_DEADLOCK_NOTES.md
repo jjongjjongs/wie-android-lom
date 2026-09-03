@@ -118,17 +118,41 @@ So the worker runs `b.run()`, the `r` field is `b.r`, and its r=0 setter is
 | `k.a()V/c(I)V`       | card  | " |
 | `v.c(I)V`            | card  | " |
 
+### Reference dispatch mechanism (found)
+
+The reference `EventQueue.dispatchEvent_v0` (`0x1f95fc`) is a full event-type
+switch on the event fields (`getDefaultDisplay` at `0x1ef180` into `ip`, then
+`switch(event subtype r4)`), NOT the thin delegate our `org.kwis.EventQueue`
+uses. On a **repaint event (subtype `0x29`=41, handler `0x1f9928`)** it does:
+
+```
+0x1f9950  mov r0, ip            ; ip = getDefaultDisplay()
+0x1f9954  ldr r3, [ip]
+0x1f9960  ldr pc, [r3, #0x88]   ; call display.vtable[slot 34]  (0x88/4)
+```
+
+i.e. it dispatches the repaint to `display.vtable[34]`, which routes to the
+current displayable's paint/handler — the game's own card/Jlet code — and that
+reaches `M -> Game.b -> b.r = 0` (the first wake, before the worker renders).
+
+Our path is `net.wie.EventQueue.dispatchEvent -> RepaintEvent ->
+Display.handlePaintEvent -> net.wie.CardCanvas.paint`, and `CardCanvas` has zero
+cards, so nothing game-side runs. **That is the divergence**: the reference
+paints the game's own displayable; we paint an empty wrapper. The game never
+`setCurrent`s a card of its own (its startApp is minimal), so on the reference
+the *current displayable for a Jlet must default to the Jlet/its main surface*,
+whose `vtable[34]` is the game paint/handler.
+
 ### The open question (next step)
 
-`Game.b()V` (`0x13a8`) is the bootstrap wake, and it is a **virtual method
-invoked by neither `b.run()` nor `b.startApp`** (confirmed by tracing their
-calls). So the platform must invoke it — but ours never does. It is not a
-`JletEventListener.notifyEvent(III)V` override (wrong signature) and `b`
-implements only `Runnable`. Next: find `Game.b()V`'s dispatch slot and what
-the reference's Jlet/event/frame delivery calls on the active Jlet per
-frame/event (peel `Jlet.startApp` core `0x20e368` and
-`Display.activateCurrentDisplay0` `0x1f53d8`), then reproduce that call in our
-`org.kwis` Jlet/event path so the concrete Jlet's method fires and clears `b.r`.
+Reproduce the reference's current-displayable routing for these Jlet titles:
+determine what the reference registers as the current displayable when a Jlet
+calls `getDefaultDisplay()` (peel reference `getDefaultDisplay` `0x1ef180` and
+`activateCurrentDisplay0` `0x1f53d8`), and make our repaint dispatch invoke the
+active Jlet's `vtable[34]` (the game paint/handler) rather than the empty
+`net.wie.CardCanvas`. That is the concrete platform fix; keep it scoped to the
+Jlet-without-pushed-card case so card-based titles (Seed, Zenonia) are
+unaffected.
 
 On the reference the worker's first `Game.r = 0` must come from somewhere — most
 likely the reference's `Thread.start` / monitor / `EventQueue` bootstrap
