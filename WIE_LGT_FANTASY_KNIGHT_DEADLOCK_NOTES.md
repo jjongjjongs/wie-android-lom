@@ -468,3 +468,42 @@ The crux narrows to: *what platform action creates/authors the Jlet's first card
 (or its equivalent surface) so that a delivered event has something to present?*
 No `Card` is instantiated anywhere in g3's startup, so that authoring is
 platform-driven on Jlet activation and is the specific piece still to pin.
+
+### (a) classes.dex decompiled — the bootstrap has no Java-side trigger
+
+Decompiled the reference WPP player's Android glue (`android/lgt/wipi/*` in
+`ref/classes*.dex`, via androguard) to see how it drives the game. Result: it
+does **not** author the first card or post any bootstrap event — that is all
+native.
+
+- `WipiPlayer$WipiThread.run()` just calls `WipiPlayer.startWipiN(aid, null)`
+  (a native method). `startWipiN` runs the whole WIPI VM (the game's
+  `Main.main` → Jlet lifecycle → `startApp` → worker) and blocks until exit.
+- The only things the Java layer posts into native are `pltEventN(int, Object)`
+  — **key** (`WipiEventManager.onKeyEvent`, `DirectionKeyOverlay.send`),
+  **touch** (`onTouchEvent`), **exit** (`exitPlatform` posts type 0), and
+  **new-intent** (type 34) — and `pltChangeStateN(int)` lifecycle transitions
+  (`onResume`/`onPause`/dialogs), where `pltChangeStateN(1)` fires **only** when
+  resuming from a prior pause (`mBpaused`), never at first launch.
+- Rendering is a native→Java callback (`flushBitmap([S,I,I,I,I)` into
+  `FrameSurfaceView`); the game only flushes once its worker has produced a
+  frame.
+
+So **there is no Android-side "activate / initial paint / surface-ready" event
+at bootstrap**: the native VM authors the game's first card and starts its
+render loop autonomously inside `startWipiN`. That autonomy lives in the native
+event/scheduler system (the event-manager singleton `global[0x152210 + 0xa94]`
+seen in `getNextEvent`), which our Rust platform reimplements incompletely.
+
+### Refined B target: the worker's own event poll returns "no event"
+
+Combining the census, the `run()` decode, and this dex result: the worker's
+outer loop (`0x2654`) polls the native event system through `.data` import
+thunks and, in our runtime, gets nothing back, so it falls to the `Game.r` wait
+every time. The clean B is therefore to make **the worker's own poll return the
+bootstrap event** (an initial repaint/activate the native VM would have
+generated), so the game handles it **on the worker's own thread and monitor
+context** — авторing its first card and clearing `Game.r` itself. This avoids
+the cross-thread monitor wedge the direct-poke experiment hit. The remaining
+task is to identify that poll import (instrument the init-SVC / event-manager
+calls the worker makes at `0x2654`–`0x2684`) and give it the initial event.
