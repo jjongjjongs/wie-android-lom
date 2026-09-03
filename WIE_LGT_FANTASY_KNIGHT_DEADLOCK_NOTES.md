@@ -805,3 +805,36 @@ only ~1 `fillRect` + `drawLine` per frame and **no `drawImage`** - the game
 loop is live but its sprite/background imagery is not being drawn. That is a
 downstream resource/rendering gap (image loading, or the `Font::getDefaultFont`
 stub the title hits 197x), independent of the worker deadlock this fixes.
+
+## Rendering, after the deadlock: card paint dispatch + a progression layer
+
+With the deadlock fixed, the play area was still blank while only the platform
+status bar drew. Traced the card paint path down two more layers.
+
+### Fixed — compiled card paint override dispatch (`08ab524`)
+
+The game pushes its play card `e` and issues 174 `repaint()`s on it, but its
+paint drew nothing. `e` is a compiled card (extends `w` extends
+org.kwis `Card`) whose paint override is the obfuscated
+`e.a(Lorg/kwis/msp/lcdui/Graphics;)V` (entry `0x104a4`, a real drawing method:
+`drawImage`/`fillRect`/`drawLine`). `net.wie.CardCanvas` paints a card via
+`invoke_virtual(card, "paint", ...)` **by name**; the JVM resolved "paint"
+against the bridged proto, which carries the override under `a`, so the call hit
+the platform `Card::paint` **stub** and drew nothing (confirmed: `e.a` was never
+called - 0 `drawImage` - before the fix). `compiled_class::as_proto` now also
+exposes a compiled class's single `(Lorg/kwis/msp/lcdui/Graphics;)V` instance
+method under the name `paint` when it has none by that name - that descriptor is
+the card-paint signature. With it, `e.a` runs (0 -> 555 `drawImage` per run) and
+the game renders its own screen. No regression across the corpus.
+
+### Remaining — the game stalls at a static early screen (progression layer)
+
+g3/g6 now paint, but the frame is static: the last-frame signature is identical
+from tick ~500 through 4500 (one 6-colour screen, mostly a white clear with a
+few sprite pixels - the game's own art, decoded fine: the images are PNGs that
+decode to valid dimensions). The worker stays active (`java-static`/
+`VmActivateClass` census), so a loop is running, but the visible state never
+advances and no key (UP/DOWN/LEFT/RIGHT/FIRE/NUM5) changes it. So the game is
+stuck internally - a loading/asset-wait or an event the Jlet path never receives
+- not a paint problem. This is the next distinct layer to investigate; the paint
+dispatch above is a prerequisite that is now in place.
