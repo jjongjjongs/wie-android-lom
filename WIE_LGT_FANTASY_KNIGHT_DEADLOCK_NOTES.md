@@ -545,3 +545,46 @@ recommended options are (1) commit to porting the firmware event-manager's
 autonomous bootstrap, (2) accept g3/g6 as fully-diagnosed and deferred and move
 to other failing titles (g4 crash, g5 class-0x0), or (3) revisit once the
 generic vtable-synthesis work (task) makes the game's own dispatch reachable.
+
+## BREAKTHROUGH — the game can be brought fully alive
+
+Experimentally, calling the game's own two methods after `startApp` makes g3
+run:
+
+- **`Game.a()V` (`0x1138`)** — the screen-setup method. Invoking it (via
+  `jvm.invoke_virtual(currentJlet, "a", "()V")`) makes the game **create its
+  cards** (`Card.<init>` for `k`/`e`/`v`/`g`), call `Display.setDockedCard`, and
+  `Display.addJletEventListener` — i.e. it authors the first screen. Our runtime
+  never calls this on its own, which is why no `Card` was ever instantiated.
+- **`Game.b()V` (`0x13a8`)** — the wake. With cards now present, invoking it
+  cleanly clears `Game.r` and the worker runs.
+
+With `a()` then `b()` called after `startApp`, the init-SVC census flips from the
+parked `java-unknown=53/s` (spinning on `wait`) to **`java-static=90/s
+java-reserved=90/s VmThreadReschedule=90/s`** — the worker is now *running the
+game*, drawing every frame. The deadlock is gone. (The earlier direct-`b()`
+experiment stalled only because it ran before `a()` had authored a card.)
+
+Both `a()V` and `b()V` are **slot-dispatched only** (no `bl`/literal xref in the
+binary), so on the reference the native VM calls them through the game's Jlet
+vtable slots — likely platform lifecycle callbacks the native VM issues after
+`startApp` (a "setup/activate" and a "start" callback) that our `net.wie`
+launcher does not.
+
+### Two concrete engineering pieces remain
+
+1. **Trigger `a()`/`b()` generically.** They are the game's overrides of
+   platform Jlet lifecycle slots; our `net.wie.Launcher` runs only `startApp`.
+   Identify which Jlet vtable slots the reference invokes after `startApp` and
+   issue them (game-agnostic — no obfuscated-name hardcoding).
+2. **Render the docked card.** The game shows its screen via
+   `Display.setDockedCard`, but our `net.wie.CardCanvas.paint` iterates only
+   *pushed* cards, so the docked card is never painted (screen stays black even
+   though the game is running and drawing). `CardCanvas` must also paint the
+   Display's `dockedCard`.
+
+Both are additive and gate-able to the cardless-Jlet / docked-card cases, so the
+working card-push titles (Seed, Zenonia, LoM) are unaffected. The `startApp`
+self-call at `0x2288` reads `virtual_method_offsets[+0xb6]`, which resolves to
+slot 1 (`getClass`) — a legitimate call, not the setup trigger — so the setup
+trigger is a separate Jlet lifecycle slot, still to be pinned.
