@@ -217,6 +217,63 @@ that dispatched events must reach the active Jlet's own `org.kwis` dispatch
 (which then virtual-dispatches into game code), which our `net.wie`→MIDP pump
 never does.**
 
+### `Game.run()` (`0x262c`) decoded — the present/re-arm model
+
+The worker is not a bare `while(r!=0) wait()`; it is an event loop with the
+wait nested inside:
+
+```
+run():
+  0x263c  call import id 0xf                 ; setup (monitor/exec-env)
+  0x2650  b 0x2834
+  0x2834  s = singleton(0x2030); if s.field@0x20 == 0 -> return   ; outer gate
+  0x2654  <event-poll body: several .data-thunk imports>
+          ... if poll yields nothing (r4==0) -> 0x2740
+  0x2740  if Game.r (meta+0x5a, slot 2) != 0 -> 0x271c
+  0x271c  this.wait()  via Object vtable slot 9 (offset 0x28)     ; TIMED wait
+          (our runtime bounds a bare wait() to LGT_BARE_WAIT_BOUND_MS=20ms and
+           returns — it does NOT block until notify, so the worker *spins*,
+           re-checking Game.r every ~quantum)
+  when Game.r == 0 (0x2764+):
+    r7 = Game.field[meta+0x52]                 ; card param b() stored
+    r4 = Game.field[meta+0x50]                 ; int  param b() stored
+    Game.c(this, r7, r4)   ; c(Lw;I)V = 0x2a58 = present / buffer-swap
+    Game.field[meta+0x5a] = 1                  ; re-arm: Game.r = 1
+    ... loop back to 0x2834
+```
+
+So the confirmed cycle is: **wait until `Game.r==0` → present the card/params
+that `Game.b` stored → set `Game.r=1` → wait again.** `Game.b(Lw;I)V` (`0x2900`)
+is the producer (stores card→`field@0x52`, int→`field@0x50`, sets `Game.r=0`,
+notifies); `run()` is the consumer. A single successful `Game.b` therefore
+bootstraps exactly one present; sustained animation needs `Game.b` to fire once
+per frame, which only happens if events keep reaching the game's handlers.
+
+Two consequences for the fix:
+- The worker's `Object.wait()` is already timed in our runtime, so the worker is
+  *live and spinning*, not hard-blocked. It re-reads `Game.r` continuously. The
+  missing piece is purely the `Game.r=0` **producer** side (`Game.b`), i.e. an
+  event reaching a game handler.
+- The worker's own outer loop (`0x2654`) polls events through **`.data` import
+  thunks patched at load**, not through `org.kwis.EventQueue.getNextEvent` — the
+  g3 runtime trace shows the worker never calls our Rust `getNextEvent`. So the
+  game's event source in the compiled model is a lower-level import, distinct
+  from the `net.wie`/`org.kwis` `EventQueue` our pump drives. Pinning which
+  import that poll is (runtime trace of the worker thread's platform calls) is
+  the next concrete instrumentation step.
+
+### Firmware-linked mode is media-only (not an event-path reference)
+
+`wie_lgt` can load the real BIOS (`libarm32_lgt_system.so`) when it is present
+in the title's filesystem (`firmware_link::try_load_bios`), but that path only
+binds the firmware's `MC_mda*` media exports and runs firmware init as a
+side task — **the game still runs its org.kwis/event code on the Rust platform
+either way** (`emulator.rs`: "the game runs on the Rust platform either way").
+So there is no supported mode that executes the game's event model against the
+real firmware; the deadlock is squarely in our Rust org.kwis/net.wie shim, and
+the reference `liblgt_system.so` remains a *static* spec, not a runnable oracle
+for the event path.
+
 ### The open question (next step)
 
 Reproduce the reference's current-displayable routing for these Jlet titles:
