@@ -705,3 +705,48 @@ achieve the boot); the docked-card rendering remains committed and correct.
 slot-dispatched only, `Game` overrides no lifecycle method, so the caller is
 either `Game`'s own `b()V`/event handler or a platform callback on `Game`'s
 (not `b`'s) vtable that our runtime never issues.
+
+## TRUE ROOT CAUSE: the main class `Game` never activates its dispatch table
+
+Traced what invokes the screen-setup `Game.a()V` (`0x1138`) and found the real
+gap: **`Game` (root `0x140004c`) is never activated**, so its virtual-method
+overrides are never placed in a dispatch table, and its instances fall back to
+the platform table.
+
+- `Game`'s metadata has `dispatch_table` (`metadata+0x0c`) **= 0** and
+  `linker_flags` (`metadata+0x24`, u16) `= 0x0705` with bit `0x0100` set, so it
+  is a **heavy-linked** class that must have its variable-length dispatch table
+  *synthesized* (`activate_heavy_dispatch_table`), exactly like LoM's `f`/`n`.
+- But there is **no `vm_activate_class(root=0x140004c)`** in a g3 run - `Game`
+  activates through none of the paths that build/register a table. Its base `b`
+  (`0x1400fdc`) and the card classes activate; `Game` does not.
+- Consequently, when a `Game` JVM instance crosses into compiled code,
+  `JavaHandles::insert` finds no table registered for `"Game"` and logs
+  **"Game declares no dispatch table; using the fallback"**, pinning the
+  platform fallback table on it.
+- The fallback table does not carry `Game`'s overrides. So a compiled
+  `this.a()V` / `this.b()V` on a `Game` instance dispatches through the fallback
+  (or the base `b`, whose `a()V` `0x2114` and `b()V` `0x213c` are trivial
+  one-import stubs), **never** reaching `Game.a()V` (`0x1138`, the card/dock/
+  listener setup) or `Game.b()V` (`0x13a8`, the worker wake). The
+  `a()`+`b()` experiment worked only because it dispatched through the *JVM's*
+  own proto vtable, which does carry `Game`'s methods.
+
+So the deadlock is a **vtable-synthesis gap** (the "generic linking" task), not
+an event-delivery or resolver problem: the launched main class's own methods are
+simply not in the table its instances dispatch through.
+
+### The fix direction
+
+`Game` must get its heavy dispatch table synthesized and registered under its
+name (`java_handles.set_dispatch_table("Game", table)`), with `Game.a()V` /
+`Game.b()V` at their linked slots, so `this.a()V`/`this.b()V` reach the
+overrides. `activate_heavy_dispatch_table` already builds such a table but (a)
+`Game` never reaches it (no activation), and (b) it looks the class up in
+`app_classes`, where the main class is absent (it is bridged via
+`bridge_class_chain`, not registered via `VmRegisterClasses`). The fix is to
+synthesize + register the main class's dispatch table when it is bridged
+(parsing it from its root, as other paths already do with
+`app_classes::parse_class_root`), so its instances stop using the fallback.
+This must be regression-tested across titles, since it changes main-class
+dispatch for every LGT app.
