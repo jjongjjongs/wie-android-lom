@@ -511,27 +511,6 @@ pub async fn flush_lcd(
 
     screen.paint(&*src_canvas);
 
-    // Blank the buffer after a whole-screen present.
-    //
-    // An LGT clet requests a frame with MC_grpRepaint, which only posts a
-    // repaint event; the system's handler clears the draw buffer before it
-    // calls the clet's paint and presents the result with MC_grpFlushLcd. The
-    // clet's own paint therefore starts from a blank surface and redraws the
-    // whole frame every time - several (Demon Hunter's menus, for one) draw
-    // only text with MC_grpDrawString and never clear anything themselves. We
-    // model that handler's clear here, at the present, so the next frame's paint
-    // starts blank instead of drawing over the last one - without it each screen
-    // is left painted on top of the previous one.
-    //
-    // Guarded to a full-surface flush (x/y at the origin, w/h covering it) so a
-    // title that presents only a dirty sub-rectangle and relies on the rest of
-    // the buffer persisting is left untouched.
-    if x == 0 && y == 0 && w >= framebuffer.0.width && h >= framebuffer.0.height {
-        let size = (framebuffer.0.bpl * framebuffer.0.height) as usize;
-        let blank = vec![0u8; size];
-        context.write_bytes(context.data_ptr(framebuffer.0.buf)?, &blank)?;
-    }
-
     Ok(())
 }
 
