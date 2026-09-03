@@ -85,6 +85,35 @@ repaint/ready flag, then mirror it in our org.kwis event/card model. This is the
 guessing at platform behaviour risks regressing titles that already run
 (Seed, Zenonia).
 
+## Reference entry points already mapped (`liblgt_system.so`, vaddr == file off)
+
+The reference is heavily layered: nearly every `Java_*` symbol is a thin
+save-point / generic-dispatch wrapper (`0x145130`, `0x198f38`, `0x138fb0`,
+`0xef214`, `0x144fd0`) that forwards to a core. Peel via the `bl` chains.
+
+- `Java_org_kwis_msp_lcdui_JletWrapper_startApp_s0` `0x20d7fc` — the reference's
+  launcher (our `net.wie.Launcher` equivalent); thin dispatcher, calls
+  `ldr pc,[r3,#0x30]` on a manager object with the Jlet as arg.
+- `Java_org_kwis_msp_lcdui_Jlet_startApp_v0` `0x20d07c` → core `0x20e368`
+  (forwards through generic dispatch id `0xc9`).
+- `Java_org_kwis_msp_lcdui_Display_activateCurrentDisplay_v0` `0x1eecdc` →
+  `_s0` `0x1ef594` → `Display_activateCurrentDisplay0` `0x1f53d8` (real logic).
+  Prime suspect for what posts the initial paint/event to the active Jlet.
+- `Java_java_lang_Thread_start_v0` `0x1613c8`, `Thread_run_v0` `0x1611ac`,
+  `Java_android_lgt_wipi_JavaThread_runN` `0x178174`.
+- Scheduler: `dscheduler_main` `0xeddf8`, `dscheduler_init` `0xedf40`,
+  `dprocess_find_dthread_by_pthread_id` `0xeccb0`,
+  `dscheduler_add_timer_queue` `0xee03c` (frame/timer pump candidate).
+- `Java_org_kwis_msp_lcdui_Card_serviceRepaints_v0` `0x1ed5bc`,
+  `Card_repaint_v0` `0x1ed740`, `Card_paint_v0` `0x1eeb00`.
+- `Java_org_kwis_msp_lcdui_Display_getDefaultDisplay_s0` `0x1ef180`.
+
+Note: even on the reference there is no card at bootstrap (the game's startApp
+creates none), so `Game.b`'s *first* call is not a normal card paint — the
+open question is which reference path (display activation / scheduler frame
+pump / an initial posted event) invokes it (or a `notify` + `Game.r=0`) without
+a pre-existing card. That is the crux to resolve next.
+
 ## Useful addresses (Fantasy Knight `g3mod/binary.mod`)
 
 - `.text` vaddr `0x1000` = file offset `0x34` (so `file = vaddr - 0xFCC`).
