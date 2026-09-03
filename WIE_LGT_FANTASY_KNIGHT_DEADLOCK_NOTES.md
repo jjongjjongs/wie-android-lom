@@ -980,3 +980,35 @@ title's investigation. Everything up to the pixel level (deadlock, main-class
 vtable, self-call resolver, card-paint dispatch, GC-rooted constants, decode,
 clip, blit) is now correct; only this last background/transparency divergence
 remains, and it needs reference firmware to settle.
+
+## Firmware/platform RE pass: the platform layer is correct; the stall is a
+## game-internal state machine
+
+Went after the render/progression blocker at the platform level (with
+`liblgt_system.so` available as the spec). The platform side checks out - no
+smoking gun:
+
+- **`e.a` (card paint) switches on a game state field** `[stateObj+0x58]`
+  (`stateObj` = the class singleton returned by `0xd2fd0 -> 0xd2f74`): states
+  `{2,3,6,10}` take the content path, states `{0,1}` render the near-blank
+  screen. The title sits in a low/blank state; the render is entirely
+  state-driven and correct for that state.
+- **`vm_class_is_assignable_to` fallback is benign**: the repeating
+  "unknown class; assuming assignable" is `java/lang/String` vs an unnamed
+  target - i.e. `String instanceof <Comparable/CharSequence/Serializable>`,
+  where assuming assignable (true) is the correct answer.
+- **The `Ljava/lang/Object` -> byte[] marshalling is benign**: every wrapped
+  array is genuinely `element_type == 'B'` (the game's data buffers, incl. the
+  ~10 KB `.dat`), so wrapping them as `[B` is correct.
+- No WIPI-C time/tick/random import is polled in the stuck loop; the loop is pure
+  Java-level (`java-virtual≈180/s`), so it is not a stalled platform timer.
+
+The state field is written through a resolved field-offset slot (no literal
+`str ...,#0x58` exists in the image), so the transition cannot be pinned by
+static disassembly. Confirming why it never advances needs dynamic tooling - a
+memory write-watch on that field, or a reference-vs-ours execution diff - which
+is a larger build than static RE. Net: every platform-level layer WIE controls
+(deadlock, vtable synthesis, self-call resolver, card-paint dispatch, GC-rooted
+constants, image decode/clip/blit, assignability, array marshalling) is now
+correct for g3; the last gap is the title's own state machine not leaving its
+initial state, and closing it needs execution-diff tooling against the device.
