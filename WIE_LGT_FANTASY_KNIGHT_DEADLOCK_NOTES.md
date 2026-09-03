@@ -919,3 +919,36 @@ So the remaining g3/g6 blocker is this render-compositing chain (off-screen
 buffer + WIPI image transparency semantics: magenta-key vs PNG alpha + the
 expected coloured background), not the worker loop or the deadlock/paint/vtable
 gaps already fixed. This is the next thread if the title is picked up again.
+
+## The render blocker is white-on-white (visually confirmed)
+
+Dumped the actual decoded sprites and traced the exact draw sequence. The
+finding is concrete and reproducible:
+
+- The game's sprites are vertical **glyph/tile atlases** (5x950, 9x210, ... tall
+  thin PNGs), decoded fine. Every one is exactly **two colours**: magenta
+  `0xFF00FF` at **alpha 0** (the PNG's own tRNS marks it transparent) and white
+  `0xFFFFFF` at **alpha 255** - i.e. the visible glyph pixels are **pure white**
+  (confirmed by rendering the strips over grey: white marks on transparent).
+- `e.paint` each frame: `setColor(0xFFFFFF); fillRect(0,0,240,296)` - an
+  intentional **white** background (the colour is a literal `mvn r8,#0xff000000`
+  = `0x00FFFFFF` in `e.a`, not a misresolved field) - then the glyph atlases via
+  the `setClip(dest) -> drawImage(atlas at offset) -> setClip(full)` pattern,
+  with **no `setColor` before the draws** (so no monochrome-tint feature in play)
+  and `transparentColor == -1` throughout.
+
+So the game draws pure-white glyphs onto its own pure-white fill, with no
+coloured surface underneath and no tint - they are invisible, which is exactly
+the near-blank screen observed. drawImage, clip, and PNG decode are all working
+correctly; the pixels genuinely cancel.
+
+For this to render on the device, the reference must diverge in one of two ways
+this build does not reproduce: (a) a coloured background/surface is drawn under
+the glyphs that our execution never emits, or (b) `liblgt_system.so`'s image or
+graphics layer treats these two-colour tRNS PNGs differently (e.g. keying white
+rather than magenta, or drawing the "transparent" colour opaque). Deciding
+between them needs disassembly of the reference firmware's `createImage` /
+`drawImage`, a separate RE effort beyond the worker/dispatch/GC gaps fixed so
+far. The off-screen `createImage(240,320)` double-buffer exists but is not the
+target of `e.paint`'s draws (those hit the screen graphics directly), so it is
+not the missing surface.
