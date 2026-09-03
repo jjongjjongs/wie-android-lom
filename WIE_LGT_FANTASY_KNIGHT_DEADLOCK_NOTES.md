@@ -379,3 +379,64 @@ a pre-existing card. That is the crux to resolve next.
 - `Game.r`: field slot 2, index at class meta `0x1500a30 + 0x5a`.
 - Method table entries are 28 bytes: `+0x04`=name ptr, `+0x08`=descriptor ptr,
   `+0x0c`=flags (`arg_words<<16 | link marker`), `+0x14`=code.
+
+## Fix direction B — reproduce the platform event channel (chosen)
+
+Option B (mirror the platform's uniform event-delivery channel, additively,
+gated on the cardless-Jlet case, leaving the card path untouched) is the chosen
+direction: it is game-agnostic (no per-title obfuscated-handler knowledge) and,
+unlike a one-shot `Game.r=0` poke, it drives *sustained* frames, not just the
+first one.
+
+### Reference delivery channels mapped (`EventQueue.dispatchEvent` `0x1f95fc`)
+
+- Opens with an **unconditional** call, every dispatch, before the type switch:
+  `r4 = this.field@8 . field@0x10; r4.vtable[slot 18]` (`ldr pc,[r3,#0x4c]`).
+- For `event[0] > 3` it reads `r4 = event[1]` (subtype) and, after
+  `bl 0x1f4dd4` (`Display.get_raw_class`) and `bl 0x1eecb8`
+  (`activateCurrentDisplay_v0`) **on every dispatch**, `ip = getDefaultDisplay()`
+  then switches on the subtype: `0x29`=41 repaint → `0x1f9928`; `1`,`2`,`0x3e9`
+  (1001), `0xbb8` (3000), `0x3ef` (1007)… Several arms end in
+  `getDefaultDisplay().vtable[slot 36] = eventNotify(III)V` (`ldr pc,[ip,#0x94]`)
+  or the repaint arm's `getDefaultDisplay().vtable[0x88]` (slot 33
+  `serviceRepaints(Z)` under the `*4+4` convention, or slot 34 `repaint(Card)`
+  under the raw-array convention — the one-word-header off-by-one is unresolved
+  statically and must be settled by runtime probe).
+- For `event[0] <= 3` it routes through the low-level event-manager singleton
+  (`global[0x152210 + 0xa94]`, its `vtable[0x16c]/[0x178]`), not the display.
+- The event array is `(type=event[0], subtype=event[1], p1, p2)`. **Our
+  `net.wie.EventQueue` uses a flat `(code, subcode, key, 0)` encoding that does
+  not mirror this two-dimensional (type, subtype) shape.**
+
+### Why the three obvious org.kwis channels are all empty for g3
+
+Confirmed at runtime and from metadata:
+- **No card**: g3 never `pushCard`s (nothing in `net.wie.CardCanvas`).
+- **No JletEventListener**: g3 never calls `addJletEventListener`, and its class
+  chain `Game -> b -> Jlet` implements only `java/lang/Runnable` (read from the
+  game's class metadata interface table) — it does **not** implement
+  `JletEventListener`/`SystemEventListener`, so `Display.eventNotify ->
+  JletEventListener.notifyEvent` reaches nothing.
+- **No worker poll**: the worker only spins on `Game.wait()`.
+
+So g3's bootstrap delivery is something the platform does **automatically** when
+a Jlet's display is activated (the per-dispatch `activateCurrentDisplay_v0`
+`0x1eecb8` / core `0x1f53d8` is the prime suspect), not something the game
+registers. This is the piece static RE cannot finish (firmware plumbing,
+runtime-built vtables, the `*4+4` off-by-one).
+
+### Concrete B plan (empirical resolution of the delivery target)
+
+1. Settle the delivery target by **runtime probe**, not static RE: in our
+   runtime, for the cardless-Jlet case, drive the active Jlet (`Game`) through
+   candidate receivers and watch for the worker waking (`Game.r -> 0`, a
+   non-empty painted frame). Candidates, in order: the game's own bootstrap
+   handler `Game.b()V` (`0x13a8`) invoked by its resolved own-virtual slot;
+   `Display.eventNotify(III)`; the reference's per-dispatch
+   `activateCurrentDisplay`. Our runtime already calls compiled game methods
+   (startApp/run) — reuse that entry to make the incoming call.
+2. Once the receiver is confirmed, implement it as an **additive** branch in the
+   org.kwis/net.wie event path taken only when the active Jlet has no shown card,
+   so `net.wie.CardCanvas`/MIDP (Seed, Zenonia, LoM) is untouched.
+3. Regression-gate on Seed / Zenonia / LoM plus the `wie_lgt` suite; keep g3/g6
+   as the positive cases.
