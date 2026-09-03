@@ -35,8 +35,8 @@ use super::{
         interface::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
-            bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, vm_get_constant_string, vm_instantiate_array,
-            vm_run_main_class,
+            bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, resolve_main_class_arguments, run_main_class,
+            vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
         platform_metadata::platform_class,
@@ -1195,23 +1195,31 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let argc = core.read_param(2)?;
             let argv = core.read_param(3)?;
 
-            let app_classes = context.app_classes.clone();
-            let image_ranges = context.image_ranges.clone();
-            let java_handles = context.java_handles.clone();
             let fallback_main_class = context.main_class_name.clone();
+            let arguments = resolve_main_class_arguments(core, argc, argv, fallback_main_class.as_deref());
+            tracing::debug!("java_run_main({arguments:?})");
 
-            vm_run_main_class(
-                core,
-                jvm,
-                &java_handles,
-                &app_classes,
-                &image_ranges,
-                argc,
-                argv,
-                fallback_main_class.as_deref(),
-            )
-            .await?
-            .write(core, lr)
+            // Bridge the main class chain to the JVM, then synthesize and
+            // register the main class's own dispatch table, both before
+            // `Main::main` creates the Jlet instance. Using `context.jvm`
+            // directly (rather than the `jvm` binding, a `&mut context.jvm`
+            // borrow) leaves the whole `context` free to lend immutably to the
+            // dispatch-table synthesis in between.
+            if let Some(first) = arguments.first() {
+                let name = first.replace('.', "/");
+                bridge_class_chain(
+                    &context.jvm,
+                    core,
+                    &context.java_handles,
+                    &context.app_classes,
+                    &context.image_ranges,
+                    &name,
+                )
+                .await;
+                activate_main_class_dispatch_table(core, context, &name, 0)?;
+            }
+
+            run_main_class(&context.jvm, arguments).await?.write(core, lr)
         }
         InitSvcId::VmGetConstantString => {
             let chars = core.read_param(1)?;
@@ -1960,6 +1968,82 @@ async fn resolve_own_fields(core: &mut ArmCore, context: &InitSvcContext) -> Res
             write_generic(core, output + index * 2, slot as u16)?;
             tracing::debug!("resolved own field {name}:{descriptor} at row {index} -> slot {slot}");
         }
+    }
+
+    Ok(())
+}
+
+/// Synthesizes and registers the application main class's own dispatch table.
+///
+/// A class the compiled code instantiates itself is handed to `VmActivateClass`,
+/// which builds its dispatch table and registers it under its name. The main
+/// class is different: the platform creates its instance through the JVM
+/// (`Main::main` -> `new_class`), so `VmActivateClass` never fires for it, its
+/// heavy dispatch table is never synthesized, and `JavaHandles::insert` pins the
+/// root-0 fallback table on every instance. A compiled `this.m()` on such an
+/// instance then reaches the superclass stub at that slot instead of the class's
+/// own override - which is why Battle Monster / Fantasy Knight's `Game` boots to
+/// a black screen: the worker's `this.a()`/`this.b()` never run the real
+/// setup/wake code, so no card is ever authored.
+///
+/// Do here, before `Main::main` runs, exactly what `VmActivateClass` would have:
+/// synthesize the table and register it under the class name. Superclasses are
+/// activated first (depth-first) so their dispatch-slot counts are linked before
+/// a subclass inherits them. Only heavy-linked classes that ship no prebuilt
+/// table are touched; every other main class already dispatches correctly and is
+/// left untouched, keeping this change scoped to the shape that needs it.
+fn activate_main_class_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, name: &str, depth: usize) -> Result<()> {
+    if depth >= MAX_SUPERCLASS_DEPTH {
+        tracing::warn!("main class {name} sits deeper than {MAX_SUPERCLASS_DEPTH} superclasses; stopping dispatch synthesis");
+        return Ok(());
+    }
+
+    // The main class is usually absent from the registered table, so fall back
+    // to finding it by shape in the image, as the bridge does.
+    let resolved = {
+        let registered = context
+            .app_classes
+            .lock()
+            .iter()
+            .find(|class| class.name == name)
+            .map(|class| (class.root, class.superclass.clone()));
+        match registered {
+            Some(found) => Some(found),
+            None => app_classes::find_class(core, &context.image_ranges, name).map(|class| (class.root, class.superclass)),
+        }
+    };
+    let Some((root, superclass)) = resolved else {
+        // A platform class the JVM already dispatches; nothing to synthesize.
+        return Ok(());
+    };
+
+    let metadata: u32 = read_generic(core, root + 8)?;
+    if metadata == 0 {
+        return Ok(());
+    }
+
+    let linker_flags: u16 = read_generic(core, metadata + 0x24)?;
+    let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
+
+    // Only a heavy-linked class shipping no prebuilt table needs a table
+    // synthesized. A light-linked class, or one that already carries a table
+    // (its own or one synthesized on an earlier pass), already dispatches
+    // correctly - leave it, and stop the recursion here.
+    if linker_flags & 0x0100 == 0 || vtable != 0 {
+        return Ok(());
+    }
+
+    // Activate the superclass first so its dispatch-slot count is linked before
+    // this class's heavy linking reads it to place inherited slots.
+    if let Some(superclass) = superclass {
+        activate_main_class_dispatch_table(core, context, &superclass, depth + 1)?;
+    }
+
+    let table = activate_dispatch_table(core, context, root)?;
+    let fallback = context.java_handles.fallback_dispatch_table();
+    if table != fallback {
+        context.java_handles.set_dispatch_table(name, table);
+        tracing::debug!("Synthesized main-class dispatch table for {name}: root={root:#x}, table={table:#x}");
     }
 
     Ok(())

@@ -758,29 +758,21 @@ fn install_dispatch(core: &mut ArmCore, handles: &JavaHandles, table: &mut Class
     Ok(())
 }
 
-/// Import `0x83`. The application asks the platform to run a Java main class,
-/// passing the Jlet's own class name as the first argument - the same shape
-/// KTF uses. The named class is one of the application's own compiled classes,
-/// so a bridge is registered for it before `Main` is entered.
-#[allow(clippy::too_many_arguments)]
-pub async fn vm_run_main_class(
-    core: &mut ArmCore,
-    jvm: &mut Jvm,
-    handles: &JavaHandles,
-    app_classes: &Mutex<Vec<AppClass>>,
-    image_ranges: &[(u32, u32)],
-    argc: u32,
-    argv: u32,
-    fallback_main_class: Option<&str>,
-) -> Result<u32> {
+/// Import `0x83`. Reads the main-class argument vector the application handed
+/// the platform, the same shape KTF uses.
+///
+/// Reading the vector must not end the run. Not every ABI passes argc/argv in
+/// the registers the classic one does, so a title can reach here with a bogus
+/// vector; an unreadable entry stops collection and the main class still runs
+/// (with the arguments gathered so far), rather than the whole title dying
+/// before it starts. `org.kwis.msp.lcdui.Main::main` reads argv[0] as the
+/// application's main class; when the ABI did not hand over a readable vector,
+/// fall back to the main class the archive descriptor named (`app_info`
+/// `mclass`), which WIE already knows, so the title still launches its Jlet.
+pub fn resolve_main_class_arguments(core: &ArmCore, argc: u32, argv: u32, fallback_main_class: Option<&str>) -> Vec<String> {
     let argc = argc.min(MAX_MAIN_ARGUMENTS);
     tracing::debug!("vm_run_main_class: argc={argc}, argv={argv:#x}");
 
-    // Reading the argument vector must not end the run. Not every ABI passes
-    // argc/argv in the registers the classic one does, so a title can reach
-    // here with a bogus vector; an unreadable entry stops collection and the
-    // main class still runs (with the arguments gathered so far), rather than
-    // the whole title dying before it starts.
     let mut arguments = Vec::with_capacity(argc as usize);
     for index in 0..argc {
         let pointer: u32 = match read_generic(core, argv + index * 4) {
@@ -808,10 +800,6 @@ pub async fn vm_run_main_class(
         arguments.push(String::from_utf8_lossy(&bytes).into_owned());
     }
 
-    // `org.kwis.msp.lcdui.Main::main` reads argv[0] as the application's main
-    // class. When the ABI did not hand over a readable vector, fall back to the
-    // main class the archive descriptor named (`app_info` `mclass`), which WIE
-    // already knows, so the title still launches its Jlet.
     if arguments.is_empty()
         && let Some(main_class) = fallback_main_class
         && !main_class.is_empty()
@@ -820,12 +808,16 @@ pub async fn vm_run_main_class(
         arguments.push(main_class.to_owned());
     }
 
-    tracing::debug!("java_run_main({arguments:?})");
+    arguments
+}
 
-    if let Some(main_class_name) = arguments.first() {
-        bridge_class_chain(jvm, core, handles, app_classes, image_ranges, main_class_name).await;
-    }
-
+/// Builds `org.kwis.msp.lcdui.Main::main`'s argument array and enters it.
+///
+/// The main class named by `arguments[0]` (and everything it inherits from or
+/// implements) must already have been bridged - and, when it needs one, had its
+/// dispatch table synthesized - before this runs, since `Main::main` creates
+/// the Jlet instance straight away.
+pub async fn run_main_class(jvm: &Jvm, arguments: Vec<String>) -> Result<u32> {
     let mut args_array = match jvm.instantiate_array("Ljava/lang/String;", arguments.len()).await {
         Ok(array) => array,
         Err(error) => return Err(JvmSupport::to_wie_err(jvm, error).await),
