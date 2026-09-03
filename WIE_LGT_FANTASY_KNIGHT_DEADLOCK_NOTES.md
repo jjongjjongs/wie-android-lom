@@ -189,6 +189,44 @@ Contrast with card-based titles (Seed, Zenonia), which **do** `pushCard` during
 their own startup, so the `CardCanvas` has a card and painting it runs game
 code. g3/g6 push nothing, so nothing game-side ever runs.
 
+### The worker is a pure consumer — instrumented dispatch census
+
+Instrumented every LGT dispatch path in `init.rs` (imported static/virtual/
+interface, unknown-slot, object-self) and ran g3 for 400 ticks. The entire
+platform-call census the game makes is:
+
+- **Start-up only (once):** `Runtime.getRuntime`, `Runtime.gc` (slot 13),
+  `Math.min` ×2, `Random.<init>`, `Display.getDefaultDisplay` ×2, `Jlet.<init>`,
+  `BackLight.alwaysOn`, `Thread.<init>`, `Thread.start` (slot 10). That is the
+  minimal `startApp`, and it confirms **the worker thread is actually created
+  and started** (`Thread.start` fires).
+- **Steady state (forever after):** `Game.getClass()` (Object slot 1) ×2, then
+  `Game.wait()` (**Object slot 9**) ×~81 and nothing else. No WIPI-C SVC of any
+  kind (`wipic svc` count = 0), no `EventQueue`/`Display`/`Card` virtual, no
+  event-array poll from the game side.
+
+So the worker's whole life is `synchronized(this){ while(this.r != 0)
+this.wait(); … }` — a pure spin on `Game.wait()`, timed-bounded to 20 ms by our
+runtime, re-reading `Game.r` (always 1) each time. **It never reaches an event
+poll and never calls a single platform method beyond the wait.** The
+`VmInstantiateArray`/`aastore` (~16/s) seen in the init-SVC stats come from the
+`net.wie.EventLoopRunner` painting the empty `CardCanvas`, not from the worker.
+
+Two hard conclusions from this census:
+
+1. **`Display.vtable[34]` — and every `Display`/`Card`/`EventQueue` dispatch slot
+   — is never invoked in our runtime.** The game issues no virtual dispatch on
+   any platform lcdui object at all; the worker only spins on `Game.wait()`. So
+   the runtime answer to "what does `Display.vtable[34]` route to" is: *it is
+   never reached* (our metadata would route slot 34 → `repaint(Card)`, but the
+   game never gets there). The divergence is upstream of any Display call.
+2. The worker is a **pure consumer**. The `Game.r = 0` **producer** (`Game.b` →
+   `notify`) is never the worker's own job — on the reference it is driven by the
+   platform's event thread calling *into* the game. Our `net.wie.EventLoopRunner`
+   is that thread, but it only paints the empty `CardCanvas` and has no channel
+   that invokes the game's Jlet/card handler. **That absent channel is the whole
+   bug**; there is no game-side code path that could self-start.
+
 ### `Game.b()V` (`0x13a8`) is invoked purely by runtime virtual dispatch
 
 Scanned the whole `binary.mod` (BL targets + literal-pool words, bias
