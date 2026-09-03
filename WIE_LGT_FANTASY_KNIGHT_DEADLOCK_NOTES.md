@@ -750,3 +750,58 @@ synthesize + register the main class's dispatch table when it is bridged
 `app_classes::parse_class_root`), so its instances stop using the fallback.
 This must be regression-tested across titles, since it changes main-class
 dispatch for every LGT app.
+
+## RESOLVED — the worker deadlock is fixed (two coordinated changes)
+
+The g3/g6 boot-to-black worker deadlock is fixed by two commits, verified to
+boot both titles with no regression across LoM, Zenonia z1/z2/z3, Seed, and
+g1/g2/g4/g7 (colour counts all unchanged; wie_lgt unit suite green).
+
+### Part 1 — synthesize the main class's dispatch table (`6b8bf9e`)
+
+`VmActivateClass` never fires for the launched main class (the platform makes
+its instance through the JVM, `Main::main` -> `new_class`), so `Game`'s
+heavy dispatch table was never synthesized and every instance fell back to the
+root-0 fallback ("Game declares no dispatch table"). Now the `VmRunMainClass`
+handler synthesizes and registers the main class's table (superclasses first)
+before `Main::main` runs, exactly as `VmActivateClass` would. Scoped to
+heavy-linked-no-table main classes, so other titles are untouched.
+`vm_run_main_class` was split into `resolve_main_class_arguments` +
+`run_main_class` so the handler can bridge, synthesize, then run with the full
+`InitSvcContext` in scope.
+
+Confirmed slots: `Game.a()V` = slot 21 (entry `0x1138`, screen setup),
+`Game.b()V` = slot 22 (entry `0x13a8`, worker wake); base `b`'s are trivial
+stubs at the same slots. So the synthesized `Game` table carries the real
+overrides at 21/22.
+
+### Part 2 — re-resolve the self-call references off reserved slots (`1909aa0`)
+
+`resolve_own_virtual_methods` matches each trailing own-virtual reference row by
+the *first* registered class with that name+descriptor. The appended reference
+rows carry no per-class attribution (the 0x14 class table holds only the 34
+platform classes; `vm_resolve_one`/0x13 is never called for g3; app classes are
+bridged, not resolved per-class), so `b.startApp`'s `this.a()V`/`this.b()V`
+(rows 91/90) froze at a `Card` subclass's slot - the reserved slot 1
+(`getClass`). The self-call dispatched `getClass`, no card was authored, worker
+parked forever.
+
+A real application method never sits at a reserved Object slot (1..=9), so such
+a row is unambiguously mis-resolved. After activating the launched class chain,
+re-point every reserved-slot own-virtual row whose method resolves within the
+launched class's own (now fully linked) hierarchy to that slot. Rows already at
+a real slot are left alone. `row 91 a()V: 1 -> 21`, `row 90 b()V: 1 -> 22`.
+
+### Result and the remaining (separate) gap
+
+g3/g6 go from 1 colour (fully black) to 63: `Game.a()` runs, creates cards
+`k/e/v/g`, docks a `ProxyCard`, pushes card `e`, the worker wakes and the
+platform pipeline pumps (status bar renders). The SVC census shows the active
+game-loop signature (`java-static=50/s java-reserved=50/s VmActivateClass=56/s`),
+not the parked `java-unknown` spin - the deadlock is gone.
+
+The play area is still black: card `e` is pushed and painted, but the game draws
+only ~1 `fillRect` + `drawLine` per frame and **no `drawImage`** - the game
+loop is live but its sprite/background imagery is not being drawn. That is a
+downstream resource/rendering gap (image loading, or the `Font::getDefaultFont`
+stub the title hits 197x), independent of the worker deadlock this fixes.
