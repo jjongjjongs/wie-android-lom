@@ -230,6 +230,50 @@ pub fn as_proto(class: &AppClass) -> JavaClassProto<CompiledContext> {
         tracing::debug!("Seed1 diagnostic bridge p.run()V -> 0x175fc");
     }
 
+    // An application card overrides `org.kwis.msp.lcdui.Card::paint` under an
+    // obfuscated name - Fantasy Knight's card `e` names its paint override
+    // `a(Lorg/kwis/msp/lcdui/Graphics;)V`. The platform paints a card by calling
+    // `paint` on it (`net.wie.CardCanvas` does so through the JVM), but the JVM
+    // resolves that name against this bridged proto, which carries the compiled
+    // method under `a`, not `paint` - so the call reached the platform
+    // `Card::paint` stub and the card drew nothing (a running game on a blank
+    // screen). Expose the override under `paint` as well when the class carries
+    // exactly one instance method taking an `org.kwis` `Graphics` and no method
+    // already named `paint`; that descriptor is the card-paint signature, so the
+    // single such method is the paint override. (`p.run` above bridges the same
+    // kind of obfuscated platform-method override for `Runnable`.)
+    if !methods.iter().any(|method| method.name == "paint") {
+        let graphics_methods: Vec<_> = class
+            .methods()
+            .filter(|method| method.descriptor() == "(Lorg/kwis/msp/lcdui/Graphics;)V" && method.is_instance_method())
+            .collect();
+        if let [paint] = graphics_methods[..]
+            && let Some(entry) = paint.entry()
+        {
+            let body = CompiledMethod {
+                class_name: class.name.clone(),
+                name: "paint".to_owned(),
+                descriptor: "(Lorg/kwis/msp/lcdui/Graphics;)V".to_owned(),
+                entry,
+                takes_receiver: true,
+            };
+
+            methods.push(JavaMethodProto {
+                name: body.name.clone(),
+                descriptor: body.descriptor.clone(),
+                access_flags: MethodAccessFlags::empty(),
+                body: Box::new(body) as Box<dyn MethodBody<JavaError, CompiledContext>>,
+            });
+
+            tracing::debug!(
+                "Bridged obfuscated paint override {}.{}{} -> paint @ {entry:#x}",
+                class.name,
+                paint.name(),
+                paint.descriptor()
+            );
+        }
+    }
+
     let mut interface_names = class.interfaces.clone();
 
     // Seed1 stores p's Runnable interface in an alternate metadata slot
