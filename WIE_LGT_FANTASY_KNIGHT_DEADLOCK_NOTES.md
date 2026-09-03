@@ -93,14 +93,42 @@ an event to the game's card/handler (no card is registered at bootstrap, and
 our `EventLoopRunner` dispatches to an empty `net.wie.CardCanvas`). So the whole
 chain never fires and `Game.r` stays 1.
 
+### Class hierarchy (resolved)
+
+Names read from the class metadata (`name` at `metadata+0x08`,
+`super` at `metadata+0x10`, `metadata = root - 0x4c`):
+
+- `Game` (root `0x140004c`) **extends** `b` (root `0x1400fdc`) extends platform
+  Jlet. `Game` holds the screen cards as static fields (`a:Lk; b:Lv; c:Lg;
+  d:Le;`).
+- `b` implements `java/lang/Runnable`; it owns `run()` `0x262c` (the worker),
+  the `r` field, `startApp` `0x220c`, and `b(Lw;I)V` `0x2900` (the r=0 setter),
+  `c(Lw;I)V` `0x2a58` (present).
+- Cards `e/g/k/v` (roots `0x1401330/0x1401688/0x14022ec/0x1402a2c`) extend
+  `w` (`0x1402b9c`) extends platform `Card`.
+
+So the worker runs `b.run()`, the `r` field is `b.r`, and its r=0 setter is
+`b.b(Lw;I)V`. The 7 wake handlers, by owning class:
+
+| handler          | class | note |
+|------------------|-------|------|
+| `Game.b()V` `0x13a8`  | Game  | **bootstrap candidate** — the only non-card handler |
+| `e.a()V/c(I)V`        | card  | per-card, needs the card shown |
+| `g.c(I)V`            | card  | " |
+| `k.a()V/c(I)V`       | card  | " |
+| `v.c(I)V`            | card  | " |
+
 ### The open question (next step)
 
-Which of the 7 handlers is the **bootstrap** trigger (the first wake, before any
-card is shown), and what reference path invokes it. Candidates: a periodic
-frame/timer callback (the render loop is per-frame gated), or the display
-activation delivering an initial event to the Jlet. Identify the platform slot
-/ event each of the 7 handlers hangs off (are they `notifyEvent`/`keyNotify`/
-timer overrides?) and find which the reference fires without a pre-shown card.
+`Game.b()V` (`0x13a8`) is the bootstrap wake, and it is a **virtual method
+invoked by neither `b.run()` nor `b.startApp`** (confirmed by tracing their
+calls). So the platform must invoke it — but ours never does. It is not a
+`JletEventListener.notifyEvent(III)V` override (wrong signature) and `b`
+implements only `Runnable`. Next: find `Game.b()V`'s dispatch slot and what
+the reference's Jlet/event/frame delivery calls on the active Jlet per
+frame/event (peel `Jlet.startApp` core `0x20e368` and
+`Display.activateCurrentDisplay0` `0x1f53d8`), then reproduce that call in our
+`org.kwis` Jlet/event path so the concrete Jlet's method fires and clears `b.r`.
 
 On the reference the worker's first `Game.r = 0` must come from somewhere — most
 likely the reference's `Thread.start` / monitor / `EventQueue` bootstrap
