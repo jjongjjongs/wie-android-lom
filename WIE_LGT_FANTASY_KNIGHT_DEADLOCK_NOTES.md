@@ -952,3 +952,31 @@ between them needs disassembly of the reference firmware's `createImage` /
 far. The off-screen `createImage(240,320)` double-buffer exists but is not the
 target of `e.paint`'s draws (those hit the screen graphics directly), so it is
 not the missing surface.
+
+## Correction + experiment: the glyphs are white on a *correctly* transparent
+## magenta background - the missing piece is a coloured backdrop
+
+Rendered the atlas strips ignoring alpha: each tile is **mostly magenta with
+white marks**, i.e. **magenta = background (correctly tRNS-transparent), white =
+the glyph**. So the earlier "is magenta the ink?" question resolves to: no - the
+glyphs are white, keyed onto transparent magenta, exactly as a sprite atlas
+should be. Our decode/clip/blit handle this correctly.
+
+Experiment (env-gated, reverted): forcing the transparent-magenta pixels opaque
+made g3 show readable magenta-blocked text - but that is the *background* tiles
+becoming visible while the white glyphs still blend into the white screen, i.e. a
+misleading artefact, not the real render. It also shifted LoM (640 -> 632), so it
+is not a correct general change.
+
+So the true blocker is confirmed: **white glyphs need a coloured surface, but
+`e.paint` fills the screen white** (`0xFFFFFF`, an unconditional literal in
+`e.a`) and no coloured background image is drawn on this screen (the
+`createImage(240,320)` double-buffer is never blitted here). For the device to
+show these white glyphs, the reference must either draw a coloured background via
+a path our execution does not reach, or its graphics layer diverges. Pinning
+which requires disassembling `liblgt_system.so`'s `createImage`/`drawImage`/fill
+path against ours - a firmware-RE effort, and the honest boundary of this
+title's investigation. Everything up to the pixel level (deadlock, main-class
+vtable, self-call resolver, card-paint dispatch, GC-rooted constants, decode,
+clip, blit) is now correct; only this last background/transparency divergence
+remains, and it needs reference firmware to settle.
