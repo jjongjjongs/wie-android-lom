@@ -871,3 +871,51 @@ A curiosity worth a look if this is picked up again: a larger emulated clock
 step (WIE_CLOCK_MS=20+) makes g3 paint zero frames rather than progressing
 faster, so the title's timing is coupled to the LGT reschedule/deadline model in
 a way the 1ms-per-read test clock does not reproduce cleanly.
+
+## Worker loop + render, traced (why the screen stays near-blank)
+
+Answering "what does `b.run` check, why is the scene list empty": the worker is
+NOT stuck-empty - it runs the game loop at frame rate and the block is the
+render, not the loop.
+
+### The worker loop (`b.run` @ 0x262c)
+
+- Its outer guard is `[singleton.data + 0x20]`, where the singleton comes from
+  `0x2030 -> 0x1fd4`, which returns **`b`'s own class object** (root
+  `0x1400fdc`) after an init check - so the guard is one of `b`'s static fields.
+- `b`'s instance fields (resolved own-field rows 40-46): `u:I`(6), `s:Lw;`(3),
+  `a:Ldisplay;`(0), `q:Lw;`(5), `t:Lw;`(4), `r:Z`(2, the worker park flag),
+  `p:Lw;`(1) - i.e. a Display, four `w` (Card) references `p/q/s/t`, a boolean
+  and an int. The body walks these and dispatches the per-object `i()V`
+  (own-virtual row 87 -> slot 41, correctly resolved).
+- Steady-state census is `VmActivateClass≈56/s` with **~0 `vm_instantiate`** -
+  those activations are the cached class-activation the per-frame loop issues via
+  `0x2030`, not new objects. So the loop paces at ~frame rate and the game is
+  live, sitting on a static screen (identical frame signature tick 500-4500, no
+  key changes it - our key codes: FIRE=148, arrows 141-146, LSK/RSK 6/7; the
+  game special-cases key `-11`, unreachable from us, but other keys still
+  dispatch).
+
+### The render is where it dies
+
+`e.paint` (the pushed play card, via the now-working paint bridge) each frame:
+`fillRect(0,0,240,296)` in **white** (`0xFFFFFF`), a cluster of tiny `drawLine`s
+at the origin (the only visible artefact - the 6x6 top-left glyph), then ~15
+`drawImage`s at real on-screen coords (84,66 / 94,136 / ...), each wrapped in a
+per-sprite `setClip`. drawLine/fillRect render; **the drawImages contribute no
+visible pixels.**
+
+The sprites decode fine but are **2-colour**: magenta `0xFF00FF` at **alpha 0
+(transparent)** and white `0xFFFFFF` at **alpha 255 (opaque)** - i.e. white
+content keyed on transparent magenta, though the game never calls
+`setTransparentColor` (stays -1). Drawn opaque-white onto the white `fillRect`,
+they are invisible. The game also allocates a `createImage(240,320)` off-screen
+buffer (double-buffer), so the real pipeline is draw-scene-to-buffer then
+blit-to-screen, and the visible white-on-white is the unresolved knot:
+white-content sprites need a coloured backdrop that either isn't being drawn or
+isn't compositing (the full-colour art appears only as a ~24px fragment).
+
+So the remaining g3/g6 blocker is this render-compositing chain (off-screen
+buffer + WIPI image transparency semantics: magenta-key vs PNG alpha + the
+expected coloured background), not the worker loop or the deadlock/paint/vtable
+gaps already fixed. This is the next thread if the title is picked up again.
