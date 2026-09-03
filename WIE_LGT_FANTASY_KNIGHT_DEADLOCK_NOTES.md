@@ -65,7 +65,42 @@ Poking `Game.r = 0` once does not self-sustain (the worker renders once, sets
 state (the event params `Game.b` would set are missing) and the game spins in an
 init loop, never rendering.
 
+### The wake chain (fully traced)
+
+`Game.r` is cleared through a fixed game-internal wrapper chain, all reached
+only from the game's event/callback handlers:
+
+```
+platform event  ->  <handler>()  ->  M(card,int)  ->  Game.b(card,int)  ->  Game.r = 0  ->  worker wakes
+                        (7 sites)      0x288c           0x2900
+```
+
+- `Game.b(Lw;I)V` `0x2900` — sets `Game.r=0` (only r=0 writer; confirmed the two
+  other `meta+0x5a` sites `0x36098`/`0xbbc68` are *method-slot* dispatches in
+  other classes, not r writes).
+- `M` `0x288c` — fetches the game singleton (`0x2030`), and if it exists calls
+  `Game.b(card,int)`. Private helper, no `.data` table entry.
+- `M` is loaded (via literal-pool pointer, not `bl`) and called from **7 game
+  methods**: `0x13a8`, `0x1045c`, `0x11cac`, `0x7d9f8`, `0xb46a4`, `0xb4dd0`,
+  `0xd2570`. These are the game's event handlers.
+- `0x13a8` is a named method `b()V` on the class at classptr `0x140004c` (holds
+  the screen cards as static fields `a:Lk; b:Lv; c:Lg; d:Le;` and has
+  `<init>/a()/pauseApp/resumeApp`). It reads a card from a field and calls
+  `M(card,-1)`.
+
+None of the 7 handlers runs in our runtime, because the platform never delivers
+an event to the game's card/handler (no card is registered at bootstrap, and
+our `EventLoopRunner` dispatches to an empty `net.wie.CardCanvas`). So the whole
+chain never fires and `Game.r` stays 1.
+
 ### The open question (next step)
+
+Which of the 7 handlers is the **bootstrap** trigger (the first wake, before any
+card is shown), and what reference path invokes it. Candidates: a periodic
+frame/timer callback (the render loop is per-frame gated), or the display
+activation delivering an initial event to the Jlet. Identify the platform slot
+/ event each of the 7 handlers hangs off (are they `notifyEvent`/`keyNotify`/
+timer overrides?) and find which the reference fires without a pre-shown card.
 
 On the reference the worker's first `Game.r = 0` must come from somewhere — most
 likely the reference's `Thread.start` / monitor / `EventQueue` bootstrap
