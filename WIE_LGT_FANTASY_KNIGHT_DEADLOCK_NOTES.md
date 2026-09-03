@@ -128,12 +128,26 @@ uses. On a **repaint event (subtype `0x29`=41, handler `0x1f9928`)** it does:
 ```
 0x1f9950  mov r0, ip            ; ip = getDefaultDisplay()
 0x1f9954  ldr r3, [ip]
-0x1f9960  ldr pc, [r3, #0x88]   ; call display.vtable[slot 34]  (0x88/4)
+0x1f9960  ldr pc, [r3, #0x88]   ; call display.vtable entry at byte offset 0x88
 ```
 
-i.e. it dispatches the repaint to `display.vtable[34]`, which routes to the
-current displayable's paint/handler — the game's own card/Jlet code — and that
-reaches `M -> Game.b -> b.r = 0` (the first wake, before the worker renders).
+The compiled dispatch uses `vtable[slot*4 + 4]` (a one-word header), so byte
+offset `0x88` is **slot 33 = `Display.serviceRepaints(Z)`** (confirmed against
+`platform_metadata.rs`, which reads the reference dt_ tables; slot 34 =
+`repaint(Card)` at offset `0x8c`, and `Display.repaint_v0` `0x1efb80` is a no-op
+for a null card). So the reference services the repaint synchronously
+(`serviceRepaints(false)`), painting the current displayable — the game's own
+card/Jlet code — which reaches `M -> Game.b -> b.r = 0`.
+
+CAVEAT: painting an *empty* surface would not wake anything, so the bootstrap
+first-wake (before any card is shown) is still not fully pinned. Either the
+reference's default current displayable for a Jlet routes paints to the Jlet's
+own handler, or the first wake comes from a different event path in
+`dispatchEvent` (its type/subtype switch, e.g. the `getActiveJlet` +
+`display.vtable[0x4c]` = slot 18 branch at `0x1f9644`, still to be decoded). The
+static reference RE here is error-prone (layered wrappers, runtime-built vtables
+whose raw dt_ words are descriptors, not code); the offset/slot mapping must be
+recomputed with the `*4+4` header each time.
 
 Our path is `net.wie.EventQueue.dispatchEvent -> RepaintEvent ->
 Display.handlePaintEvent -> net.wie.CardCanvas.paint`, and `CardCanvas` has zero
