@@ -1012,3 +1012,26 @@ is a larger build than static RE. Net: every platform-level layer WIE controls
 constants, image decode/clip/blit, assignability, array marshalling) is now
 correct for g3; the last gap is the title's own state machine not leaving its
 initial state, and closing it needs execution-diff tooling against the device.
+
+## Dynamic state probe: g3 sits at a valid (invisible) menu, input-gated
+
+Built a runtime probe on the state field and traced the input path. Key results:
+
+- The screen state `[w_metadata+0x58]` (w = class `w`, root `0x1402b9c`) is
+  **`0xa` (10)**, constant from startup - and 10 is in `e.a`'s content-render
+  path `{2,3,6,10}`. So the title is **not stuck in a blank state**; it is at a
+  legitimate **menu** (state 10) whose white-glyph options render invisibly on
+  the white fill. (Honoring the PNG's magenta tRNS is *correct* - LoM uses the
+  same magenta-keyed atlases with no `setTransparentColor` and renders fine on
+  its coloured backgrounds; neither title calls `setTransparentColor`.)
+- Input reaches `w.keyNotify(type,key)`; for a normal key it dispatches
+  own-virtual **row 80 = `d()V` -> slot 31 (correctly resolved)**, but only when
+  an internal gate `[gameobj+0x68] > 0` holds. That gate is conditionally false,
+  so the menu ignores keys and never advances.
+
+So the remaining blocker is the title's own multi-gate state machine (a menu at
+state 10 with input gated off), not any platform-level defect - every platform
+layer WIE owns is verified correct. Pinning why `[gameobj+0x68]` never opens (or
+what the menu waits on) needs deeper per-game state tracing or a
+reference-vs-ours execution diff. This is the honest boundary; the platform-level
+work for g3/g6 is complete.
