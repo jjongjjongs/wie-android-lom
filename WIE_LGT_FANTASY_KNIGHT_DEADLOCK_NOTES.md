@@ -625,3 +625,47 @@ not the first global name match. That both disambiguates `a()V`/`b()V` and
 naturally defers a row until its owning class registers (its range appears only
 then). Must be regression-tested across the LGT suite (Seed, Zenonia, LoM) since
 it changes the shared own-virtual resolver.
+
+## Resolver-fix attempt and the precise remaining plan
+
+Attempted the trigger fix and learned exactly what it needs.
+
+- **Where `Game` is registered:** the 19 classes registered by `VmRegisterClasses`
+  are the card/helper classes (`r,s,t,u,v,w,x,f..q`); **`Game` is not among them**.
+  `Game` (and its Jlet super `b`) join `app_classes` only later, inside
+  `vm_run_main_class` → `bridge_class_chain`, which then invokes
+  `org/kwis/msp/lcdui/Main.main` (→ `Game.startApp`, the self-call)
+  **synchronously in the same call**.
+- **Why `resolve_own_virtual_methods` mis-resolves row 91:** it runs after
+  `VmRegisterClasses`, when only the card classes exist, so `a()V`'s candidates
+  are `v(slot 1), w/g/k(slot 42)` — and it never re-runs after `Game` is bridged
+  (and the loop skips already-filled rows), so row 91 is frozen wrong.
+- **Majority vote does not work.** Picking the most common candidate slot (42)
+  gives the *card* classes' `a()V` slot, not `Game`'s — `Game` extends `Jlet`,
+  the cards extend `Card`, so their vtables differ. Tested: still 0 cards, black.
+  So the row genuinely must resolve against **`Game`**, whose `a()V` slot is
+  neither 1 nor 42.
+
+**The fix needs two coordinated parts:**
+1. **Re-resolve after the main class is bridged.** `Game`'s own-virtual rows
+   (incl. row 91) can only resolve correctly once `Game` is in `app_classes`,
+   which happens inside `vm_run_main_class` right before `Main.main` runs — so
+   the re-resolve must be triggered there, before `startApp`. Today
+   `resolve_own_virtual_methods` is coupled to `InitSvcContext`
+   (`own_virtual_resolve`, `app_classes`, `ensure_heavy_method_slots_linked`);
+   making it callable from `bridge_class_chain`/`vm_run_main_class`
+   (`interface.rs`) is a small refactor (thread the state through, or expose a
+   re-resolve hook the main-class path can call).
+2. **Resolve each row against its owning class, not the first name match.** The
+   correct scoping is the class whose declared `virtual_method_start/count`
+   range contains the row; a lighter interim heuristic is: on the post-bridge
+   re-resolve, for a row currently pointing at an Object-reserved slot (1–9)
+   while its method name is not an Object method, prefer the **main class
+   chain**'s slot for that name+descriptor (row 91 is `Game`'s own reference).
+   Card rows already resolved to their own (non-Object) slots stay untouched, so
+   card titles are unaffected.
+
+This is the concrete next implementation. It has been proven to unblock the
+title end to end (the `a()`+`b()` experiment), and the docked-card rendering it
+depends on is already committed, so once the self-call resolves correctly the
+screen renders without any game-specific hardcoding.
