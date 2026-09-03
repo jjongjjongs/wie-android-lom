@@ -75,7 +75,7 @@ pub async fn init_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord) 
 }
 
 pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, op: WIPICGraphicsContextIdx, pv: WIPICWord) -> Result<()> {
-    tracing::debug!("MC_grpSetContext({p_grp_ctx:#x}, {op:?}, {pv:#x})");
+    tracing::trace!("MC_grpSetContext({p_grp_ctx:#x}, {op:?}, {pv:#x})");
 
     let mut grp_ctx: WIPICGraphicsContext = read_generic(context, p_grp_ctx)?;
     match op {
@@ -133,7 +133,7 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
 /// reads nothing back, and the clip is reported as `(x1, y1, x2 + 1, y2 + 1)`
 /// (the reference stores the bottom-right corner decremented and re-adds it).
 pub async fn get_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, op: WIPICGraphicsContextIdx, out_ptr: WIPICWord) -> Result<()> {
-    tracing::debug!("MC_grpGetContext({p_grp_ctx:#x}, {op:?}, {out_ptr:#x})");
+    tracing::trace!("MC_grpGetContext({p_grp_ctx:#x}, {op:?}, {out_ptr:#x})");
 
     if p_grp_ctx == 0 || out_ptr == 0 {
         return Ok(());
@@ -506,6 +506,36 @@ pub async fn flush_lcd(
 
     let src_canvas = framebuffer.image(context)?;
 
+    // DIAGNOSTIC: summarise the frame we are about to present so a device log
+    // shows whether an image actually reached the draw buffer. A text-only
+    // screen carries a handful of colours; a decoded image carries dozens or
+    // hundreds. Distinguishes "the image never got drawn" from "it was drawn
+    // but is not reaching the display". Logged at info so it survives a normal
+    // capture without turning on the per-primitive flood.
+    {
+        use alloc::collections::BTreeSet;
+
+        let mut colours: BTreeSet<u32> = BTreeSet::new();
+        let mut non_black: u32 = 0;
+        for colour in src_canvas.colors() {
+            let packed = ((colour.r as u32) << 16) | ((colour.g as u32) << 8) | colour.b as u32;
+            if packed != 0 {
+                non_black += 1;
+            }
+            if colours.len() <= 512 {
+                colours.insert(packed);
+            }
+        }
+        tracing::info!(
+            "FRAME flush fb={:#x} {}x{} region=({x},{y},{w},{h}) colours={} non_black={}",
+            framebuffer.0.buf.0,
+            src_canvas.width(),
+            src_canvas.height(),
+            colours.len(),
+            non_black,
+        );
+    }
+
     let platform = context.system().platform();
     let screen = platform.screen();
 
@@ -727,7 +757,7 @@ pub async fn get_font_descent(_: &mut dyn WIPICContext, font: i32) -> Result<i32
 }
 
 pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_string: WIPICWord, length: i32) -> Result<i32> {
-    tracing::debug!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
+    tracing::trace!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
 
     let string = read_wipi_string(context, ptr_string, length)?;
 

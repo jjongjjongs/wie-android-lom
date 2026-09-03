@@ -39,7 +39,7 @@ static INIT: Once = Once::new();
 /// the input path (event queue, canvas, clet) stays at debug so a press is
 /// always captured. Setting `RUST_LOG`, or the in-app log filter (e.g.
 /// `wie_lgt::hot=trace`), overrides this entirely.
-const DEFAULT_LOG_DIRECTIVE: &str = "debug,wie_lgt=trace,wie_lgt::hot=warn,wie_lgt::runtime::wipi_c=debug,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=info,wie_wipi_java::classes::org::kwis::msp::lcdui::graphics=info,wie_midp::classes::javax::microedition::lcdui::graphics=info,java_runtime=info,arm32_cpu=warn";
+const DEFAULT_LOG_DIRECTIVE: &str = "debug,wie_lgt=trace,wie_lgt::hot=warn,wie_lgt::runtime::wipi_c=debug,wie_ktf=trace,wie_j2me=trace,wie_skt=trace,wie_core_arm=info,wie_wipi_c::api::graphics=debug,wie_wipi_java::classes::org::kwis::msp::lcdui::graphics=info,wie_midp::classes::javax::microedition::lcdui::graphics=info,java_runtime=info,arm32_cpu=warn";
 
 /// Lets the player swap the log filter at runtime, so capturing a module's
 /// debug/trace detail no longer means editing the default above and rebuilding.
