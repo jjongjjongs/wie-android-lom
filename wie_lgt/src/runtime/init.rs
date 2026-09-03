@@ -1140,8 +1140,26 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             // it by name against the registered classes, re-running as they
             // appear.
             let field_start = table.fields.len() as u32;
-            let field_end = table.field_offset_capacity();
-            *context.own_field_resolve.lock() = Some((arguments[1], table.outputs.field_offsets, field_start, field_end));
+            // `field_offset_capacity` bounds the array by the next output array
+            // above it in `.bss`. When `field_offsets` is itself the last output
+            // array, it has no such neighbour and the layout bound is 0 - yet the
+            // compiled code still indexes it. Fantasy Knight / Battle Monster read
+            // row 45, the slot their worker's `while(this.r != 0) wait()` guards
+            // (a boolean); left unresolved it reads 0, so the load lands on slot 0
+            // - a live Display reference that never clears - and the worker hangs
+            // forever. Bound the walk by the end of the image section that holds
+            // the array instead, so those trailing own-field rows still resolve.
+            let field_offsets = table.outputs.field_offsets;
+            let field_end = match table.field_offset_capacity() {
+                0 => context
+                    .image_ranges
+                    .iter()
+                    .find(|(base, size)| field_offsets >= *base && field_offsets < base + size)
+                    .map(|(base, size)| (base + size - field_offsets) / 2)
+                    .unwrap_or(0),
+                capacity => capacity,
+            };
+            *context.own_field_resolve.lock() = Some((arguments[1], field_offsets, field_start, field_end));
 
             *context.imported_classes.lock() = Some(table);
 
