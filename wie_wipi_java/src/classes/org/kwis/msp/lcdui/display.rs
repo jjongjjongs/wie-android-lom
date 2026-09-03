@@ -275,7 +275,14 @@ impl Display {
     ) -> JvmResult<()> {
         tracing::debug!("org.kwis.msp.lcdui.Display::setDockedCard({this:?}, {card:?}, {where_})");
 
-        jvm.put_field(&mut this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;", card).await
+        jvm.put_field(&mut this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;", card.clone()).await?;
+
+        // The docked card is the persistent background surface; hand it to the
+        // CardCanvas so it is painted behind any pushed cards. Cardless-Jlet
+        // titles show their whole screen this way.
+        let card_canvas = jvm.get_field(&this, "cardCanvas", "Lnet/wie/CardCanvas;").await?;
+        jvm.invoke_virtual(&card_canvas, "setDockedCard", "(Lorg/kwis/msp/lcdui/Card;)V", (card,))
+            .await
     }
 
     async fn is_double_buffered(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<bool> {

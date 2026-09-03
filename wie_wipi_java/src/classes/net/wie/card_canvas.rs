@@ -10,7 +10,7 @@ use wie_midp::classes::{
     net::wie::MIDPKeyCode,
 };
 
-use crate::classes::org::kwis::msp::lcdui::{Card, Display};
+use crate::classes::org::kwis::msp::lcdui::{Card, Display, Graphics};
 
 #[repr(i32)]
 #[allow(clippy::upper_case_acronyms, non_camel_case_types)]
@@ -130,6 +130,7 @@ impl CardCanvas {
                 JavaMethodProto::new("keyRepeated", "(I)V", Self::key_repeated, Default::default()),
                 JavaMethodProto::new("keyReleased", "(I)V", Self::key_released, Default::default()),
                 JavaMethodProto::new("pushCard", "(Lorg/kwis/msp/lcdui/Card;)V", Self::push_card, Default::default()),
+                JavaMethodProto::new("setDockedCard", "(Lorg/kwis/msp/lcdui/Card;)V", Self::set_docked_card, Default::default()),
                 JavaMethodProto::new("popCard", "()Lorg/kwis/msp/lcdui/Card;", Self::pop_card, Default::default()),
                 JavaMethodProto::new("removeCard", "(Lorg/kwis/msp/lcdui/Card;)Z", Self::remove_card, Default::default()),
                 JavaMethodProto::new("countCard", "()I", Self::count_card, Default::default()),
@@ -137,7 +138,14 @@ impl CardCanvas {
                 // wie private
                 JavaMethodProto::new("handleNotifyEvent", "(III)V", Self::handle_notify_event, Default::default()),
             ],
-            fields: vec![JavaFieldProto::new("cards", "Ljava/util/Vector;", Default::default())],
+            fields: vec![
+                JavaFieldProto::new("cards", "Ljava/util/Vector;", Default::default()),
+                // A single background card set via org.kwis Display.setDockedCard,
+                // painted behind the pushed-card stack. Cardless-Jlet titles
+                // (Fantasy Knight, Battle Monster) show their screen this way
+                // rather than through pushCard.
+                JavaFieldProto::new("dockedCard", "Lorg/kwis/msp/lcdui/Card;", Default::default()),
+            ],
             access_flags: Default::default(),
         }
     }
@@ -163,28 +171,44 @@ impl CardCanvas {
         // canvas drawing state before wrapping it as WIPI Graphics.
         let _: () = jvm.invoke_virtual(&g, "reset", "()V", ()).await?;
 
-        let graphics = jvm
+        let graphics: ClassInstanceRef<Graphics> = jvm
             .new_class("org/kwis/msp/lcdui/Graphics", "(Ljavax/microedition/lcdui/Graphics;)V", (g,))
-            .await?;
+            .await?
+            .into();
+
+        // The docked card is the background layer; the pushed-card stack draws
+        // on top of it.
+        let docked: ClassInstanceRef<Card> = jvm.get_field(&this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;").await?;
+        if !docked.is_null() {
+            Self::paint_one(jvm, &graphics, &docked).await?;
+        }
 
         let cards = jvm.get_field(&this, "cards", "Ljava/util/Vector;").await?;
         let length = jvm.invoke_virtual(&cards, "size", "()I", ()).await?;
 
         for i in 0..length {
-            let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let x: i32 = jvm.invoke_virtual(&card, "getX", "()I", ()).await?;
-            let y: i32 = jvm.invoke_virtual(&card, "getY", "()I", ()).await?;
-
-            let _: () = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await?;
-            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (x, y)).await?;
-
-            let paint_result: JvmResult<()> = jvm
-                .invoke_virtual(&card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", (graphics.clone(),))
-                .await;
-            let reset_result: JvmResult<()> = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await;
-            paint_result?;
-            reset_result?;
+            let card: ClassInstanceRef<Card> = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
+            Self::paint_one(jvm, &graphics, &card).await?;
         }
+
+        Ok(())
+    }
+
+    /// Paints one card at its `(getX, getY)` offset, resetting the shared WIPI
+    /// Graphics around it so a card cannot leak translate/clip state to the next.
+    async fn paint_one(jvm: &Jvm, graphics: &ClassInstanceRef<Graphics>, card: &ClassInstanceRef<Card>) -> JvmResult<()> {
+        let x: i32 = jvm.invoke_virtual(card, "getX", "()I", ()).await?;
+        let y: i32 = jvm.invoke_virtual(card, "getY", "()I", ()).await?;
+
+        let _: () = jvm.invoke_virtual(graphics, "reset", "()V", ()).await?;
+        let _: () = jvm.invoke_virtual(graphics, "translate", "(II)V", (x, y)).await?;
+
+        let paint_result: JvmResult<()> = jvm
+            .invoke_virtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", (graphics.clone(),))
+            .await;
+        let reset_result: JvmResult<()> = jvm.invoke_virtual(graphics, "reset", "()V", ()).await;
+        paint_result?;
+        reset_result?;
 
         Ok(())
     }
@@ -285,6 +309,35 @@ impl CardCanvas {
                 jvm.get_field(&wipi_display, "midpDisplay", "Ljavax/microedition/lcdui/Display;").await?;
             let _: () = jvm.invoke_virtual(&midp_display, "disablePaint", "()V", ()).await?;
         }
+
+        Ok(())
+    }
+
+    async fn set_docked_card(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, c: ClassInstanceRef<Card>) -> JvmResult<()> {
+        tracing::debug!("net.wie.CardCanvas::setDockedCard({this:?}, {c:?})");
+
+        let previous: ClassInstanceRef<Card> = jvm.get_field(&this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;").await?;
+        if !previous.is_null() {
+            let same: bool = jvm.invoke_virtual(&previous, "equals", "(Ljava/lang/Object;)Z", (c.clone(),)).await?;
+            if same {
+                return Ok(());
+            }
+            let _: () = jvm.invoke_virtual(&previous, "showNotify", "(Z)V", (false,)).await?;
+            let _: () = jvm
+                .invoke_virtual(&previous, "setCanvas", "(Ljavax/microedition/lcdui/Canvas;)V", (None,))
+                .await?;
+        }
+
+        jvm.put_field(&mut this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;", c.clone()).await?;
+
+        if !c.is_null() {
+            let _: () = jvm
+                .invoke_virtual(&c, "setCanvas", "(Ljavax/microedition/lcdui/Canvas;)V", (this.clone(),))
+                .await?;
+            let _: () = jvm.invoke_virtual(&c, "showNotify", "(Z)V", (true,)).await?;
+        }
+
+        let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
 
         Ok(())
     }
