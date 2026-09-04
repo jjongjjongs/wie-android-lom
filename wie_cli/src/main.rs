@@ -192,33 +192,13 @@ fn profile_callback(path: &PathBuf) -> anyhow::Result<wie_backend::ProfileCallba
     }))
 }
 
-/// Whether the loader below would hand this title to `LgtEmulator`, mirroring
-/// its archive-then-jar selection order so the LCD can be sized to match.
-fn is_lgt_title(extension: &str, buf: &[u8]) -> bool {
-    if extension.ends_with("zip") {
-        if let Ok(files) = extract_zip(buf) {
-            return !KtfEmulator::loadable_archive(&files) && LgtEmulator::loadable_archive(&files);
-        }
-        false
-    } else if extension.ends_with("jar") {
-        !KtfEmulator::loadable_jar(buf) && LgtEmulator::loadable_jar(buf)
-    } else {
-        false
-    }
-}
-
 pub fn start(filename: &str, options: Options) -> anyhow::Result<()> {
+    let window = WindowImpl::new(240, 320).unwrap(); // TODO hardcoded size
+    let platform = Box::new(WieCliPlatform::new(window.handle()));
+
     let buf = fs::read(filename)?;
     // Only used to pick the loader; all file access keeps the original casing.
     let extension = filename.to_lowercase();
-
-    // The LGT WIPI platform runs on a taller 240x400 LCD (see
-    // `wie_android::runner::LGT_SCREEN_HEIGHT`); everything else uses 240x320.
-    // Sizing the window before the loader runs keeps `getDisplayInfo` honest.
-    let screen_height = if is_lgt_title(&extension, &buf) { 400 } else { 320 };
-    let window = WindowImpl::new(240, screen_height).unwrap();
-    let platform = Box::new(WieCliPlatform::new(window.handle()));
-
     let mut emulator: Box<dyn Emulator> = if extension.ends_with("zip") {
         let files = extract_zip(&buf).unwrap();
 

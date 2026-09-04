@@ -870,45 +870,10 @@ pub async fn copy_frame_buffer(
     let src_image = src_framebuffer.image(context)?;
     let mut dst_canvas = dst_framebuffer.canvas(context)?;
 
-    // A framebuffer-to-framebuffer copy is a plain block copy, not a keyed
-    // blit. The reference MC_grpCopyFrameBuffer only drops pixels when the
-    // graphics context carries a transparent colour, and a title's per-frame
-    // double-buffer flip (off-screen -> screen, the whole 240xH) sets none - so
-    // every source pixel is copied, magenta included. Keying magenta here dropped
-    // any region the title left in its transparent-key colour to whatever the
-    // destination held (black after a clear): on a tall LGT LCD MapleStory 도적편
-    // leaves the field's unfilled lower rows keyed, and they showed as a black
-    // band splitting the scene. Copy verbatim instead.
-    blit_plain(&mut **dst_canvas, dx, dy, w, h, &*src_image, sx, sy);
+    blit_magenta_keyed(&mut **dst_canvas, dx, dy, w, h, &*src_image, sx, sy);
     dst_canvas.flush()?;
 
     Ok(())
-}
-
-/// Copies `src` onto `canvas` pixel-for-pixel within both surfaces' bounds, with
-/// no colour keying - the block-copy counterpart to `blit_magenta_keyed`.
-#[allow(clippy::too_many_arguments)]
-fn blit_plain(canvas: &mut dyn Canvas, dx: i32, dy: i32, w: i32, h: i32, src: &dyn Image, sx: i32, sy: i32) {
-    let src_w = src.width() as i64;
-    let src_h = src.height() as i64;
-    let dst_w = canvas.image().width() as i64;
-    let dst_h = canvas.image().height() as i64;
-
-    for row in 0..h as i64 {
-        let sy_px = sy as i64 + row;
-        let dy_px = dy as i64 + row;
-        if sy_px < 0 || sy_px >= src_h || dy_px < 0 || dy_px >= dst_h {
-            continue;
-        }
-        for col in 0..w as i64 {
-            let sx_px = sx as i64 + col;
-            let dx_px = dx as i64 + col;
-            if sx_px < 0 || sx_px >= src_w || dx_px < 0 || dx_px >= dst_w {
-                continue;
-            }
-            canvas.put_pixel(dx_px as i32, dy_px as i32, src.get_pixel(sx_px as i32, sy_px as i32));
-        }
-    }
 }
 
 /// Whether a colour is the magenta (RGB565 `0xF81F`) that feature-phone titles
