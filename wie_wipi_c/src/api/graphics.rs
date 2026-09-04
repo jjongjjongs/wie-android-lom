@@ -12,11 +12,15 @@ use wie_backend::{
 };
 use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic};
 
-use wipi_types::wipic::{WIPICDisplayInfo, WIPICFramebuffer, WIPICGraphicsContext, WIPICImage, WIPICIndirectPtr, WIPICWord};
+use wipi_types::wipic::{WIPICDisplayInfo, WIPICFramebuffer, WIPICImage, WIPICIndirectPtr, WIPICWord};
 
 use crate::context::WIPICContext;
 
-use self::{framebuffer::FrameBuffer, grp_context::WIPICGraphicsContextIdx, image::create_wipi_image};
+use self::{
+    framebuffer::FrameBuffer,
+    grp_context::{WIPICGraphicsContext, WIPICGraphicsContextIdx},
+    image::create_wipi_image,
+};
 
 pub const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
 const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
@@ -118,7 +122,7 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
             let y1: u32 = read_generic(context, pv + 4)?;
             let x2: u32 = read_generic(context, pv + 8)?;
             let y2: u32 = read_generic(context, pv + 12)?;
-            grp_ctx.clip = [x1 as u16, y1 as u16, x2.wrapping_sub(1) as u16, y2.wrapping_sub(1) as u16];
+            grp_ctx.clip = [x1, y1, x2.wrapping_sub(1), y2.wrapping_sub(1)];
         }
         WIPICGraphicsContextIdx::FgPixelIdx => {
             grp_ctx.fgpxl = pv as _;
@@ -126,13 +130,13 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
         WIPICGraphicsContextIdx::BgPixelIdx => {
             grp_ctx.bgpxl = pv as _;
         }
-        WIPICGraphicsContextIdx::TransPixelIdx => {
-            grp_ctx.transpxl = pv as _;
-        }
+        // The reference stores nothing for op 3 and reports nothing back.
+        WIPICGraphicsContextIdx::TransPixelIdx => {}
+        // The reference ignores an alpha outside 0..=0xff rather than storing it.
         WIPICGraphicsContextIdx::AlphaIdx => {
-            grp_ctx.alpha = pv as _;
-            // grp_ctx.pixel_op_func_ptr = todo!();
-            // grp_ctx.param1 = todo!();
+            if pv <= 0xff {
+                grp_ctx.alpha = pv;
+            }
         }
         WIPICGraphicsContextIdx::PixelopIdx => {
             grp_ctx.pixel_op_func_ptr = pv;
@@ -146,12 +150,26 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
         WIPICGraphicsContextIdx::StyleIdx => {
             grp_ctx.style = pv;
         }
+        // XOR mode is a flag of its own, and the reference drives the pixel-op
+        // slot from it: turning it on zeroes the alpha and installs its built-in
+        // XOR operation, turning it off clears both. We have no pixel-op path to
+        // install, so the slot is cleared either way - a title reading it back
+        // sees no operation rather than a pointer it could not call here.
+        WIPICGraphicsContextIdx::XorModeIdx => {
+            grp_ctx.pixel_op_func_ptr = 0;
+            if pv == 0 {
+                grp_ctx.xor_mode = 0;
+            } else {
+                grp_ctx.alpha = 0;
+                grp_ctx.xor_mode = 1;
+            }
+        }
         WIPICGraphicsContextIdx::OffsetIdx => {
             // Same 32-bit-word pair as the clip corners, and the counterpart to
             // GetContext's `OffsetIdx`, which writes two 32-bit words back.
             let x: u32 = read_generic(context, pv)?;
             let y: u32 = read_generic(context, pv + 4)?;
-            grp_ctx.offset = [x as u16, y as u16];
+            grp_ctx.offset = [x, y];
         }
         _ => {
             tracing::warn!("MC_grpSetContext({p_grp_ctx:#x}, {op:?}, {pv:#x}): ignoring invalid op");
@@ -185,10 +203,10 @@ pub async fn get_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
     match op {
         WIPICGraphicsContextIdx::ClipIdx => {
             let clip = grp_ctx.clip;
-            write_generic(context, out_ptr, clip[0] as u32)?;
-            write_generic(context, out_ptr + 4, clip[1] as u32)?;
-            write_generic(context, out_ptr + 8, clip[2] as u32 + 1)?;
-            write_generic(context, out_ptr + 12, clip[3] as u32 + 1)?;
+            write_generic(context, out_ptr, clip[0])?;
+            write_generic(context, out_ptr + 4, clip[1])?;
+            write_generic(context, out_ptr + 8, clip[2].wrapping_add(1))?;
+            write_generic(context, out_ptr + 12, clip[3].wrapping_add(1))?;
         }
         WIPICGraphicsContextIdx::FgPixelIdx => write_generic(context, out_ptr, grp_ctx.fgpxl)?,
         WIPICGraphicsContextIdx::BgPixelIdx => write_generic(context, out_ptr, grp_ctx.bgpxl)?,
@@ -199,11 +217,11 @@ pub async fn get_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
         WIPICGraphicsContextIdx::PixelParam1Idx => write_generic(context, out_ptr, grp_ctx.param1)?,
         WIPICGraphicsContextIdx::FontIdx => write_generic(context, out_ptr, grp_ctx.font)?,
         WIPICGraphicsContextIdx::StyleIdx => write_generic(context, out_ptr, grp_ctx.style)?,
-        WIPICGraphicsContextIdx::XorModeIdx => write_generic(context, out_ptr, grp_ctx.reserved)?,
+        WIPICGraphicsContextIdx::XorModeIdx => write_generic(context, out_ptr, grp_ctx.xor_mode)?,
         WIPICGraphicsContextIdx::OffsetIdx => {
             let offset = grp_ctx.offset;
-            write_generic(context, out_ptr, offset[0] as u32)?;
-            write_generic(context, out_ptr + 4, offset[1] as u32)?;
+            write_generic(context, out_ptr, offset[0])?;
+            write_generic(context, out_ptr + 4, offset[1])?;
         }
         _ => {
             tracing::warn!("MC_grpGetContext({p_grp_ctx:#x}, {op:?}, {out_ptr:#x}): unsupported op");
