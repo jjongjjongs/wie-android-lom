@@ -216,10 +216,10 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
     let options = Options {
         enable_gdbserver: false,
         profile: None,
-        // `WIE_ANNUN` reserves the handset's status strip, so a title written
-        // for a strip (MapleStory 도적편 skips it in its own blits) can be
-        // captured the way it looks on such a handset.
-        annunciator: std::env::var("WIE_ANNUN").is_ok(),
+        // `WIE_ANNUN` forces the handset's status strip on (`0` forces it off),
+        // so a title can be captured under either state rather than the one its
+        // aid selects.
+        annunciator: std::env::var("WIE_ANNUN").ok().map(|x| x != "0"),
     };
 
     // The same two ways in the player has: a descriptor with a jar beside it,
@@ -421,10 +421,10 @@ fn run_scripted(label: &str, archive: &[u8], ticks_limit: u32, script: &[(u32, w
     let options = Options {
         enable_gdbserver: false,
         profile: None,
-        // `WIE_ANNUN` reserves the handset's status strip, so a title written
-        // for a strip (MapleStory 도적편 skips it in its own blits) can be
-        // captured the way it looks on such a handset.
-        annunciator: std::env::var("WIE_ANNUN").is_ok(),
+        // `WIE_ANNUN` forces the handset's status strip on (`0` forces it off),
+        // so a title can be captured under either state rather than the one its
+        // aid selects.
+        annunciator: std::env::var("WIE_ANNUN").ok().map(|x| x != "0"),
     };
     let mut emulator = if wie_lgt::LgtEmulator::loadable_archive(&files) {
         wie_lgt::LgtEmulator::from_archive(platform, files, options)

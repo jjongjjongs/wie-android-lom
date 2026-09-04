@@ -59,7 +59,7 @@ fn drives_firmware_init_when_supplied() {
         Options {
             enable_gdbserver: false,
             profile: None,
-            annunciator: false,
+            annunciator: None,
         },
     )
     .expect("build emulator");

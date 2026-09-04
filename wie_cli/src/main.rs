@@ -164,10 +164,10 @@ struct Args {
     profile_out: Option<PathBuf>,
     /// Reserve the handset's status strip ("annunciator") above the drawing
     /// area. A title inherits whichever state the handset is in and is written
-    /// for it: MapleStory 도적편 skips the strip itself and needs this on, while
-    /// titles that draw from the panel's first row need it off (the default).
-    #[arg(long, default_value_t = false)]
-    annunciator: bool,
+    /// for it, so leaving this unset lets the title decide; `--annunciator` and
+    /// `--annunciator false` force it either way.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    annunciator: Option<bool>,
 }
 
 fn main() -> anyhow::Result<()> {

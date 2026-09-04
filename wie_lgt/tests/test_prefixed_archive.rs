@@ -31,7 +31,7 @@ pub fn prefixed_archive_runs() {
         Options {
             enable_gdbserver: false,
             profile: None,
-            annunciator: false,
+            annunciator: None,
         },
     )
     .unwrap();

@@ -124,8 +124,12 @@ impl LgtEmulator {
         // `wie_wipi_c::api::graphics::new_screen_surface`; the reference's own
         // table gives the strip 24 rows on a 240/320/400-wide panel.
         const ANNUNCIATOR_ROWS: u32 = 24;
-        let strip = if options.annunciator { ANNUNCIATOR_ROWS } else { 0 };
-        write_generic(&mut core, wie_wipi_c::api::graphics::ANNUNCIATOR_ROWS_PTR, strip)?;
+        let annunciator = options.annunciator.unwrap_or_else(|| title_expects_annunciator(aid));
+        write_generic(
+            &mut core,
+            wie_wipi_c::api::graphics::ANNUNCIATOR_ROWS_PTR,
+            if annunciator { ANNUNCIATOR_ROWS } else { 0 },
+        )?;
 
         let system = System::new(platform, pid, aid, LgtTaskRunner { core: core.clone() });
 
@@ -388,6 +392,28 @@ fn is_incompatible_bundled_save(aid: &str, filename: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether a title is written for a handset showing its status strip.
+///
+/// The strip sits above the drawing area, and a title that blits straight to
+/// `MC_grpGetFrameBufferPointer` - which starts at the panel's first row, above
+/// that area - has to skip it itself. Whether the handset shows it is runtime
+/// state on the reference rather than anything the title declares, so a title
+/// works out only under the state it was written for, and the two kinds cannot
+/// both be served at once. Listing the ones that skip the strip themselves is
+/// what a player who never touches the setting effectively gets.
+///
+/// MapleStory 도적편 (`0002787C`) holds the strip height in its graphics object
+/// and adds it to every row index it derives from that pointer; without the
+/// strip its splash logos, HUD icons and shortcut numbers sit a strip too low
+/// and its level readout falls off the bottom edge. 나는 마왕이다 2 and 프로야구
+/// 2010 blit from the panel's first row instead and are right without one, as
+/// reference captures of all three confirm.
+///
+/// Keyed on the descriptor's aid, so nothing else is touched.
+fn title_expects_annunciator(aid: &str) -> bool {
+    matches!(aid.to_ascii_uppercase().as_str(), "0002787C")
 }
 
 /// SEED (`00027565`) opens `SEED_OP.dat` on launch to decide whether it has

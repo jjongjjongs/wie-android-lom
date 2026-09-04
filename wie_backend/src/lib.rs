@@ -67,9 +67,12 @@ pub struct Options {
     /// drawing area a title is given. On the reference this is runtime state the
     /// common UI turns on and off, and a title inherits whatever it is when it
     /// asks for the screen framebuffer - so titles are written for one or the
-    /// other and cannot both be served at once. Off gives a title the whole
-    /// panel, which is what every title has seen here so far.
-    pub annunciator: bool,
+    /// other and cannot both be served at once.
+    ///
+    /// `None` lets the platform decide from the title, which is what a handset
+    /// effectively does for anyone who never touches the setting; `Some` forces
+    /// it either way.
+    pub annunciator: Option<bool>,
 }
 
 pub fn extract_zip(zip: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
