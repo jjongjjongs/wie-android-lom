@@ -1340,14 +1340,18 @@ public final class MainActivity extends Activity {
     // --- views -----------------------------------------------------------
 
     /**
-     * Shows the emulated LCD on a {@link SurfaceView} whose buffer is fixed to
-     * the game's own resolution, so the display compositor - not a per-pixel
-     * software copy - scales it up to the view. That is what the reference
-     * player does, and it hands the upscale to the GPU: the frame reaches the
-     * screen through the same smooth hardware scaler the panel already uses,
-     * instead of the uneven whole-pixel steps a non-integer software scale
-     * leaves behind. The view is always sized to the frame's aspect (see
-     * onMeasure) so the compositor's scale stays uniform and never distorts.
+     * Shows the emulated LCD on a {@link SurfaceView}, upscaling the game's
+     * 240x320 frame to the view with a <em>nearest-neighbour</em> blit
+     * (filtering off), so the pixel art stays crisp - every source pixel is a
+     * solid block, matching how the reference player looks on the handset.
+     *
+     * <p>Letting the display compositor scale a frame-sized buffer instead
+     * hands the upscale to the GPU's <em>bilinear</em> filter, which blurs the
+     * pixel edges and softens text; that is the wrong trade for this art style.
+     * We size the view to the frame's aspect (see onMeasure) so the blit's
+     * scale is uniform in both axes and never distorts, then scale on the CPU
+     * with no filter. The residual non-integer factor (e.g. 4.5x) is invisible
+     * with nearest-neighbour - far less objectionable than the blur.
      *
      * <p>Every call here is on the UI thread ({@code setFrame} is dispatched
      * with {@code runOnUiThread}, the surface callbacks are framework UI-thread
@@ -1358,10 +1362,17 @@ public final class MainActivity extends Activity {
         private int frameWidth;
         private int frameHeight;
         private boolean surfaceReady;
+        /** Nearest-neighbour, no antialias/dither: a crisp whole-pixel upscale. */
+        private final Paint blitPaint;
+        private final RectF dstRect = new RectF();
 
         GameView(MainActivity activity) {
             super(activity);
             setBackgroundColor(COLOR_SCREEN_BEZEL);
+            blitPaint = new Paint();
+            blitPaint.setFilterBitmap(false);
+            blitPaint.setAntiAlias(false);
+            blitPaint.setDither(false);
             // Landscape floats the screen over the opaque keypad tray, so the
             // surface has to sit in front of the content window to show at all.
             // Dialogs and toasts are separate windows and still appear above it.
@@ -1403,23 +1414,20 @@ public final class MainActivity extends Activity {
                 bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
                 frameWidth = width;
                 frameHeight = height;
-                // A new resolution changes the aspect and the buffer size.
+                // A new resolution changes the aspect (and so the view size).
                 requestLayout();
-                applyBufferSize();
             }
 
             bitmap.copyPixelsFromBuffer(ShortBuffer.wrap(frame, 2, width * height));
             blit();
         }
 
-        /** Pin the surface buffer to the frame's resolution; the rest is the compositor's job. */
-        private void applyBufferSize() {
-            if (frameWidth > 0 && frameHeight > 0) {
-                getHolder().setFixedSize(frameWidth, frameHeight);
-            }
-        }
-
-        /** Copy the frame onto the (frame-sized) surface 1:1; the compositor scales it to the view. */
+        /**
+         * Upscale the frame to the whole surface with nearest-neighbour
+         * filtering. The surface tracks the view size (no {@code setFixedSize}),
+         * and onMeasure keeps the view at the frame's aspect, so filling it is a
+         * uniform, undistorted, crisp scale.
+         */
         private void blit() {
             if (!surfaceReady || bitmap == null) {
                 return;
@@ -1430,7 +1438,8 @@ public final class MainActivity extends Activity {
                 return;
             }
             try {
-                canvas.drawBitmap(bitmap, 0f, 0f, null);
+                dstRect.set(0f, 0f, canvas.getWidth(), canvas.getHeight());
+                canvas.drawBitmap(bitmap, null, dstRect, blitPaint);
             } finally {
                 holder.unlockCanvasAndPost(canvas);
             }
@@ -1439,7 +1448,6 @@ public final class MainActivity extends Activity {
         @Override
         public void surfaceCreated(SurfaceHolder holder) {
             surfaceReady = true;
-            applyBufferSize();
             blit();
         }
 
