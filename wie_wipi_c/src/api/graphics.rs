@@ -832,14 +832,10 @@ pub async fn draw_string(
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
     canvas.draw_text(&string, x, y, font_height, baseline, TextAlignment::Left, color, clip);
 
-    // Write back only the text's bounding box, not the whole buffer. A title's
-    // firmware may be blitting an image straight into this same buffer on
-    // another thread; a full write-back of the snapshot this canvas took would
-    // erase that image, which is why artwork and box borders came out partly
-    // black. The band is padded around the glyph run (ascenders/descenders and
-    // the baseline shift) so no drawn pixel is missed.
-    let text_width = string_width_px(&string, font_height) as i32;
-    canvas.flush_rect(x - 2, y - font_height as i32, text_width + 4, (font_height + baseline) as i32 + 6)?;
+    // `flush` writes back only the glyph pixels themselves (see write_diff), so
+    // a background the title blitted straight into this buffer shows through the
+    // gaps between and around the letters instead of being re-stamped black.
+    canvas.flush()?;
 
     Ok(())
 }
