@@ -455,6 +455,24 @@ pub async fn create_image(
 pub async fn destroy_image(context: &mut dyn WIPICContext, image: WIPICIndirectPtr) -> Result<()> {
     tracing::debug!("MC_grpDestroyImage({:#x})", image.0);
 
+    if image.0 == 0 {
+        return Ok(());
+    }
+
+    // Free the pixel planes `create_wipi_image` allocated: the colour plane
+    // (`img.buf`) always, and the mask plane (`mask.buf`) only when the source
+    // carried alpha. Freeing just the WIPICImage struct - as this did before -
+    // leaks both planes, and a title that creates and destroys a scratch image
+    // every frame (MapleStory 도적편 does this ~100x/frame) then exhausts the
+    // heap. The `buf` field is the caller's own encoded bytes and is not ours.
+    let wipi_image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
+    if wipi_image.img.buf.0 != 0 {
+        context.free(wipi_image.img.buf)?;
+    }
+    if wipi_image.mask.buf.0 != 0 {
+        context.free(wipi_image.mask.buf)?;
+    }
+
     context.free(image)?;
 
     Ok(())
