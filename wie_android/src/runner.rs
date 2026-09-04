@@ -20,6 +20,38 @@ use crate::platform::{AndroidHandsetInformation, AndroidPlatform, Frame, Shared}
 pub const SCREEN_WIDTH: u32 = 240;
 pub const SCREEN_HEIGHT: u32 = 320;
 
+/// The LGT WIPI platform hands its clets a taller 240x400 LCD, not the 240x320
+/// the other stacks use. The reference player's `FrameSurfaceView.initBitmap`
+/// allocates a 240x400 framebuffer for every portrait WIPI title, and the clet
+/// sizes its whole scene from what `MC_grpGetDisplayInfo` reports - so a 320
+/// panel squeezes the bottom HUD/menu (bars overlap, the level label falls off
+/// the edge). Reporting 400 lays the title out exactly as the device does; the
+/// on-screen keys and `GameView` letterbox absorb the extra height.
+pub const LGT_SCREEN_HEIGHT: u32 = 400;
+
+/// Whether `data` is a title `build_emulator` would hand to `LgtEmulator`, so
+/// the LCD can be sized before the platform (and thus the screen) is built. The
+/// checks mirror `build_emulator`'s order exactly: an earlier-matching stack
+/// wins, and the bare-jar formats are only reached once every archive format is
+/// ruled out.
+fn is_lgt_title(data: &[u8]) -> bool {
+    if let Ok(files) = extract_zip(data) {
+        if KtfEmulator::loadable_archive(&files) {
+            return false;
+        }
+        if LgtEmulator::loadable_archive(&files) {
+            return true;
+        }
+        if SktEmulator::loadable_archive(&files) {
+            return false;
+        }
+    }
+    if KtfEmulator::loadable_jar(data) {
+        return false;
+    }
+    LgtEmulator::loadable_jar(data)
+}
+
 /// Key indexes as laid out by `MainActivity`'s keypad and D-pad.
 fn key_code(index: i32) -> Option<KeyCode> {
     Some(match index {
@@ -88,10 +120,11 @@ impl Runner {
         self.stop();
 
         let shared = Shared::default();
+        let screen_height = if is_lgt_title(&data) { LGT_SCREEN_HEIGHT } else { SCREEN_HEIGHT };
         let platform = Box::new(AndroidPlatform::new(
             runtime_dir,
             SCREEN_WIDTH,
-            SCREEN_HEIGHT,
+            screen_height,
             shared.clone(),
             handset_information,
         ));
