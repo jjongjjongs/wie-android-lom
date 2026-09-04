@@ -794,10 +794,28 @@ pub async fn copy_area(
     Ok(())
 }
 
+/// Extra rows allocated beneath an off-screen buffer, never reported in its
+/// dimensions. A title draws into an off-screen surface with the clip context's
+/// default `0x7fff` bound - i.e. effectively unclipped - and its own software
+/// blitter does not clamp to the surface height, so a sprite placed near the
+/// bottom (MapleStory 도적편 rotates its title character down to y≈300 in a
+/// 320-row buffer) writes tens of rows past the end. On the reference that
+/// overdraw lands in slack the memory map leaves after the surface; here the
+/// next allocation - the title's own work arena - sits there, so the overdraw
+/// smashes it (wiping the NUL a later resource path relies on, and worse).
+/// Padding the surface with owned rows keeps that overdraw benign, as it is on
+/// the device. Measured worst case for 도적편 is ~24 rows; 256 is generous
+/// headroom and still trivial against the heap.
+const OFFSCREEN_GUARD_ROWS: u32 = 256;
+
 pub async fn create_offscreen_framebuffer(context: &mut dyn WIPICContext, w: i32, h: i32) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_grpCreateOffScreenFrameBuffer({w}, {h})");
 
-    let framebuffer = FrameBuffer::new(context, w as _, h as _, FRAMEBUFFER_DEPTH)?;
+    // Allocate the guard rows as part of the buffer, then report the real
+    // height: the title's coordinate math (stride, addressing) is unchanged and
+    // the extra rows are pure slack that absorbs its unclamped overdraw.
+    let mut framebuffer = FrameBuffer::new(context, w as _, (h as u32).saturating_add(OFFSCREEN_GUARD_ROWS), FRAMEBUFFER_DEPTH)?;
+    framebuffer.0.height = h as _;
 
     let memory = context.alloc(size_of::<WIPICFramebuffer>() as WIPICWord)?;
     write_generic(context, context.data_ptr(memory)?, framebuffer.0)?;
