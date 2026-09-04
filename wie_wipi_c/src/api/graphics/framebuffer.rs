@@ -135,6 +135,7 @@ impl FrameBuffer {
     /// straight into the framebuffer rather than through a full-frame copy.
     pub fn write_diff(&self, context: &mut dyn WIPICContext, snapshot: &[u8], drawn: &[u8]) -> Result<()> {
         let bpl = self.0.bpl as usize;
+        let bpp = (self.0.bpp / 8).max(1) as usize;
         if bpl == 0 || snapshot.len() != drawn.len() {
             // Layout we cannot reason about row-wise; fall back to a full write.
             return self.write(context, drawn);
@@ -144,10 +145,17 @@ impl FrameBuffer {
         for (row, (snap_row, drawn_row)) in snapshot.chunks_exact(bpl).zip(drawn.chunks_exact(bpl)).enumerate() {
             // The changed span within the row - nothing outside it is touched, so
             // a direct write elsewhere in the row survives.
-            let Some(start) = (0..bpl).find(|&i| snap_row[i] != drawn_row[i]) else {
+            let Some(first) = (0..bpl).find(|&i| snap_row[i] != drawn_row[i]) else {
                 continue;
             };
-            let end = (start..bpl).rev().find(|&i| snap_row[i] != drawn_row[i]).unwrap() + 1;
+            let last = (first..bpl).rev().find(|&i| snap_row[i] != drawn_row[i]).unwrap();
+            // Snap the span out to whole-pixel boundaries. A 16bpp pixel splits
+            // green across its two bytes, so writing a half pixel (when only one
+            // of the two bytes changed) would corrupt the colour - the green
+            // fringing along drawn edges. Rounding down to the pixel start and up
+            // past the pixel end always writes complete pixels.
+            let start = first - (first % bpp);
+            let end = (bpl).min(last + bpp - (last % bpp));
             let byte_off = row * bpl + start;
             if let Ok(dst) = u32::try_from(byte_off) {
                 context.write_bytes(base + dst, &drawn_row[start..end])?;
@@ -259,6 +267,34 @@ mod test {
         assert_eq!(out[0], 0x11);
         assert_eq!(out[6], 0x11);
         assert_eq!(out[14], 0x11);
+    }
+
+    /// When only one byte of a 16bpp pixel changes, write_diff still restages the
+    /// whole pixel (both bytes), so green - which straddles the two bytes - is
+    /// never left half-written.
+    #[test]
+    fn write_diff_restages_whole_pixels() {
+        let mut context = TestContext::new();
+        let fb = FrameBuffer::new(&mut context, 4, 1, 16).unwrap();
+        let base = context.data_ptr(fb.0.buf).unwrap();
+
+        let snapshot = [0x11u8; 8];
+        context.write_bytes(base, &snapshot).unwrap();
+
+        // Our primitive changed only the low byte of pixel 1 (bytes 2..4).
+        let mut drawn = snapshot;
+        drawn[2] = 0x77;
+
+        fb.write_diff(&mut context, &snapshot, &drawn).unwrap();
+
+        let mut out = [0u8; 8];
+        context.read_bytes(base, &mut out).unwrap();
+        // Both bytes of pixel 1 were written (the high byte re-stamped from what
+        // we drew), so the pixel is a complete, uncorrupted value.
+        assert_eq!(&out[2..4], &[0x77, 0x11]);
+        // Neighbouring pixels untouched.
+        assert_eq!(&out[0..2], &[0x11, 0x11]);
+        assert_eq!(&out[4..6], &[0x11, 0x11]);
     }
 
     #[test]
