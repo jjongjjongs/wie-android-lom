@@ -478,6 +478,93 @@ pub async fn destroy_image(context: &mut dyn WIPICContext, image: WIPICIndirectP
     Ok(())
 }
 
+/// Copy the `(x, y, w, h)` region of `fb` into a freshly allocated framebuffer
+/// of the same depth, clamping reads to the source bounds. Used to materialise a
+/// sub-image as an independent pixel plane.
+fn crop_framebuffer(context: &mut dyn WIPICContext, fb: &FrameBuffer, x: i32, y: i32, w: i32, h: i32) -> Result<FrameBuffer> {
+    let bpp = (fb.0.bpp / 8).max(1) as i64;
+    let src = fb.data(context)?;
+    let src_bpl = fb.0.bpl as i64;
+    let (src_w, src_h) = (fb.0.width as i64, fb.0.height as i64);
+    let new_bpl = w as i64 * bpp;
+    let mut out = vec![0u8; (new_bpl * h as i64) as usize];
+
+    for row in 0..h as i64 {
+        let sy = y as i64 + row;
+        if sy < 0 || sy >= src_h {
+            continue;
+        }
+        for col in 0..w as i64 {
+            let sx = x as i64 + col;
+            if sx < 0 || sx >= src_w {
+                continue;
+            }
+            let src_off = (sy * src_bpl + sx * bpp) as usize;
+            let dst_off = (row * new_bpl + col * bpp) as usize;
+            out[dst_off..dst_off + bpp as usize].copy_from_slice(&src[src_off..src_off + bpp as usize]);
+        }
+    }
+
+    let dst = FrameBuffer::new(context, w as u32, h as u32, fb.0.bpp)?;
+    context.write_bytes(context.data_ptr(dst.0.buf)?, &out)?;
+    Ok(dst)
+}
+
+/// `MC_grpCreateSubImage(parent, x, y, w, h)` - a view of a rectangular region
+/// of an existing image, as its own image handle. The reference copies the
+/// region out into an independent plane, which is what a title relies on when it
+/// slices a sprite sheet into individual frames; left unmapped it returned the
+/// diagnostic stub 0, so every sub-image was null and its draws were skipped.
+pub async fn create_sub_image(context: &mut dyn WIPICContext, parent: WIPICIndirectPtr, x: i32, y: i32, w: i32, h: i32) -> Result<WIPICWord> {
+    tracing::debug!("MC_grpCreateSubImage({:#x}, {x}, {y}, {w}, {h})", parent.0);
+
+    if parent.0 == 0 || w <= 0 || h <= 0 {
+        return Ok(0);
+    }
+
+    let parent_image: WIPICImage = read_generic(context, context.data_ptr(parent)?)?;
+
+    let sub_img = crop_framebuffer(context, &FrameBuffer(parent_image.img), x, y, w, h)?;
+    let sub_mask = if parent_image.mask.buf.0 != 0 {
+        crop_framebuffer(context, &FrameBuffer(parent_image.mask), x, y, w, h)?
+    } else {
+        FrameBuffer::empty()
+    };
+
+    let image = WIPICImage {
+        img: sub_img.0,
+        mask: sub_mask.0,
+        loop_count: 0,
+        delay: 0,
+        animated: 0,
+        buf: WIPICIndirectPtr(0),
+        offset: 0,
+        current: 0,
+        len: 0,
+    };
+
+    let memory = context.alloc(size_of::<WIPICImage>() as WIPICWord)?;
+    write_generic(context, context.data_ptr(memory)?, image)?;
+
+    Ok(memory.0)
+}
+
+/// `MC_grpDecodeNextImage(image)` - advance an animated image to its next frame.
+/// `create_wipi_image` already decodes the first (and, for the still images WIE
+/// currently produces, only) frame, so the image is ready to draw; report frame
+/// 0 as available rather than the diagnostic stub's 0-that-meant-nothing. Real
+/// multi-frame stepping is not modelled yet.
+pub async fn decode_next_image(context: &mut dyn WIPICContext, image: WIPICIndirectPtr) -> Result<i32> {
+    tracing::debug!("MC_grpDecodeNextImage({:#x})", image.0);
+
+    if image.0 == 0 {
+        return Ok(-1);
+    }
+
+    let _wipi_image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
+    Ok(0)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn draw_image(
     context: &mut dyn WIPICContext,
@@ -837,6 +924,45 @@ pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_str
     tracing::trace!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
 
     let string = read_wipi_string(context, ptr_string, length)?;
+
+    Ok(string_width_px(&string, font_handle_height(font)) as i32)
+}
+
+/// Read a UTF-16LE WIPI string. `length == -1` means NUL-terminated (a `0`
+/// code unit); `length >= 0` reads exactly that many 16-bit code units. This is
+/// the wide-character counterpart to `read_wipi_string`; the reference's
+/// `MC_grpGetUnicodeStringWidth` takes UCS-2 rather than the EUC-KR of the
+/// byte-string calls.
+fn read_wipi_unicode_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<String> {
+    let units: Vec<u16> = if length >= 0 {
+        let mut buf = vec![0u8; (length as usize) * 2];
+        context.read_bytes(ptr, &mut buf)?;
+        buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
+    } else {
+        let mut out = Vec::new();
+        let mut addr = ptr;
+        loop {
+            let unit: u16 = read_generic(context, addr)?;
+            if unit == 0 {
+                break;
+            }
+            out.push(unit);
+            addr += 2;
+        }
+        out
+    };
+
+    Ok(String::from_utf16_lossy(&units))
+}
+
+/// `MC_grpGetUnicodeStringWidth(font, ustr, len)` - the UCS-2 counterpart to
+/// `MC_grpGetStringWidth`. A title that lays out Unicode text measures it with
+/// this; left unmapped it returned the diagnostic-stub 0, collapsing every such
+/// string to zero width so the glyphs stacked on one another.
+pub async fn get_unicode_string_width(context: &mut dyn WIPICContext, font: i32, ptr_string: WIPICWord, length: i32) -> Result<i32> {
+    tracing::trace!("MC_grpGetUnicodeStringWidth({font}, {ptr_string:#x}, {length})");
+
+    let string = read_wipi_unicode_string(context, ptr_string, length)?;
 
     Ok(string_width_px(&string, font_handle_height(font)) as i32)
 }
