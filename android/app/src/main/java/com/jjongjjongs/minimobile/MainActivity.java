@@ -25,8 +25,6 @@ import android.provider.OpenableColumns;
 import android.util.Log;
 import android.util.SparseArray;
 import android.view.MotionEvent;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
@@ -1024,6 +1022,7 @@ public final class MainActivity extends Activity {
     private void buildPlayerContent() {
         detach(gameView);
         detach(keypad);
+        gameView.landscape = landscapeMode;
         keypad.landscape = landscapeMode;
         keypad.requestLayout();
 
@@ -1048,12 +1047,7 @@ public final class MainActivity extends Activity {
             arena.addView(gameView, screenParams);
             root.addView(arena, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         } else {
-            LinearLayout.LayoutParams screenParams =
-                    new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, GAME_WEIGHT);
-            // onMeasure fits the frame's aspect, so the view is narrower than the
-            // row; center it and let the bezel show on either side.
-            screenParams.gravity = android.view.Gravity.CENTER;
-            root.addView(gameView, screenParams);
+            root.addView(gameView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, GAME_WEIGHT));
             root.addView(keypad, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, KEYPAD_WEIGHT));
         }
 
@@ -1339,66 +1333,33 @@ public final class MainActivity extends Activity {
 
     // --- views -----------------------------------------------------------
 
-    /**
-     * Shows the emulated LCD on a {@link SurfaceView}, upscaling the game's
-     * 240x320 frame to the view with a <em>nearest-neighbour</em> blit
-     * (filtering off), so the pixel art stays crisp - every source pixel is a
-     * solid block, matching how the reference player looks on the handset.
-     *
-     * <p>Letting the display compositor scale a frame-sized buffer instead
-     * hands the upscale to the GPU's <em>bilinear</em> filter, which blurs the
-     * pixel edges and softens text; that is the wrong trade for this art style.
-     * We size the view to the frame's aspect (see onMeasure) so the blit's
-     * scale is uniform in both axes and never distorts, then scale on the CPU
-     * with no filter. The residual non-integer factor (e.g. 4.5x) is invisible
-     * with nearest-neighbour - far less objectionable than the blur.
-     *
-     * <p>Every call here is on the UI thread ({@code setFrame} is dispatched
-     * with {@code runOnUiThread}, the surface callbacks are framework UI-thread
-     * calls), so the bitmap and the lock/post need no extra synchronization.
-     */
-    private final class GameView extends SurfaceView implements SurfaceHolder.Callback {
+    /** Draws the emulated LCD, letterboxed into whatever space it is given. */
+    private final class GameView extends View {
+        // No FILTER_BITMAP_FLAG: nearest-neighbour scaling keeps the low-res LCD
+        // crisp (sharp pixels) instead of the blur bilinear filtering gives.
+        private final Paint paint = new Paint();
         private Bitmap bitmap;
-        private int frameWidth;
-        private int frameHeight;
-        private boolean surfaceReady;
-        /** Nearest-neighbour, no antialias/dither: a crisp whole-pixel upscale. */
-        private final Paint blitPaint;
-        private final RectF dstRect = new RectF();
+        /** In landscape the screen is centered at its own aspect; see onMeasure. */
+        boolean landscape;
 
         GameView(MainActivity activity) {
             super(activity);
             setBackgroundColor(COLOR_SCREEN_BEZEL);
-            blitPaint = new Paint();
-            blitPaint.setFilterBitmap(false);
-            blitPaint.setAntiAlias(false);
-            blitPaint.setDither(false);
-            // Landscape floats the screen over the opaque keypad tray, so the
-            // surface has to sit in front of the content window to show at all.
-            // Dialogs and toasts are separate windows and still appear above it.
-            setZOrderOnTop(true);
-            getHolder().addCallback(this);
         }
 
         @Override
         protected void onMeasure(int widthSpec, int heightSpec) {
-            // Fit the frame's aspect into the space offered, in both
-            // orientations, so the surface rect matches the buffer's aspect and
-            // the compositor's upscale is a single uniform factor.
-            int availableWidth = MeasureSpec.getSize(widthSpec);
-            int availableHeight = MeasureSpec.getSize(heightSpec);
-            float aspect = frameWidth > 0 && frameHeight > 0 ? (float) frameWidth / frameHeight : 240f / 320f;
-
-            int width;
-            int height;
-            if (availableWidth > availableHeight * aspect) {
-                height = availableHeight;
-                width = Math.round(availableHeight * aspect);
-            } else {
-                width = availableWidth;
-                height = Math.round(availableWidth / aspect);
+            // Landscape: fill the height but take only the width the screen's own
+            // aspect needs, so the controls on either side stay uncovered.
+            if (landscape) {
+                int h = MeasureSpec.getSize(heightSpec);
+                float aspect = bitmap != null && bitmap.getHeight() > 0
+                        ? (float) bitmap.getWidth() / bitmap.getHeight()
+                        : 240f / 320f;
+                setMeasuredDimension(Math.round(h * aspect), h);
+                return;
             }
-            setMeasuredDimension(width, height);
+            super.onMeasure(widthSpec, heightSpec);
         }
 
         /** @param frame {@code {width, height, RGB565 pixels...}} */
@@ -1412,53 +1373,26 @@ public final class MainActivity extends Activity {
 
             if (bitmap == null || bitmap.getWidth() != width || bitmap.getHeight() != height) {
                 bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
-                frameWidth = width;
-                frameHeight = height;
-                // A new resolution changes the aspect (and so the view size).
-                requestLayout();
             }
 
             bitmap.copyPixelsFromBuffer(ShortBuffer.wrap(frame, 2, width * height));
-            blit();
+            invalidate();
         }
 
-        /**
-         * Upscale the frame to the whole surface with nearest-neighbour
-         * filtering. The surface tracks the view size (no {@code setFixedSize}),
-         * and onMeasure keeps the view at the frame's aspect, so filling it is a
-         * uniform, undistorted, crisp scale.
-         */
-        private void blit() {
-            if (!surfaceReady || bitmap == null) {
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+
+            if (bitmap == null) {
                 return;
             }
-            SurfaceHolder holder = getHolder();
-            Canvas canvas = holder.lockCanvas();
-            if (canvas == null) {
-                return;
-            }
-            try {
-                dstRect.set(0f, 0f, canvas.getWidth(), canvas.getHeight());
-                canvas.drawBitmap(bitmap, null, dstRect, blitPaint);
-            } finally {
-                holder.unlockCanvasAndPost(canvas);
-            }
-        }
 
-        @Override
-        public void surfaceCreated(SurfaceHolder holder) {
-            surfaceReady = true;
-            blit();
-        }
+            float scale = Math.min((float) getWidth() / bitmap.getWidth(), (float) getHeight() / bitmap.getHeight());
+            float left = (getWidth() - bitmap.getWidth() * scale) / 2f;
+            float top = (getHeight() - bitmap.getHeight() * scale) / 2f;
 
-        @Override
-        public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-            blit();
-        }
-
-        @Override
-        public void surfaceDestroyed(SurfaceHolder holder) {
-            surfaceReady = false;
+            canvas.drawBitmap(bitmap, null,
+                    new RectF(left, top, left + bitmap.getWidth() * scale, top + bitmap.getHeight() * scale), paint);
         }
     }
 
