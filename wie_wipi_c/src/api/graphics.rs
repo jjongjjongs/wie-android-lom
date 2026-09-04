@@ -69,7 +69,24 @@ pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWor
 pub async fn init_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord) -> Result<()> {
     tracing::debug!("MC_grpInitContext({p_grp_ctx:#x})");
 
-    let grp_ctx = WIPICGraphicsContext::default();
+    // Reference MC_grpInitContext (@0x1abc0c) does not zero the whole context;
+    // it plants non-zero defaults that drawing then relies on when the game
+    // never calls SetContext for a given field. Porting them keeps our output
+    // consistent with the firmware:
+    //   clip   = whole plane (0,0)-(0x7fff,0x7fff)
+    //   bgpxl  = 0x00ffffff (opaque white)
+    //   alpha  = 0xff       (fully opaque)
+    //   param1 = 0xff
+    //   font   = MC_grpGetFont(0,0,0)  (the 12px default face)
+    // Everything else (fg, transparent, pixelop, style, offset) stays zero.
+    let grp_ctx = WIPICGraphicsContext {
+        clip: [0, 0, 0x7fff, 0x7fff],
+        bgpxl: 0x00ff_ffff,
+        alpha: 0xff,
+        param1: 0xff,
+        font: font_size_px(0) as WIPICWord,
+        ..Default::default()
+    };
     write_generic(context, p_grp_ctx, grp_ctx)?;
     Ok(())
 }
@@ -1188,6 +1205,38 @@ mod tests {
         let mut context = TestContext::new();
         get_context(&mut context, 0, Idx::FgPixelIdx, 0x2000).await.unwrap();
         get_context(&mut context, 0x1000, Idx::FgPixelIdx, 0).await.unwrap();
+    }
+
+    /// MC_grpInitContext plants non-zero defaults (full clip, white background,
+    /// opaque alpha, param1, the 12px font) rather than zeroing the block, and a
+    /// game that never sets those fields draws against them. Reading each one
+    /// straight back through GetContext proves the port matches the firmware.
+    #[futures_test::test]
+    async fn init_context_plants_the_reference_defaults() {
+        const CTX: u32 = 0x1000;
+        const OUT: u32 = 0x2000;
+
+        let mut context = TestContext::new();
+        init_context(&mut context, CTX).await.unwrap();
+
+        for (op, value) in [
+            (Idx::FgPixelIdx, 0x0),
+            (Idx::BgPixelIdx, 0x00ff_ffff),
+            (Idx::AlphaIdx, 0xff),
+            (Idx::FontIdx, 12),
+            (Idx::StyleIdx, 0x0),
+        ] {
+            get_context(&mut context, CTX, op, OUT).await.unwrap();
+            assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), value, "op {op:?}");
+        }
+
+        // The clip starts at the whole plane; GetContext reports the corner one
+        // past what is stored (0x7fff -> 0x8000).
+        get_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 0x8000);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 12).unwrap(), 0x8000);
     }
 
     /// The colour path is the driver's direct RGB565: 5 bits red, 6 green, 5
