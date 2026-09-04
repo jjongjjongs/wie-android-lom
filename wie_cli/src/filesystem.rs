@@ -6,7 +6,13 @@ use std::{
 
 use directories::ProjectDirs;
 
-use wie_backend::Filesystem;
+use wie_backend::{Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError, FilesystemSetModeError};
+
+/// `errno` values std does not expose as an `ErrorKind`, matched via
+/// `raw_os_error` so the trait's dedicated error variants stay distinct from
+/// the catch-all. Both are POSIX-stable on the hosts `wie_cli` targets.
+const ENAMETOOLONG: i32 = 36;
+const EXDEV: i32 = 18;
 
 /// Persistent filesystem backed by `std::fs` under `<base>/<aid>/fs/<path>`.
 /// Any I/O error or rejected path returns the trait's failure value.
@@ -192,6 +198,112 @@ impl Filesystem for CliFilesystem {
         };
 
         fs::remove_file(disk_path).is_ok()
+    }
+
+    async fn mkdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemMkdirError> {
+        let Some(disk_path) = self.path_for(aid, path) else {
+            return Err(FilesystemMkdirError::Other);
+        };
+
+        // Exactly one directory: the trait forbids creating missing parents.
+        match fs::create_dir(&disk_path) {
+            Ok(()) => Ok(()),
+            Err(err) => Err(match err.kind() {
+                std::io::ErrorKind::AlreadyExists => FilesystemMkdirError::AlreadyExists,
+                std::io::ErrorKind::NotFound => FilesystemMkdirError::NotFound,
+                _ if err.raw_os_error() == Some(ENAMETOOLONG) => FilesystemMkdirError::NameTooLong,
+                _ => {
+                    tracing::warn!(aid, path, error = %err, "mkdir failed");
+                    FilesystemMkdirError::Other
+                }
+            }),
+        }
+    }
+
+    async fn rmdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemRmDirError> {
+        let Some(disk_path) = self.path_for(aid, path) else {
+            return Err(FilesystemRmDirError::Other);
+        };
+
+        // Non-recursive: `remove_dir` fails on a non-empty directory.
+        match fs::remove_dir(&disk_path) {
+            Ok(()) => Ok(()),
+            Err(err) => Err(match err.kind() {
+                std::io::ErrorKind::NotFound => FilesystemRmDirError::NotFound,
+                std::io::ErrorKind::DirectoryNotEmpty => FilesystemRmDirError::NotEmpty,
+                _ if err.raw_os_error() == Some(ENAMETOOLONG) => FilesystemRmDirError::NameTooLong,
+                _ => {
+                    tracing::warn!(aid, path, error = %err, "rmdir failed");
+                    FilesystemRmDirError::Other
+                }
+            }),
+        }
+    }
+
+    async fn rename(&self, aid: &str, from: &str, to: &str) -> core::result::Result<(), FilesystemRenameError> {
+        let (Some(from_path), Some(to_path)) = (self.path_for(aid, from), self.path_for(aid, to)) else {
+            return Err(FilesystemRenameError::Other);
+        };
+
+        // The host rename replaces an existing file and removes the source; it
+        // does not create destination parents.
+        match fs::rename(&from_path, &to_path) {
+            Ok(()) => Ok(()),
+            Err(err) => Err(match err.kind() {
+                std::io::ErrorKind::NotFound => FilesystemRenameError::NotFound,
+                std::io::ErrorKind::DirectoryNotEmpty => FilesystemRenameError::CrossDeviceOrNotEmpty,
+                _ if err.raw_os_error() == Some(EXDEV) => FilesystemRenameError::CrossDeviceOrNotEmpty,
+                _ if err.raw_os_error() == Some(ENAMETOOLONG) => FilesystemRenameError::NameTooLong,
+                _ => {
+                    tracing::warn!(aid, from, to, error = %err, "rename failed");
+                    FilesystemRenameError::Other
+                }
+            }),
+        }
+    }
+
+    async fn set_mode(&self, aid: &str, path: &str, mode: u32) -> core::result::Result<(), FilesystemSetModeError> {
+        let Some(disk_path) = self.path_for(aid, path) else {
+            return Err(FilesystemSetModeError::Other);
+        };
+
+        let metadata = match disk_path.metadata() {
+            Ok(md) if md.is_file() => md,
+            Ok(_) => return Err(FilesystemSetModeError::NotFound),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(FilesystemSetModeError::NotFound),
+            Err(err) if err.raw_os_error() == Some(ENAMETOOLONG) => return Err(FilesystemSetModeError::NameTooLong),
+            Err(err) => {
+                tracing::warn!(aid, path, error = %err, "set_mode: stat failed");
+                return Err(FilesystemSetModeError::Other);
+            }
+        };
+
+        // Only the owner read/write bits are meaningful to the WIPI-C caller.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(mode & 0o600);
+            if let Err(err) = fs::set_permissions(&disk_path, permissions) {
+                tracing::warn!(aid, path, error = %err, "set_mode: chmod failed");
+                return Err(FilesystemSetModeError::Other);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (metadata, mode);
+        }
+        Ok(())
+    }
+
+    async fn total_space(&self, _aid: &str) -> Option<u64> {
+        // The host disk dwarfs a feature-phone quota; report the same fixed
+        // capacity the in-memory backend does so titles see a sane figure.
+        Some(32 * 1024 * 1024)
+    }
+
+    async fn available_space(&self, _aid: &str) -> Option<u64> {
+        Some(16 * 1024 * 1024)
     }
 
     async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
