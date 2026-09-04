@@ -3233,7 +3233,7 @@ mod tests {
             assert_eq!(read_generic::<u32, _>(&context, component + 0x08).unwrap(), 0);
             assert_eq!(read_generic::<u32, _>(&context, component + 0x0c).unwrap(), 0x7fff);
             assert_eq!(read_generic::<u32, _>(&context, component + 0x10).unwrap(), 0x7fff);
-            assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 0);
+            assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 12);
             assert_eq!(read_generic::<u32, _>(&context, component + 0x18).unwrap(), 0);
             assert_eq!(read_generic::<u32, _>(&context, component + 0x1c).unwrap(), 0x00ff_ffff);
             assert_eq!(read_generic::<u32, _>(&context, component + 0x24).unwrap(), UIC_DRAW_MARKER_BASE + class);
@@ -3286,7 +3286,7 @@ mod tests {
         assert_eq!(read_generic::<u32, _>(&context, component + 0x08).unwrap(), 0);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x0c).unwrap(), 0x7fff);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x10).unwrap(), 0x7fff);
-        assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, component + 0x14).unwrap(), 12);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x18).unwrap(), 0);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x1c).unwrap(), 0x00ff_ffff);
         assert_eq!(read_generic::<u32, _>(&context, component + 0x24).unwrap(), UIC_DRAW_MARKER_BASE + 2);

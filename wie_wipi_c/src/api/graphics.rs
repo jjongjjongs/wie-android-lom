@@ -729,31 +729,65 @@ fn blit_magenta_keyed(canvas: &mut dyn Canvas, dx: i32, dy: i32, w: i32, h: i32,
 /// against the third, so any mismatch makes glyphs overlap. It matches the
 /// 10px ascent + 2px descent the metric getters below report.
 const FONT_PX_HEIGHT: f32 = 12.0;
-/// Baseline offset from the top of the line (the ascent) for that face.
-const FONT_BASELINE: f32 = 10.0;
+
+/// Pixel height the vendor's `MC_grpGetFont` assigns to each size selector.
+///
+/// The reference (`MC_grpGetFont` in `liblgt_system.so`) maps the size flag to
+/// one of seven glyph heights; a title picks a size for a heading or a HUD and
+/// then lays it out with `MC_grpGetStringWidth`/`MC_grpGetFontHeight`, so all
+/// three have to agree. We had a single 12px face, which shrank every heading
+/// to body size and threw off any layout measured against the real height.
+fn font_size_px(size: i32) -> i32 {
+    match size {
+        0x8 => 10,
+        0x10 => 14,
+        0x1000 => 16,
+        0x2000 => 18,
+        0x4000 => 19,
+        0x8000 => 22,
+        _ => 12,
+    }
+}
+
+/// The pixel height carried by a font handle. `MC_grpGetFont` returns the
+/// height itself as the handle, so decoding is the identity for a real handle
+/// and the default face for 0 (an unset `SetContext` font).
+fn font_handle_height(font: i32) -> f32 {
+    if (8..=64).contains(&font) { font as f32 } else { FONT_PX_HEIGHT }
+}
+
+/// Ascent for a face of the given height, keeping the reference's 10:2 split for
+/// the 12px face (its metric getters report 10px ascent, 2px descent).
+fn font_ascent_px(height: f32) -> f32 {
+    (height * 5.0 / 6.0).round()
+}
 
 pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFont({face}, {size}, {style})");
+    let height = font_size_px(size);
+    tracing::debug!("MC_grpGetFont({face}, {size}, {style}) -> {height}px");
 
-    Ok(0)
+    // The handle is the pixel height; SetContext stores it, and the draw/measure
+    // paths read it back (see font_handle_height).
+    Ok(height)
 }
 
 pub async fn get_font_height(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFontHeight({font})");
+    tracing::trace!("MC_grpGetFontHeight({font})");
 
-    Ok(FONT_PX_HEIGHT as i32)
+    Ok(font_handle_height(font) as i32)
 }
 
 pub async fn get_font_ascent(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFontAscent({font})");
+    tracing::trace!("MC_grpGetFontAscent({font})");
 
-    Ok(10)
+    Ok(font_ascent_px(font_handle_height(font)) as i32)
 }
 
 pub async fn get_font_descent(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFontDescent({font})");
+    tracing::trace!("MC_grpGetFontDescent({font})");
 
-    Ok(2)
+    let height = font_handle_height(font);
+    Ok((height - font_ascent_px(height)) as i32)
 }
 
 pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_string: WIPICWord, length: i32) -> Result<i32> {
@@ -761,7 +795,7 @@ pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_str
 
     let string = read_wipi_string(context, ptr_string, length)?;
 
-    Ok(string_width_px(&string, FONT_PX_HEIGHT) as i32)
+    Ok(string_width_px(&string, font_handle_height(font)) as i32)
 }
 
 pub async fn draw_string(
@@ -790,9 +824,13 @@ pub async fn draw_string(
         height: framebuffer.0.height,
     };
 
+    // The size the title selected with SetContext(font); 0 keeps the default face.
+    let font_height = font_handle_height(gctx.font as i32);
+    let baseline = font_ascent_px(font_height);
+
     let mut canvas = framebuffer.canvas(context)?;
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.draw_text(&string, x, y, FONT_PX_HEIGHT, FONT_BASELINE, TextAlignment::Left, color, clip);
+    canvas.draw_text(&string, x, y, font_height, baseline, TextAlignment::Left, color, clip);
 
     // Write back only the text's bounding box, not the whole buffer. A title's
     // firmware may be blitting an image straight into this same buffer on
@@ -800,13 +838,8 @@ pub async fn draw_string(
     // erase that image, which is why artwork and box borders came out partly
     // black. The band is padded around the glyph run (ascenders/descenders and
     // the baseline shift) so no drawn pixel is missed.
-    let text_width = string_width_px(&string, FONT_PX_HEIGHT) as i32;
-    canvas.flush_rect(
-        x - 2,
-        y - FONT_PX_HEIGHT as i32,
-        text_width + 4,
-        (FONT_PX_HEIGHT + FONT_BASELINE) as i32 + 6,
-    )?;
+    let text_width = string_width_px(&string, font_height) as i32;
+    canvas.flush_rect(x - 2, y - font_height as i32, text_width + 4, (font_height + baseline) as i32 + 6)?;
 
     Ok(())
 }
@@ -1151,6 +1184,29 @@ mod tests {
         let mut context = TestContext::new();
         get_context(&mut context, 0, Idx::FgPixelIdx, 0x2000).await.unwrap();
         get_context(&mut context, 0x1000, Idx::FgPixelIdx, 0).await.unwrap();
+    }
+
+    /// The size selector maps to the seven glyph heights `MC_grpGetFont` assigns,
+    /// and the handle those return round-trips through the height getter.
+    #[futures_test::test]
+    async fn get_font_reports_the_reference_heights() {
+        let mut context = TestContext::new();
+        for (size, height) in [
+            (0x8, 10),
+            (0x10, 14),
+            (0x1000, 16),
+            (0x2000, 18),
+            (0x4000, 19),
+            (0x8000, 22),
+            (0, 12),
+            (0x1234, 12),
+        ] {
+            let handle = super::get_font(&mut context, 0, size, 0).await.unwrap();
+            assert_eq!(handle, height, "size {size:#x}");
+            assert_eq!(super::get_font_height(&mut context, handle).await.unwrap(), height, "height of {size:#x}");
+        }
+        // An unset SetContext font (0) falls back to the default face.
+        assert_eq!(super::get_font_height(&mut context, 0).await.unwrap(), 12);
     }
 
     /// A single pixel read into four bytes of stack, which is how a title asks
