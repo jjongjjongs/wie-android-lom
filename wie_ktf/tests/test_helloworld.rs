@@ -36,6 +36,7 @@ pub fn test_helloworld() -> Result<()> {
         Options {
             enable_gdbserver: false,
             profile: None,
+            annunciator: false,
         },
     )?;
 

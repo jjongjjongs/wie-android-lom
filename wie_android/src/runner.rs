@@ -99,6 +99,7 @@ impl Runner {
         let options = Options {
             enable_gdbserver: false,
             profile: None,
+            annunciator: false,
         };
 
         match build_emulator(platform, &data, options) {

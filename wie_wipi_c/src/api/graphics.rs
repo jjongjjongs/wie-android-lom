@@ -20,6 +20,10 @@ use self::{framebuffer::FrameBuffer, grp_context::WIPICGraphicsContextIdx, image
 
 pub const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
 const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
+/// Guest word holding the height of the handset's status strip (the WIPI
+/// "annunciator"), which sits above the drawing area a title is given. Zero
+/// unless the platform stores one, and nothing below changes while it is zero.
+pub const ANNUNCIATOR_ROWS_PTR: u32 = 0x7fff2000;
 
 /// Read a WIPI-C string. `length == -1` means NUL-terminated; `length > 0`
 /// reads exactly that many bytes; `length == 0` and other negatives yield
@@ -61,8 +65,9 @@ pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWor
     // with the default (unclamped) clip and overruns the bottom edge, and the
     // list-allocator header of the very next block sits 4 bytes past this
     // buffer's end - so an unpadded screen buffer lets the overdraw corrupt the
-    // heap. See `new_guarded_surface`.
-    let framebuffer = new_guarded_surface(context, width, height)?;
+    // heap. `new_screen_surface` pads it the same way `new_guarded_surface`
+    // does, and also splits the panel from the drawing area.
+    let framebuffer = new_screen_surface(context, width, height)?;
 
     let memory = context.alloc(size_of::<WIPICFramebuffer>() as WIPICWord)?;
     write_generic(context, context.data_ptr(memory)?, framebuffer.0)?;
@@ -734,23 +739,26 @@ pub async fn get_display_info(context: &mut dyn WIPICContext, reserved: WIPICWor
 
     assert_eq!(reserved, 0);
 
-    let platform = context.system().platform();
-    let screen = platform.screen();
+    let (width, height) = {
+        let platform = context.system().platform();
+        let screen = platform.screen();
+        (screen.width(), screen.height())
+    };
 
-    // The reference's MC_grpGetDisplayInfo reports width@+8/height@+0xc and then,
-    // for a 240/320/400-wide panel, subtracts 24 from the height - but only when
-    // its two soft-key-bar properties are both set, i.e. when the platform paints
-    // a soft-key bar in the bottom 24px and reserves it from the drawable area.
-    // Our screen has no such bar (the on-screen keys sit outside the game
-    // surface), so those properties are unset and, exactly as the reference then
-    // does, we report the full height. The colour fields are the driver's direct
+    // The reference's MC_grpGetDisplayInfo (@0x1abcf8) reports width@+8 and
+    // height@+0xc, and for a 240/320/400-wide panel subtracts the status strip
+    // from the height when the annunciator properties are set - so what a title
+    // reads here is the drawing area, not the panel. `annunciator_rows` is that
+    // strip, and zero unless the platform reserves one, which leaves the full
+    // height reported as before. The colour fields are the driver's direct
     // RGB565 format (matched by Rgb565Pixel), reported here as fixed masks.
+    let strip = annunciator_rows(context, width).min(height);
     let info = WIPICDisplayInfo {
         bpp: FRAMEBUFFER_DEPTH,
         depth: 16,
-        width: screen.width(),
-        height: screen.height(),
-        bpl: 2 * screen.width(),
+        width,
+        height: height - strip,
+        bpl: 2 * width,
         color_type: 1, // 1==MC_GRP_DIRECT_COLOR_TYPE
         red_mask: 0xf800,
         green_mask: 0x7e0,
@@ -823,6 +831,47 @@ const SURFACE_GUARD_ROWS: u32 = 256;
 fn new_guarded_surface(context: &mut dyn WIPICContext, width: u32, height: u32) -> Result<FrameBuffer> {
     let mut framebuffer = FrameBuffer::new(context, width, height.saturating_add(SURFACE_GUARD_ROWS), FRAMEBUFFER_DEPTH)?;
     framebuffer.0.height = height as _;
+    Ok(framebuffer)
+}
+
+/// Height of the status strip above the drawing area, as the platform stored it
+/// in `ANNUNCIATOR_ROWS_PTR`, and zero when it stored nothing. The reference
+/// only reserves the strip on the panel widths its own table lists, so a title
+/// on any other panel sees the whole display exactly as it does today.
+fn annunciator_rows(context: &dyn WIPICContext, width: u32) -> u32 {
+    if !matches!(width, 240 | 320 | 400) {
+        return 0;
+    }
+
+    read_generic(context, ANNUNCIATOR_ROWS_PTR).unwrap_or(0)
+}
+
+/// Build the screen surface with the status strip above the drawing area.
+///
+/// The strip is part of the panel, not of the title's drawing area, and the
+/// reference splits the two: `MC_grpGetFrameBufferHeight` and
+/// `MC_grpGetDisplayInfo` report the drawing area (the panel less the strip),
+/// every `MC_grp*` primitive lands inside it, and only
+/// `MC_grpGetFrameBufferPointer` steps back to the panel's own first row -
+/// `wipic_get_frame_pointer` resolves the screen surface through its *parent*,
+/// so the address a title blits to starts at the strip.
+///
+/// A title that blits straight to that pointer therefore skips the strip
+/// itself. MapleStory 도적편 does: it keeps the strip height in a field and adds
+/// it to every row index it derives from the pointer, which is why its splash
+/// logos, HUD icons and shortcut numbers sat a strip's worth too low here while
+/// everything drawn through the `MC_grp*` calls stayed where it belonged.
+fn new_screen_surface(context: &mut dyn WIPICContext, width: u32, height: u32) -> Result<FrameBuffer> {
+    let strip = annunciator_rows(context, width).min(height);
+
+    // The surface spans the whole panel; the framebuffer reports - and every
+    // path but the pointer getter uses - the drawing area below the strip.
+    let mut framebuffer = FrameBuffer::new(context, width, height.saturating_add(SURFACE_GUARD_ROWS), FRAMEBUFFER_DEPTH)?;
+    framebuffer.0.height = height - strip;
+    // Only a platform whose indirect pointers are plain addresses reserves a
+    // strip, so this is address arithmetic on the buffer just allocated.
+    framebuffer.0.buf = WIPICIndirectPtr(framebuffer.0.buf.0 + strip * framebuffer.0.bpl);
+
     Ok(framebuffer)
 }
 
@@ -1315,9 +1364,28 @@ pub async fn post_event(context: &mut dyn WIPICContext, id: i32, r#type: i32, pa
 pub async fn get_framebuffer_pointer(context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<WIPICWord> {
     tracing::debug!("MC_GRP_GET_FRAME_BUFFER_POINTER({:#x})", framebuffer.0);
 
-    let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(framebuffer)?)?;
+    let handle = framebuffer;
+    let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(handle)?)?;
 
-    Ok(framebuffer.buf.0)
+    Ok(framebuffer.buf.0 - screen_pointer_lead(context, handle.0, framebuffer.bpl))
+}
+
+/// Bytes between the pointer the screen framebuffer hands a title and the
+/// drawing area it reports - the status strip - and zero for every other
+/// framebuffer. See `new_screen_surface`.
+///
+/// Generic over the reader so a platform's synchronous fast path for
+/// `MC_grpGetFrameBufferPointer` reports the same address this one does.
+pub fn screen_pointer_lead<R>(reader: &R, handle: WIPICWord, bpl: WIPICWord) -> WIPICWord
+where
+    R: ?Sized + wie_util::ByteRead,
+{
+    let screen: u32 = read_generic(reader, SCREEN_FRAMEBUFFER_PTR).unwrap_or(0);
+    if screen == 0 || screen != handle {
+        return 0;
+    }
+
+    read_generic::<u32, _>(reader, ANNUNCIATOR_ROWS_PTR).unwrap_or(0) * bpl
 }
 
 pub async fn get_framebuffer_width(context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {

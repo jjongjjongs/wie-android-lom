@@ -162,6 +162,12 @@ struct Args {
     /// flushed batch; `flamegraph.pl` aggregates duplicates).
     #[arg(long)]
     profile_out: Option<PathBuf>,
+    /// Reserve the handset's status strip ("annunciator") above the drawing
+    /// area. A title inherits whichever state the handset is in and is written
+    /// for it: MapleStory 도적편 skips the strip itself and needs this on, while
+    /// titles that draw from the panel's first row need it off (the default).
+    #[arg(long, default_value_t = false)]
+    annunciator: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -176,6 +182,7 @@ fn main() -> anyhow::Result<()> {
     let options = Options {
         enable_gdbserver: args.debug,
         profile,
+        annunciator: args.annunciator,
     };
 
     start(&args.filename, options)

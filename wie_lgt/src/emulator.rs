@@ -7,7 +7,7 @@ use jvm::runtime::{JavaIoInputStream, JavaLangClassLoader};
 use wie_backend::{Emulator, Event, Options, Platform, System, TaskRunner, extract_zip};
 use wie_core_arm::{Allocator, ArmCore, EXECUTED_INSTRUCTIONS, PC_SAMPLES};
 use wie_jvm_support::{JvmSupport, RustJavaJvmImplementation};
-use wie_util::{Result, WieError};
+use wie_util::{Result, WieError, write_generic};
 
 use crate::runtime::init::load_native;
 
@@ -118,6 +118,15 @@ impl LgtEmulator {
         mut options: Options,
     ) -> Result<Self> {
         let mut core = ArmCore::new(options.enable_gdbserver, options.profile.take())?;
+
+        // The status strip a title has to work around, published where the
+        // WIPI-C graphics layer reads it. See
+        // `wie_wipi_c::api::graphics::new_screen_surface`; the reference's own
+        // table gives the strip 24 rows on a 240/320/400-wide panel.
+        const ANNUNCIATOR_ROWS: u32 = 24;
+        let strip = if options.annunciator { ANNUNCIATOR_ROWS } else { 0 };
+        write_generic(&mut core, wie_wipi_c::api::graphics::ANNUNCIATOR_ROWS_PTR, strip)?;
+
         let system = System::new(platform, pid, aid, LgtTaskRunner { core: core.clone() });
 
         for (filename, data) in files {

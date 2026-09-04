@@ -63,6 +63,13 @@ pub type ProfileCallback = Box<dyn FnMut(Vec<ProfileSample>) + Send + Sync>;
 pub struct Options {
     pub enable_gdbserver: bool,
     pub profile: Option<ProfileCallback>,
+    /// Whether the handset shows its status strip ("annunciator") above the
+    /// drawing area a title is given. On the reference this is runtime state the
+    /// common UI turns on and off, and a title inherits whatever it is when it
+    /// asks for the screen framebuffer - so titles are written for one or the
+    /// other and cannot both be served at once. Off gives a title the whole
+    /// panel, which is what every title has seen here so far.
+    pub annunciator: bool,
 }
 
 pub fn extract_zip(zip: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {

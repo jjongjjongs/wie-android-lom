@@ -394,6 +394,7 @@ pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm
     // `register_init_svc_handler`, which owns the single `fast_svc` slot and
     // routes each SVC category (WIPI-C here, init's thread-reschedule there) to
     // the right handler. See `try_fast_wipic_getter`.
+
     Ok(())
 }
 
@@ -434,8 +435,11 @@ pub(crate) fn try_fast_wipic_getter(core: &mut ArmCore) -> Result<bool> {
         // the struct's guest address (data_ptr is identity), so read it
         // directly — including the generic path's null-handle behavior.
         ID_GET_FRAMEBUFFER_POINTER => {
-            let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
-            framebuffer.buf.0
+            let handle = core.read_param(0)?;
+            let framebuffer: WIPICFramebuffer = read_generic(core, handle)?;
+            // The screen framebuffer's pointer starts at the status strip, the
+            // same as the generic handler reports it.
+            framebuffer.buf.0 - graphics::screen_pointer_lead(core, handle, framebuffer.bpl)
         }
         ID_GET_FRAMEBUFFER_WIDTH => {
             let framebuffer: WIPICFramebuffer = read_generic(core, core.read_param(0)?)?;
