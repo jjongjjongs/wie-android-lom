@@ -123,6 +123,10 @@ impl LgtEmulator {
         // WIPI-C graphics layer reads it. See
         // `wie_wipi_c::api::graphics::new_screen_surface`; the reference's own
         // table gives the strip 24 rows on a 240/320/400-wide panel.
+        // The handset's own bitmap face belongs to whichever BIOS this run
+        // loads, so drop the one a previous run in this process installed.
+        wie_wipi_c::api::graphics::clear_bios_font();
+
         const ANNUNCIATOR_ROWS: u32 = 24;
         let annunciator = options.annunciator.unwrap_or_else(|| title_expects_annunciator(aid));
         write_generic(

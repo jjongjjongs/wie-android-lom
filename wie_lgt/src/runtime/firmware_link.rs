@@ -16,6 +16,7 @@ use spin::Mutex;
 use wie_backend::System;
 use wie_core_arm::{Allocator, ArmCore, ResultWriter, SvcId};
 use wie_util::{ByteWrite, Result, read_generic, write_generic};
+use wie_wipi_c::api::graphics;
 
 use super::SVC_CATEGORY_FIRMWARE_MDA;
 use super::firmware::{FirmwareImage, ImportResolver, load_firmware};
@@ -244,6 +245,16 @@ pub async fn try_load_bios(core: &mut ArmCore, system: &System) -> Result<Option
     let size = system.filesystem().size(BIOS_FILENAME).await.unwrap_or(0);
     let data = read_bios(system, size).await;
     tracing::info!("Loading firmware BIOS {BIOS_FILENAME} ({} bytes) at base {FIRMWARE_BASE:#x}", data.len());
+
+    // The handset's own bitmap face lives in this image, and drawing text with
+    // it needs nothing else from the firmware - so take it before the mapping,
+    // and a title gets the handset's glyphs even if the rest of the load does
+    // not come up. See `wie_wipi_c::api::graphics::install_bios_font`.
+    if graphics::install_bios_font(&data) {
+        tracing::info!("Firmware bitmap face installed; text is drawn from the handset's own glyphs");
+    } else {
+        tracing::warn!("No bitmap face found in {BIOS_FILENAME}; text stays on the outline font");
+    }
 
     let names: FirmwareImportNames = Arc::new(Mutex::new(Vec::new()));
     register_firmware_libc_handler(core, system, names.clone())?;
