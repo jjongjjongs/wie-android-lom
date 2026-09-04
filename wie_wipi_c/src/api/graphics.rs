@@ -580,6 +580,14 @@ pub async fn get_display_info(context: &mut dyn WIPICContext, reserved: WIPICWor
     let platform = context.system().platform();
     let screen = platform.screen();
 
+    // The reference's MC_grpGetDisplayInfo reports width@+8/height@+0xc and then,
+    // for a 240/320/400-wide panel, subtracts 24 from the height - but only when
+    // its two soft-key-bar properties are both set, i.e. when the platform paints
+    // a soft-key bar in the bottom 24px and reserves it from the drawable area.
+    // Our screen has no such bar (the on-screen keys sit outside the game
+    // surface), so those properties are unset and, exactly as the reference then
+    // does, we report the full height. The colour fields are the driver's direct
+    // RGB565 format (matched by Rgb565Pixel), reported here as fixed masks.
     let info = WIPICDisplayInfo {
         bpp: FRAMEBUFFER_DEPTH,
         depth: 16,
@@ -1180,6 +1188,28 @@ mod tests {
         let mut context = TestContext::new();
         get_context(&mut context, 0, Idx::FgPixelIdx, 0x2000).await.unwrap();
         get_context(&mut context, 0x1000, Idx::FgPixelIdx, 0).await.unwrap();
+    }
+
+    /// The colour path is the driver's direct RGB565: 5 bits red, 6 green, 5
+    /// blue, packed r>>3 << 11 | g>>2 << 5 | b>>3, and it round-trips through the
+    /// getter within that precision. This is what MC_grpGetDisplayInfo advertises
+    /// (masks 0xf800/0x07e0/0x001f) and what a title's own blitter converts
+    /// against, so it has to be exact.
+    #[futures_test::test]
+    async fn pixel_from_rgb_is_direct_rgb565() {
+        let mut context = TestContext::new();
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0xff, 0, 0).await.unwrap(), 0xf800);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0, 0xff, 0).await.unwrap(), 0x07e0);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0, 0, 0xff).await.unwrap(), 0x001f);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0xff, 0xff, 0xff).await.unwrap(), 0xffff);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0, 0, 0).await.unwrap(), 0x0000);
+
+        // A pure-red pixel decodes back to full red (5-bit max scaled to 8-bit).
+        const OUT: u32 = 0x3000;
+        super::get_rgb_from_pixel(&mut context, 0xf800, OUT, OUT + 4, OUT + 8).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 0xff);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 0);
     }
 
     /// The size selector maps to the seven glyph heights `MC_grpGetFont` assigns,
