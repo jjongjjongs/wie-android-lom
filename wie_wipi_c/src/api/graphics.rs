@@ -97,7 +97,18 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
     let mut grp_ctx: WIPICGraphicsContext = read_generic(context, p_grp_ctx)?;
     match op {
         WIPICGraphicsContextIdx::ClipIdx => {
-            grp_ctx.clip = read_generic(context, pv)?;
+            // The clip rectangle is passed as four 32-bit words (x1, y1, x2, y2),
+            // not four 16-bit ones - reading it as `[u16; 4]` took only the low
+            // halves of x1/y1 as the whole rect and dropped x2/y2 entirely, so a
+            // title that saved the clip with GetContext and restored it here got a
+            // degenerate rectangle back and every later blit clipped to nothing
+            // (MapleStory 도적편's sprites vanished). The reference stores the
+            // bottom-right corner decremented; GetContext re-adds the 1.
+            let x1: u32 = read_generic(context, pv)?;
+            let y1: u32 = read_generic(context, pv + 4)?;
+            let x2: u32 = read_generic(context, pv + 8)?;
+            let y2: u32 = read_generic(context, pv + 12)?;
+            grp_ctx.clip = [x1 as u16, y1 as u16, x2.wrapping_sub(1) as u16, y2.wrapping_sub(1) as u16];
         }
         WIPICGraphicsContextIdx::FgPixelIdx => {
             grp_ctx.fgpxl = pv as _;
@@ -126,7 +137,11 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
             grp_ctx.style = pv;
         }
         WIPICGraphicsContextIdx::OffsetIdx => {
-            grp_ctx.offset = read_generic(context, pv)?;
+            // Same 32-bit-word pair as the clip corners, and the counterpart to
+            // GetContext's `OffsetIdx`, which writes two 32-bit words back.
+            let x: u32 = read_generic(context, pv)?;
+            let y: u32 = read_generic(context, pv + 4)?;
+            grp_ctx.offset = [x as u16, y as u16];
         }
         _ => {
             tracing::warn!("MC_grpSetContext({p_grp_ctx:#x}, {op:?}, {pv:#x}): ignoring invalid op");
@@ -1331,15 +1346,29 @@ mod tests {
             assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), value, "op {op:?}");
         }
 
-        // The clip is a struct in memory both ways; the bottom-right corner is
-        // reported one past what is stored, matching liblgt_system.so.
-        write_generic(&mut context, OUT, [10u16, 20, 100, 200]).unwrap();
+        // The clip is passed through memory both ways as four 32-bit words
+        // (x1, y1, x2, y2); set decrements the bottom-right corner on the way in
+        // and get reports it one past what is stored, matching liblgt_system.so,
+        // so a get-then-set round-trip is the identity.
+        write_generic(&mut context, OUT, 10u32).unwrap();
+        write_generic(&mut context, OUT + 4, 20u32).unwrap();
+        write_generic(&mut context, OUT + 8, 100u32).unwrap();
+        write_generic(&mut context, OUT + 12, 200u32).unwrap();
         set_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
         get_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
         assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 10);
         assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 20);
-        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 101);
-        assert_eq!(read_generic::<u32, _>(&context, OUT + 12).unwrap(), 201);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 100);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 12).unwrap(), 200);
+
+        // The offset is the same two-32-bit-word pair through memory, restored
+        // verbatim.
+        write_generic(&mut context, OUT, 7u32).unwrap();
+        write_generic(&mut context, OUT + 4, 9u32).unwrap();
+        set_context(&mut context, CTX, Idx::OffsetIdx, OUT).await.unwrap();
+        get_context(&mut context, CTX, Idx::OffsetIdx, OUT).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 7);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 9);
     }
 
     /// A null context or destination is a no-op, exactly as the vendor guards it,
