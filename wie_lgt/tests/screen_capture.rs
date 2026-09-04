@@ -76,12 +76,16 @@ impl Screen for CaptureScreen {
         }
     }
 
+    /// The LCD the title is told it has. `WIE_SCR_W`/`WIE_SCR_H` override it so
+    /// a layout that a title derives from the screen size can be swept: how a
+    /// splash or a HUD element moves as the reported size changes says whether
+    /// the title centred it, anchored it, or placed it at a fixed offset.
     fn width(&self) -> u32 {
-        240
+        std::env::var("WIE_SCR_W").ok().and_then(|x| x.parse().ok()).unwrap_or(240)
     }
 
     fn height(&self) -> u32 {
-        320
+        std::env::var("WIE_SCR_H").ok().and_then(|x| x.parse().ok()).unwrap_or(320)
     }
 }
 
@@ -295,6 +299,23 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
             }
             if ticks == t2.saturating_add(20) {
                 emulator.handle_event(Event::Keyup(key2));
+            }
+        }
+
+        // Every `WIE_FDUMP_EVERY` ticks, the exact frame as a PPM under
+        // `WIE_FDUMP_DIR`. The single last/busiest frame catches one screen;
+        // a title that walks through several (a splash sequence, an intro,
+        // then a menu) needs the whole run to compare each against a
+        // reference capture.
+        if let Ok(dir) = std::env::var("WIE_FDUMP_DIR") {
+            let every: u32 = std::env::var("WIE_FDUMP_EVERY").ok().and_then(|x| x.parse().ok()).unwrap_or(25);
+            if ticks % every == 0 {
+                let c = screen.captured.lock().unwrap();
+                if !c.last_pixels.is_empty() {
+                    let mut ppm = format!("P6\n{} {}\n255\n", c.width, c.height).into_bytes();
+                    ppm.extend_from_slice(&c.last_pixels);
+                    let _ = std::fs::write(format!("{dir}/t{ticks:06}.ppm"), ppm);
+                }
             }
         }
 
