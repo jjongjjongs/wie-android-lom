@@ -86,6 +86,18 @@ pub(crate) fn try_fast_stdlib_mem(core: &mut ArmCore) -> Result<bool> {
     let a0 = core.read_param(0)?;
     let a1 = core.read_param(1)?;
     let a2 = core.read_param(2)?;
+    // DIAGNOSTIC: a clet blits a decoded background by copying it in bulk. Log
+    // the big copies (dst/src/size) so a device log shows whether the image
+    // lands in the draw buffer (compare dst against the `fb=` in the FRAME line)
+    // or somewhere that never reaches the screen.
+    if a2 >= 0x4000 {
+        let name = match id {
+            MEMCPY => "memcpy",
+            MEMMOVE => "memmove",
+            _ => "memset",
+        };
+        tracing::info!("BIGMEM {name}(dst={a0:#x}, src={a1:#x}, size={a2:#x})");
+    }
     match id {
         MEMCPY => stdlib::mem_copy(core, a0, a1, a2)?,
         MEMMOVE => stdlib::mem_move(core, a0, a1, a2)?,
