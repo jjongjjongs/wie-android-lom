@@ -7,7 +7,7 @@ use jvm::{
 use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 
 use wie_backend::{AsyncCallable, Instant, System};
-use wie_core_arm::{Allocator, ArmCore};
+use wie_core_arm::{Allocator, ArmCore, HEAP_BASE, HEAP_SIZE};
 use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
 use wie_wipi_c::{
     WIPICContext, WIPICMethodBody,
@@ -64,6 +64,19 @@ impl WIPICContext for LgtWIPICContext {
         // guard the header subtraction underflows and panics. Metal Slug
         // Survival frees a null handle during startup.
         if memory.0 < size_of::<WIPICWord>() as WIPICWord {
+            return Ok(());
+        }
+
+        // A pointer that lands outside the guest heap is not one we handed out:
+        // a title that reads an uninitialised field as a handle and frees it
+        // passes whatever bytes the field held, which is a NUL no-op on the
+        // reference's zeroed heap but a stray small integer here (MapleStory
+        // 도적편 frees 0x100 while opening its menu). Dropping it, rather than
+        // driving the allocator with a garbage address until its bitmap index
+        // runs off the end, is the free(NULL)/bad-pointer behaviour the
+        // reference has.
+        if memory.0 < HEAP_BASE || memory.0 >= HEAP_BASE + HEAP_SIZE {
+            tracing::debug!("MC_knlFree({:#x}): ignoring free of a non-heap pointer", memory.0);
             return Ok(());
         }
 

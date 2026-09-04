@@ -10,7 +10,7 @@ use wie_backend::{
     Event,
     canvas::{Canvas, Clip, Color, Image, PixelType, Rgb8Pixel, Rgb565Pixel, TextAlignment, string_width_px},
 };
-use wie_util::{Result, read_generic, read_null_terminated_string_bytes, write_generic};
+use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic};
 
 use wipi_types::wipic::{WIPICDisplayInfo, WIPICFramebuffer, WIPICGraphicsContext, WIPICImage, WIPICIndirectPtr, WIPICWord};
 
@@ -458,7 +458,22 @@ pub async fn create_image(
 ) -> Result<WIPICWord> {
     tracing::debug!("MC_grpCreateImage({ptr_image:#x}, {:#x}, {offset}, {len})", image_data.0);
 
-    let image = create_wipi_image(context, image_data, offset, len)?;
+    // The source pointer can be one the title read out of never-initialised
+    // memory - a NULL/valid handle on the reference's zeroed heap, a stray
+    // address here - so a read straight from it faults the whole VM instead of
+    // failing the one call. The reference returns "not done" for a source it
+    // cannot read; do the same and let the title carry on rather than die.
+    let image = match create_wipi_image(context, image_data, offset, len) {
+        Ok(image) => image,
+        Err(WieError::InvalidMemoryAccess(address)) => {
+            tracing::warn!(
+                "MC_grpCreateImage: unreadable source {:#x} (+{offset}, faulted at {address:#x}); reporting not-done",
+                image_data.0
+            );
+            return Ok(0); // not MC_GRP_IMAGE_DONE
+        }
+        Err(other) => return Err(other),
+    };
 
     let memory = context.alloc(size_of::<WIPICImage>() as WIPICWord)?;
     write_generic(context, ptr_image, memory)?;

@@ -262,10 +262,31 @@ pub async fn get_resource_id(context: &mut dyn WIPICContext, ptr_name: WIPICWord
     tracing::debug!("MC_knlGetResourceID({ptr_name:#x}, {ptr_size:#x})");
 
     let raw_name = read_null_terminated_string_bytes(context, ptr_name)?;
-    let name = encoding_rs::EUC_KR.decode(&raw_name).0;
+    let mut name = encoding_rs::EUC_KR.decode(&raw_name).0;
     tracing::debug!("  resource name: {name}");
 
-    let size = context.get_resource_size(&name).await?;
+    let mut size = context.get_resource_size(&name).await?;
+
+    // A title can hand us a path that is not NUL-terminated: it copies the
+    // characters into a scratch buffer and trusts the byte past the last one to
+    // already be zero. That holds on the reference's heap, whose freshly handed
+    // out (and internally recycled) blocks are zeroed, but not here, where the
+    // block still carries the bytes an earlier use left - MapleStory 도적편
+    // builds "png/mainmenu/menu.dat" over stale RGB565 pixels, so the read runs
+    // on into garbage and the lookup misses. A resource path is plain ASCII, so
+    // when the full read misses, retry with the leading printable-ASCII run,
+    // which is exactly the path the title meant.
+    if size.is_none() {
+        let ascii_len = raw_name.iter().position(|&b| !(0x20..=0x7e).contains(&b)).unwrap_or(raw_name.len());
+        if ascii_len < raw_name.len() && ascii_len > 0 {
+            let trimmed = encoding_rs::EUC_KR.decode(&raw_name[..ascii_len]).0.into_owned();
+            if let Some(found) = context.get_resource_size(&trimmed).await? {
+                tracing::debug!("  resource name resolved to {trimmed:?} after trimming a non-path tail");
+                size = Some(found);
+                name = trimmed.into();
+            }
+        }
+    }
 
     if size.is_none() {
         if ptr_size != 0 {

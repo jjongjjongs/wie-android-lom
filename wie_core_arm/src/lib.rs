@@ -54,6 +54,6 @@ pub use self::{
     allocator::Allocator,
     binary_patches::install_binary_patches,
     context::ArmCoreContext,
-    core::{ArmCore, RUN_FUNCTION_LR, RunFunctionResult},
+    core::{ArmCore, HEAP_BASE, HEAP_SIZE, RUN_FUNCTION_LR, RunFunctionResult},
     function::{EmulatedFunction, EmulatedFunctionParam, RegisteredFunction, RegisteredFunctionHolder, ResultWriter, SvcId},
 };
