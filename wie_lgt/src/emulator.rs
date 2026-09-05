@@ -230,9 +230,14 @@ impl LgtEmulator {
         // thread (P2), and route the game's media imports to the firmware's
         // MC_mda* exports (P3). Dormant without the BIOS; the game runs on the
         // Rust platform either way.
+        let mut firmware_static_roots = Vec::new();
         let mda_routes = if let Some(image) = crate::runtime::firmware_link::try_load_bios(core, system).await? {
             let routes = crate::runtime::firmware_link::build_mda_routes(core, system, &image)?;
             let plan = crate::runtime::firmware_link::FirmwareInitPlan::from_image(&image);
+            // The firmware's own `.data`/`.bss`: platform globals there can be
+            // the only reference to a guest object, so the collector needs them
+            // as roots.
+            firmware_static_roots = image.writable_segments.clone();
             let mut firmware_core = core.clone();
             system.spawn(async move || {
                 if let Err(error) = crate::runtime::firmware_link::run_firmware_init(&mut firmware_core, &plan).await {
@@ -245,7 +250,17 @@ impl LgtEmulator {
             BTreeMap::new()
         };
 
-        load_native(core, system, &jvm, &binary_mod, &jar_filename, main_class_name.as_deref(), mda_routes).await?;
+        load_native(
+            core,
+            system,
+            &jvm,
+            &binary_mod,
+            &jar_filename,
+            main_class_name.as_deref(),
+            mda_routes,
+            firmware_static_roots,
+        )
+        .await?;
 
         Ok(())
     }

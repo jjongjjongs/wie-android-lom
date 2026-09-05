@@ -60,6 +60,34 @@ pub struct SavePointState {
 }
 
 impl SavePointState {
+    /// The collector roots every live save point contributes: the register
+    /// words a longjmp would restore, and the guest jmp_buf blocks themselves.
+    ///
+    /// A save point outlives the moment it was captured, so a callee-saved
+    /// register it holds can be the last reference to an object the frame's
+    /// *current* registers no longer name - and the sweep would free it.
+    pub fn gc_roots(&self) -> (Vec<u32>, Vec<(u32, u32)>) {
+        let chains = self.chains.lock();
+
+        let mut registers = Vec::new();
+        let mut ranges = Vec::new();
+
+        for chain in chains.values() {
+            for point in &chain.points {
+                ranges.push((point.address, point.address + SAVE_POINT_SIZE));
+
+                if let Some(context) = &point.continuation {
+                    registers.extend_from_slice(&[
+                        context.r0, context.r1, context.r2, context.r3, context.r4, context.r5, context.r6, context.r7, context.r8, context.sb,
+                        context.sl, context.fp, context.ip, context.lr,
+                    ]);
+                }
+            }
+        }
+
+        (registers, ranges)
+    }
+
     /// Native loader execution happens before `ArmCoreThreadWrapper` exists.
     /// Reserve id zero for that bootstrap execution environment; real WIE
     /// native threads start at id one.

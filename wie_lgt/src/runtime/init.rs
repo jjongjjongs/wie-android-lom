@@ -533,12 +533,20 @@ fn register_init_svc_handler(
     system: &System,
     jvm: &Jvm,
     image_ranges: ImageRanges,
+    static_roots: Vec<(u32, u32)>,
     save_points: &SavePointState,
     dlet_properties: DletProperties,
     firmware_mda_routes: BTreeMap<u32, u32>,
     main_class_name: Option<Arc<str>>,
 ) -> Result<()> {
     let java_handles = JavaHandles::new(core.clone());
+    for (start, size) in static_roots {
+        java_handles.register_gc_static_root(start, start.wrapping_add(size));
+    }
+    // A save point is a jmp_buf: it holds the callee-saved registers a compiled
+    // frame will restore when a longjmp lands on it, and those can be the last
+    // reference to an object the frame's *current* registers no longer hold.
+    java_handles.set_save_points(save_points.clone());
     // Give the collector the JVM's reachability so its sweep can pin objects
     // the guest roots miss but the JVM still holds.
     java_handles.set_jvm(jvm.clone());
@@ -3413,8 +3421,13 @@ pub async fn load_native(
     jar_filename: &str,
     main_class_name: Option<&str>,
     firmware_mda_routes: BTreeMap<u32, u32>,
+    firmware_static_roots: Vec<(u32, u32)>,
 ) -> Result<()> {
-    let (entrypoint, image_ranges) = load_executable(core, data)?;
+    let LoadedImage {
+        entrypoint,
+        ranges: image_ranges,
+        writable_ranges,
+    } = load_executable(core, data)?;
     let save_points = SavePointState::default();
 
     // Native dlet_main derives property 200 by removing the 11-byte
@@ -3433,6 +3446,13 @@ pub async fn load_native(
         system,
         jvm,
         Arc::new(image_ranges),
+        // The module's own writable sections and the firmware's writable
+        // segments are the two static homes a live object can be reachable
+        // from without appearing in any thread register, stack word or
+        // class-static block. Hand them to the collector as roots: missing
+        // them lets a mass sweep on heap exhaustion free objects the game is
+        // still using, which surfaces later as hollowed-out state.
+        writable_ranges.into_iter().chain(firmware_static_roots).collect(),
         &save_points,
         dlet_properties,
         firmware_mda_routes,
@@ -3835,7 +3855,18 @@ fn apply_relocations(core: &mut ArmCore, data: &[u8], section_headers: &[elf::se
 /// registered.
 type ImageRanges = Arc<Vec<(u32, u32)>>;
 
-fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u32)>)> {
+/// The loaded image of `binary.mod`: its entry point, every mapped section
+/// range, and - separately - the writable ones.
+struct LoadedImage {
+    entrypoint: u32,
+    ranges: Vec<(u32, u32)>,
+    /// `.data`/`.bss` and any other `SHF_WRITE` section. The AOT module keeps
+    /// globals there, and a global can be the only reference to a live object,
+    /// so the collector has to scan these words as roots.
+    writable_ranges: Vec<(u32, u32)>,
+}
+
+fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<LoadedImage> {
     let elf = ElfBytes::<AnyEndian>::minimal_parse(data).map_err(|x| WieError::FatalError(format!("Failed to parse ELF binary.mod: {x}")))?;
 
     if elf.ehdr.e_machine != elf::abi::EM_ARM {
@@ -3856,6 +3887,7 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u3
     let section_headers: alloc::vec::Vec<_> = shdrs.iter().collect();
 
     let mut ranges = Vec::new();
+    let mut writable_ranges = Vec::new();
 
     for shdr in &section_headers {
         let section_name = strtab
@@ -3877,6 +3909,9 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u3
             }
 
             ranges.push((shdr.sh_addr as u32, shdr.sh_size as u32));
+            if shdr.sh_flags & u64::from(elf::abi::SHF_WRITE) != 0 {
+                writable_ranges.push((shdr.sh_addr as u32, shdr.sh_size as u32));
+            }
         }
     }
 
@@ -3884,7 +3919,11 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<(u32, Vec<(u32, u3
 
     tracing::debug!("Entrypoint: {:#x}", elf.ehdr.e_entry);
 
-    Ok((elf.ehdr.e_entry as u32, ranges))
+    Ok(LoadedImage {
+        entrypoint: elf.ehdr.e_entry as u32,
+        ranges,
+        writable_ranges,
+    })
 }
 
 #[cfg(test)]

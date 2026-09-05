@@ -26,6 +26,9 @@ use wie_util::{Result, WieError, read_generic, write_generic};
 use crate::relocation::{R_ARM_ABS32, R_ARM_GLOB_DAT, R_ARM_JUMP_SLOT, R_ARM_NONE, R_ARM_RELATIVE, arm_abs32, arm_relative};
 
 const PT_LOAD: u32 = 1;
+/// `PF_W` - the segment is writable, so its words can hold live object
+/// references the collector has to treat as roots.
+const PF_W: u32 = 2;
 const PT_DYNAMIC: u32 = 2;
 
 const DT_NULL: u32 = 0;
@@ -69,6 +72,10 @@ pub struct FirmwareImage {
     pub entry: u32,
     /// `(address, size)` of each loaded `PT_LOAD` segment.
     pub segments: Vec<(u32, u32)>,
+    /// `(address, size)` of the writable `PT_LOAD` segments (the firmware's
+    /// `.data`/`.bss`). These hold platform globals that can be the only
+    /// reference to a guest object, so the collector scans them as roots.
+    pub writable_segments: Vec<(u32, u32)>,
     /// The firmware's own exported symbols, name -> guest address. This is the
     /// table re-derived against the exact binary that was loaded, replacing the
     /// build-specific address guesses in `platform_metadata`.
@@ -128,6 +135,7 @@ struct ProgramHeader {
     p_vaddr: u32,
     p_filesz: u32,
     p_memsz: u32,
+    p_flags: u32,
 }
 
 /// Translates a virtual address (as stored in `PT_DYNAMIC` pointers) to a file
@@ -185,6 +193,7 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
             p_vaddr: rd_u32(data, off + 8)?,
             p_filesz: rd_u32(data, off + 16)?,
             p_memsz: rd_u32(data, off + 20)?,
+            p_flags: rd_u32(data, off + 24)?,
         };
         match ph.p_type {
             PT_LOAD => loads.push(ph),
@@ -200,6 +209,7 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
 
     // Map each PT_LOAD segment at base + p_vaddr, zero-filling bss (memsz > filesz).
     let mut segments = Vec::new();
+    let mut writable_segments = Vec::new();
     for ph in &loads {
         let addr = base.wrapping_add(ph.p_vaddr);
         let file_start = ph.p_offset as usize;
@@ -213,6 +223,9 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
         core.load(&image, addr, image.len())?;
 
         segments.push((addr, ph.p_memsz));
+        if ph.p_flags & PF_W != 0 {
+            writable_segments.push((addr, ph.p_memsz));
+        }
     }
 
     // Parse the dynamic array into the tags the loader needs.
@@ -395,6 +408,7 @@ pub fn load_firmware(core: &mut ArmCore, data: &[u8], base: u32, resolver: &mut 
         base,
         entry,
         segments,
+        writable_segments,
         exports,
         unresolved_imports,
         init,

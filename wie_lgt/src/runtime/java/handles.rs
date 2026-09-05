@@ -21,6 +21,8 @@ use spin::Mutex;
 use wie_core_arm::{Allocator, ArmCore};
 use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
 
+use crate::runtime::savepoint::SavePointState;
+
 /// Instance header the compiled code relies on:
 ///
 /// ```text
@@ -104,6 +106,10 @@ pub struct JavaHandles {
     /// crossing pins its objects here for its duration. Identity to nesting
     /// count, since the same object can be pinned by nested crossings.
     bridge_pins: Arc<Mutex<BTreeMap<usize, u32>>>,
+    /// The live save points, whose jmp_buf blocks and captured register
+    /// contexts are GC roots: a longjmp restores those registers, so an object
+    /// named only there is still reachable. Set once the state exists.
+    save_points: Arc<Mutex<Option<SavePointState>>>,
 }
 
 /// Keeps a set of instance identities pinned against the collector for as long
@@ -154,7 +160,14 @@ impl JavaHandles {
             gc_static_roots: Default::default(),
             jvm: Default::default(),
             bridge_pins: Default::default(),
+            save_points: Default::default(),
         }
+    }
+
+    /// Records the save-point state whose jmp_buf blocks and captured register
+    /// contexts the collector scans as roots.
+    pub fn set_save_points(&self, save_points: SavePointState) {
+        *self.save_points.lock() = Some(save_points);
     }
 
     /// Records the JVM whose reachability pins live objects during a sweep.
@@ -383,7 +396,18 @@ impl JavaHandles {
         let static_roots = self.gc_static_roots.lock().clone();
         let global_data = (GUEST_GLOBAL_DATA_BASE, GUEST_GLOBAL_DATA_BASE + GUEST_GLOBAL_DATA_SIZE);
 
-        for &(low, high) in stack_ranges.iter().chain(static_roots.iter()).chain(core::iter::once(&global_data)) {
+        let (save_point_registers, save_point_ranges) = match self.save_points.lock().as_ref() {
+            Some(save_points) => save_points.gc_roots(),
+            None => (Vec::new(), Vec::new()),
+        };
+        seeds.extend_from_slice(&save_point_registers);
+
+        for &(low, high) in stack_ranges
+            .iter()
+            .chain(static_roots.iter())
+            .chain(save_point_ranges.iter())
+            .chain(core::iter::once(&global_data))
+        {
             let mut address = low & !3;
             while address < high {
                 if let Ok(word) = read_generic::<u32, _>(&core, address) {
@@ -649,7 +673,50 @@ impl JavaHandles {
     pub fn materialize_array_block(&self, handle: u32, length: u32, elements: &[u8]) -> Result<()> {
         let mut core = self.core.clone();
 
-        let data = Allocator::alloc(&mut core, ARRAY_HEADER_SIZE + elements.len() as u32)?;
+        let size = ARRAY_HEADER_SIZE + elements.len() as u32;
+
+        // Re-mirroring an array of the same length writes over the block it
+        // already has, so a pointer the compiled code kept into the elements
+        // stays good.
+        let reusable = self
+            .gc_objects
+            .lock()
+            .get(&handle)
+            .copied()
+            .filter(|object| object.is_array && object.payload_size == size)
+            .map(|object| object.payload);
+
+        let data = match reusable {
+            Some(data) => data,
+            None => {
+                let data = self.alloc_reporting_leaks(&mut core, size)?;
+
+                // Swap the array block in for whatever the object pointed at -
+                // for a handle from `insert` that is the generic field block,
+                // one word per platform field row, a couple of kilobytes on a
+                // title with a wide import table. Leaving it in place orphaned
+                // it on every crossing: the collector went on scanning and
+                // freeing the field block while the array block was never
+                // reclaimed at all, so a title that mirrors a `char[]` per
+                // drawn string ate the heap in minutes. Read back under the
+                // same lock as the insert, since the allocation above can run a
+                // sweep that changes what this handle points at.
+                let previous = self.gc_objects.lock().insert(
+                    handle,
+                    GcObject {
+                        payload: data,
+                        payload_size: size,
+                        is_array: true,
+                    },
+                );
+                if let Some(previous) = previous {
+                    let _ = Allocator::free(&mut core, previous.payload, previous.payload_size);
+                }
+
+                data
+            }
+        };
+
         write_generic(&mut core, data, length)?;
         core.write_bytes(data + ARRAY_HEADER_SIZE, elements)?;
         write_generic(&mut core, handle + INSTANCE_FIELDS_OFFSET, data)?;
@@ -720,7 +787,42 @@ mod tests {
     use wie_core_arm::{Allocator, ArmCore};
     use wie_util::{read_generic, write_generic};
 
+    use crate::runtime::savepoint::SavePointState;
+
     use super::{INSTANCE_FIELDS_OFFSET, JavaHandles};
+
+    /// A save point is a jmp_buf a longjmp will restore, so a handle sitting in
+    /// its block is still a live reference - even though nothing else names it.
+    /// Without this root the sweep frees the object and the resumed frame reads
+    /// a hollow one, which is how a title's state turns into shells.
+    #[test]
+    fn a_handle_left_in_a_save_point_survives_the_sweep() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+
+        let handles = JavaHandles::new(core.clone());
+        let save_points = SavePointState::default();
+        handles.set_save_points(save_points.clone());
+
+        let kept = handles.allocate_instance(0).unwrap();
+        let orphan = handles.allocate_instance(0).unwrap();
+
+        // A compiled frame armed a catch and left the object in a saved
+        // register; the jmp_buf block is the only place that names it.
+        let point = save_points.alloc(&mut core, 0).unwrap();
+        write_generic(&mut core, point + 0x20, kept).unwrap();
+
+        handles.gc_collect_with_pins(&BTreeSet::new());
+
+        assert!(
+            handles.gc_objects.lock().contains_key(&kept),
+            "an object named only by a live save point must survive"
+        );
+        assert!(
+            !handles.gc_objects.lock().contains_key(&orphan),
+            "an object no root names is still garbage"
+        );
+    }
 
     /// A guest word registered as a static root keeps the object its handle
     /// names alive, exactly how an interned constant string survives once its
@@ -773,6 +875,41 @@ mod tests {
         handles.materialize_array_block(handle, chars.len() as u32, &bytes).unwrap();
 
         assert_eq!(handles.read_char_array(handle).unwrap(), chars);
+    }
+
+    /// Mirroring a JVM array into a handle replaces the generic field block
+    /// with the array block, so the collector tracks (and can reclaim) what the
+    /// object actually points at, and the field block goes straight back to the
+    /// heap. Repeating the crossing must not grow the heap.
+    #[test]
+    fn materializing_an_array_block_hands_the_field_block_back() {
+        let mut core = ArmCore::new(false, None).unwrap();
+        Allocator::init(&mut core).unwrap();
+        let handles = JavaHandles::new(core.clone());
+        handles.set_field_slots(256);
+
+        let handle = handles.allocate_instance(0).unwrap();
+        let field_block: u32 = read_generic(&core, handle + INSTANCE_FIELDS_OFFSET).unwrap();
+        assert_eq!(handles.gc_objects.lock().get(&handle).unwrap().payload, field_block);
+
+        let bytes = [1u8, 0, 2, 0, 3, 0];
+        handles.materialize_array_block(handle, 3, &bytes).unwrap();
+
+        let array_block: u32 = read_generic(&core, handle + INSTANCE_FIELDS_OFFSET).unwrap();
+        let tracked = handles.gc_objects.lock().get(&handle).copied().unwrap();
+        assert_eq!(tracked.payload, array_block, "the array block is what the object now points at");
+        assert_eq!(tracked.payload_size, 4 + bytes.len() as u32);
+        assert!(tracked.is_array);
+
+        // The 1 KiB field block is free again: a fresh allocation of that size
+        // gets it back rather than growing the heap.
+        assert_eq!(Allocator::alloc(&mut core, 256 * 4).unwrap(), field_block);
+
+        // Mirroring the same array again reuses the block it already has, so a
+        // pointer the compiled code kept into the elements stays valid.
+        handles.materialize_array_block(handle, 3, &[4, 0, 5, 0, 6, 0]).unwrap();
+        assert_eq!(read_generic::<u32, _>(&core, handle + INSTANCE_FIELDS_OFFSET).unwrap(), array_block);
+        assert_eq!(handles.read_char_array(handle).unwrap(), [4u16, 5, 6]);
     }
 
     #[test]
