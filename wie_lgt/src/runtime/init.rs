@@ -1835,6 +1835,51 @@ fn superclass_dispatch_slot_count(core: &ArmCore, context: &InitSvcContext, root
     Ok(platform_class(&superclass).map(|class| class.dispatch.len() as u32).unwrap_or(0))
 }
 
+/// Caches the application superclass a class extends when the class table did
+/// not register it.
+///
+/// A base that is missing from the cache reads as "no application superclass":
+/// `superclass_dispatch_slot_count` falls through to zero and
+/// `superclass_virtual_slot` finds nothing, so the subclass is laid out from
+/// slot zero and every one of its overrides lands on a slot of its own instead
+/// of the base's. Battle Monster's in-game card `i` extends `b`, which extends
+/// the SDK card `o`; with `b` missing, `i.g()V` came out at slot 129 rather
+/// than the slot `o.g()V` holds, and the own-virtual row for `g()V` - resolved
+/// against the first application class that declares it, which is `i` - took
+/// that slot with it.
+///
+/// The class is in the image whether or not it was registered, so read it from
+/// there. A platform superclass is left alone: `platform_class` already
+/// describes those.
+fn ensure_application_superclass_cached(core: &ArmCore, context: &InitSvcContext, root: u32) {
+    let Some(superclass) = application_superclass_to_cache(&context.app_classes.lock(), root) else {
+        return;
+    };
+
+    let Some(class) = app_classes::find_class(core, &context.image_ranges, &superclass) else {
+        tracing::warn!("LGT class at {root:#x} extends {superclass}, which is neither registered nor in the image");
+        return;
+    };
+
+    tracing::debug!("Cached unregistered application superclass {superclass} at {:#x}", class.root);
+    context.app_classes.lock().push(class);
+}
+
+/// The application superclass of `root` that `classes` does not yet describe.
+///
+/// `None` when there is nothing to read from the image: an unknown class, one
+/// that extends nothing, one whose base is a platform class `platform_class`
+/// already describes, or one whose base is cached already.
+fn application_superclass_to_cache(classes: &[AppClass], root: u32) -> Option<String> {
+    let superclass = classes.iter().find(|class| class.root == root)?.superclass.clone()?;
+
+    if platform_class(&superclass).is_some() || classes.iter().any(|class| class.name == superclass) {
+        return None;
+    }
+
+    Some(superclass)
+}
+
 /// Ensures native heavy-link method slots have been assigned exactly once.
 ///
 /// `vm_resolve_one` receives an already-linked class_shared root and immediately
@@ -1881,6 +1926,12 @@ fn ensure_heavy_method_slots_linked_at(core: &mut ArmCore, context: &InitSvcCont
         let class = app_classes::parse_class_root(core, root)?;
         context.app_classes.lock().push(class);
     }
+
+    // `vm_register_classes` does not always list the whole hierarchy: Battle
+    // Monster registers the in-game card `i` but not the `b` it extends, and
+    // an unregistered base is invisible to every lookup below. Cache it from
+    // the image first, so the chain this class is laid out on is complete.
+    ensure_application_superclass_cached(core, context, root);
 
     // A subclass's slots are laid out on top of its superclass's, so the base
     // has to be linked first. Linking a subclass while its base still carries
@@ -4214,6 +4265,57 @@ fn load_executable(core: &mut ArmCore, data: &[u8]) -> Result<LoadedImage> {
         ranges,
         writable_ranges,
     })
+}
+
+#[cfg(test)]
+mod application_superclass_tests {
+    use alloc::{string::ToString, vec, vec::Vec};
+
+    use super::{AppClass, application_superclass_to_cache};
+
+    fn class(root: u32, name: &str, superclass: Option<&str>) -> AppClass {
+        AppClass {
+            root,
+            get_class: 0,
+            get_raw_class: 0,
+            name: name.to_string(),
+            superclass: superclass.map(|x| x.to_string()),
+            interfaces: Vec::new(),
+            members: Vec::new(),
+            instance_words: 0,
+        }
+    }
+
+    /// Battle Monster's shape: the class table registers the in-game card `i`
+    /// and the SDK card `o` it ultimately derives from, but not the `b` in
+    /// between. `b` is the one to read out of the image.
+    #[test]
+    fn names_the_base_the_class_table_left_out() {
+        let classes = vec![class(0x1401910, "i", Some("b")), class(0x1403e08, "o", Some("org/kwis/msp/lcdui/Card"))];
+
+        assert_eq!(application_superclass_to_cache(&classes, 0x1401910).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn leaves_alone_a_base_that_needs_no_reading() {
+        let mut classes = vec![
+            class(0x1401910, "i", Some("b")),
+            // A platform base is described by `platform_class`, not the image.
+            class(0x1403e08, "o", Some("org/kwis/msp/lcdui/Card")),
+            // The application's own root extends nothing.
+            class(0x140004c, "Game", None),
+        ];
+
+        assert_eq!(application_superclass_to_cache(&classes, 0x1403e08), None);
+        assert_eq!(application_superclass_to_cache(&classes, 0x140004c), None);
+
+        // A class nobody has parsed yet has no superclass to look for.
+        assert_eq!(application_superclass_to_cache(&classes, 0xdead_beef), None);
+
+        // Once `b` is cached, there is nothing left to read.
+        classes.push(class(0x1400fc4, "b", Some("o")));
+        assert_eq!(application_superclass_to_cache(&classes, 0x1401910), None);
+    }
 }
 
 #[cfg(test)]
