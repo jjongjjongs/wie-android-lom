@@ -18,7 +18,7 @@ use wipi_types::wipic::{WIPICDisplayInfo, WIPICFramebuffer, WIPICImage, WIPICInd
 use crate::context::WIPICContext;
 
 use self::{
-    bitmap_font::BitmapFont,
+    bitmap_font::BitmapFace,
     framebuffer::FrameBuffer,
     grp_context::{WIPICGraphicsContext, WIPICGraphicsContextIdx},
     image::create_wipi_image,
@@ -991,14 +991,14 @@ fn blit_magenta_keyed(canvas: &mut dyn Canvas, dx: i32, dy: i32, w: i32, h: i32,
 /// `y` is the top of the glyph box, the same origin the outline path draws
 /// from, and each glyph is stamped a pixel at a time so the result is the 1-bit
 /// shape the face stores rather than an anti-aliased rendering of it.
-fn draw_bitmap_string(canvas: &mut dyn Canvas, font: &BitmapFont, string: &str, x: i32, y: i32, color: Color, clip: Clip) {
+fn draw_bitmap_string(canvas: &mut dyn Canvas, face: &BitmapFace, string: &str, x: i32, y: i32, color: Color, clip: Clip) {
     let mut pen = x;
     for c in string.chars() {
-        let Some(glyph) = font.glyph(c) else {
+        let Some(glyph) = face.glyph(c) else {
             continue;
         };
 
-        for row in 0..bitmap_font::GLYPH_HEIGHT as u32 {
+        for row in 0..face.height {
             let py = y + row as i32;
             if py < clip.y || py >= clip.y + clip.height as i32 {
                 continue;
@@ -1062,12 +1062,12 @@ fn font_ascent_px(height: f32) -> f32 {
 }
 
 pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32) -> Result<i32> {
-    // The reference registers one face - `font_default`, 12 pixels - so a
-    // request for any other size matches nothing in its font registry and the
-    // title is handed that face anyway. With the BIOS face installed we do the
-    // same, and every metric below then reports it.
-    let height = match bitmap_font::system_font() {
-        Some(_) => bitmap_font::GLYPH_HEIGHT as i32,
+    // The reference picks one of the seven faces its font module carries from
+    // the size flag, and falls back to the default face for a flag that names
+    // none. With the BIOS faces installed we do the same, and every metric
+    // below then reports the face the title was actually handed.
+    let height = match bitmap_font::face_for_size(size as u32) {
+        Some(face) => face.height as i32,
         None => font_size_px(size),
     };
     tracing::debug!("MC_grpGetFont({face}, {size}, {style}) -> {height}px");
@@ -1080,8 +1080,8 @@ pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32
 pub async fn get_font_height(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
     tracing::trace!("MC_grpGetFontHeight({font})");
 
-    if bitmap_font::system_font().is_some() {
-        return Ok(bitmap_font::GLYPH_HEIGHT as i32);
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.height as i32);
     }
 
     Ok(font_handle_height(font) as i32)
@@ -1090,8 +1090,8 @@ pub async fn get_font_height(_: &mut dyn WIPICContext, font: i32) -> Result<i32>
 pub async fn get_font_ascent(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
     tracing::trace!("MC_grpGetFontAscent({font})");
 
-    if bitmap_font::system_font().is_some() {
-        return Ok(bitmap_font::GLYPH_ASCENT as i32);
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.ascent as i32);
     }
 
     Ok(font_ascent_px(font_handle_height(font)) as i32)
@@ -1100,8 +1100,8 @@ pub async fn get_font_ascent(_: &mut dyn WIPICContext, font: i32) -> Result<i32>
 pub async fn get_font_descent(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
     tracing::trace!("MC_grpGetFontDescent({font})");
 
-    if bitmap_font::system_font().is_some() {
-        return Ok(bitmap_font::GLYPH_DESCENT as i32);
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.descent as i32);
     }
 
     let height = font_handle_height(font);
@@ -1112,8 +1112,8 @@ pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_str
     tracing::trace!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
 
     let string = read_wipi_string(context, ptr_string, length)?;
-    if let Some(bitmap) = bitmap_font::system_font() {
-        return Ok(bitmap.string_width(&string) as i32);
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.string_width(&string) as i32);
     }
 
     Ok(string_width_px(&string, font_handle_height(font)) as i32)
@@ -1154,8 +1154,8 @@ pub async fn get_unicode_string_width(context: &mut dyn WIPICContext, font: i32,
     tracing::trace!("MC_grpGetUnicodeStringWidth({font}, {ptr_string:#x}, {length})");
 
     let string = read_wipi_unicode_string(context, ptr_string, length)?;
-    if let Some(bitmap) = bitmap_font::system_font() {
-        return Ok(bitmap.string_width(&string) as i32);
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.string_width(&string) as i32);
     }
 
     Ok(string_width_px(&string, font_handle_height(font)) as i32)
@@ -1190,11 +1190,12 @@ pub async fn draw_string(
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
 
     // The handset's own face when the BIOS supplied one, drawn a pixel at a
-    // time exactly as it is stored - the reference has one face and draws every
-    // string from it, whatever size the title asked for.
-    if let Some(font) = bitmap_font::system_font() {
+    // time exactly as it is stored. The face is the one the title selected with
+    // `SetContext(font)`, so a heading it asked `MC_grpGetFont` for a larger
+    // size for is drawn - and measured - in that size.
+    if let Some(face) = bitmap_font::face_for_height(gctx.font) {
         let mut canvas = framebuffer.canvas(context)?;
-        draw_bitmap_string(&mut **canvas, &font, &string, x, y, color, clip);
+        draw_bitmap_string(&mut **canvas, &face, &string, x, y, color, clip);
         canvas.flush()?;
 
         return Ok(());
