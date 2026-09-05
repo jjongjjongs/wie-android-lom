@@ -222,6 +222,8 @@ impl LgtEmulator {
 
         apply_offline_auth_patch(&aid, &mut binary_mod);
         apply_gamevil_baseball_auth_patch(&aid, &mut binary_mod);
+        apply_com2us_cert_patch(&aid, &mut binary_mod);
+        apply_gamevil_online_auth_patch(&aid, &mut binary_mod);
 
         // If the user supplied the firmware BIOS, map and bind it, drive its
         // init as its own task so a bring-up crash cannot corrupt the game
@@ -266,6 +268,128 @@ fn data_dir_relative(filename: &str, aid: &str) -> Option<String> {
 
     let rest = segments.collect::<Vec<_>>().join("/");
     (!rest.is_empty()).then_some(rest)
+}
+
+/// Applies `edits` (offset within the window, replacement byte) to the one
+/// place `pattern` matches in `binary_mod`, reporting what happened under
+/// `label`. A `None` in the pattern masks a byte.
+///
+/// Nothing is written unless the pattern matches exactly once, so a title the
+/// window was not read off - or one whose module differs from the one it was
+/// read off - is left alone rather than corrupted.
+fn patch_unique_window(binary_mod: &mut [u8], pattern: &[Option<u8>], edits: &[(usize, u8)], label: &str) {
+    let matches = |window: &[u8]| window.iter().zip(pattern).all(|(&byte, expect)| expect.is_none_or(|e| e == byte));
+
+    let mut site = None;
+    let mut count = 0usize;
+    for (index, window) in binary_mod.windows(pattern.len()).enumerate() {
+        if matches(window) {
+            count += 1;
+            site.get_or_insert(index);
+        }
+    }
+
+    match (count, site) {
+        (1, Some(start)) => {
+            for &(offset, byte) in edits {
+                binary_mod[start + offset] = byte;
+            }
+            tracing::info!("Applied {label} at binary.mod offset {start}");
+        }
+        (0, _) => tracing::warn!("{label} site not found; leaving binary.mod unchanged"),
+        (n, _) => tracing::warn!("{label} pattern is ambiguous ({n} sites); leaving binary.mod unchanged"),
+    }
+}
+
+/// 엘피스 (`0002EBC9`) will not start without the certificate it stores after
+/// authenticating with Com2uS's server once. The certificate is issued per copy
+/// and was never packaged with the archive, and the server that issued it has
+/// been gone for years, so the title asks to fetch one, cannot, and stops on
+/// its "인증서가 없습니다" prompt.
+///
+/// One routine answers "is this copy authenticated": it looks for
+/// `tara_cert.c2s`, loads and decrypts it, checks the fields inside, and
+/// returns 1 for a good certificate, an error code for a bad one, or -1 when
+/// the file is not there. Its caller starts the game on 1 and prompts
+/// otherwise. Returning 1 from it - `movs r0, #1 ; bx lr` over its prologue -
+/// is the whole patch: the answer the routine would give if the handset's own
+/// certificate were still beside the game.
+///
+/// The caller stores the returned value as a state byte rather than only
+/// branching on it, so the answer has to come from the routine itself rather
+/// than from redirecting the branch that reads it.
+///
+/// Applied only to that title, and only when the window is present exactly
+/// once, so nothing else can be touched by accident.
+fn apply_com2us_cert_patch(aid: &str, binary_mod: &mut [u8]) {
+    if !aid.eq_ignore_ascii_case("0002EBC9") {
+        return;
+    }
+
+    // push {r4,r5,lr} ; ldr r0,[pc,#N] ("tara_cert.c2s") ; bl <file exists> ;
+    // lsls r0,r0,#24 ; cmp r0,#0. `None` masks the literal-pool offset and the
+    // `bl` displacement.
+    const PATTERN: [Option<u8>; 12] = [
+        Some(0x30),
+        Some(0xb5),
+        None,
+        Some(0x48),
+        None,
+        Some(0xf7),
+        None,
+        Some(0xff),
+        Some(0x00),
+        Some(0x06),
+        Some(0x00),
+        Some(0x28),
+    ];
+    // movs r0, #1 ; bx lr, over the prologue.
+    const EDITS: [(usize, u8); 4] = [(0, 0x01), (1, 0x20), (2, 0x70), (3, 0x47)];
+
+    patch_unique_window(binary_mod, &PATTERN, &EDITS, "엘피스 offline certificate patch");
+}
+
+/// 냐옹타이쿤2 (`00026E9C`) authenticates with GAMEVIL's server on first run and
+/// keeps the certificate it gets back as `certi.pzx`. Neither is available any
+/// more: the archive carries no certificate, and the server has been gone for
+/// years, so answering 예 to its "게임 실행을 위한 인증을 시작 합니다" prompt
+/// leaves it on "서버 접속중" until the socket gives up.
+///
+/// Its state machine asks one routine whether this copy is already
+/// authenticated - the routine loads `certi.pzx` and compares the subscriber
+/// number inside against `PHONENUMBER`, answering 1 for a match, -1 for a
+/// mismatch, and 0 when there is no certificate to read. On 1 the machine skips
+/// straight past the whole prompt-and-connect sequence, so returning 1 from it -
+/// `movs r0, #1 ; bx lr` over its prologue - starts the game the way a handset
+/// that had already authenticated once would.
+///
+/// Applied only to that title, and only when the window is present exactly
+/// once, so nothing else can be touched by accident.
+fn apply_gamevil_online_auth_patch(aid: &str, binary_mod: &mut [u8]) {
+    if !aid.eq_ignore_ascii_case("00026E9C") {
+        return;
+    }
+
+    // push {r4,r5,r6,lr} ; sub sp,#0xc ; adds r5,r0,#0 ; movs r1,#0 ;
+    // movs r2,#0xc ; ldr r3,[pc,#N]. `None` masks the literal-pool offset.
+    const PATTERN: [Option<u8>; 12] = [
+        Some(0x70),
+        Some(0xb5),
+        Some(0x83),
+        Some(0xb0),
+        Some(0x05),
+        Some(0x1c),
+        Some(0x00),
+        Some(0x21),
+        Some(0x0c),
+        Some(0x22),
+        None,
+        Some(0x4b),
+    ];
+    // movs r0, #1 ; bx lr, over the prologue.
+    const EDITS: [(usize, u8); 4] = [(0, 0x01), (1, 0x20), (2, 0x70), (3, 0x47)];
+
+    patch_unique_window(binary_mod, &PATTERN, &EDITS, "냐옹타이쿤2 offline authentication patch");
 }
 
 /// Super Action Hero 3 (`00028E74`) checks in with an authentication server
@@ -654,7 +778,10 @@ impl LgtAppInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{LgtAppInfo, apply_gamevil_baseball_auth_patch, data_dir_relative, is_incompatible_bundled_save};
+    use super::{
+        LgtAppInfo, apply_com2us_cert_patch, apply_gamevil_baseball_auth_patch, apply_gamevil_online_auth_patch, data_dir_relative,
+        is_incompatible_bundled_save,
+    };
 
     // The 2009 verifier window (2010 differs only in the wildcard `bl`/`ldr`
     // bytes); `09 d0` at index 2-3 is the `beq` to flip.
@@ -685,6 +812,39 @@ mod tests {
         let snapshot = empty.clone();
         apply_gamevil_baseball_auth_patch("0002E749", &mut empty);
         assert_eq!(empty, snapshot);
+    }
+
+    // 엘피스's certificate check, from its `push {r4,r5,lr}` through the branch
+    // that reads the answer; `12 48` and `ee` are the masked literal offset and
+    // `bl` displacement.
+    const ELPIS_CERT_WINDOW: [u8; 12] = [0x30, 0xb5, 0x12, 0x48, 0xff, 0xf7, 0xee, 0xff, 0x00, 0x06, 0x00, 0x28];
+    // 냐옹타이쿤2's "already authenticated?" routine, through the load of its
+    // first literal.
+    const NYAONG_AUTH_WINDOW: [u8; 12] = [0x70, 0xb5, 0x83, 0xb0, 0x05, 0x1c, 0x00, 0x21, 0x0c, 0x22, 0x17, 0x4b];
+    // movs r0, #1 ; bx lr - what each routine's prologue becomes.
+    const RETURN_ONE: [u8; 4] = [0x01, 0x20, 0x70, 0x47];
+
+    #[test]
+    fn cert_patches_answer_that_the_copy_is_authenticated() {
+        for (aid, window, patch) in [
+            ("0002EBC9", ELPIS_CERT_WINDOW, apply_com2us_cert_patch as fn(&str, &mut [u8])),
+            ("00026E9C", NYAONG_AUTH_WINDOW, apply_gamevil_online_auth_patch),
+        ] {
+            let mut binary = window.to_vec();
+            patch(aid, &mut binary);
+            assert_eq!(binary[..4], RETURN_ONE, "aid {aid} routine not stubbed");
+            assert_eq!(binary[4..], window[4..], "aid {aid} touched more than the prologue");
+
+            // A different title leaves the same bytes untouched, and a module
+            // without the site is not written to at all.
+            let mut other = window.to_vec();
+            patch("00027565", &mut other);
+            assert_eq!(other, window);
+
+            let mut empty = alloc::vec![0u8; 64];
+            patch(aid, &mut empty);
+            assert_eq!(empty, alloc::vec![0u8; 64]);
+        }
     }
 
     #[test]
