@@ -175,32 +175,116 @@ impl CardCanvas {
             .await?
             .into();
 
+        // What the title asked to have repainted since the last pass. A card
+        // paints its whole scene however small the region is, so the region has
+        // to become the clip: the ez-i SDK titles type a dialogue out by asking
+        // for one 10x10 glyph cell at a time and letting the rest of the box
+        // stand, and repainting the lot unclipped wiped every letter but the
+        // newest.
+        let region = Self::take_dirty_region(jvm, &this).await?;
+
         // The docked card is the background layer; the pushed-card stack draws
         // on top of it.
         let docked: ClassInstanceRef<Card> = jvm.get_field(&this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;").await?;
         if !docked.is_null() {
-            Self::paint_one(jvm, &graphics, &docked).await?;
+            Self::paint_one(jvm, &graphics, &docked, 0, region).await?;
         }
+
+        let client_top = Self::client_top(jvm, &this, &docked).await?;
 
         let cards = jvm.get_field(&this, "cards", "Ljava/util/Vector;").await?;
         let length = jvm.invoke_virtual(&cards, "size", "()I", ()).await?;
 
         for i in 0..length {
             let card: ClassInstanceRef<Card> = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            Self::paint_one(jvm, &graphics, &card).await?;
+            Self::paint_one(jvm, &graphics, &card, client_top, region).await?;
         }
 
         Ok(())
     }
 
-    /// Paints one card at its `(getX, getY)` offset, resetting the shared WIPI
-    /// Graphics around it so a card cannot leak translate/clip state to the next.
-    async fn paint_one(jvm: &Jvm, graphics: &ClassInstanceRef<Graphics>, card: &ClassInstanceRef<Card>) -> JvmResult<()> {
+    /// Takes the region `Canvas.repaint` collected, and leaves nothing pending.
+    ///
+    /// `None` means "paint everything": either the title asked for the whole
+    /// canvas, or this pass was not asked for at all - a redraw the platform
+    /// itself wanted - and a full paint is what that has always meant.
+    ///
+    /// The rectangle is in canvas coordinates, which is what `Card.repaint`
+    /// hands the canvas.
+    async fn take_dirty_region(jvm: &Jvm, this: &ClassInstanceRef<Self>) -> JvmResult<Option<(i32, i32, i32, i32)>> {
+        let mut this = this.clone();
+
+        let x: i32 = jvm.get_field(&this, "__wieDirtyX", "I").await?;
+        let y: i32 = jvm.get_field(&this, "__wieDirtyY", "I").await?;
+        let width: i32 = jvm.get_field(&this, "__wieDirtyWidth", "I").await?;
+        let height: i32 = jvm.get_field(&this, "__wieDirtyHeight", "I").await?;
+
+        jvm.put_field(&mut this, "__wieDirtyWidth", "I", 0).await?;
+        jvm.put_field(&mut this, "__wieDirtyHeight", "I", 0).await?;
+
+        if width <= 0 || height <= 0 {
+            return Ok(None);
+        }
+
+        Ok(Some((x, y, width, height)))
+    }
+
+    /// The row a pushed card's own origin lands on.
+    ///
+    /// A docked status strip is part of the panel, not of the area a title is
+    /// given: the reference puts it above the drawing area (the WIPI-C side
+    /// splits the two the same way, see `wie_wipi_c::api::graphics`), so a card
+    /// pushed while one is docked starts below it. The ez-i SDK titles rely on
+    /// exactly that - 판타지나이트 and 배틀몬스터 dock a 240x24 strip and then
+    /// repaint `(0, 0, 240, 296)` on a 320-row panel, so with the strip's rows
+    /// left to them their last 24 rows kept whatever an earlier full-screen
+    /// draw had put there.
+    ///
+    /// A docked card that fills the panel is a background rather than a strip -
+    /// it leaves no room to push anything below it - so it moves nothing.
+    async fn client_top(jvm: &Jvm, this: &ClassInstanceRef<Self>, docked: &ClassInstanceRef<Card>) -> JvmResult<i32> {
+        if docked.is_null() {
+            return Ok(0);
+        }
+
+        let height: i32 = jvm.invoke_virtual(docked, "getHeight", "()I", ()).await?;
+        let canvas_height: i32 = jvm.invoke_virtual(this, "getHeight", "()I", ()).await?;
+
+        if height <= 0 || height >= canvas_height {
+            return Ok(0);
+        }
+
+        let y: i32 = jvm.invoke_virtual(docked, "getY", "()I", ()).await?;
+
+        Ok(y + height)
+    }
+
+    /// Paints one card at its `(getX, getY)` offset, `offset_y` rows down the
+    /// panel, resetting the shared WIPI Graphics around it so a card cannot leak
+    /// translate/clip state to the next.
+    async fn paint_one(
+        jvm: &Jvm,
+        graphics: &ClassInstanceRef<Graphics>,
+        card: &ClassInstanceRef<Card>,
+        offset_y: i32,
+        region: Option<(i32, i32, i32, i32)>,
+    ) -> JvmResult<()> {
         let x: i32 = jvm.invoke_virtual(card, "getX", "()I", ()).await?;
-        let y: i32 = jvm.invoke_virtual(card, "getY", "()I", ()).await?;
+        let card_y: i32 = jvm.invoke_virtual(card, "getY", "()I", ()).await?;
+        let y = card_y + offset_y;
 
         let _: () = jvm.invoke_virtual(graphics, "reset", "()V", ()).await?;
         let _: () = jvm.invoke_virtual(graphics, "translate", "(II)V", (x, y)).await?;
+
+        // The region is in canvas coordinates and `setClip` is in the card's,
+        // which the translate above just established; the strip a docked card
+        // takes cancels out, since `Card.repaint` reports a card's own origin
+        // without it.
+        if let Some((region_x, region_y, width, height)) = region {
+            let _: () = jvm
+                .invoke_virtual(graphics, "setClip", "(IIII)V", (region_x - x, region_y - card_y, width, height))
+                .await?;
+        }
 
         let paint_result: JvmResult<()> = jvm
             .invoke_virtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", (graphics.clone(),))
