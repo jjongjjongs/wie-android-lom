@@ -6,6 +6,8 @@ use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
+use crate::classes::org::kwis::msf::io::Message;
+
 /// A connected WIPI socket, as `org.kwis.msf.io.URL.find` hands one back.
 ///
 /// The reference declares this an interface and returns one of its `com.velox`
@@ -32,7 +34,10 @@ impl Socket {
                 JavaMethodProto::new("isStream", "()Z", Self::is_stream, Default::default()),
                 JavaMethodProto::new("getMessageCount", "()I", Self::get_message_count, Default::default()),
                 JavaMethodProto::new("getMessageMaxLength", "()I", Self::get_message_max_length, Default::default()),
+                JavaMethodProto::new("send", "(Lorg/kwis/msf/io/Message;)V", Self::send, Default::default()),
+                JavaMethodProto::new("recv", "(Lorg/kwis/msf/io/Message;)V", Self::recv, Default::default()),
                 JavaMethodProto::new("close", "()V", Self::close, Default::default()),
+                JavaMethodProto::new("accept", "()Lorg/kwis/msf/io/Socket;", Self::accept, Default::default()),
                 JavaMethodProto::new("getSocketDiscripter", "()I", Self::get_socket_discripter, Default::default()),
             ],
             fields: vec![JavaFieldProto::new("fd", "I", Default::default())],
@@ -90,6 +95,30 @@ impl Socket {
         tracing::debug!("org.kwis.msf.io.Socket::getMessageMaxLength({this:?})");
 
         Ok(0)
+    }
+
+    /// The message (datagram) half of the interface. `URL.find` opens stream
+    /// connections - which is what every archive here asks for - so a title that
+    /// reaches these is using a socket kind the platform does not model, and is
+    /// told so rather than left to read an empty message back.
+    async fn send(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, message: ClassInstanceRef<Message>) -> JvmResult<()> {
+        tracing::warn!("org.kwis.msf.io.Socket::send({this:?}, {message:?}) on a stream socket");
+
+        Err(jvm.exception("java/io/IOException", "not a message socket").await)
+    }
+
+    async fn recv(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, message: ClassInstanceRef<Message>) -> JvmResult<()> {
+        tracing::warn!("org.kwis.msf.io.Socket::recv({this:?}, {message:?}) on a stream socket");
+
+        Err(jvm.exception("java/io/IOException", "not a message socket").await)
+    }
+
+    /// Accepting an inbound connection needs a listening socket, which nothing
+    /// here opens; a title that asks gets nothing rather than a wrong answer.
+    async fn accept(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<ClassInstanceRef<Self>> {
+        tracing::warn!("org.kwis.msf.io.Socket::accept({this:?}) on a socket that is not listening");
+
+        Err(jvm.exception("java/io/IOException", "not a listening socket").await)
     }
 
     async fn close(jvm: &Jvm, context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>) -> JvmResult<()> {
