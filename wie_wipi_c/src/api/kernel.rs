@@ -114,7 +114,47 @@ async fn subscriber_number(context: &mut dyn WIPICContext) -> String {
         return number;
     }
 
+    // Failing a certificate, the archive's own descriptor names the subscriber:
+    // `app_info` carries the OMA download URL the copy was fetched with, and
+    // that URL's `ctn` is the number the handset downloading it was on. Titles
+    // whose certificate we cannot decrypt (Com2uS's `cert.c2s` is its own
+    // format, not the ez-i one above) still check the number against the
+    // certificate they were issued, so reporting the one their own descriptor
+    // names is what lets them authenticate offline.
+    if let Ok(app_info) = context.read_resource("app_info").await
+        && let Some(number) = descriptor_subscriber_number(&app_info)
+    {
+        tracing::info!("recovered subscriber number from app_info: {number:?}");
+        return number;
+    }
+
     FALLBACK.to_string()
+}
+
+/// The subscriber number an LGT archive descriptor was downloaded for: the
+/// `ctn` query parameter of the `DDurl` it carries.
+///
+/// Matched only where the URL itself starts a parameter (`?ctn=` / `&ctn=`), so
+/// the `send_ctn` of a gifted copy - the sender's number, not the subscriber's -
+/// is not mistaken for it. Returns `None` unless the value is a plausible
+/// subscriber number, so a descriptor without one falls back to the caller's
+/// placeholder. The store wrote them 12 digits long as often as 11.
+fn descriptor_subscriber_number(app_info: &[u8]) -> Option<String> {
+    // Scanned as bytes: a descriptor's name and vendor fields are EUC-KR, so it
+    // is not valid UTF-8 as a whole.
+    const KEY: &[u8] = b"ctn=";
+
+    app_info
+        .windows(KEY.len())
+        .enumerate()
+        .filter(|&(at, window)| window == KEY && matches!(at.checked_sub(1).map(|before| app_info[before]), Some(b'?' | b'&')))
+        .map(|(at, _)| {
+            let digits = &app_info[at + KEY.len()..];
+            let end = digits.iter().position(|b| !b.is_ascii_digit()).unwrap_or(digits.len());
+            &digits[..end]
+        })
+        .find(|number| (10..=12).contains(&number.len()) && number.first() == Some(&b'0'))
+        .map(|number| String::from_utf8_lossy(number).into_owned())
 }
 
 /// Reads a `certification` file that is just the subscriber number as ASCII
@@ -580,5 +620,38 @@ mod test {
         assert_eq!(u32::from_le_bytes(result), 0);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::descriptor_subscriber_number;
+
+    #[test]
+    fn reads_the_subscriber_number_out_of_a_descriptor() {
+        // A real descriptor: EUC-KR name and vendor fields, and a download URL
+        // carrying both the subscriber's number and, for a gifted copy, the
+        // sender's. The subscriber's is the one the certificate was issued to.
+        let mut app_info =
+            b"AID:000315C6\r\nName:\xbe\xd7\xbc\xc7\r\nDDurl:http://omadn.ez-i.co.kr:9089/oma_dd.dn?ctn=010085300848&req_pltf=4".to_vec();
+        app_info.extend_from_slice(b"&send_ctn=010022055752&gift_type=0\r\n");
+
+        assert_eq!(descriptor_subscriber_number(&app_info).as_deref(), Some("010085300848"));
+    }
+
+    #[test]
+    fn ignores_a_descriptor_that_names_no_subscriber() {
+        assert_eq!(
+            descriptor_subscriber_number(b"AID:000315C6\r\nDDurl:http://example/dd.dn?pid=1\r\n"),
+            None
+        );
+        // `send_ctn` alone is the sender of a gift, not the subscriber.
+        assert_eq!(
+            descriptor_subscriber_number(b"DDurl:http://example/dd.dn?a=1&send_ctn=010022055752"),
+            None
+        );
+        // Too short to be a number, and not starting where one would.
+        assert_eq!(descriptor_subscriber_number(b"DDurl:http://example/dd.dn?ctn=0100&b=2"), None);
+        assert_eq!(descriptor_subscriber_number(b"DDurl:http://example/dd.dn?ctn=910085300848"), None);
     }
 }

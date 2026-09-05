@@ -143,22 +143,34 @@ impl LgtEmulator {
                 tracing::info!("skipping incompatible bundled save {filename:?}; the title will start fresh");
                 continue;
             }
-            system.filesystem().add_virtual(filename, data.clone())
+            system.filesystem().add_virtual(filename, data.clone());
+
+            // An archive dumped off a handset keeps the title's own data
+            // directory in it, under the path the handset stored it at -
+            // `wipi-data/<aid>/`, and with either separator, since the dumps
+            // are made on Windows. A title reads those files from its data-dir
+            // root, so expose them there as well; without it a title finds none
+            // of its own data - its certificate included - and starts over as
+            // if freshly installed.
+            if let Some(inner) = data_dir_relative(filename, aid)
+                && !files.keys().any(|k| k.trim_start_matches("P/") == inner)
+            {
+                tracing::info!("exposing packaged data-dir file {filename:?} at data-dir root as {inner:?}");
+                system.filesystem().add_virtual(&inner, data.clone());
+            }
         }
 
-        // Certification/auth files are sometimes packaged inside a folder (e.g.
-        // "인증파일/certification"), but a title reads them from its data-dir
-        // root. Expose such a file under its bare name too so the read resolves
-        // and the title's offline auth check passes instead of falling through
-        // to an online billing handshake that cannot complete. A real root copy
-        // always takes precedence.
+        // Certification/auth files are sometimes packaged inside some other
+        // folder (e.g. "인증파일/certification"), but a title reads them from
+        // its data-dir root. Expose such a file under its bare name too so the
+        // read resolves and the title's offline auth check passes instead of
+        // falling through to an online billing handshake that cannot complete.
+        // A real root copy always takes precedence.
         const AUTH_FILES: [&str; 3] = ["certification", "cert.c2s", "certi.pzx"];
         for (filename, data) in files {
             let filename = filename.trim_start_matches("P/");
-            if let Some((_, base)) = filename.rsplit_once('/')
-                && AUTH_FILES.contains(&base)
-                && !files.keys().any(|k| k.trim_start_matches("P/") == base)
-            {
+            let base = filename.rsplit(['/', '\\']).next().unwrap_or(filename);
+            if base != filename && AUTH_FILES.contains(&base) && !files.keys().any(|k| k.trim_start_matches("P/") == base) {
                 tracing::info!("exposing nested auth file {filename:?} at data-dir root as {base:?}");
                 system.filesystem().add_virtual(base, data.clone());
             }
@@ -235,6 +247,25 @@ impl LgtEmulator {
 
         Ok(())
     }
+}
+
+/// The data-dir-relative name of an archive entry that packages the title's own
+/// data directory, or `None` for an entry that is not under one.
+///
+/// A handset dump keeps the directory at `wipi-data/<aid>/`; the separator is
+/// whichever the machine that packed the zip used, and the aid's case is not
+/// guaranteed to match the descriptor's.
+fn data_dir_relative(filename: &str, aid: &str) -> Option<String> {
+    let mut segments = filename.split(['/', '\\']);
+
+    let dir = segments.next()?;
+    let owner = segments.next()?;
+    if !dir.eq_ignore_ascii_case("wipi-data") || !owner.eq_ignore_ascii_case(aid) {
+        return None;
+    }
+
+    let rest = segments.collect::<Vec<_>>().join("/");
+    (!rest.is_empty()).then_some(rest)
 }
 
 /// Super Action Hero 3 (`00028E74`) checks in with an authentication server
@@ -600,13 +631,19 @@ impl LgtAppInfo {
 
         let mut lines = data.split(|x| *x == b'\n');
 
+        // Descriptors come both LF- and CRLF-terminated, so a field's value ends
+        // at the line ending rather than at the split. A carriage return left on
+        // the aid follows it into the title's storage directory name and into
+        // every per-title comparison made against it.
+        let field = |line: &[u8], at: usize| String::from_utf8_lossy(&line[at..]).trim().to_owned();
+
         for line in &mut lines {
             if line.starts_with(b"AID:") {
-                aid = String::from_utf8_lossy(&line[4..]).into();
+                aid = field(line, 4);
             } else if line.starts_with(b"PID:") {
-                pid = String::from_utf8_lossy(&line[4..]).into();
+                pid = field(line, 4);
             } else if line.starts_with(b"MClass:") {
-                mclass = String::from_utf8_lossy(&line[7..]).into();
+                mclass = field(line, 7);
             }
             // TODO load name, it's in euc-kr..
         }
@@ -617,7 +654,7 @@ impl LgtAppInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_gamevil_baseball_auth_patch, is_incompatible_bundled_save};
+    use super::{LgtAppInfo, apply_gamevil_baseball_auth_patch, data_dir_relative, is_incompatible_bundled_save};
 
     // The 2009 verifier window (2010 differs only in the wildcard `bl`/`ldr`
     // bytes); `09 d0` at index 2-3 is the `beq` to flip.
@@ -670,5 +707,39 @@ mod tests {
 
         // Other titles keep their SaveFile.dat.
         assert!(!is_incompatible_bundled_save("00027565", "SaveFile.dat"));
+    }
+    #[test]
+    fn reads_a_descriptor_whichever_line_ending_it_uses() {
+        // A CRLF descriptor's carriage return followed the aid into the title's
+        // storage directory name and into every comparison made against it.
+        let crlf = LgtAppInfo::parse(b"PID:PD149574\r\nAID:000315C6\r\nMClass:Clet\r\n");
+        assert_eq!(
+            (crlf.aid.as_str(), crlf.pid.as_str(), crlf.mclass.as_str()),
+            ("000315C6", "PD149574", "Clet")
+        );
+
+        let lf = LgtAppInfo::parse(b"PID:PD149574\nAID:000315C6\nMClass:Clet\n");
+        assert_eq!((lf.aid.as_str(), lf.pid.as_str(), lf.mclass.as_str()), ("000315C6", "PD149574", "Clet"));
+    }
+
+    #[test]
+    fn finds_the_data_dir_a_handset_dump_packages() {
+        // Either separator, since the dumps are packed on Windows, and the aid's
+        // case is not guaranteed to match the descriptor's.
+        assert_eq!(data_dir_relative("wipi-data/000315C6/cert.c2s", "000315C6").as_deref(), Some("cert.c2s"));
+        assert_eq!(
+            data_dir_relative("wipi-data\\000315C6\\cert.c2s", "000315c6").as_deref(),
+            Some("cert.c2s")
+        );
+        assert_eq!(
+            data_dir_relative("wipi-data\\000315C6\\save\\slot1", "000315C6").as_deref(),
+            Some("save/slot1")
+        );
+
+        // Another title's directory, the directory itself, and a plain file are
+        // all left where they are.
+        assert_eq!(data_dir_relative("wipi-data/0002EBC9/cert.c2s", "000315C6"), None);
+        assert_eq!(data_dir_relative("wipi-data/000315C6/", "000315C6"), None);
+        assert_eq!(data_dir_relative("app_info", "000315C6"), None);
     }
 }

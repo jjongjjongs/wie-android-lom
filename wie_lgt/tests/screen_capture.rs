@@ -483,12 +483,10 @@ fn run_scripted(label: &str, archive: &[u8], ticks_limit: u32, script: &[(u32, w
     eprintln!("[{label}] {ticks} ticks, {} frames, last sig={:016x}", c.frames, c.last_sig);
 }
 
-/// Drives LoM with a scripted key sequence from `WIE_SCRIPT` (`tick:KEY,...`),
-/// so the tutorial and inventory can be reached from a test. Diagnostic.
-#[test]
-#[ignore = "diagnostic"]
-fn capture_lom_scripted() {
-    let script: Vec<(u32, wie_backend::KeyCode)> = std::env::var("WIE_SCRIPT")
+/// Parses `WIE_SCRIPT` (`tick:KEY,tick:KEY,...`) into the press schedule
+/// `run_scripted` takes.
+fn script_from_env() -> Vec<(u32, wie_backend::KeyCode)> {
+    std::env::var("WIE_SCRIPT")
         .expect("set WIE_SCRIPT=tick:KEY,tick:KEY,...")
         .split(',')
         .filter(|s| !s.trim().is_empty())
@@ -496,7 +494,34 @@ fn capture_lom_scripted() {
             let (tick, key) = pair.split_once(':').expect("tick:KEY");
             (tick.trim().parse().expect("tick"), key_by_name(key.trim()).expect("key name"))
         })
-        .collect();
+        .collect()
+}
+
+/// Drives the archive at `WIE_ARCHIVE` with the `WIE_SCRIPT` key sequence, so a
+/// title that parks on a notice or a menu can be walked past from a test.
+/// Diagnostic; retail archives are not in the repository.
+#[test]
+#[ignore = "diagnostic"]
+fn capture_scripted_archive() {
+    let Ok(path) = std::env::var("WIE_ARCHIVE") else {
+        eprintln!("Set WIE_ARCHIVE to an archive and WIE_SCRIPT to tick:KEY,...");
+        return;
+    };
+    let archive = std::fs::read(&path).expect("archive");
+    let ticks: u32 = std::env::var("WIE_TICKS").ok().and_then(|x| x.parse().ok()).unwrap_or(60000);
+    let label = std::path::Path::new(&path)
+        .file_stem()
+        .map_or("archive", |x| x.to_str().unwrap_or("archive"));
+
+    run_scripted(label, &archive, ticks, &script_from_env());
+}
+
+/// Drives LoM with a scripted key sequence from `WIE_SCRIPT` (`tick:KEY,...`),
+/// so the tutorial and inventory can be reached from a test. Diagnostic.
+#[test]
+#[ignore = "diagnostic"]
+fn capture_lom_scripted() {
+    let script = script_from_env();
     let ticks: u32 = std::env::var("WIE_TICKS").ok().and_then(|x| x.parse().ok()).unwrap_or(60000);
     run_scripted("LoM", include_bytes!("../../test_games/legend_of_master.zip"), ticks, &script);
 }
