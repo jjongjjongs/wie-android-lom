@@ -2294,6 +2294,21 @@ fn reresolve_own_virtuals_against_class(core: &mut ArmCore, context: &InitSvcCon
     Ok(())
 }
 
+/// Whether `root` is a heavy-linked class whose dispatch table has not been
+/// synthesized yet - the same pair of conditions `activate_dispatch_table`
+/// routes on.
+fn needs_heavy_dispatch_table(core: &ArmCore, root: u32) -> Result<bool> {
+    let metadata: u32 = read_generic(core, root + 8)?;
+    if metadata == 0 {
+        return Ok(false);
+    }
+
+    let linker_flags: u16 = read_generic(core, metadata + 0x24)?;
+    let vtable: u32 = read_generic(core, metadata + CLASS_DISPATCH_TABLE)?;
+
+    Ok(linker_flags & 0x0100 != 0 && vtable == 0)
+}
+
 /// Synthesizes the variable-length instance dispatch table produced by native
 /// `vm_link_class_heavy`.
 ///
@@ -2303,7 +2318,33 @@ fn reresolve_own_virtuals_against_class(core: &mut ArmCore, context: &InitSvcCon
 /// dispatch slots, copies the superclass dispatch, then installs every method
 /// whose linked signed slot is non-negative.
 fn activate_heavy_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Result<u32> {
+    activate_heavy_dispatch_table_at(core, context, root, 0)
+}
+
+fn activate_heavy_dispatch_table_at(core: &mut ArmCore, context: &InitSvcContext, root: u32, depth: usize) -> Result<u32> {
     ensure_heavy_method_slots_linked(core, context, root)?;
+
+    // The table starts as a copy of the superclass's, so the superclass needs
+    // one before this class is laid out - and nothing orders the two
+    // activations. Build the superclass's first; activating it in its own
+    // right afterwards finds the table published in its metadata and reuses
+    // it.
+    if depth < MAX_HEAVY_LINK_DEPTH {
+        let superclass_root = {
+            let app_classes = context.app_classes.lock();
+            app_classes
+                .iter()
+                .find(|class| class.root == root)
+                .and_then(|class| class.superclass.clone())
+                .and_then(|superclass| app_classes.iter().find(|class| class.name == superclass).map(|class| class.root))
+        };
+
+        if let Some(superclass_root) = superclass_root
+            && needs_heavy_dispatch_table(core, superclass_root)?
+        {
+            activate_heavy_dispatch_table_at(core, context, superclass_root, depth + 1)?;
+        }
+    }
 
     let class = context
         .app_classes
@@ -2395,6 +2436,41 @@ fn activate_dispatch_table(core: &mut ArmCore, context: &InitSvcContext, root: u
     // A light-linked class with no table of its own inherits the nearest
     // available superclass dispatch table wholesale.
     if vtable == 0 {
+        // The nearest superclass, not the nearest *platform* superclass. A
+        // light-linked class whose superclass is a heavy-linked application
+        // class has to take that class's synthesized table: Fantasy Knight's
+        // `k` declares nothing of its own and inherits all of `w`'s methods,
+        // and taking `Card`'s table instead left every call the Jlet worker
+        // made on the card - `a()`, `i()`, `d()` - on the unknown-slot trap.
+        // Build the superclass's table if it has not been built yet; it is
+        // published in its metadata, so activating it later reuses this one.
+        let application_superclass = {
+            let app_classes = context.app_classes.lock();
+            app_classes
+                .iter()
+                .find(|class| class.root == root)
+                .and_then(|class| class.superclass.clone())
+                .and_then(|superclass| app_classes.iter().find(|class| class.name == superclass).map(|class| class.root))
+        };
+
+        if let Some(superclass_root) = application_superclass {
+            if needs_heavy_dispatch_table(core, superclass_root)? {
+                let table = activate_heavy_dispatch_table(core, context, superclass_root)?;
+
+                tracing::debug!("LGT class at {root:#x} inherits the table its superclass at {superclass_root:#x} needed built first");
+
+                return Ok(table);
+            }
+
+            let superclass_metadata: u32 = read_generic(core, superclass_root + 8)?;
+            if superclass_metadata != 0 {
+                let superclass_vtable: u32 = read_generic(core, superclass_metadata + CLASS_DISPATCH_TABLE)?;
+                if superclass_vtable != 0 {
+                    return Ok(superclass_vtable);
+                }
+            }
+        }
+
         let inherited = platform_superclass_dispatch_table(context, root);
 
         // Seed1's `o` declares a 30-slot instance table but leaves the
