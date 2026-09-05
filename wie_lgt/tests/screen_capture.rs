@@ -465,10 +465,21 @@ fn run_scripted(label: &str, archive: &[u8], ticks_limit: u32, script: &[(u32, w
         let _ = std::fs::write(path, ppm);
     };
 
+    // The same periodic frame dump `run` takes: a scripted walk is exactly the
+    // case where the screens between the key presses are what needs comparing.
+    let frame_dump = std::env::var("WIE_FDUMP_DIR").ok();
+    let frame_dump_every: u32 = std::env::var("WIE_FDUMP_EVERY").ok().and_then(|x| x.parse().ok()).unwrap_or(25);
+
     let mut ticks = 0u32;
     while !exited.load(Ordering::SeqCst) && ticks < ticks_limit {
         if ticks % 40 == 0 {
             emulator.handle_event(Event::Redraw);
+        }
+
+        if let Some(dir) = &frame_dump
+            && ticks % frame_dump_every == 0
+        {
+            write_ppm(&format!("{dir}/t{ticks:06}.ppm"), &screen);
         }
 
         for (step, &(at, key)) in script.iter().enumerate() {
