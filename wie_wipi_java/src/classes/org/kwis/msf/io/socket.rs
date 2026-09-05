@@ -1,4 +1,4 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 
 use bytemuck::cast_vec;
 use java_class_proto::{JavaFieldProto, JavaMethodProto};

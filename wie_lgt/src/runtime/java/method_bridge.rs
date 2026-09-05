@@ -417,22 +417,48 @@ async fn marshal_arguments(
     Ok(values)
 }
 
-/// Converts a JVM return value into the word the compiled code expects.
+/// A bridged method's return, in the registers the compiled code reads it back
+/// from: `r0`, and for a `long` or `double` the high half in `r1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JavaReturn {
+    pub low: u32,
+    pub high: Option<u32>,
+}
+
+impl From<u32> for JavaReturn {
+    fn from(low: u32) -> Self {
+        Self { low, high: None }
+    }
+}
+
+impl JavaReturn {
+    fn wide(value: u64) -> Self {
+        Self {
+            low: value as u32,
+            high: Some((value >> 32) as u32),
+        }
+    }
+}
+
+/// Converts a JVM return value into the registers the compiled code expects.
 ///
 /// Objects are handed back as handles rather than pointers, because the
-/// instance lives on the Rust side; `long` and `double` are truncated, which
-/// no imported method returns today.
-fn marshal_return(handles: &JavaHandles, value: JavaValue) -> Result<u32> {
+/// instance lives on the Rust side. A `long` or `double` occupies two
+/// registers, low half first - truncating it to `r0` left `r1` holding
+/// whatever the call had put there, which is how Fantasy Knight's
+/// `System.currentTimeMillis()` came back with a garbage high word and its
+/// authentication card asked to sleep for eighty-five billion milliseconds.
+fn marshal_return(handles: &JavaHandles, value: JavaValue) -> Result<JavaReturn> {
     Ok(match value {
-        JavaValue::Void => 0,
-        JavaValue::Boolean(x) => x.into(),
-        JavaValue::Byte(x) => x as i32 as u32,
-        JavaValue::Char(x) => x.into(),
-        JavaValue::Short(x) => x as i32 as u32,
-        JavaValue::Int(x) => x as u32,
-        JavaValue::Float(x) => x.to_bits(),
-        JavaValue::Long(x) => x as u32,
-        JavaValue::Double(x) => x.to_bits() as u32,
+        JavaValue::Void => 0.into(),
+        JavaValue::Boolean(x) => u32::from(x).into(),
+        JavaValue::Byte(x) => (x as i32 as u32).into(),
+        JavaValue::Char(x) => u32::from(x).into(),
+        JavaValue::Short(x) => (x as i32 as u32).into(),
+        JavaValue::Int(x) => (x as u32).into(),
+        JavaValue::Float(x) => x.to_bits().into(),
+        JavaValue::Long(x) => JavaReturn::wide(x as u64),
+        JavaValue::Double(x) => JavaReturn::wide(x.to_bits()),
         JavaValue::Object(x) => match x {
             // An object returned from a JVM method may already have a guest
             // handle - e.g. a compiled `d` item stored in a JVM Vector and read
@@ -442,8 +468,8 @@ fn marshal_return(handles: &JavaHandles, value: JavaValue) -> Result<u32> {
             // every time, so a round-tripped item came back empty - its arrays
             // null - which showed as a shell item and made the save serializer
             // throw a NullPointerException on the missing data.
-            Some(instance) => handles.address_of(instance)?,
-            None => 0,
+            Some(instance) => handles.address_of(instance)?.into(),
+            None => 0.into(),
         },
     })
 }
@@ -526,7 +552,7 @@ fn argument_identities(arguments: &[JavaValue]) -> Vec<usize> {
         .collect()
 }
 
-pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member: &ResolvedMember, receiver: Option<u32>) -> Result<u32> {
+pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member: &ResolvedMember, receiver: Option<u32>) -> Result<JavaReturn> {
     let ResolvedMember {
         class_name,
         name,
@@ -572,7 +598,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
             write_back_char_arrays(jvm, handles, &char_writebacks).await?;
             sync_jvm_fields_to_guest(jvm, handles, this).await?;
 
-            return Ok(this);
+            return Ok(this.into());
         }
 
         tracing::debug!("LGT new {class_name}{descriptor} on {this:#x}");
@@ -587,7 +613,7 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
         handles.bind(this, instance);
         sync_jvm_fields_to_guest(jvm, handles, this).await?;
 
-        return Ok(this);
+        return Ok(this.into());
     }
 
     let receiver = match receiver {
@@ -648,10 +674,10 @@ pub async fn invoke(core: &mut ArmCore, jvm: &Jvm, handles: &JavaHandles, member
                 sync_jvm_fields_to_guest(jvm, handles, handle).await?;
             }
 
-            let handle = marshal_return(handles, value)?;
-            materialize_primitive_array_result(jvm, handles, handle).await?;
+            let result = marshal_return(handles, value)?;
+            materialize_primitive_array_result(jvm, handles, result.low).await?;
 
-            Ok(handle)
+            Ok(result)
         }
         // The bridged Java method threw. Register the exception so a guest
         // handle names it, and surface it as `WieError::JavaException` so the

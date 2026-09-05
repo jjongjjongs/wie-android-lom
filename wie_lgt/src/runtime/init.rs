@@ -38,7 +38,7 @@ use super::{
             bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, resolve_main_class_arguments, run_main_class,
             vm_get_constant_string, vm_instantiate_array,
         },
-        method_bridge::{self, ResolvedMember},
+        method_bridge::{self, JavaReturn, ResolvedMember},
         platform_metadata::platform_class,
     },
     savepoint::SavePointState,
@@ -618,9 +618,14 @@ fn register_init_svc_handler(
 /// if one is armed, otherwise propagate it as a real Java exception for a Java
 /// catch higher up (`compiled_class` re-surfaces it) - instead of letting it
 /// end the title. A plain value or a non-exception fault is handled as before.
-fn write_java_result(core: &mut ArmCore, save_points: &SavePointState, result: Result<u32>, lr: u32) -> Result<()> {
+fn write_java_result(core: &mut ArmCore, save_points: &SavePointState, result: Result<JavaReturn>, lr: u32) -> Result<()> {
     match result {
-        Ok(value) => value.write(core, lr),
+        // A `long` or `double` comes back in the register pair, low half first.
+        Ok(JavaReturn { low, high: Some(high) }) => {
+            core.write_return_value(&[low, high])?;
+            core.set_next_pc(lr)
+        }
+        Ok(JavaReturn { low, .. }) => low.write(core, lr),
         Err(WieError::JavaException(exception)) => save_points.throw(core, exception),
         Err(error) => Err(error),
     }
@@ -1756,7 +1761,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
 ///
 /// `index` is the row of the static method table, which is all the stub
 /// carries; everything else comes from the table published at load time.
-async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+async fn invoke_imported_static(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<JavaReturn> {
     // The row is lifted out before the JVM runs: a call can re-enter the
     // runtime and want the table again, and this lock does not nest.
     let member = context
@@ -3285,17 +3290,17 @@ const RESERVED_ACCESSOR_ROWS: usize = 2;
 /// `ACC_STATIC` in a platform method's access flags.
 const METHOD_ACCESS_STATIC: u32 = 0x0008;
 
-async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<JavaReturn> {
     let a0 = core.read_param(0)?;
 
     let resolved = {
         let imported_classes = context.imported_classes.lock();
         let Some(table) = imported_classes.as_ref() else {
-            return Ok(a0);
+            return Ok(a0.into());
         };
         let Some((class, slot)) = table.static_method_owner(index) else {
             tracing::warn!("LGT reserved static row {index} belongs to no class");
-            return Ok(a0);
+            return Ok(a0.into());
         };
 
         let class_object = table
@@ -3327,7 +3332,7 @@ async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, in
                 .map_err(|error| wie_util::WieError::FatalError(alloc::format!("LGT get_class could not initialize {class_name}: {error:?}")))?;
         }
 
-        return Ok(class_object);
+        return Ok(class_object.into());
     }
 
     // Past the accessor pair, a blank row is a static the application's import
@@ -3395,7 +3400,7 @@ async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, in
     }
 
     tracing::warn!("LGT reserved slot {slot} of {class_name} called with a0={a0:#x}");
-    Ok(a0)
+    Ok(a0.into())
 }
 
 /// Slots 1 to 9 of every dispatch table, which the platform fills in for the
@@ -3427,7 +3432,7 @@ const OBJECT_DISPATCH_SLOTS: &[(&str, &str)] = &[
 /// wake; otherwise a notifier spins on `vm_monitor_enter` forever while the
 /// waiter sleeps holding it. `notify`/`notifyAll` keep the monitor, matching the
 /// JVM. Non-blocking `Object` methods go straight through.
-async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext, member: &ResolvedMember, this: u32) -> Result<u32> {
+async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext, member: &ResolvedMember, this: u32) -> Result<JavaReturn> {
     let handles = context.java_handles.clone();
     let jvm = context.jvm.clone();
 
@@ -3467,7 +3472,7 @@ async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext,
         }
         context.system.sleep(LGT_BARE_WAIT_BOUND_MS).await;
         match jvm.monitor_enter(instance).await {
-            Ok(()) => Ok(0),
+            Ok(()) => Ok(0.into()),
             Err(error) => Err(wie_jvm_support::JvmSupport::to_wie_err(&jvm, error).await),
         }
     } else {
@@ -3493,7 +3498,7 @@ async fn invoke_object_self_method(core: &mut ArmCore, context: &InitSvcContext,
 /// expected to provide, and which method a given slot means is not yet known.
 /// Returning zero at least keeps the caller going, and the log says what to
 /// look for.
-async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, class_index: u32, slot: u32) -> Result<u32> {
+async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, class_index: u32, slot: u32) -> Result<JavaReturn> {
     let this = core.read_param(0)?;
 
     // Resolve fixed native dispatch slots from the receiver's actual platform
@@ -3520,7 +3525,7 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
                     method_name,
                     method_descriptor
                 );
-                Ok(0)
+                Ok(0.into())
             }
         };
     }
@@ -3545,7 +3550,7 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
 
         tracing::debug!("LGT java/lang/Object.{name}{descriptor} on {this:#x}, which has no instance");
 
-        return Ok(0);
+        return Ok(0.into());
     }
 
     let imported_class = context
@@ -3561,7 +3566,7 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
 
     let Some(class) = class else {
         tracing::warn!("LGT undeclared dispatch slot {slot} called on {this:#x}, class_index={class_index}");
-        return Ok(0);
+        return Ok(0.into());
     };
 
     if let Some((method_name, method_descriptor)) = platform_class(&class).and_then(|platform| platform.dispatch_method(slot)) {
@@ -3579,11 +3584,11 @@ async fn call_unknown_slot(core: &mut ArmCore, context: &mut InitSvcContext, cla
 
     tracing::warn!("LGT undeclared dispatch slot {slot} of {class} called on {this:#x}");
 
-    Ok(0)
+    Ok(0.into())
 }
 
 /// Handles a call the compiled code made through a class's dispatch table.
-async fn invoke_imported_interface(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+async fn invoke_imported_interface(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<JavaReturn> {
     let this = core.read_param(0)?;
 
     let member = context
@@ -3602,7 +3607,7 @@ async fn invoke_imported_interface(core: &mut ArmCore, context: &mut InitSvcCont
     method_bridge::invoke(core, &jvm, &handles, &member, Some(this)).await
 }
 
-async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
+async fn invoke_imported_virtual(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<JavaReturn> {
     let this = core.read_param(0)?;
 
     let member = context
