@@ -34,6 +34,14 @@ const CONNECT_FAILED: &str = "연결에 실패하였습니다.";
 /// authentication these titles run at start-up puts up its "connection failed"
 /// notice and carries on into the game. Without this class it was never told
 /// anything, and sat on its "authenticating" screen forever.
+///
+/// `BillSocket://` is the exception, and does not dial at all. On the handset
+/// it is not a plain TCP connection: the platform carries it over its own
+/// `MC_netBillSocket`, adding the billing headers only the carrier's network
+/// can supply, and the gateway on the far end has been unreachable for years.
+/// Told the connection failed, the SDK stops on a screen it never leaves - it
+/// has no offline branch, because on the handset the first run always reached
+/// the gateway. So answer it here instead: see [`Socket::local_billing`].
 // class org.kwis.msf.io.URL
 pub struct URL;
 
@@ -74,6 +82,12 @@ impl URL {
         let Some((host, port)) = parse_authority(&url) else {
             return Err(jvm.exception("org/kwis/msf/io/SchemeNotFoundException", &url).await);
         };
+
+        if is_billing_scheme(&url) {
+            tracing::info!("org.kwis.msf.io.URL::find({url:?}) answered by the in-process billing gateway");
+
+            return Socket::local_billing(jvm).await;
+        }
 
         match Self::connect(context, &host, port).await {
             Ok(fd) => {
@@ -159,9 +173,26 @@ fn parse_authority(url: &str) -> Option<(RustString, u16)> {
     Some((host.into(), port.parse().ok()?))
 }
 
+/// Whether `url` names the carrier's billing gateway rather than a server of
+/// the title's own. The scheme is spelled `BillSocket` by every title here, but
+/// schemes are not case sensitive.
+fn is_billing_scheme(url: &str) -> bool {
+    url.split_once("://").is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("billsocket"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_authority;
+    use super::{is_billing_scheme, parse_authority};
+
+    #[test]
+    fn tells_the_billing_gateway_from_a_title_s_own_server() {
+        assert!(is_billing_scheme("BillSocket://218.50.3.88:2508"));
+        assert!(is_billing_scheme("billsocket://218.38.12.48:5200"));
+
+        assert!(!is_billing_scheme("socket://218.38.12.48:5100"));
+        assert!(!is_billing_scheme("BillSocket:218.50.3.88:2508"));
+        assert!(!is_billing_scheme("218.50.3.88:2508"));
+    }
 
     #[test]
     fn reads_the_host_and_port_a_title_opens() {
