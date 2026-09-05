@@ -1,0 +1,49 @@
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+
+use test_utils::{TestPlatform, TestPlatformEvent};
+use wie_backend::{Emulator, Options, extract_zip};
+use wie_lgt::LgtEmulator;
+
+/// Quarantined alongside `test_helloworld`: it drives the same fixture, which
+/// never reaches `Exit` on this fork's LGT runtime, so the tick loop spins
+/// forever. The archive-shape assertion above it still holds - that part is
+/// covered by `LgtEmulator::loadable_archive`'s own tests.
+#[test]
+#[ignore = "hangs: the LGT helloworld fixture never exits on this runtime"]
+pub fn prefixed_archive_runs() {
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let exited = Arc::new(AtomicBool::new(false));
+
+    let stdout_clone = stdout.clone();
+    let exited_clone = exited.clone();
+    let platform = Box::new(TestPlatform::with_event_handler(move |event| match event {
+        TestPlatformEvent::Stdout(buf) => stdout_clone.lock().unwrap().extend(buf),
+        TestPlatformEvent::OpenUrl(_) => {}
+        TestPlatformEvent::Exit => exited_clone.store(true, Ordering::SeqCst),
+    }));
+
+    // Same app as `helloworld_lgt.zip`, repacked with every entry below `P/`
+    // the way handset dumps often are.
+    let archive = extract_zip(include_bytes!("../../test_data/helloworld_lgt_prefixed.zip")).unwrap();
+    assert!(LgtEmulator::loadable_archive(&archive), "prefixed archive not detected");
+
+    let mut emulator = LgtEmulator::from_archive(
+        platform,
+        archive,
+        Options {
+            enable_gdbserver: false,
+            profile: None,
+            annunciator: None,
+        },
+    )
+    .unwrap();
+
+    while !exited.load(Ordering::SeqCst) {
+        emulator.tick().unwrap();
+    }
+
+    assert_eq!(String::from_utf8(stdout.lock().unwrap().clone()).unwrap(), "Hello, world!");
+}

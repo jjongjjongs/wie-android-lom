@@ -6,10 +6,13 @@ use jvm::{
 };
 use wipi_types::wipic::{WIPICIndirectPtr, WIPICWord};
 
-use wie_backend::{AsyncCallable, Event, Instant, System};
-use wie_core_arm::{Allocator, ArmCore};
+use wie_backend::{AsyncCallable, Instant, System};
+use wie_core_arm::{Allocator, ArmCore, HEAP_BASE, HEAP_SIZE};
 use wie_util::{ByteRead, ByteWrite, Result, WieError, read_generic, write_generic};
-use wie_wipi_c::{WIPICContext, WIPICMethodBody};
+use wie_wipi_c::{
+    WIPICContext, WIPICMethodBody,
+    api::{filesystem::SharedFilesystemState, net::SharedNetworkState, serial::SharedSerialState},
+};
 
 // mostly same as ktf's one, can we merge those?
 #[derive(Clone)]
@@ -17,11 +20,28 @@ pub struct LgtWIPICContext {
     core: ArmCore,
     system: System,
     jvm: Jvm,
+    network_state: SharedNetworkState,
+    serial_state: SharedSerialState,
+    filesystem_state: SharedFilesystemState,
 }
 
 impl LgtWIPICContext {
-    pub fn new(core: ArmCore, system: System, jvm: Jvm) -> Self {
-        Self { core, system, jvm }
+    pub fn new(
+        core: ArmCore,
+        system: System,
+        jvm: Jvm,
+        network_state: SharedNetworkState,
+        serial_state: SharedSerialState,
+        filesystem_state: SharedFilesystemState,
+    ) -> Self {
+        Self {
+            core,
+            system,
+            jvm,
+            network_state,
+            serial_state,
+            filesystem_state,
+        }
     }
 }
 
@@ -39,6 +59,27 @@ impl WIPICContext for LgtWIPICContext {
     }
 
     fn free(&mut self, memory: WIPICIndirectPtr) -> Result<()> {
+        // Freeing a null (or otherwise header-less) pointer is a no-op, matching
+        // C `free(NULL)` and the reference firmware's MC_knlFree; without this
+        // guard the header subtraction underflows and panics. Metal Slug
+        // Survival frees a null handle during startup.
+        if memory.0 < size_of::<WIPICWord>() as WIPICWord {
+            return Ok(());
+        }
+
+        // A pointer that lands outside the guest heap is not one we handed out:
+        // a title that reads an uninitialised field as a handle and frees it
+        // passes whatever bytes the field held, which is a NUL no-op on the
+        // reference's zeroed heap but a stray small integer here (MapleStory
+        // 도적편 frees 0x100 while opening its menu). Dropping it, rather than
+        // driving the allocator with a garbage address until its bitmap index
+        // runs off the end, is the free(NULL)/bad-pointer behaviour the
+        // reference has.
+        if memory.0 < HEAP_BASE || memory.0 >= HEAP_BASE + HEAP_SIZE {
+            tracing::debug!("MC_knlFree({:#x}): ignoring free of a non-heap pointer", memory.0);
+            return Ok(());
+        }
+
         let base_address = memory.0 - size_of::<WIPICWord>() as WIPICWord;
 
         let size: WIPICWord = read_generic(&self.core, base_address)?;
@@ -51,12 +92,32 @@ impl WIPICContext for LgtWIPICContext {
         Ok(())
     }
 
+    fn free_raw_unsized(&mut self, address: WIPICWord) -> Result<()> {
+        Allocator::free_unsized(&mut self.core, address)
+    }
+
+    fn raw_alloc_size(&self, address: WIPICWord) -> Result<WIPICWord> {
+        Allocator::allocation_size(&self.core, address)
+    }
+
     fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord> {
         Ok(memory.0)
     }
 
     fn system(&mut self) -> &mut System {
         &mut self.system
+    }
+
+    fn network_state(&self) -> SharedNetworkState {
+        self.network_state.clone()
+    }
+
+    fn serial_state(&self) -> SharedSerialState {
+        self.serial_state.clone()
+    }
+
+    fn filesystem_state(&self) -> SharedFilesystemState {
+        self.filesystem_state.clone()
     }
 
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord> {
@@ -117,17 +178,21 @@ impl WIPICContext for LgtWIPICContext {
         Ok(data)
     }
 
-    fn set_timer(&mut self, due: Instant, callback: WIPICMethodBody) {
+    fn set_timer(&mut self, id: WIPICWord, due: Instant, callback: WIPICMethodBody) {
         let context = self.clone();
 
-        self.system().event_queue().push(Event::timer(due, move || {
+        self.system().event_queue().push_timer(id, due, move || {
             let mut context = context.clone();
 
             async move {
                 callback.call(&mut context, Box::new([])).await?;
                 Ok(())
             }
-        }))
+        })
+    }
+
+    fn unset_timer(&mut self, id: WIPICWord) {
+        self.system().event_queue().cancel_timer(id);
     }
 }
 

@@ -14,6 +14,7 @@ use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use crate::classes::javax::microedition::lcdui::{Font, Image};
 
 bitflags::bitflags! {
+    #[derive(Clone, Copy)]
     struct Anchor: i32 {
         const HCENTER = 1;
         const VCENTER = 2;
@@ -45,6 +46,26 @@ impl From<Anchor> for TextAlignment {
         } else {
             TextAlignment::Left
         }
+    }
+}
+
+/// The amount to shift `y` by so the text sits where the vertical anchor asks,
+/// given that `draw_text` treats `y` as the top of the glyph box.
+///
+/// MIDP `drawString` anchors the point vertically at the text's `TOP`, `BOTTOM`,
+/// `BASELINE`, or (`VCENTER`) its middle; the default is `TOP`. `draw_text`
+/// only ever draws downward from the top, so a non-top anchor has to move the
+/// origin up first - without this every `BOTTOM`/`BASELINE`-anchored label (a
+/// SEED menu item, say) lands a line too low.
+fn vertical_anchor_offset(anchor: Anchor, font_height: i32, font_baseline: i32) -> i32 {
+    if anchor.contains(Anchor::BOTTOM) {
+        -font_height
+    } else if anchor.contains(Anchor::BASELINE) {
+        -font_baseline
+    } else if anchor.contains(Anchor::VCENTER) {
+        -font_height / 2
+    } else {
+        0 // TOP or unspecified
     }
 }
 
@@ -115,6 +136,7 @@ impl Graphics {
                 JavaFieldProto::new("translateY", "I", Default::default()),
                 JavaFieldProto::new("color", "I", Default::default()),
                 JavaFieldProto::new("xorMode", "Z", Default::default()),
+                JavaFieldProto::new("font", "Ljavax/microedition/lcdui/Font;", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -153,15 +175,19 @@ impl Graphics {
         jvm.put_field(&mut this, "color", "I", 0).await?;
         jvm.put_field(&mut this, "xorMode", "Z", false).await?;
 
+        let font: ClassInstanceRef<Font> = jvm
+            .invoke_static("javax/microedition/lcdui/Font", "getDefaultFont", "()Ljavax/microedition/lcdui/Font;", ())
+            .await?;
+
+        jvm.put_field(&mut this, "font", "Ljavax/microedition/lcdui/Font;", font).await?;
+
         Ok(())
     }
 
     async fn get_font(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Graphics>) -> JvmResult<ClassInstanceRef<Font>> {
-        tracing::warn!("stub javax.microedition.lcdui.Graphics::getFont({this:?})");
+        tracing::debug!("javax.microedition.lcdui.Graphics::getFont({this:?})");
 
-        let instance = jvm.new_class("javax/microedition/lcdui/Font", "()V", []).await?;
-
-        Ok(instance.into())
+        jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await
     }
 
     async fn set_color(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, rgb: i32) -> JvmResult<()> {
@@ -190,8 +216,10 @@ impl Graphics {
         Ok(())
     }
 
-    async fn set_font(_jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Graphics>, font: ClassInstanceRef<Font>) -> JvmResult<()> {
-        tracing::warn!("stub javax.microedition.lcdui.Graphics::setFont({this:?}, {font:?})");
+    async fn set_font(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Graphics>, font: ClassInstanceRef<Font>) -> JvmResult<()> {
+        tracing::debug!("javax.microedition.lcdui.Graphics::setFont({this:?}, {font:?})");
+
+        jvm.put_field(&mut this, "font", "Ljavax/microedition/lcdui/Font;", font).await?;
 
         Ok(())
     }
@@ -408,13 +436,21 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> = jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
+
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
 
         canvas.draw_text(
             &string,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
@@ -445,13 +481,21 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> = jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
+
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
 
         canvas.draw_text(
             &string,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
@@ -482,13 +526,21 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> = jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
+
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
 
         canvas.draw_text(
             &string,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
@@ -518,13 +570,21 @@ impl Graphics {
         let translate_y: i32 = jvm.get_field(&this, "translateY", "I").await?;
 
         let color: i32 = jvm.get_field(&this, "color", "I").await?;
+        let font: ClassInstanceRef<Font> = jvm.get_field(&this, "font", "Ljavax/microedition/lcdui/Font;").await?;
+        let font_size: i32 = jvm.get_field(&font, "size", "I").await?;
+        let font_height = Font::pixel_height(font_size) as f32;
+        let font_baseline = Font::baseline(font_size) as f32;
 
         let clip = Self::clip(jvm, &this).await?;
+
+        let y = y + vertical_anchor_offset(anchor, font_height as i32, font_baseline as i32);
 
         canvas.draw_text(
             &substring,
             (translate_x + x) as _,
             (translate_y + y) as _,
+            font_height,
+            font_baseline,
             anchor.into(),
             Rgb8Pixel::to_color(color as _),
             clip,
@@ -598,6 +658,68 @@ impl Graphics {
         let clip = Self::clip(jvm, &this).await?;
 
         canvas.draw(x as _, y as _, src_image.width(), src_image.height(), &*src_image, 0, 0, clip);
+
+        Ok(())
+    }
+
+    /// Blit `img` onto this Graphics' canvas, treating source pixels whose
+    /// RGB565 equals `color_key565` as transparent. This is the single-pass
+    /// backend path for WIPI's color-keyed `drawImage`: it replaces the
+    /// per-pixel ARGB array plus `drawRGB` round-trip (a JVM int-array
+    /// allocation and a second full pass over the pixels) that a color-keyed
+    /// sprite would otherwise pay on every call. Anchor, translation and clip
+    /// match [`draw_image`](Self::draw_image).
+    pub async fn draw_image_color_key(
+        jvm: &Jvm,
+        this: &mut ClassInstanceRef<Graphics>,
+        img: &ClassInstanceRef<Image>,
+        x: i32,
+        y: i32,
+        anchor: i32,
+        color_key565: u16,
+    ) -> JvmResult<()> {
+        if img.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "img is null").await);
+        }
+
+        let anchor = Anchor::from_bits_truncate(anchor);
+        let src_image = Image::image(jvm, img).await?;
+
+        let x_delta = if anchor.contains(Anchor::HCENTER) {
+            -((src_image.width() / 2) as i32)
+        } else if anchor.contains(Anchor::RIGHT) {
+            -(src_image.width() as i32)
+        } else {
+            0
+        };
+        let y_delta = if anchor.contains(Anchor::VCENTER) {
+            -((src_image.height() / 2) as i32)
+        } else if anchor.contains(Anchor::BOTTOM) {
+            -(src_image.height() as i32)
+        } else {
+            0
+        };
+
+        let translate_x: i32 = jvm.get_field(this, "translateX", "I").await?;
+        let translate_y: i32 = jvm.get_field(this, "translateY", "I").await?;
+
+        let x = translate_x + x + x_delta;
+        let y = translate_y + y + y_delta;
+
+        let clip = Self::clip(jvm, this).await?;
+        let mut canvas = Self::canvas(jvm, this).await?;
+
+        canvas.draw_with_color_key(
+            x as _,
+            y as _,
+            src_image.width(),
+            src_image.height(),
+            &*src_image,
+            0,
+            0,
+            clip,
+            color_key565,
+        );
 
         Ok(())
     }

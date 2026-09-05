@@ -7,6 +7,9 @@ use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
+/// What `getFlipState` reports on a handset with nothing to fold.
+const FLIP_OPEN: i32 = 1;
+
 // class org.kwis.msp.handset.HandsetProperty
 pub struct HandsetProperty;
 
@@ -17,6 +20,8 @@ impl HandsetProperty {
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
             methods: vec![
+                JavaMethodProto::new("getFlipState", "()I", Self::get_flip_state, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("bgmStop", "()I", Self::bgm_stop, MethodAccessFlags::STATIC),
                 JavaMethodProto::new(
                     "getSystemProperty",
                     "(Ljava/lang/String;)Ljava/lang/String;",
@@ -35,12 +40,35 @@ impl HandsetProperty {
         }
     }
 
+    /// A handset that does not fold is always open, which is what a title
+    /// checks this for before deciding whether it may draw.
+    async fn get_flip_state(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.handset.HandsetProperty::getFlipState()");
+
+        Ok(FLIP_OPEN)
+    }
+
+    /// Silences whatever the handset itself was playing before the title
+    /// started. Nothing plays behind a title here, so there is nothing to
+    /// silence and the call succeeds.
+    async fn bgm_stop(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.handset.HandsetProperty::bgmStop()");
+
+        Ok(0)
+    }
+
     async fn get_system_property(jvm: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<ClassInstanceRef<String>> {
         let name = JavaLangString::to_rust_string(jvm, &name).await?;
         tracing::warn!("stub org.kwis.msp.handset.HandsetProperty::getSystemProperty({name})");
 
         let value = match name.as_ref() {
             "VIBRATORLEVEL" => "0",
+            "DS_LOCK" => "0",
+            // A valid subscriber number so a title that gates on having one
+            // (e.g. an SMS opt-in that reads its own number) sees a real value
+            // instead of an empty string. Matches the WIPI-C PHONENUMBER path's
+            // fallback so both agree.
+            "PHONENUMBER" | "MIN" => "01046119269",
             _ => "",
         };
 

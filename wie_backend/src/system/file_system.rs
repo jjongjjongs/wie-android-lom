@@ -1,4 +1,4 @@
-use alloc::{borrow::ToOwned, boxed::Box, string::String, sync::Arc, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeSet, string::String, sync::Arc, vec::Vec};
 use core::cmp::min;
 
 use hashbrown::HashMap;
@@ -38,6 +38,38 @@ fn normalize_guest_path(path: &str) -> Option<String> {
     }
 
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// Normalize a guest directory path.
+///
+/// Unlike file paths, the root directory is valid and is represented as the
+/// empty string. A trailing slash is accepted because the LGT filesystem layer
+/// strips it before opening the directory.
+fn normalize_guest_directory(path: &str) -> Option<String> {
+    if path.contains('\\') {
+        return None;
+    }
+
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Some(String::new());
+    }
+
+    let mut out = String::new();
+    for seg in trimmed.split('/') {
+        match seg {
+            "" | "." => continue,
+            ".." => return None,
+            normal => {
+                if !out.is_empty() {
+                    out.push('/');
+                }
+                out.push_str(normal);
+            }
+        }
+    }
+
+    Some(out)
 }
 
 /// Unified filesystem view exposed by `System::filesystem()`.
@@ -118,6 +150,147 @@ impl FilesystemOverlay {
         };
         self.platform.filesystem().truncate(&self.aid, &normalized, len).await;
     }
+
+    pub async fn remove(&self, path: &str) -> bool {
+        let Some(normalized) = normalize_guest_path(path) else {
+            return false;
+        };
+
+        self.platform.filesystem().remove(&self.aid, &normalized).await
+    }
+
+    pub async fn mkdir(&self, path: &str) -> core::result::Result<(), crate::platform::FilesystemMkdirError> {
+        use crate::platform::FilesystemMkdirError;
+
+        let Some(normalized) = normalize_guest_path(path) else {
+            return Err(FilesystemMkdirError::Other);
+        };
+
+        // Packaged virtual objects are visible filesystem entries but are
+        // read-only. Creating a directory over one therefore behaves as an
+        // existing-path collision.
+        if self.size(&normalized).await.is_some() || self.list(&normalized).await.is_some() {
+            return Err(FilesystemMkdirError::AlreadyExists);
+        }
+
+        self.platform.filesystem().mkdir(&self.aid, &normalized).await
+    }
+
+    pub async fn rmdir(&self, path: &str) -> core::result::Result<(), crate::platform::FilesystemRmDirError> {
+        use crate::platform::FilesystemRmDirError;
+
+        let Some(normalized) = normalize_guest_path(path) else {
+            return Err(FilesystemRmDirError::Other);
+        };
+
+        // A directory visible only through the packaged archive is read-only.
+        // Do not turn that into a persistent-layer ENOENT.
+        if self.platform.filesystem().list(&self.aid, &normalized).await.is_none() && self.list(&normalized).await.is_some() {
+            return Err(FilesystemRmDirError::Other);
+        }
+
+        self.platform.filesystem().rmdir(&self.aid, &normalized).await
+    }
+
+    pub async fn rename(&self, from: &str, to: &str) -> core::result::Result<(), crate::platform::FilesystemRenameError> {
+        use crate::platform::FilesystemRenameError;
+
+        let Some(from) = normalize_guest_path(from) else {
+            return Err(FilesystemRenameError::Other);
+        };
+        let Some(to) = normalize_guest_path(to) else {
+            return Err(FilesystemRenameError::Other);
+        };
+
+        // Platform objects shadow virtual files. A source that exists only in
+        // the archive is read-only and cannot be renamed.
+        if !self.platform.filesystem().exists(&self.aid, &from).await && self.platform.filesystem().list(&self.aid, &from).await.is_none() {
+            if self.virtual_files.lock().contains_key(&from) || {
+                let mut prefix = from.clone();
+                prefix.push('/');
+                self.virtual_files.lock().keys().any(|key| key.starts_with(&prefix))
+            } {
+                return Err(FilesystemRenameError::Other);
+            }
+        }
+
+        self.platform.filesystem().rename(&self.aid, &from, &to).await
+    }
+
+    pub async fn set_mode(&self, path: &str, mode: u32) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+        use crate::platform::FilesystemSetModeError;
+
+        let Some(normalized) = normalize_guest_path(path) else {
+            return Err(FilesystemSetModeError::Other);
+        };
+
+        // A packaged virtual file is visible through the overlay but has no
+        // writable persistent object whose host permissions can be changed.
+        if !self.platform.filesystem().exists(&self.aid, &normalized).await && self.virtual_files.lock().contains_key(&normalized) {
+            return Err(FilesystemSetModeError::Other);
+        }
+
+        self.platform.filesystem().set_mode(&self.aid, &normalized, mode).await
+    }
+
+    pub async fn total_space(&self) -> Option<u64> {
+        self.platform.filesystem().total_space(&self.aid).await
+    }
+
+    pub async fn available_space(&self) -> Option<u64> {
+        self.platform.filesystem().available_space(&self.aid).await
+    }
+
+    /// Lists the direct children visible through the overlay.
+    ///
+    /// Platform entries come first in their native enumeration order. Virtual
+    /// archive entries that are not shadowed by the platform follow. Virtual
+    /// directories are implicit in archive paths and are exposed by their
+    /// first path component.
+    pub async fn list(&self, path: &str) -> Option<Vec<String>> {
+        let normalized = normalize_guest_directory(path)?;
+
+        let platform_entries = self.platform.filesystem().list(&self.aid, &normalized).await;
+        let platform_exists = platform_entries.is_some();
+        let mut entries = platform_entries.unwrap_or_default();
+
+        let mut seen = BTreeSet::new();
+        for entry in &entries {
+            seen.insert(entry.clone());
+        }
+
+        let prefix = if normalized.is_empty() {
+            String::new()
+        } else {
+            let mut prefix = normalized.clone();
+            prefix.push('/');
+            prefix
+        };
+
+        for key in self.virtual_files.lock().keys() {
+            let Some(rest) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            if rest.is_empty() {
+                continue;
+            }
+
+            let child = rest.split('/').next().unwrap_or(rest);
+            if seen.insert(child.to_owned()) {
+                entries.push(child.to_owned());
+            }
+        }
+
+        if entries.is_empty() {
+            let virtual_dir_exists = normalized.is_empty() || self.virtual_files.lock().keys().any(|key| key.starts_with(&prefix));
+
+            if !virtual_dir_exists && !platform_exists {
+                return None;
+            }
+        }
+
+        Some(entries)
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +302,7 @@ mod tests {
         vec,
         vec::Vec,
     };
+    use alloc::{collections::BTreeSet, format};
 
     use hashbrown::HashMap;
     use spin::Mutex;
@@ -136,7 +310,7 @@ mod tests {
     use crate::{
         audio_sink::AudioSink,
         database::DatabaseRepository,
-        platform::{Filesystem, Platform},
+        platform::{Filesystem, FilesystemMkdirError, FilesystemRenameError, FilesystemRmDirError, Platform},
         screen::Screen,
         time::Instant,
     };
@@ -146,6 +320,7 @@ mod tests {
     #[derive(Default)]
     struct StubFilesystem {
         files: Mutex<HashMap<(String, String), Vec<u8>>>,
+        directories: Mutex<BTreeSet<(String, String)>>,
     }
     #[async_trait::async_trait]
     impl Filesystem for StubFilesystem {
@@ -179,6 +354,158 @@ mod tests {
             let file = files.entry((aid.to_string(), path.to_string())).or_default();
             file.resize(len, 0);
         }
+
+        async fn remove(&self, aid: &str, path: &str) -> bool {
+            self.files.lock().remove(&(aid.to_string(), path.to_string())).is_some()
+        }
+
+        async fn mkdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemMkdirError> {
+            if path.is_empty() {
+                return Err(FilesystemMkdirError::AlreadyExists);
+            }
+
+            let mut directories = self.directories.lock();
+            let key = (aid.to_string(), path.to_string());
+
+            if directories.contains(&key) || self.files.lock().contains_key(&key) {
+                return Err(FilesystemMkdirError::AlreadyExists);
+            }
+
+            let parent = path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+            if !parent.is_empty() {
+                let parent_key = (aid.to_string(), parent.to_string());
+                let mut prefix = parent.to_string();
+                prefix.push('/');
+
+                let parent_exists = directories.contains(&parent_key)
+                    || directories
+                        .iter()
+                        .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix))
+                    || self
+                        .files
+                        .lock()
+                        .keys()
+                        .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix));
+
+                if !parent_exists {
+                    return Err(FilesystemMkdirError::NotFound);
+                }
+            }
+
+            directories.insert(key);
+            Ok(())
+        }
+
+        async fn rmdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemRmDirError> {
+            if path.is_empty() {
+                return Err(FilesystemRmDirError::Other);
+            }
+
+            let key = (aid.to_string(), path.to_string());
+
+            if self.files.lock().contains_key(&key) {
+                return Err(FilesystemRmDirError::Other);
+            }
+
+            let mut prefix = path.to_string();
+            prefix.push('/');
+
+            let has_file_child = self
+                .files
+                .lock()
+                .keys()
+                .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix));
+
+            let mut directories = self.directories.lock();
+            let exists = directories.contains(&key);
+            let has_directory_child = directories
+                .iter()
+                .any(|(entry_aid, entry_path)| entry_aid == aid && entry_path.starts_with(&prefix));
+
+            if has_file_child || has_directory_child {
+                return Err(FilesystemRmDirError::NotEmpty);
+            }
+
+            if !exists {
+                return Err(FilesystemRmDirError::NotFound);
+            }
+
+            directories.remove(&key);
+            Ok(())
+        }
+
+        async fn rename(&self, aid: &str, from: &str, to: &str) -> core::result::Result<(), FilesystemRenameError> {
+            let mut files = self.files.lock();
+            let Some(data) = files.remove(&(aid.to_string(), from.to_string())) else {
+                return Err(FilesystemRenameError::NotFound);
+            };
+            files.insert((aid.to_string(), to.to_string()), data);
+            Ok(())
+        }
+
+        async fn set_mode(&self, aid: &str, path: &str, _mode: u32) -> core::result::Result<(), crate::platform::FilesystemSetModeError> {
+            if self.files.lock().contains_key(&(aid.to_string(), path.to_string())) {
+                Ok(())
+            } else {
+                Err(crate::platform::FilesystemSetModeError::NotFound)
+            }
+        }
+
+        async fn total_space(&self, _aid: &str) -> Option<u64> {
+            Some(32 * 1024 * 1024)
+        }
+
+        async fn available_space(&self, _aid: &str) -> Option<u64> {
+            Some(16 * 1024 * 1024)
+        }
+
+        async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>> {
+            let prefix = if path.is_empty() { String::new() } else { format!("{path}/") };
+            let files = self.files.lock();
+            let directories = self.directories.lock();
+            let mut entries = Vec::new();
+            let mut seen = BTreeSet::new();
+            let mut directory_exists = path.is_empty() || directories.contains(&(aid.to_string(), path.to_string()));
+
+            for ((entry_aid, entry_path), _) in files.iter() {
+                if entry_aid != aid {
+                    continue;
+                }
+                let Some(rest) = entry_path.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if rest.is_empty() {
+                    continue;
+                }
+                let child = rest.split('/').next().unwrap_or(rest).to_string();
+                directory_exists = true;
+
+                if seen.insert(child.clone()) {
+                    entries.push(child);
+                }
+            }
+
+            for (entry_aid, entry_path) in directories.iter() {
+                if entry_aid != aid {
+                    continue;
+                }
+                let Some(rest) = entry_path.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if rest.is_empty() {
+                    continue;
+                }
+
+                directory_exists = true;
+
+                let child = rest.split('/').next().unwrap_or(rest).to_string();
+                if seen.insert(child.clone()) {
+                    entries.push(child);
+                }
+            }
+
+            if directory_exists { Some(entries) } else { None }
+        }
     }
 
     struct StubPlatform {
@@ -204,6 +531,8 @@ mod tests {
         fn write_stderr(&self, _buf: &[u8]) {}
         fn exit(&self) {}
         fn vibrate(&self, _duration_ms: u64, _intensity: u8) {}
+
+        fn set_backlight_mode(&self, _mode: u8) {}
     }
 
     fn setup() -> FilesystemOverlay {
@@ -278,5 +607,38 @@ mod tests {
         let mut buf = [0u8; 4];
         assert_eq!(fs.read("cfg.dat", 0, 4, &mut buf).await, Some(4));
         assert_eq!(buf, [1, 2, 3, 4]);
+    }
+
+    #[futures_test::test]
+    async fn list_merges_platform_and_virtual_direct_children() {
+        let fs = setup();
+
+        fs.write("dir/platform.dat", 0, &[1]).await;
+        fs.add_virtual("dir/virtual.dat", vec![2]);
+        fs.add_virtual("dir/sub/deep.dat", vec![3]);
+        fs.add_virtual("dir/platform.dat", vec![4]);
+
+        let entries = fs.list("dir/").await.unwrap();
+
+        assert_eq!(entries.first().map(String::as_str), Some("platform.dat"));
+        assert_eq!(entries.iter().filter(|x| x.as_str() == "platform.dat").count(), 1);
+
+        let mut virtual_tail = entries[1..].to_vec();
+        virtual_tail.sort();
+        assert_eq!(virtual_tail, vec!["sub".to_string(), "virtual.dat".to_string()]);
+    }
+
+    #[futures_test::test]
+    async fn list_virtual_root_exposes_only_direct_children() {
+        let fs = setup();
+
+        fs.add_virtual("root.bin", vec![1]);
+        fs.add_virtual("P/data.bin", vec![2]);
+        fs.add_virtual("P/nested/deep.bin", vec![3]);
+
+        let mut entries = fs.list("/").await.unwrap();
+        entries.sort();
+
+        assert_eq!(entries, vec!["P".to_string(), "root.bin".to_string()]);
     }
 }

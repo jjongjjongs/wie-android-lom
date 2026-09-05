@@ -1,0 +1,8 @@
+[package]
+name = "smaf_player"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+smaf = { path = "../smaf" }
+tracing = { version = "^0.1", default-features = false }

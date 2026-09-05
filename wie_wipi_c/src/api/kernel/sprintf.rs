@@ -14,7 +14,10 @@ pub fn sprintf(context: &mut dyn WIPICContext, format: &str, args: &[u32]) -> Re
     })
 }
 
-fn format(format: &str, args: &[u32], read_string: &mut dyn FnMut(u32) -> Result<String>) -> Result<String> {
+/// Formats `format` with `args`, resolving `%s` pointers through `read_string`.
+/// Exposed so callers that hold something other than a `WIPICContext` - the LGT
+/// stdlib works straight off `ArmCore` - can format with their own reader.
+pub fn format(format: &str, args: &[u32], read_string: &mut dyn FnMut(u32) -> Result<String>) -> Result<String> {
     let mut result = String::with_capacity(format.len());
     let mut chars = format.chars();
     let mut arg_iter = args.iter();

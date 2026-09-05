@@ -1,3 +1,4 @@
+mod bitmap_font;
 mod framebuffer;
 mod grp_context;
 mod image;
@@ -8,31 +9,50 @@ use alloc::{string::String, vec, vec::Vec};
 
 use wie_backend::{
     Event,
-    canvas::{Clip, Color, PixelType, Rgb8Pixel, Rgb565Pixel, TextAlignment, string_width},
+    canvas::{Canvas, Clip, Color, Image, PixelType, Rgb8Pixel, Rgb565Pixel, TextAlignment, string_width_px},
 };
-use wie_util::{Result, read_generic, read_null_terminated_string_bytes, write_generic};
+use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic};
 
-use wipi_types::wipic::{WIPICDisplayInfo, WIPICFramebuffer, WIPICGraphicsContext, WIPICImage, WIPICIndirectPtr, WIPICWord};
+use wipi_types::wipic::{WIPICDisplayInfo, WIPICFramebuffer, WIPICImage, WIPICIndirectPtr, WIPICWord};
 
 use crate::context::WIPICContext;
 
-use self::{framebuffer::FrameBuffer, grp_context::WIPICGraphicsContextIdx, image::create_wipi_image};
+use self::{
+    bitmap_font::BitmapFace,
+    framebuffer::FrameBuffer,
+    grp_context::{WIPICGraphicsContext, WIPICGraphicsContextIdx},
+    image::create_wipi_image,
+};
 
-const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
+pub use self::bitmap_font::{clear as clear_bios_font, install_from_bios as install_bios_font};
+
+pub const FRAMEBUFFER_DEPTH: u32 = 16; // XXX hardcode to 16bpp as some game requires 16bpp framebuffer
 const SCREEN_FRAMEBUFFER_PTR: u32 = 0x7fff1000;
+/// Guest word holding the height of the handset's status strip (the WIPI
+/// "annunciator"), which sits above the drawing area a title is given. Zero
+/// unless the platform stores one, and nothing below changes while it is zero.
+pub const ANNUNCIATOR_ROWS_PTR: u32 = 0x7fff2000;
+
 /// Read a WIPI-C string. `length == -1` means NUL-terminated; `length > 0`
 /// reads exactly that many bytes; `length == 0` and other negatives yield
 /// an empty string.
-fn read_wipi_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<Vec<u8>> {
-    if length > 0 {
+///
+/// The bytes are EUC-KR, which is what a Korean handset's toolchain put in the
+/// binary. Reading them as UTF-8 turns every Hangul syllable into U+FFFD, and
+/// the font has no glyph for that, so a title's text silently drew nothing at
+/// all - which is what dialogue boxes with no words in them were.
+fn read_wipi_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<String> {
+    let bytes = if length > 0 {
         let mut buf = vec![0u8; length as usize];
         context.read_bytes(ptr, &mut buf)?;
-        return Ok(buf);
-    }
-    if length == -1 {
-        return read_null_terminated_string_bytes(context, ptr);
-    }
-    Ok(Vec::new())
+        buf
+    } else if length == -1 {
+        read_null_terminated_string_bytes(context, ptr)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(encoding_rs::EUC_KR.decode(&bytes).0.into_owned())
 }
 
 pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWord) -> Result<WIPICIndirectPtr> {
@@ -49,7 +69,13 @@ pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWor
         (screen.width(), screen.height())
     };
 
-    let framebuffer = FrameBuffer::new(context, width, height, FRAMEBUFFER_DEPTH)?;
+    // Guard the screen surface too: a title blits its scene straight into it
+    // with the default (unclamped) clip and overruns the bottom edge, and the
+    // list-allocator header of the very next block sits 4 bytes past this
+    // buffer's end - so an unpadded screen buffer lets the overdraw corrupt the
+    // heap. `new_screen_surface` pads it the same way `new_guarded_surface`
+    // does, and also splits the panel from the drawing area.
+    let framebuffer = new_screen_surface(context, width, height)?;
 
     let memory = context.alloc(size_of::<WIPICFramebuffer>() as WIPICWord)?;
     write_generic(context, context.data_ptr(memory)?, framebuffer.0)?;
@@ -61,18 +87,46 @@ pub async fn get_screen_framebuffer(context: &mut dyn WIPICContext, a0: WIPICWor
 pub async fn init_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord) -> Result<()> {
     tracing::debug!("MC_grpInitContext({p_grp_ctx:#x})");
 
-    let grp_ctx = WIPICGraphicsContext::default();
+    // Reference MC_grpInitContext (@0x1abc0c) does not zero the whole context;
+    // it plants non-zero defaults that drawing then relies on when the game
+    // never calls SetContext for a given field. Porting them keeps our output
+    // consistent with the firmware:
+    //   clip   = whole plane (0,0)-(0x7fff,0x7fff)
+    //   bgpxl  = 0x00ffffff (opaque white)
+    //   alpha  = 0xff       (fully opaque)
+    //   param1 = 0xff
+    //   font   = MC_grpGetFont(0,0,0)  (the 12px default face)
+    // Everything else (fg, transparent, pixelop, style, offset) stays zero.
+    let grp_ctx = WIPICGraphicsContext {
+        clip: [0, 0, 0x7fff, 0x7fff],
+        bgpxl: 0x00ff_ffff,
+        alpha: 0xff,
+        param1: 0xff,
+        font: font_size_px(0) as WIPICWord,
+        ..Default::default()
+    };
     write_generic(context, p_grp_ctx, grp_ctx)?;
     Ok(())
 }
 
 pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, op: WIPICGraphicsContextIdx, pv: WIPICWord) -> Result<()> {
-    tracing::debug!("MC_grpSetContext({p_grp_ctx:#x}, {op:?}, {pv:#x})");
+    tracing::trace!("MC_grpSetContext({p_grp_ctx:#x}, {op:?}, {pv:#x})");
 
     let mut grp_ctx: WIPICGraphicsContext = read_generic(context, p_grp_ctx)?;
     match op {
         WIPICGraphicsContextIdx::ClipIdx => {
-            grp_ctx.clip = read_generic(context, pv)?;
+            // The clip rectangle is passed as four 32-bit words (x1, y1, x2, y2),
+            // not four 16-bit ones - reading it as `[u16; 4]` took only the low
+            // halves of x1/y1 as the whole rect and dropped x2/y2 entirely, so a
+            // title that saved the clip with GetContext and restored it here got a
+            // degenerate rectangle back and every later blit clipped to nothing
+            // (MapleStory 도적편's sprites vanished). The reference stores the
+            // bottom-right corner decremented; GetContext re-adds the 1.
+            let x1: u32 = read_generic(context, pv)?;
+            let y1: u32 = read_generic(context, pv + 4)?;
+            let x2: u32 = read_generic(context, pv + 8)?;
+            let y2: u32 = read_generic(context, pv + 12)?;
+            grp_ctx.clip = [x1, y1, x2.wrapping_sub(1), y2.wrapping_sub(1)];
         }
         WIPICGraphicsContextIdx::FgPixelIdx => {
             grp_ctx.fgpxl = pv as _;
@@ -80,13 +134,13 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
         WIPICGraphicsContextIdx::BgPixelIdx => {
             grp_ctx.bgpxl = pv as _;
         }
-        WIPICGraphicsContextIdx::TransPixelIdx => {
-            grp_ctx.transpxl = pv as _;
-        }
+        // The reference stores nothing for op 3 and reports nothing back.
+        WIPICGraphicsContextIdx::TransPixelIdx => {}
+        // The reference ignores an alpha outside 0..=0xff rather than storing it.
         WIPICGraphicsContextIdx::AlphaIdx => {
-            grp_ctx.alpha = pv as _;
-            // grp_ctx.pixel_op_func_ptr = todo!();
-            // grp_ctx.param1 = todo!();
+            if pv <= 0xff {
+                grp_ctx.alpha = pv;
+            }
         }
         WIPICGraphicsContextIdx::PixelopIdx => {
             grp_ctx.pixel_op_func_ptr = pv;
@@ -100,14 +154,83 @@ pub async fn set_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, o
         WIPICGraphicsContextIdx::StyleIdx => {
             grp_ctx.style = pv;
         }
+        // XOR mode is a flag of its own, and the reference drives the pixel-op
+        // slot from it: turning it on zeroes the alpha and installs its built-in
+        // XOR operation, turning it off clears both. We have no pixel-op path to
+        // install, so the slot is cleared either way - a title reading it back
+        // sees no operation rather than a pointer it could not call here.
+        WIPICGraphicsContextIdx::XorModeIdx => {
+            grp_ctx.pixel_op_func_ptr = 0;
+            if pv == 0 {
+                grp_ctx.xor_mode = 0;
+            } else {
+                grp_ctx.alpha = 0;
+                grp_ctx.xor_mode = 1;
+            }
+        }
         WIPICGraphicsContextIdx::OffsetIdx => {
-            grp_ctx.offset = read_generic(context, pv)?;
+            // Same 32-bit-word pair as the clip corners, and the counterpart to
+            // GetContext's `OffsetIdx`, which writes two 32-bit words back.
+            let x: u32 = read_generic(context, pv)?;
+            let y: u32 = read_generic(context, pv + 4)?;
+            grp_ctx.offset = [x, y];
         }
         _ => {
             tracing::warn!("MC_grpSetContext({p_grp_ctx:#x}, {op:?}, {pv:#x}): ignoring invalid op");
         }
     }
     write_generic(context, p_grp_ctx, grp_ctx)?;
+
+    Ok(())
+}
+
+/// `MC_grpGetContext(p_grp_ctx, op, out_ptr)` - the read counterpart to
+/// `MC_grpSetContext`. A clet's blitter reads the live drawing state back
+/// (foreground colour, alpha, font, clip, offset...) so it can save and restore
+/// it around each primitive. Left a stub returning nothing, it zeroed the game's
+/// saved context, and the restore then corrupted every following draw - Demon
+/// Hunter smeared each screen over the last one and spun redrawing.
+///
+/// Behaviour mirrors `liblgt_system.so`'s `MC_grpGetContext`: the value is
+/// written *through* `out_ptr` (unlike `SetContext`, which passes scalars by
+/// value), the call is a no-op when either pointer is null, `TransPixelIdx`
+/// reads nothing back, and the clip is reported as `(x1, y1, x2 + 1, y2 + 1)`
+/// (the reference stores the bottom-right corner decremented and re-adds it).
+pub async fn get_context(context: &mut dyn WIPICContext, p_grp_ctx: WIPICWord, op: WIPICGraphicsContextIdx, out_ptr: WIPICWord) -> Result<()> {
+    tracing::trace!("MC_grpGetContext({p_grp_ctx:#x}, {op:?}, {out_ptr:#x})");
+
+    if p_grp_ctx == 0 || out_ptr == 0 {
+        return Ok(());
+    }
+
+    let grp_ctx: WIPICGraphicsContext = read_generic(context, p_grp_ctx)?;
+    match op {
+        WIPICGraphicsContextIdx::ClipIdx => {
+            let clip = grp_ctx.clip;
+            write_generic(context, out_ptr, clip[0])?;
+            write_generic(context, out_ptr + 4, clip[1])?;
+            write_generic(context, out_ptr + 8, clip[2].wrapping_add(1))?;
+            write_generic(context, out_ptr + 12, clip[3].wrapping_add(1))?;
+        }
+        WIPICGraphicsContextIdx::FgPixelIdx => write_generic(context, out_ptr, grp_ctx.fgpxl)?,
+        WIPICGraphicsContextIdx::BgPixelIdx => write_generic(context, out_ptr, grp_ctx.bgpxl)?,
+        // The reference reads nothing back for op 3.
+        WIPICGraphicsContextIdx::TransPixelIdx => {}
+        WIPICGraphicsContextIdx::AlphaIdx => write_generic(context, out_ptr, grp_ctx.alpha)?,
+        WIPICGraphicsContextIdx::PixelopIdx => write_generic(context, out_ptr, grp_ctx.pixel_op_func_ptr)?,
+        WIPICGraphicsContextIdx::PixelParam1Idx => write_generic(context, out_ptr, grp_ctx.param1)?,
+        WIPICGraphicsContextIdx::FontIdx => write_generic(context, out_ptr, grp_ctx.font)?,
+        WIPICGraphicsContextIdx::StyleIdx => write_generic(context, out_ptr, grp_ctx.style)?,
+        WIPICGraphicsContextIdx::XorModeIdx => write_generic(context, out_ptr, grp_ctx.xor_mode)?,
+        WIPICGraphicsContextIdx::OffsetIdx => {
+            let offset = grp_ctx.offset;
+            write_generic(context, out_ptr, offset[0])?;
+            write_generic(context, out_ptr + 4, offset[1])?;
+        }
+        _ => {
+            tracing::warn!("MC_grpGetContext({p_grp_ctx:#x}, {op:?}, {out_ptr:#x}): unsupported op");
+        }
+    }
 
     Ok(())
 }
@@ -160,12 +283,12 @@ pub async fn draw_arc(
     w: i32,
     h: i32,
     start_angle: i32,
-    arc_angle: i32,
+    end_angle: i32,
     p_gctx: WIPICWord,
 ) -> Result<()> {
-    tracing::debug!("MC_grpDrawArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {arc_angle}, {p_gctx:#x})", dst.0);
+    tracing::debug!("MC_grpDrawArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {end_angle}, {p_gctx:#x})", dst.0);
 
-    if w <= 0 || h <= 0 {
+    if dst.0 == 0 || p_gctx == 0 || w <= 0 || h <= 0 {
         return Ok(());
     }
 
@@ -181,7 +304,16 @@ pub async fn draw_arc(
     };
 
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.draw_arc(x as _, y as _, w as _, h as _, start_angle, arc_angle, color, clip);
+    canvas.draw_arc(
+        x as _,
+        y as _,
+        w as _,
+        h as _,
+        start_angle,
+        end_angle.wrapping_sub(start_angle),
+        color,
+        clip,
+    );
     canvas.flush()?;
 
     Ok(())
@@ -196,12 +328,12 @@ pub async fn fill_arc(
     w: i32,
     h: i32,
     start_angle: i32,
-    arc_angle: i32,
+    end_angle: i32,
     p_gctx: WIPICWord,
 ) -> Result<()> {
-    tracing::debug!("MC_grpFillArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {arc_angle}, {p_gctx:#x})", dst.0);
+    tracing::debug!("MC_grpFillArc({:#x}, {x}, {y}, {w}, {h}, {start_angle}, {end_angle}, {p_gctx:#x})", dst.0);
 
-    if w <= 0 || h <= 0 {
+    if dst.0 == 0 || p_gctx == 0 || w <= 0 || h <= 0 {
         return Ok(());
     }
 
@@ -217,7 +349,133 @@ pub async fn fill_arc(
     };
 
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.fill_arc(x as _, y as _, w as _, h as _, start_angle, arc_angle, color, clip);
+    canvas.fill_arc(
+        x as _,
+        y as _,
+        w as _,
+        h as _,
+        start_angle,
+        end_angle.wrapping_sub(start_angle),
+        color,
+        clip,
+    );
+    canvas.flush()?;
+
+    Ok(())
+}
+
+/// Reads `n` (x, y) vertices from two parallel `M_Int32` arrays, the way the
+/// WIPI polygon calls pass them.
+fn read_polygon_points(context: &mut dyn WIPICContext, x_points: WIPICWord, y_points: WIPICWord, n: usize) -> Result<Vec<(i32, i32)>> {
+    let mut points = Vec::with_capacity(n);
+    for i in 0..n {
+        let offset = (i * size_of::<i32>()) as WIPICWord;
+        let x: i32 = read_generic(context, x_points + offset)?;
+        let y: i32 = read_generic(context, y_points + offset)?;
+        points.push((x, y));
+    }
+    Ok(points)
+}
+
+/// The bounding box of a set of points as `(min_x, min_y, max_x, max_y)`. Used
+/// as the draw clip so a stray vertex cannot paint outside the shape's extent.
+/// `Clip` is neither `Copy` nor `Clone`, so callers rebuild one per draw from
+/// these bounds.
+fn polygon_bounds(points: &[(i32, i32)]) -> (i32, i32, i32, i32) {
+    let min_x = points.iter().map(|p| p.0).min().unwrap_or(0);
+    let min_y = points.iter().map(|p| p.1).min().unwrap_or(0);
+    let max_x = points.iter().map(|p| p.0).max().unwrap_or(0);
+    let max_y = points.iter().map(|p| p.1).max().unwrap_or(0);
+    (min_x, min_y, max_x, max_y)
+}
+
+fn bounds_clip(bounds: (i32, i32, i32, i32)) -> Clip {
+    let (min_x, min_y, max_x, max_y) = bounds;
+    Clip {
+        x: min_x,
+        y: min_y,
+        width: (max_x - min_x + 1).max(0) as u32,
+        height: (max_y - min_y + 1).max(0) as u32,
+    }
+}
+
+pub async fn draw_polygon(
+    context: &mut dyn WIPICContext,
+    dst: WIPICIndirectPtr,
+    x_points: WIPICWord,
+    y_points: WIPICWord,
+    n_points: i32,
+    p_gctx: WIPICWord,
+) -> Result<()> {
+    tracing::debug!("MC_grpDrawPolygon({:#x}, {x_points:#x}, {y_points:#x}, {n_points}, {p_gctx:#x})", dst.0);
+
+    if n_points < 2 || x_points == 0 || y_points == 0 {
+        return Ok(());
+    }
+
+    let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
+    let gctx: WIPICGraphicsContext = read_generic(context, p_gctx)?;
+    let points = read_polygon_points(context, x_points, y_points, n_points as usize)?;
+
+    let bounds = polygon_bounds(&points);
+    let color = framebuffer.pixel_to_color(gctx.fgpxl);
+    let mut canvas = framebuffer.canvas(context)?;
+
+    // Close the outline back to the first vertex, which is what a polygon is.
+    for i in 0..points.len() {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % points.len()];
+        canvas.draw_line(x1, y1, x2, y2, color, bounds_clip(bounds));
+    }
+    canvas.flush()?;
+
+    Ok(())
+}
+
+pub async fn fill_polygon(
+    context: &mut dyn WIPICContext,
+    dst: WIPICIndirectPtr,
+    x_points: WIPICWord,
+    y_points: WIPICWord,
+    n_points: i32,
+    p_gctx: WIPICWord,
+) -> Result<()> {
+    tracing::debug!("MC_grpFillPolygon({:#x}, {x_points:#x}, {y_points:#x}, {n_points}, {p_gctx:#x})", dst.0);
+
+    if n_points < 3 || x_points == 0 || y_points == 0 {
+        return Ok(());
+    }
+
+    let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
+    let gctx: WIPICGraphicsContext = read_generic(context, p_gctx)?;
+    let points = read_polygon_points(context, x_points, y_points, n_points as usize)?;
+
+    let bounds = polygon_bounds(&points);
+    let color = framebuffer.pixel_to_color(gctx.fgpxl);
+    let (min_y, max_y) = (bounds.1, bounds.3);
+    let mut canvas = framebuffer.canvas(context)?;
+
+    // Even-odd scanline fill: for each row, gather where the edges cross it,
+    // sort, and paint the interior between successive crossing pairs.
+    let mut crossings: Vec<i32> = Vec::with_capacity(points.len());
+    for y in min_y..=max_y {
+        crossings.clear();
+        for i in 0..points.len() {
+            let (x1, y1) = points[i];
+            let (x2, y2) = points[(i + 1) % points.len()];
+            // A half-open edge test counts each vertex once, so a scanline
+            // passing exactly through a vertex is not filled twice.
+            let (lo, hi, xa, xb) = if y1 <= y2 { (y1, y2, x1, x2) } else { (y2, y1, x2, x1) };
+            if y >= lo && y < hi {
+                let x = xa + (xb - xa) * (y - lo) / (hi - lo);
+                crossings.push(x);
+            }
+        }
+        crossings.sort_unstable();
+        for pair in crossings.chunks_exact(2) {
+            canvas.draw_line(pair[0], y, pair[1], y, color, bounds_clip(bounds));
+        }
+    }
     canvas.flush()?;
 
     Ok(())
@@ -232,7 +490,22 @@ pub async fn create_image(
 ) -> Result<WIPICWord> {
     tracing::debug!("MC_grpCreateImage({ptr_image:#x}, {:#x}, {offset}, {len})", image_data.0);
 
-    let image = create_wipi_image(context, image_data, offset, len)?;
+    // The source pointer can be one the title read out of never-initialised
+    // memory - a NULL/valid handle on the reference's zeroed heap, a stray
+    // address here - so a read straight from it faults the whole VM instead of
+    // failing the one call. The reference returns "not done" for a source it
+    // cannot read; do the same and let the title carry on rather than die.
+    let image = match create_wipi_image(context, image_data, offset, len) {
+        Ok(image) => image,
+        Err(WieError::InvalidMemoryAccess(address)) => {
+            tracing::warn!(
+                "MC_grpCreateImage: unreadable source {:#x} (+{offset}, faulted at {address:#x}); reporting not-done",
+                image_data.0
+            );
+            return Ok(0); // not MC_GRP_IMAGE_DONE
+        }
+        Err(other) => return Err(other),
+    };
 
     let memory = context.alloc(size_of::<WIPICImage>() as WIPICWord)?;
     write_generic(context, ptr_image, memory)?;
@@ -244,9 +517,114 @@ pub async fn create_image(
 pub async fn destroy_image(context: &mut dyn WIPICContext, image: WIPICIndirectPtr) -> Result<()> {
     tracing::debug!("MC_grpDestroyImage({:#x})", image.0);
 
+    if image.0 == 0 {
+        return Ok(());
+    }
+
+    // Free the pixel planes `create_wipi_image` allocated: the colour plane
+    // (`img.buf`) always, and the mask plane (`mask.buf`) only when the source
+    // carried alpha. Freeing just the WIPICImage struct - as this did before -
+    // leaks both planes, and a title that creates and destroys a scratch image
+    // every frame (MapleStory 도적편 does this ~100x/frame) then exhausts the
+    // heap. The `buf` field is the caller's own encoded bytes and is not ours.
+    let wipi_image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
+    if wipi_image.img.buf.0 != 0 {
+        context.free(wipi_image.img.buf)?;
+    }
+    if wipi_image.mask.buf.0 != 0 {
+        context.free(wipi_image.mask.buf)?;
+    }
+
     context.free(image)?;
 
     Ok(())
+}
+
+/// Copy the `(x, y, w, h)` region of `fb` into a freshly allocated framebuffer
+/// of the same depth, clamping reads to the source bounds. Used to materialise a
+/// sub-image as an independent pixel plane.
+fn crop_framebuffer(context: &mut dyn WIPICContext, fb: &FrameBuffer, x: i32, y: i32, w: i32, h: i32) -> Result<FrameBuffer> {
+    let bpp = (fb.0.bpp / 8).max(1) as i64;
+    let src = fb.data(context)?;
+    let src_bpl = fb.0.bpl as i64;
+    let (src_w, src_h) = (fb.0.width as i64, fb.0.height as i64);
+    let new_bpl = w as i64 * bpp;
+    let mut out = vec![0u8; (new_bpl * h as i64) as usize];
+
+    for row in 0..h as i64 {
+        let sy = y as i64 + row;
+        if sy < 0 || sy >= src_h {
+            continue;
+        }
+        for col in 0..w as i64 {
+            let sx = x as i64 + col;
+            if sx < 0 || sx >= src_w {
+                continue;
+            }
+            let src_off = (sy * src_bpl + sx * bpp) as usize;
+            let dst_off = (row * new_bpl + col * bpp) as usize;
+            out[dst_off..dst_off + bpp as usize].copy_from_slice(&src[src_off..src_off + bpp as usize]);
+        }
+    }
+
+    let dst = FrameBuffer::new(context, w as u32, h as u32, fb.0.bpp)?;
+    context.write_bytes(context.data_ptr(dst.0.buf)?, &out)?;
+    Ok(dst)
+}
+
+/// `MC_grpCreateSubImage(parent, x, y, w, h)` - a view of a rectangular region
+/// of an existing image, as its own image handle. The reference copies the
+/// region out into an independent plane, which is what a title relies on when it
+/// slices a sprite sheet into individual frames; left unmapped it returned the
+/// diagnostic stub 0, so every sub-image was null and its draws were skipped.
+pub async fn create_sub_image(context: &mut dyn WIPICContext, parent: WIPICIndirectPtr, x: i32, y: i32, w: i32, h: i32) -> Result<WIPICWord> {
+    tracing::debug!("MC_grpCreateSubImage({:#x}, {x}, {y}, {w}, {h})", parent.0);
+
+    if parent.0 == 0 || w <= 0 || h <= 0 {
+        return Ok(0);
+    }
+
+    let parent_image: WIPICImage = read_generic(context, context.data_ptr(parent)?)?;
+
+    let sub_img = crop_framebuffer(context, &FrameBuffer(parent_image.img), x, y, w, h)?;
+    let sub_mask = if parent_image.mask.buf.0 != 0 {
+        crop_framebuffer(context, &FrameBuffer(parent_image.mask), x, y, w, h)?
+    } else {
+        FrameBuffer::empty()
+    };
+
+    let image = WIPICImage {
+        img: sub_img.0,
+        mask: sub_mask.0,
+        loop_count: 0,
+        delay: 0,
+        animated: 0,
+        buf: WIPICIndirectPtr(0),
+        offset: 0,
+        current: 0,
+        len: 0,
+    };
+
+    let memory = context.alloc(size_of::<WIPICImage>() as WIPICWord)?;
+    write_generic(context, context.data_ptr(memory)?, image)?;
+
+    Ok(memory.0)
+}
+
+/// `MC_grpDecodeNextImage(image)` - advance an animated image to its next frame.
+/// `create_wipi_image` already decodes the first (and, for the still images WIE
+/// currently produces, only) frame, so the image is ready to draw; report frame
+/// 0 as available rather than the diagnostic stub's 0-that-meant-nothing. Real
+/// multi-frame stepping is not modelled yet.
+pub async fn decode_next_image(context: &mut dyn WIPICContext, image: WIPICIndirectPtr) -> Result<i32> {
+    tracing::debug!("MC_grpDecodeNextImage({:#x})", image.0);
+
+    if image.0 == 0 {
+        return Ok(-1);
+    }
+
+    let _wipi_image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
+    Ok(0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -271,7 +649,13 @@ pub async fn draw_image(
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
     let image: WIPICImage = read_generic(context, context.data_ptr(image)?)?;
 
-    let src_image = FrameBuffer(image.img).image(context)?;
+    // An image that carries alpha keeps the full colour in the mask plane, and
+    // its per-pixel alpha composites straight. One without a mask is a 16bpp
+    // colour plane whose transparency is the magenta key instead, so it is
+    // keyed rather than blended.
+    let keyed = image.mask.buf.0 == 0;
+    let source = if keyed { image.img } else { image.mask };
+    let src_image = FrameBuffer(source).image(context)?;
     let mut canvas = framebuffer.canvas(context)?;
 
     let clip = Clip {
@@ -281,7 +665,11 @@ pub async fn draw_image(
         height: h as _,
     };
 
-    canvas.draw(dx as _, dy as _, w as _, h as _, &*src_image, sx as _, sy as _, clip);
+    if keyed {
+        blit_magenta_keyed(&mut **canvas, dx, dy, w, h, &*src_image, sx, sy);
+    } else {
+        canvas.draw(dx as _, dy as _, w as _, h as _, &*src_image, sx as _, sy as _, clip);
+    }
     canvas.flush()?;
 
     Ok(())
@@ -301,6 +689,36 @@ pub async fn flush_lcd(
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(framebuffer)?)?);
 
     let src_canvas = framebuffer.image(context)?;
+
+    // DIAGNOSTIC: summarise the frame we are about to present so a device log
+    // shows whether an image actually reached the draw buffer. A text-only
+    // screen carries a handful of colours; a decoded image carries dozens or
+    // hundreds. Distinguishes "the image never got drawn" from "it was drawn
+    // but is not reaching the display". Logged at info so it survives a normal
+    // capture without turning on the per-primitive flood.
+    {
+        use alloc::collections::BTreeSet;
+
+        let mut colours: BTreeSet<u32> = BTreeSet::new();
+        let mut non_black: u32 = 0;
+        for colour in src_canvas.colors() {
+            let packed = ((colour.r as u32) << 16) | ((colour.g as u32) << 8) | colour.b as u32;
+            if packed != 0 {
+                non_black += 1;
+            }
+            if colours.len() <= 512 {
+                colours.insert(packed);
+            }
+        }
+        tracing::info!(
+            "FRAME flush fb={:#x} {}x{} region=({x},{y},{w},{h}) colours={} non_black={}",
+            framebuffer.0.buf.0,
+            src_canvas.width(),
+            src_canvas.height(),
+            colours.len(),
+            non_black,
+        );
+    }
 
     let platform = context.system().platform();
     let screen = platform.screen();
@@ -343,15 +761,26 @@ pub async fn get_display_info(context: &mut dyn WIPICContext, reserved: WIPICWor
 
     assert_eq!(reserved, 0);
 
-    let platform = context.system().platform();
-    let screen = platform.screen();
+    let (width, height) = {
+        let platform = context.system().platform();
+        let screen = platform.screen();
+        (screen.width(), screen.height())
+    };
 
+    // The reference's MC_grpGetDisplayInfo (@0x1abcf8) reports width@+8 and
+    // height@+0xc, and for a 240/320/400-wide panel subtracts the status strip
+    // from the height when the annunciator properties are set - so what a title
+    // reads here is the drawing area, not the panel. `annunciator_rows` is that
+    // strip, and zero unless the platform reserves one, which leaves the full
+    // height reported as before. The colour fields are the driver's direct
+    // RGB565 format (matched by Rgb565Pixel), reported here as fixed masks.
+    let strip = annunciator_rows(context, width).min(height);
     let info = WIPICDisplayInfo {
         bpp: FRAMEBUFFER_DEPTH,
         depth: 16,
-        width: screen.width(),
-        height: screen.height(),
-        bpl: 2 * screen.width(),
+        width,
+        height: height - strip,
+        bpl: 2 * width,
         color_type: 1, // 1==MC_GRP_DIRECT_COLOR_TYPE
         red_mask: 0xf800,
         green_mask: 0x7e0,
@@ -400,10 +829,78 @@ pub async fn copy_area(
     Ok(())
 }
 
+/// Extra rows allocated beneath a draw surface, never reported in its
+/// dimensions. A title draws into a surface (the screen framebuffer or an
+/// off-screen buffer) with the clip context's default `0x7fff` bound - i.e.
+/// effectively unclipped - and its own software blitter does not clamp to the
+/// surface height, so a sprite placed near the bottom (MapleStory 도적편
+/// rotates its title character down to y≈300 in a 320-row buffer) writes tens
+/// of rows past the end. On the reference that overdraw lands in slack the
+/// memory map leaves after the surface; here the next allocation sits there, so
+/// the overdraw smashes it - and 4 bytes past the screen buffer is the *list
+/// allocator header* of the title's work arena, so the stray pixels clear its
+/// in-use bit, the heap then re-hands that live arena out, and the resource
+/// load into the re-issued block wipes the menu the title just built there.
+/// Padding the surface with owned rows keeps that overdraw benign, as it is on
+/// the device. Measured worst case for 도적편 is ~24 rows; 256 is generous
+/// headroom and still trivial against the heap.
+const SURFACE_GUARD_ROWS: u32 = 256;
+
+/// Build a draw surface with `SURFACE_GUARD_ROWS` of owned slack under its
+/// reported height. The width/height/stride the surface reports are the real
+/// ones, so a title's addressing is identical; the extra rows only exist to
+/// absorb its unclamped overdraw instead of the next allocation.
+fn new_guarded_surface(context: &mut dyn WIPICContext, width: u32, height: u32) -> Result<FrameBuffer> {
+    let mut framebuffer = FrameBuffer::new(context, width, height.saturating_add(SURFACE_GUARD_ROWS), FRAMEBUFFER_DEPTH)?;
+    framebuffer.0.height = height as _;
+    Ok(framebuffer)
+}
+
+/// Height of the status strip above the drawing area, as the platform stored it
+/// in `ANNUNCIATOR_ROWS_PTR`, and zero when it stored nothing. The reference
+/// only reserves the strip on the panel widths its own table lists, so a title
+/// on any other panel sees the whole display exactly as it does today.
+fn annunciator_rows(context: &dyn WIPICContext, width: u32) -> u32 {
+    if !matches!(width, 240 | 320 | 400) {
+        return 0;
+    }
+
+    read_generic(context, ANNUNCIATOR_ROWS_PTR).unwrap_or(0)
+}
+
+/// Build the screen surface with the status strip above the drawing area.
+///
+/// The strip is part of the panel, not of the title's drawing area, and the
+/// reference splits the two: `MC_grpGetFrameBufferHeight` and
+/// `MC_grpGetDisplayInfo` report the drawing area (the panel less the strip),
+/// every `MC_grp*` primitive lands inside it, and only
+/// `MC_grpGetFrameBufferPointer` steps back to the panel's own first row -
+/// `wipic_get_frame_pointer` resolves the screen surface through its *parent*,
+/// so the address a title blits to starts at the strip.
+///
+/// A title that blits straight to that pointer therefore skips the strip
+/// itself. MapleStory 도적편 does: it keeps the strip height in a field and adds
+/// it to every row index it derives from the pointer, which is why its splash
+/// logos, HUD icons and shortcut numbers sat a strip's worth too low here while
+/// everything drawn through the `MC_grp*` calls stayed where it belonged.
+fn new_screen_surface(context: &mut dyn WIPICContext, width: u32, height: u32) -> Result<FrameBuffer> {
+    let strip = annunciator_rows(context, width).min(height);
+
+    // The surface spans the whole panel; the framebuffer reports - and every
+    // path but the pointer getter uses - the drawing area below the strip.
+    let mut framebuffer = FrameBuffer::new(context, width, height.saturating_add(SURFACE_GUARD_ROWS), FRAMEBUFFER_DEPTH)?;
+    framebuffer.0.height = height - strip;
+    // Only a platform whose indirect pointers are plain addresses reserves a
+    // strip, so this is address arithmetic on the buffer just allocated.
+    framebuffer.0.buf = WIPICIndirectPtr(framebuffer.0.buf.0 + strip * framebuffer.0.bpl);
+
+    Ok(framebuffer)
+}
+
 pub async fn create_offscreen_framebuffer(context: &mut dyn WIPICContext, w: i32, h: i32) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_grpCreateOffScreenFrameBuffer({w}, {h})");
 
-    let framebuffer = FrameBuffer::new(context, w as _, h as _, FRAMEBUFFER_DEPTH)?;
+    let framebuffer = new_guarded_surface(context, w as _, h as _)?;
 
     let memory = context.alloc(size_of::<WIPICFramebuffer>() as WIPICWord)?;
     write_generic(context, context.data_ptr(memory)?, framebuffer.0)?;
@@ -444,53 +941,224 @@ pub async fn copy_frame_buffer(
     let src_image = src_framebuffer.image(context)?;
     let mut dst_canvas = dst_framebuffer.canvas(context)?;
 
-    let clip = Clip {
-        x: dx as _,
-        y: dy as _,
-        width: w as _,
-        height: h as _,
-    };
-
-    dst_canvas.draw(dx as _, dy as _, w as _, h as _, &*src_image, sx as _, sy as _, clip);
+    blit_magenta_keyed(&mut **dst_canvas, dx, dy, w, h, &*src_image, sx, sy);
     dst_canvas.flush()?;
 
     Ok(())
 }
 
-pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFont({face}, {size}, {style})");
+/// Whether a colour is the magenta (RGB565 `0xF81F`) that feature-phone titles
+/// reserve as a transparent colour key. The top five red and blue bits and no
+/// green survive the round trip through a 16bpp buffer as exactly `255, 0, 255`.
+fn is_transparent_key(color: Color) -> bool {
+    color.r >= 0xf8 && color.g <= 0x07 && color.b >= 0xf8
+}
 
-    Ok(0)
+/// Copies `src` onto `canvas`, skipping magenta source pixels. A title draws a
+/// layer over a magenta fill and blits it expecting the magenta keyed out; the
+/// graphics context carries no transparent pixel for these blits, so the
+/// convention is honoured here rather than read from it.
+fn blit_magenta_keyed(canvas: &mut dyn Canvas, dx: i32, dy: i32, w: i32, h: i32, src: &dyn Image, sx: i32, sy: i32) {
+    let src_w = src.width() as i64;
+    let src_h = src.height() as i64;
+    let dst_w = canvas.image().width() as i64;
+    let dst_h = canvas.image().height() as i64;
+
+    for row in 0..h as i64 {
+        let sy_px = sy as i64 + row;
+        let dy_px = dy as i64 + row;
+        if sy_px < 0 || sy_px >= src_h || dy_px < 0 || dy_px >= dst_h {
+            continue;
+        }
+        for col in 0..w as i64 {
+            let sx_px = sx as i64 + col;
+            let dx_px = dx as i64 + col;
+            if sx_px < 0 || sx_px >= src_w || dx_px < 0 || dx_px >= dst_w {
+                continue;
+            }
+
+            let color = src.get_pixel(sx_px as i32, sy_px as i32);
+            if is_transparent_key(color) {
+                continue;
+            }
+            canvas.put_pixel(dx_px as i32, dy_px as i32, color);
+        }
+    }
+}
+
+/// Draw a string from the handset's own bitmap face.
+///
+/// `y` is the top of the glyph box, the same origin the outline path draws
+/// from, and each glyph is stamped a pixel at a time so the result is the 1-bit
+/// shape the face stores rather than an anti-aliased rendering of it.
+fn draw_bitmap_string(canvas: &mut dyn Canvas, face: &BitmapFace, string: &str, x: i32, y: i32, color: Color, clip: Clip) {
+    let mut pen = x;
+    for c in string.chars() {
+        let Some(glyph) = face.glyph(c) else {
+            continue;
+        };
+
+        for row in 0..face.height {
+            let py = y + row as i32;
+            if py < clip.y || py >= clip.y + clip.height as i32 {
+                continue;
+            }
+
+            for col in 0..glyph.width() {
+                if !glyph.pixel(col, row) {
+                    continue;
+                }
+
+                let px = pen + col as i32;
+                if px < clip.x || px >= clip.x + clip.width as i32 {
+                    continue;
+                }
+
+                canvas.put_pixel(px, py, color);
+            }
+        }
+
+        pen += glyph.advance as i32;
+    }
+}
+
+/// The single font size the WIPI-C text path uses, in device pixels. All of
+/// `MC_grpGetFontHeight`, `MC_grpGetStringWidth` and `MC_grpDrawString` must
+/// agree on it: a title measures text with the first two and lays it out
+/// against the third, so any mismatch makes glyphs overlap. It matches the
+/// 10px ascent + 2px descent the metric getters below report.
+const FONT_PX_HEIGHT: f32 = 12.0;
+
+/// Pixel height the vendor's `MC_grpGetFont` assigns to each size selector.
+///
+/// The reference (`MC_grpGetFont` in `liblgt_system.so`) maps the size flag to
+/// one of seven glyph heights; a title picks a size for a heading or a HUD and
+/// then lays it out with `MC_grpGetStringWidth`/`MC_grpGetFontHeight`, so all
+/// three have to agree. We had a single 12px face, which shrank every heading
+/// to body size and threw off any layout measured against the real height.
+fn font_size_px(size: i32) -> i32 {
+    match size {
+        0x8 => 10,
+        0x10 => 14,
+        0x1000 => 16,
+        0x2000 => 18,
+        0x4000 => 19,
+        0x8000 => 22,
+        _ => 12,
+    }
+}
+
+/// The pixel height carried by a font handle. `MC_grpGetFont` returns the
+/// height itself as the handle, so decoding is the identity for a real handle
+/// and the default face for 0 (an unset `SetContext` font).
+fn font_handle_height(font: i32) -> f32 {
+    if (8..=64).contains(&font) { font as f32 } else { FONT_PX_HEIGHT }
+}
+
+/// Ascent for a face of the given height, keeping the reference's 10:2 split for
+/// the 12px face (its metric getters report 10px ascent, 2px descent).
+fn font_ascent_px(height: f32) -> f32 {
+    (height * 5.0 / 6.0).round()
+}
+
+pub async fn get_font(_: &mut dyn WIPICContext, face: i32, size: i32, style: i32) -> Result<i32> {
+    // The reference picks one of the seven faces its font module carries from
+    // the size flag, and falls back to the default face for a flag that names
+    // none. With the BIOS faces installed we do the same, and every metric
+    // below then reports the face the title was actually handed.
+    let height = match bitmap_font::face_for_size(size as u32) {
+        Some(face) => face.height as i32,
+        None => font_size_px(size),
+    };
+    tracing::debug!("MC_grpGetFont({face}, {size}, {style}) -> {height}px");
+
+    // The handle is the pixel height; SetContext stores it, and the draw/measure
+    // paths read it back (see font_handle_height).
+    Ok(height)
 }
 
 pub async fn get_font_height(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFontHeight({font})");
+    tracing::trace!("MC_grpGetFontHeight({font})");
 
-    Ok(12)
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.height as i32);
+    }
+
+    Ok(font_handle_height(font) as i32)
 }
 
 pub async fn get_font_ascent(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFontAscent({font})");
+    tracing::trace!("MC_grpGetFontAscent({font})");
 
-    Ok(10)
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.ascent as i32);
+    }
+
+    Ok(font_ascent_px(font_handle_height(font)) as i32)
 }
 
 pub async fn get_font_descent(_: &mut dyn WIPICContext, font: i32) -> Result<i32> {
-    tracing::warn!("stub MC_grpGetFontDescent({font})");
+    tracing::trace!("MC_grpGetFontDescent({font})");
 
-    Ok(2)
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.descent as i32);
+    }
+
+    let height = font_handle_height(font);
+    Ok((height - font_ascent_px(height)) as i32)
 }
 
 pub async fn get_string_width(context: &mut dyn WIPICContext, font: i32, ptr_string: WIPICWord, length: i32) -> Result<i32> {
-    tracing::debug!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
+    tracing::trace!("MC_grpGetStringWidth({font}, {ptr_string:#x}, {length})");
 
-    let bytes = read_wipi_string(context, ptr_string, length)?;
-    if bytes.is_empty() {
-        return Ok(0);
+    let string = read_wipi_string(context, ptr_string, length)?;
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.string_width(&string) as i32);
     }
-    let s = String::from_utf8_lossy(&bytes);
 
-    Ok(string_width(&s, 10.0) as i32)
+    Ok(string_width_px(&string, font_handle_height(font)) as i32)
+}
+
+/// Read a UTF-16LE WIPI string. `length == -1` means NUL-terminated (a `0`
+/// code unit); `length >= 0` reads exactly that many 16-bit code units. This is
+/// the wide-character counterpart to `read_wipi_string`; the reference's
+/// `MC_grpGetUnicodeStringWidth` takes UCS-2 rather than the EUC-KR of the
+/// byte-string calls.
+fn read_wipi_unicode_string(context: &mut dyn WIPICContext, ptr: WIPICWord, length: i32) -> Result<String> {
+    let units: Vec<u16> = if length >= 0 {
+        let mut buf = vec![0u8; (length as usize) * 2];
+        context.read_bytes(ptr, &mut buf)?;
+        buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
+    } else {
+        let mut out = Vec::new();
+        let mut addr = ptr;
+        loop {
+            let unit: u16 = read_generic(context, addr)?;
+            if unit == 0 {
+                break;
+            }
+            out.push(unit);
+            addr += 2;
+        }
+        out
+    };
+
+    Ok(String::from_utf16_lossy(&units))
+}
+
+/// `MC_grpGetUnicodeStringWidth(font, ustr, len)` - the UCS-2 counterpart to
+/// `MC_grpGetStringWidth`. A title that lays out Unicode text measures it with
+/// this; left unmapped it returned the diagnostic-stub 0, collapsing every such
+/// string to zero width so the glyphs stacked on one another.
+pub async fn get_unicode_string_width(context: &mut dyn WIPICContext, font: i32, ptr_string: WIPICWord, length: i32) -> Result<i32> {
+    tracing::trace!("MC_grpGetUnicodeStringWidth({font}, {ptr_string:#x}, {length})");
+
+    let string = read_wipi_unicode_string(context, ptr_string, length)?;
+    if let Some(face) = bitmap_font::face_for_height(font as u32) {
+        return Ok(face.string_width(&string) as i32);
+    }
+
+    Ok(string_width_px(&string, font_handle_height(font)) as i32)
 }
 
 pub async fn draw_string(
@@ -504,15 +1172,13 @@ pub async fn draw_string(
 ) -> Result<()> {
     tracing::debug!("MC_grpDrawString({:#x}, {x}, {y}, {ptr_string:#x}, {length}, {pgc:#x})", dst.0);
 
-    let string_bytes = read_wipi_string(context, ptr_string, length)?;
-    if string_bytes.is_empty() {
+    let string = read_wipi_string(context, ptr_string, length)?;
+    if string.is_empty() {
         return Ok(());
     }
 
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(dst)?)?);
     let gctx: WIPICGraphicsContext = read_generic(context, pgc)?;
-
-    let string = String::from_utf8_lossy(&string_bytes);
 
     let clip = Clip {
         x: 0,
@@ -521,9 +1187,30 @@ pub async fn draw_string(
         height: framebuffer.0.height,
     };
 
-    let mut canvas = framebuffer.canvas(context)?;
     let color = framebuffer.pixel_to_color(gctx.fgpxl);
-    canvas.draw_text(&string, x, y, TextAlignment::Left, color, clip);
+
+    // The handset's own face when the BIOS supplied one, drawn a pixel at a
+    // time exactly as it is stored. The face is the one the title selected with
+    // `SetContext(font)`, so a heading it asked `MC_grpGetFont` for a larger
+    // size for is drawn - and measured - in that size.
+    if let Some(face) = bitmap_font::face_for_height(gctx.font) {
+        let mut canvas = framebuffer.canvas(context)?;
+        draw_bitmap_string(&mut **canvas, &face, &string, x, y, color, clip);
+        canvas.flush()?;
+
+        return Ok(());
+    }
+
+    // The size the title selected with SetContext(font); 0 keeps the default face.
+    let font_height = font_handle_height(gctx.font as i32);
+    let baseline = font_ascent_px(font_height);
+
+    let mut canvas = framebuffer.canvas(context)?;
+    canvas.draw_text(&string, x, y, font_height, baseline, TextAlignment::Left, color, clip);
+
+    // `flush` writes back only the glyph pixels themselves (see write_diff), so
+    // a background the title blitted straight into this buffer shows through the
+    // gaps between and around the letters instead of being re-stamped black.
     canvas.flush()?;
 
     Ok(())
@@ -539,6 +1226,32 @@ pub async fn repaint(context: &mut dyn WIPICContext, lcd: i32, x: i32, y: i32, w
     Ok(())
 }
 
+/// Row length in bytes and the stride to advance by, or `None` when the call
+/// asks for nothing that can be delivered.
+///
+/// `ipl` is a destination stride, but a handset asked less of it than the name
+/// suggests: LGT's own runtime checks only that it is positive and then
+/// discards it, writing rows packed at `w * 4`. Titles are written against
+/// that. Zenonia reads single pixels with `w = 1, ipl = 1`, and rejecting
+/// those left it reading uninitialised stack as pixels - which is what its
+/// collision checks were deciding on.
+///
+/// A stride wide enough to be one is still honoured, since nothing says the
+/// other handsets discarded it too; anything smaller falls back to packed.
+fn destination_stride(w: i32, h: i32, ipl: i32) -> Option<(i32, i32)> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    if ipl <= 0 {
+        tracing::warn!("MC_grpGetRGBPixels: invalid ipl {ipl}");
+        return None;
+    }
+
+    let row_bytes = i32::try_from((w as i64).checked_mul(4)?).ok()?;
+
+    Some((row_bytes, ipl.max(row_bytes)))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn get_rgb_pixels(
     context: &mut dyn WIPICContext,
@@ -552,14 +1265,9 @@ pub async fn get_rgb_pixels(
 ) -> Result<()> {
     tracing::debug!("MC_grpGetRGBPixels({:#x}, {x}, {y}, {w}, {h}, {pd:#x}, {ipl})", src.0);
 
-    let row_bytes = match (w as i64).checked_mul(4) {
-        Some(n) if w > 0 && h > 0 => n as i32,
-        _ => return Ok(()),
-    };
-    if ipl < row_bytes {
-        tracing::warn!("MC_grpGetRGBPixels: invalid ipl {ipl} (need >= {row_bytes})");
+    let Some((row_bytes, ipl)) = destination_stride(w, h, ipl) else {
         return Ok(());
-    }
+    };
 
     let framebuffer = FrameBuffer(read_generic(context, context.data_ptr(src)?)?);
     let image = framebuffer.image(context)?;
@@ -752,9 +1460,28 @@ pub async fn post_event(context: &mut dyn WIPICContext, id: i32, r#type: i32, pa
 pub async fn get_framebuffer_pointer(context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<WIPICWord> {
     tracing::debug!("MC_GRP_GET_FRAME_BUFFER_POINTER({:#x})", framebuffer.0);
 
-    let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(framebuffer)?)?;
+    let handle = framebuffer;
+    let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(handle)?)?;
 
-    Ok(framebuffer.buf.0)
+    Ok(framebuffer.buf.0 - screen_pointer_lead(context, handle.0, framebuffer.bpl))
+}
+
+/// Bytes between the pointer the screen framebuffer hands a title and the
+/// drawing area it reports - the status strip - and zero for every other
+/// framebuffer. See `new_screen_surface`.
+///
+/// Generic over the reader so a platform's synchronous fast path for
+/// `MC_grpGetFrameBufferPointer` reports the same address this one does.
+pub fn screen_pointer_lead<R>(reader: &R, handle: WIPICWord, bpl: WIPICWord) -> WIPICWord
+where
+    R: ?Sized + wie_util::ByteRead,
+{
+    let screen: u32 = read_generic(reader, SCREEN_FRAMEBUFFER_PTR).unwrap_or(0);
+    if screen == 0 || screen != handle {
+        return 0;
+    }
+
+    read_generic::<u32, _>(reader, ANNUNCIATOR_ROWS_PTR).unwrap_or(0) * bpl
 }
 
 pub async fn get_framebuffer_width(context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {
@@ -781,10 +1508,196 @@ pub async fn get_framebuffer_bpl(context: &mut dyn WIPICContext, framebuffer: WI
     Ok(framebuffer.bpl as _)
 }
 
-pub async fn get_framebuffer_bpp(context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {
+pub async fn get_framebuffer_bpp(_context: &mut dyn WIPICContext, framebuffer: WIPICIndirectPtr) -> Result<i32> {
     tracing::debug!("MC_GRP_GET_FRAME_BUFFER_BPP({:#x})", framebuffer.0);
 
-    let framebuffer: WIPICFramebuffer = read_generic(context, context.data_ptr(framebuffer)?)?;
+    // The vendor `wipic_get_frame_bpp` ignores its argument and returns the
+    // display's depth from a global. Titles rely on that: their direct-blit
+    // inner loop calls this with whatever register happens to be live - the
+    // frame pointer, the width - not a framebuffer handle, then uses the result
+    // as the pixel stride. Dereferencing that argument as a handle here read a
+    // garbage struct and returned a garbage depth, so a title's glyph and
+    // sprite writes landed at the wrong offset and never appeared while its
+    // `MC_grpFillRect` panels, which never touch this call, drew fine. Every
+    // framebuffer this runtime hands out is `FRAMEBUFFER_DEPTH`, so report it
+    // directly and ignore the argument, as the vendor does.
+    Ok(FRAMEBUFFER_DEPTH as _)
+}
 
-    Ok(framebuffer.bpp as _)
+#[cfg(test)]
+mod tests {
+    use wie_util::{read_generic, write_generic};
+
+    use super::WIPICGraphicsContextIdx as Idx;
+    use super::{destination_stride, get_context, init_context, set_context};
+    use crate::context::test::TestContext;
+
+    /// A clet saves the drawing state with `MC_grpGetContext` and later restores
+    /// it with `MC_grpSetContext`, so a get has to report back exactly what a set
+    /// stored. When this read nothing (the old stub), the saved state was zero and
+    /// the restore wrecked every later draw.
+    #[futures_test::test]
+    async fn get_context_reads_back_what_set_context_stored() {
+        const CTX: u32 = 0x1000;
+        const OUT: u32 = 0x2000;
+
+        let mut context = TestContext::new();
+        init_context(&mut context, CTX).await.unwrap();
+
+        // Scalars are passed to set by value and returned by get through a pointer.
+        for (op, value) in [
+            (Idx::FgPixelIdx, 0x1234u32),
+            (Idx::BgPixelIdx, 0x5678),
+            (Idx::AlphaIdx, 0x80),
+            (Idx::FontIdx, 0x42),
+            (Idx::StyleIdx, 0x3),
+        ] {
+            set_context(&mut context, CTX, op, value).await.unwrap();
+            get_context(&mut context, CTX, op, OUT).await.unwrap();
+            assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), value, "op {op:?}");
+        }
+
+        // The clip is passed through memory both ways as four 32-bit words
+        // (x1, y1, x2, y2); set decrements the bottom-right corner on the way in
+        // and get reports it one past what is stored, matching liblgt_system.so,
+        // so a get-then-set round-trip is the identity.
+        write_generic(&mut context, OUT, 10u32).unwrap();
+        write_generic(&mut context, OUT + 4, 20u32).unwrap();
+        write_generic(&mut context, OUT + 8, 100u32).unwrap();
+        write_generic(&mut context, OUT + 12, 200u32).unwrap();
+        set_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
+        get_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 10);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 20);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 100);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 12).unwrap(), 200);
+
+        // The offset is the same two-32-bit-word pair through memory, restored
+        // verbatim.
+        write_generic(&mut context, OUT, 7u32).unwrap();
+        write_generic(&mut context, OUT + 4, 9u32).unwrap();
+        set_context(&mut context, CTX, Idx::OffsetIdx, OUT).await.unwrap();
+        get_context(&mut context, CTX, Idx::OffsetIdx, OUT).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 7);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 9);
+    }
+
+    /// A null context or destination is a no-op, exactly as the vendor guards it,
+    /// not a memory fault.
+    #[futures_test::test]
+    async fn get_context_tolerates_null_pointers() {
+        let mut context = TestContext::new();
+        get_context(&mut context, 0, Idx::FgPixelIdx, 0x2000).await.unwrap();
+        get_context(&mut context, 0x1000, Idx::FgPixelIdx, 0).await.unwrap();
+    }
+
+    /// MC_grpInitContext plants non-zero defaults (full clip, white background,
+    /// opaque alpha, param1, the 12px font) rather than zeroing the block, and a
+    /// game that never sets those fields draws against them. Reading each one
+    /// straight back through GetContext proves the port matches the firmware.
+    #[futures_test::test]
+    async fn init_context_plants_the_reference_defaults() {
+        const CTX: u32 = 0x1000;
+        const OUT: u32 = 0x2000;
+
+        let mut context = TestContext::new();
+        init_context(&mut context, CTX).await.unwrap();
+
+        for (op, value) in [
+            (Idx::FgPixelIdx, 0x0),
+            (Idx::BgPixelIdx, 0x00ff_ffff),
+            (Idx::AlphaIdx, 0xff),
+            (Idx::FontIdx, 12),
+            (Idx::StyleIdx, 0x0),
+        ] {
+            get_context(&mut context, CTX, op, OUT).await.unwrap();
+            assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), value, "op {op:?}");
+        }
+
+        // The clip starts at the whole plane; GetContext reports the corner one
+        // past what is stored (0x7fff -> 0x8000).
+        get_context(&mut context, CTX, Idx::ClipIdx, OUT).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 0x8000);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 12).unwrap(), 0x8000);
+    }
+
+    /// The colour path is the driver's direct RGB565: 5 bits red, 6 green, 5
+    /// blue, packed r>>3 << 11 | g>>2 << 5 | b>>3, and it round-trips through the
+    /// getter within that precision. This is what MC_grpGetDisplayInfo advertises
+    /// (masks 0xf800/0x07e0/0x001f) and what a title's own blitter converts
+    /// against, so it has to be exact.
+    #[futures_test::test]
+    async fn pixel_from_rgb_is_direct_rgb565() {
+        let mut context = TestContext::new();
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0xff, 0, 0).await.unwrap(), 0xf800);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0, 0xff, 0).await.unwrap(), 0x07e0);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0, 0, 0xff).await.unwrap(), 0x001f);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0xff, 0xff, 0xff).await.unwrap(), 0xffff);
+        assert_eq!(super::get_pixel_from_rgb(&mut context, 0, 0, 0).await.unwrap(), 0x0000);
+
+        // A pure-red pixel decodes back to full red (5-bit max scaled to 8-bit).
+        const OUT: u32 = 0x3000;
+        super::get_rgb_from_pixel(&mut context, 0xf800, OUT, OUT + 4, OUT + 8).await.unwrap();
+        assert_eq!(read_generic::<u32, _>(&context, OUT).unwrap(), 0xff);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 4).unwrap(), 0);
+        assert_eq!(read_generic::<u32, _>(&context, OUT + 8).unwrap(), 0);
+    }
+
+    /// The size selector maps to the seven glyph heights `MC_grpGetFont` assigns,
+    /// and the handle those return round-trips through the height getter.
+    #[futures_test::test]
+    async fn get_font_reports_the_reference_heights() {
+        let mut context = TestContext::new();
+        for (size, height) in [
+            (0x8, 10),
+            (0x10, 14),
+            (0x1000, 16),
+            (0x2000, 18),
+            (0x4000, 19),
+            (0x8000, 22),
+            (0, 12),
+            (0x1234, 12),
+        ] {
+            let handle = super::get_font(&mut context, 0, size, 0).await.unwrap();
+            assert_eq!(handle, height, "size {size:#x}");
+            assert_eq!(super::get_font_height(&mut context, handle).await.unwrap(), height, "height of {size:#x}");
+        }
+        // An unset SetContext font (0) falls back to the default face.
+        assert_eq!(super::get_font_height(&mut context, 0).await.unwrap(), 12);
+    }
+
+    /// A single pixel read into four bytes of stack, which is how a title asks
+    /// whether it has walked into something. LGT's runtime takes `ipl = 1`.
+    #[test]
+    fn a_one_pixel_probe_is_delivered() {
+        assert_eq!(destination_stride(1, 1, 1), Some((4, 4)));
+    }
+
+    #[test]
+    fn a_real_stride_is_honoured() {
+        // Reading 100 pixels into a 240 wide buffer.
+        assert_eq!(destination_stride(100, 50, 960), Some((400, 960)));
+    }
+
+    /// Too small to be a stride, so the rows pack - which is what the handset
+    /// did with any value at all.
+    #[test]
+    fn a_short_stride_packs_instead_of_dropping_the_call() {
+        assert_eq!(destination_stride(8, 4, 3), Some((32, 32)));
+    }
+
+    #[test]
+    fn nothing_to_read_is_dropped() {
+        assert_eq!(destination_stride(0, 4, 16), None);
+        assert_eq!(destination_stride(4, 0, 16), None);
+        assert_eq!(destination_stride(4, 4, 0), None);
+        assert_eq!(destination_stride(4, 4, -1), None);
+    }
+
+    #[test]
+    fn an_unreasonable_width_is_dropped_rather_than_overflowing() {
+        assert_eq!(destination_stride(i32::MAX, 1, i32::MAX), None);
+    }
 }

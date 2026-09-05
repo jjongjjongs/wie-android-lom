@@ -21,6 +21,8 @@ impl SmafPlayer {
                 JavaMethodProto::new("start", "(Z)V", Self::start_with_repeat, Default::default()),
                 JavaMethodProto::new("stop", "()V", Self::stop, Default::default()),
                 JavaMethodProto::new("close", "()V", Self::close, Default::default()),
+                JavaMethodProto::new("setVolume", "(I)I", Self::set_volume, Default::default()),
+                JavaMethodProto::new("getVolume", "()I", Self::get_volume, Default::default()),
             ],
             fields: vec![JavaFieldProto::new("audioHandle", "I", Default::default())],
             access_flags: Default::default(),
@@ -78,5 +80,29 @@ impl SmafPlayer {
         system.audio().close(audio_handle as u32).unwrap();
 
         Ok(())
+    }
+
+    async fn set_volume(jvm: &Jvm, context: &mut WieJvmContext, this: ClassInstanceRef<Self>, volume: i32) -> Result<i32> {
+        tracing::debug!("net.wie.SmafPlayer::setVolume({this:?}, {volume})");
+
+        let audio_handle: i32 = jvm.get_field(&this, "audioHandle", "I").await?;
+        let system = context.system();
+
+        match system.audio().set_volume(audio_handle as u32, volume.clamp(0, 100) as u8) {
+            Ok(()) => Ok(0),
+            Err(_) => Ok(-9),
+        }
+    }
+
+    async fn get_volume(jvm: &Jvm, context: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> Result<i32> {
+        tracing::debug!("net.wie.SmafPlayer::getVolume({this:?})");
+
+        let audio_handle: i32 = jvm.get_field(&this, "audioHandle", "I").await?;
+        let system = context.system();
+
+        match system.audio().get_volume(audio_handle as u32) {
+            Ok(volume) => Ok(i32::from(volume)),
+            Err(_) => Ok(-9),
+        }
     }
 }

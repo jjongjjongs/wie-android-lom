@@ -4,7 +4,10 @@ use jvm::Jvm;
 use wie_backend::System;
 use wie_core_arm::{ArmCore, EmulatedFunction, EmulatedFunctionParam, ResultWriter, SvcId};
 use wie_util::{Result, WieError};
-use wie_wipi_c::{WIPICMethodBody, WIPICResult};
+use wie_wipi_c::{
+    WIPICMethodBody, WIPICResult,
+    api::{filesystem, net, serial},
+};
 
 use crate::runtime::SVC_CATEGORY_WIPIC;
 use crate::runtime::svc_ids::{WIPICKernelMethodId, WIPICTableId};
@@ -55,14 +58,34 @@ impl EmulatedFunction<(), WIPICMethodResult, ()> for CMethodProxy {
     }
 }
 
-async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm), id: SvcId) -> Result<()> {
+async fn handle_wipic_svc(
+    core: &mut ArmCore,
+    (system, jvm, network_state, serial_state, filesystem_state): &mut (
+        System,
+        Jvm,
+        net::SharedNetworkState,
+        serial::SharedSerialState,
+        filesystem::SharedFilesystemState,
+    ),
+    id: SvcId,
+) -> Result<()> {
     let table_id = WIPICTableId::try_from(id.0 >> 16)?;
     let function_id = id.0 as u16;
     let (_, lr) = core.read_pc_lr()?;
     if table_id == WIPICTableId::Kernel && function_id == WIPICKernelMethodId::Reserved1 as u16 {
-        return interface::get_wipic_interfaces(core, &mut KtfWIPICContext::new(core.clone(), system.clone(), jvm.clone()))
-            .await?
-            .write(core, lr);
+        return interface::get_wipic_interfaces(
+            core,
+            &mut KtfWIPICContext::new(
+                core.clone(),
+                system.clone(),
+                jvm.clone(),
+                network_state.clone(),
+                serial_state.clone(),
+                filesystem_state.clone(),
+            ),
+        )
+        .await?
+        .write(core, lr);
     }
 
     let body = method_table::get_method_body(table_id, function_id)
@@ -70,7 +93,14 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
 
     EmulatedFunction::call(
         &CMethodProxy {
-            context: KtfWIPICContext::new(core.clone(), system.clone(), jvm.clone()),
+            context: KtfWIPICContext::new(
+                core.clone(),
+                system.clone(),
+                jvm.clone(),
+                network_state.clone(),
+                serial_state.clone(),
+                filesystem_state.clone(),
+            ),
             body,
         },
         core,
@@ -81,5 +111,15 @@ async fn handle_wipic_svc(core: &mut ArmCore, (system, jvm): &mut (System, Jvm),
 }
 
 pub fn register_wipic_svc_handler(core: &mut ArmCore, system: &System, jvm: &Jvm) -> Result<()> {
-    core.register_svc_handler(SVC_CATEGORY_WIPIC, handle_wipic_svc, &(system.clone(), jvm.clone()))
+    core.register_svc_handler(
+        SVC_CATEGORY_WIPIC,
+        handle_wipic_svc,
+        &(
+            system.clone(),
+            jvm.clone(),
+            net::new_state(),
+            serial::new_state(),
+            filesystem::new_state(),
+        ),
+    )
 }

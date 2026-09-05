@@ -210,8 +210,12 @@ where
         self.file_table.lock().files.remove(&fd.id());
     }
 
-    async fn unlink(&self, _path: &str) -> IOResult<()> {
-        Err(IOError::Unsupported)
+    async fn unlink(&self, path: &str) -> IOResult<()> {
+        if self.system.filesystem().remove(path).await {
+            Ok(())
+        } else {
+            Err(IOError::NotFound)
+        }
     }
 
     async fn metadata(&self, path: &str) -> IOResult<FileStat> {

@@ -6,6 +6,13 @@ const COPY_CHUNK: usize = 4096;
 const STR_SCAN_CHUNK: usize = 256;
 
 pub async fn memcpy(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
+    mem_copy(core, ptr_dst, ptr_src, len)
+}
+
+/// Synchronous body of [`memcpy`]. Neither this nor the copy it does ever
+/// suspends, so the hot fast-SVC path (see `wie_lgt`) calls it directly instead
+/// of driving the async wrapper's future.
+pub fn mem_copy(core: &mut ArmCore, ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
     let mut buf = [0u8; COPY_CHUNK];
     let mut offset: u32 = 0;
     while offset < len {
@@ -17,7 +24,75 @@ pub async fn memcpy(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, 
     Ok(())
 }
 
+/// Like [`memcpy`], but defined when the two ranges overlap.
+///
+/// A game moving a sprite along a row does exactly that, and a forward copy
+/// would smear the leading bytes over the rest of it, so an overlap that runs
+/// the wrong way is copied from the back.
+pub async fn memmove(core: &mut ArmCore, _: &mut (), ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
+    mem_move(core, ptr_dst, ptr_src, len)
+}
+
+/// Synchronous body of [`memmove`] (see [`mem_copy`]).
+pub fn mem_move(core: &mut ArmCore, ptr_dst: u32, ptr_src: u32, len: u32) -> Result<()> {
+    // Only a destination inside the source needs the reverse pass; the other
+    // direction, and no overlap at all, are safe to copy forwards.
+    let overlaps_forward = ptr_dst > ptr_src && ptr_dst.wrapping_sub(ptr_src) < len;
+
+    let mut buf = [0u8; COPY_CHUNK];
+    let mut done: u32 = 0;
+    while done < len {
+        let chunk = ((len - done) as usize).min(COPY_CHUNK);
+        let offset = if overlaps_forward { len - done - chunk as u32 } else { done };
+
+        core.read_bytes(ptr_src.wrapping_add(offset), &mut buf[..chunk])?;
+        core.write_bytes(ptr_dst.wrapping_add(offset), &buf[..chunk])?;
+
+        done = done.wrapping_add(chunk as u32);
+    }
+
+    Ok(())
+}
+
+/// Compares `len` bytes, returning negative, zero or positive on the first
+/// pair that differs, the way C's `memcmp` does.
+///
+/// A stub returning zero says every buffer is equal, which a game reads as a
+/// match it never made: MapleStory's Cygnus edition scans a table one byte at
+/// a time and, told each step compared equal, never stopped - its logs are a
+/// run of 0x416 calls with the first pointer walking forward and nothing else
+/// moving.
+pub async fn memcmp(core: &mut ArmCore, _: &mut (), ptr_a: u32, ptr_b: u32, len: u32) -> Result<u32> {
+    let mut a = [0u8; COPY_CHUNK];
+    let mut b = [0u8; COPY_CHUNK];
+    let mut offset: u32 = 0;
+
+    while offset < len {
+        let chunk = ((len - offset) as usize).min(COPY_CHUNK);
+        core.read_bytes(ptr_a.wrapping_add(offset), &mut a[..chunk])?;
+        core.read_bytes(ptr_b.wrapping_add(offset), &mut b[..chunk])?;
+
+        for index in 0..chunk {
+            if a[index] != b[index] {
+                // C compares as unsigned char, so the difference is taken
+                // there and then returned in r0 as the same bits the guest
+                // reads back as a signed int.
+                return Ok((a[index] as i32 - b[index] as i32) as u32);
+            }
+        }
+
+        offset = offset.wrapping_add(chunk as u32);
+    }
+
+    Ok(0)
+}
+
 pub async fn memset(core: &mut ArmCore, _: &mut (), ptr_dst: u32, value: u32, len: u32) -> Result<()> {
+    mem_set(core, ptr_dst, value, len)
+}
+
+/// Synchronous body of [`memset`] (see [`mem_copy`]).
+pub fn mem_set(core: &mut ArmCore, ptr_dst: u32, value: u32, len: u32) -> Result<()> {
     let buf = [value as u8; COPY_CHUNK];
     let mut offset: u32 = 0;
     while offset < len {

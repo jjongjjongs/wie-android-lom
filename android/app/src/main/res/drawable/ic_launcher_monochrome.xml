@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Single-tone silhouette for themed icons: the folder's outline with the
+         screen punched out so it still reads as a phone under any system tint. -->
+    <group
+        android:pivotX="54" android:pivotY="54"
+        android:scaleX="0.85" android:scaleY="0.85">
+
+        <path
+            android:pathData="M41,52 h26 a7,7 0 0 1 7,7 v26 a7,7 0 0 1 -7,7 h-26 a7,7 0 0 1 -7,-7 v-26 a7,7 0 0 1 7,-7 z"
+            android:fillColor="#000000" />
+
+        <group
+            android:pivotX="54" android:pivotY="52"
+            android:rotation="-8">
+            <path
+                android:fillType="evenOdd"
+                android:pathData="M40,13 h28 a7,7 0 0 1 7,7 v25 a7,7 0 0 1 -7,7 h-28 a7,7 0 0 1 -7,-7 v-25 a7,7 0 0 1 7,-7 z M41,18 h26 a3,3 0 0 1 3,3 v21 a3,3 0 0 1 -3,3 h-26 a3,3 0 0 1 -3,-3 v-21 a3,3 0 0 1 3,-3 z"
+                android:fillColor="#000000" />
+        </group>
+    </group>
+</vector>

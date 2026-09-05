@@ -1,6 +1,76 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 use crate::{audio_sink::AudioSink, database::DatabaseRepository, screen::Screen, time::Instant};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkError {
+    InvalidSocket,
+    NotConnected,
+    WouldBlock,
+    TimedOut,
+    ConnectionRefused,
+    HostUnreachable,
+    Unsupported,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkPoll<T> {
+    Pending,
+    Ready(Result<T, NetworkError>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkEvent {
+    Connected(i32),
+    ConnectFailed(i32),
+    Readable(i32),
+    Writable(i32),
+    /// A `MC_netGetHostAddr` resolution finished. `address` is the resolved IPv4
+    /// in the WIPI encoding, or `0xFFFF_FFFF` when the host could not be resolved.
+    HostResolved {
+        query_id: u32,
+        address: u32,
+    },
+}
+
+pub trait Network: Send + Sync {
+    fn socket(&self, family: i32, socket_type: i32) -> Result<i32, NetworkError>;
+
+    fn connect(&self, socket: i32, address: u32, port: u16) -> NetworkPoll<()>;
+
+    fn bind(&self, socket: i32, address: u32, port: u16) -> Result<(), NetworkError>;
+
+    fn read(&self, socket: i32, buf: &mut [u8]) -> Result<usize, NetworkError>;
+
+    fn write(&self, socket: i32, buf: &[u8]) -> Result<usize, NetworkError>;
+
+    fn send_to(&self, socket: i32, buf: &[u8], address: u32, port: u16) -> Result<usize, NetworkError>;
+
+    /// Receives a datagram, returning `(bytes, sender_address, sender_port)`
+    /// where the address is in the same WIPI encoding `connect`/`send_to` take.
+    fn recv_from(&self, socket: i32, buf: &mut [u8]) -> Result<(usize, u32, u16), NetworkError>;
+
+    fn close(&self, socket: i32) -> Result<(), NetworkError>;
+
+    /// Starts resolving `host` and, when it finishes, delivers a
+    /// [`NetworkEvent::HostResolved`] carrying `query_id` and the resolved
+    /// address (or `0xFFFF_FFFF` on failure) through [`Self::poll_event`].
+    fn resolve_host(&self, host: &str, query_id: u32);
+
+    /// Resolves `host` to an IPv4 address in the WIPI encoding, blocking until
+    /// the lookup completes, or `0xFFFF_FFFF` on failure.
+    ///
+    /// This is the synchronous counterpart to [`Self::resolve_host`], used by the
+    /// HTTP exchange, which resolves the target and then drives connect/send/recv
+    /// through the same socket primitives. The default returns the failure
+    /// sentinel so a backend without name resolution rejects every host.
+    fn resolve_host_blocking(&self, _host: &str) -> u32 {
+        0xFFFF_FFFF
+    }
+
+    fn poll_event(&self) -> Option<NetworkEvent>;
+}
 
 pub trait Platform: Send + Sync {
     fn screen(&self) -> &dyn Screen;
@@ -8,14 +78,73 @@ pub trait Platform: Send + Sync {
     fn database_repository(&self) -> &dyn DatabaseRepository;
     fn filesystem(&self) -> &dyn Filesystem;
     fn audio_sink(&self) -> Box<dyn AudioSink>;
+
+    fn network(&self) -> Option<&dyn Network> {
+        None
+    }
+
+    /// Optional handset/HAL information value.
+    ///
+    /// Carrier runtimes can expose host information that is not part of the
+    /// public WIPI system-property API. Backends that do not model such
+    /// handset state return None.
+    fn system_information(&self, _key: &str) -> Option<alloc::string::String> {
+        None
+    }
+
+    /// Places a telephone call through the host. Returns false when the host
+    /// cannot dispatch the request.
+    fn call_place(&self, _number: &str) -> bool {
+        false
+    }
+
+    /// Opens a URL through the host platform. Returns false when the host
+    /// cannot dispatch the request.
+    fn open_url(&self, _url: &str) -> bool {
+        false
+    }
+
     fn write_stdout(&self, buf: &[u8]);
     fn write_stderr(&self, buf: &[u8]);
     fn exit(&self);
     fn vibrate(&self, duration_ms: u64, intensity: u8);
+    fn set_backlight_mode(&self, mode: u8);
 }
 
 /// Platform filesystem abstraction. Every method is scoped by `aid`;
 /// implementations MUST NOT cross aid boundaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemMkdirError {
+    AlreadyExists,
+    NotFound,
+    NameTooLong,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemRmDirError {
+    NotFound,
+    NotEmpty,
+    NameTooLong,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemRenameError {
+    NotFound,
+    AlreadyExists,
+    CrossDeviceOrNotEmpty,
+    NameTooLong,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilesystemSetModeError {
+    NotFound,
+    NameTooLong,
+    Other,
+}
+
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
     async fn exists(&self, aid: &str, path: &str) -> bool;
@@ -51,4 +180,49 @@ pub trait Filesystem: Send + Sync {
     /// - `len > current_size` → zero-fill extend.
     /// - `len < current_size` → tail bytes dropped.
     async fn truncate(&self, aid: &str, path: &str, len: usize);
+
+    async fn remove(&self, aid: &str, path: &str) -> bool;
+
+    /// Create exactly one directory.
+    ///
+    /// Missing parent directories are not created implicitly.
+    async fn mkdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemMkdirError>;
+
+    /// Remove exactly one empty directory.
+    ///
+    /// This operation is non-recursive.
+    async fn rmdir(&self, aid: &str, path: &str) -> core::result::Result<(), FilesystemRmDirError>;
+
+    /// Rename or move an existing filesystem object.
+    ///
+    /// Implementations follow the host rename operation:
+    /// - an existing regular-file destination may be replaced;
+    /// - the source is removed on success;
+    /// - no destination parent directories are created implicitly.
+    async fn rename(&self, aid: &str, from: &str, to: &str) -> core::result::Result<(), FilesystemRenameError>;
+
+    /// Replace the permission bits of one regular file.
+    ///
+    /// The LGT WIPI-C filesystem exposes only owner read/write combinations:
+    /// 0400, 0200 and 0600.
+    async fn set_mode(&self, aid: &str, path: &str, mode: u32) -> core::result::Result<(), FilesystemSetModeError>;
+
+    /// Total byte capacity of the storage backing this application's filesystem.
+    ///
+    /// `None` means the platform could not query the backing filesystem.
+    async fn total_space(&self, aid: &str) -> Option<u64>;
+
+    /// Bytes currently available to an unprivileged application on the storage
+    /// backing this application's filesystem.
+    ///
+    /// This corresponds to native `statfs.f_bavail * f_bsize`, not `f_bfree`.
+    /// `None` means the platform could not query the backing filesystem.
+    async fn available_space(&self, aid: &str) -> Option<u64>;
+
+    /// Lists direct child basenames of a directory.
+    ///
+    /// Files and directories are returned alike. `Some(Vec::new())` means an
+    /// existing empty directory; `None` means the directory could not be
+    /// opened. Implementations preserve their native enumeration order.
+    async fn list(&self, aid: &str, path: &str) -> Option<Vec<String>>;
 }

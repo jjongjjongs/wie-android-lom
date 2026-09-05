@@ -7,6 +7,7 @@ use wie_util::{ByteRead, ByteWrite, Result};
 
 use crate::{
     WIPICMethodBody,
+    api::{filesystem::SharedFilesystemState, net::SharedNetworkState, serial::SharedSerialState},
     method::{ParamConverter, ResultConverter},
 };
 
@@ -16,13 +17,19 @@ pub trait WIPICContext: ByteRead + ByteWrite + Send + Sync {
     fn alloc(&mut self, size: WIPICWord) -> Result<WIPICIndirectPtr>;
     fn free(&mut self, memory: WIPICIndirectPtr) -> Result<()>;
     fn free_raw(&mut self, address: WIPICWord, size: WIPICWord) -> Result<()>;
+    fn free_raw_unsized(&mut self, address: WIPICWord) -> Result<()>;
+    fn raw_alloc_size(&self, address: WIPICWord) -> Result<WIPICWord>;
     fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord>;
     async fn call_function(&mut self, address: WIPICWord, args: &[WIPICWord]) -> Result<WIPICWord>;
     fn system(&mut self) -> &mut System;
+    fn network_state(&self) -> SharedNetworkState;
+    fn serial_state(&self) -> SharedSerialState;
+    fn filesystem_state(&self) -> SharedFilesystemState;
     fn spawn(&mut self, callback: WIPICMethodBody) -> Result<()>;
     async fn get_resource_size(&self, name: &str) -> Result<Option<usize>>;
     async fn read_resource(&self, name: &str) -> Result<Vec<u8>>;
-    fn set_timer(&mut self, due: Instant, callback: WIPICMethodBody);
+    fn set_timer(&mut self, id: WIPICWord, due: Instant, callback: WIPICMethodBody);
+    fn unset_timer(&mut self, id: WIPICWord);
 }
 
 pub struct WIPICResult {
@@ -89,15 +96,27 @@ pub mod test {
     use wie_util::{ByteRead, ByteWrite, Result, WieError};
 
     use super::{WIPICContext, WIPICMethodBody};
+    use crate::api::{
+        filesystem::{SharedFilesystemState, new_state as new_filesystem_state},
+        net::{SharedNetworkState, new_state as new_network_state},
+        serial::{SharedSerialState, new_state as new_serial_state},
+    };
 
     const TEST_MEMORY_SIZE: usize = 0x20000;
     const TEST_ALLOC_START: usize = 0x10000;
+    const TEST_GLOBAL_DATA_BASE: u32 = 0x7fff_0000;
+    const TEST_GLOBAL_DATA_SIZE: usize = 0x4000;
 
     pub struct TestContext {
         memory: [u8; TEST_MEMORY_SIZE],
+        global_data: [u8; TEST_GLOBAL_DATA_SIZE],
         last_alloc: usize,
+        raw_allocations: Vec<(WIPICWord, WIPICWord)>,
         system: Option<System>,
         resources: Vec<(String, Vec<u8>)>,
+        network_state: SharedNetworkState,
+        serial_state: SharedSerialState,
+        filesystem_state: SharedFilesystemState,
     }
 
     impl TestContext {
@@ -105,18 +124,28 @@ pub mod test {
         pub fn new() -> Self {
             Self {
                 memory: [0; TEST_MEMORY_SIZE],
+                global_data: [0; TEST_GLOBAL_DATA_SIZE],
                 last_alloc: TEST_ALLOC_START,
+                raw_allocations: Vec::new(),
                 system: None,
                 resources: Vec::new(),
+                network_state: new_network_state(),
+                serial_state: new_serial_state(),
+                filesystem_state: new_filesystem_state(),
             }
         }
 
         pub fn with_system(system: System) -> Self {
             Self {
                 memory: [0; TEST_MEMORY_SIZE],
+                global_data: [0; TEST_GLOBAL_DATA_SIZE],
                 last_alloc: TEST_ALLOC_START,
+                raw_allocations: Vec::new(),
                 system: Some(system),
                 resources: Vec::new(),
+                network_state: new_network_state(),
+                serial_state: new_serial_state(),
+                filesystem_state: new_filesystem_state(),
             }
         }
 
@@ -131,6 +160,7 @@ pub mod test {
         fn alloc_raw(&mut self, size: WIPICWord) -> Result<WIPICWord> {
             let address = self.last_alloc;
             self.last_alloc += size as usize;
+            self.raw_allocations.push((address as WIPICWord, size));
 
             Ok(address as WIPICWord)
         }
@@ -143,8 +173,26 @@ pub mod test {
             Ok(())
         }
 
-        fn free_raw(&mut self, _address: WIPICWord, _size: WIPICWord) -> Result<()> {
+        fn free_raw(&mut self, address: WIPICWord, _size: WIPICWord) -> Result<()> {
+            if let Some(index) = self.raw_allocations.iter().position(|&(candidate, _)| candidate == address) {
+                self.raw_allocations.remove(index);
+            }
             Ok(())
+        }
+
+        fn free_raw_unsized(&mut self, address: WIPICWord) -> Result<()> {
+            if let Some(index) = self.raw_allocations.iter().position(|&(candidate, _)| candidate == address) {
+                self.raw_allocations.remove(index);
+            }
+            Ok(())
+        }
+
+        fn raw_alloc_size(&self, address: WIPICWord) -> Result<WIPICWord> {
+            self.raw_allocations
+                .iter()
+                .find(|&&(candidate, _)| candidate == address)
+                .map(|&(_, size)| size)
+                .ok_or_else(|| WieError::FatalError(format!("Address {address:#x} is not a tracked raw allocation")))
         }
 
         fn data_ptr(&self, memory: WIPICIndirectPtr) -> Result<WIPICWord> {
@@ -157,6 +205,18 @@ pub mod test {
 
         fn system(&mut self) -> &mut System {
             self.system.as_mut().unwrap()
+        }
+
+        fn network_state(&self) -> SharedNetworkState {
+            self.network_state.clone()
+        }
+
+        fn serial_state(&self) -> SharedSerialState {
+            self.serial_state.clone()
+        }
+
+        fn filesystem_state(&self) -> SharedFilesystemState {
+            self.filesystem_state.clone()
         }
 
         fn spawn(&mut self, _callback: WIPICMethodBody) -> Result<()> {
@@ -175,14 +235,37 @@ pub mod test {
                 .ok_or_else(|| WieError::FatalError(format!("Missing test resource: {name}")))
         }
 
-        fn set_timer(&mut self, _due: Instant, _callback: WIPICMethodBody) {
-            todo!()
+        fn set_timer(&mut self, id: WIPICWord, due: Instant, _callback: WIPICMethodBody) {
+            if let Some(system) = self.system.as_mut() {
+                system.event_queue().push_timer(id, due, || async { Ok(()) });
+            }
+        }
+
+        fn unset_timer(&mut self, id: WIPICWord) {
+            if let Some(system) = self.system.as_mut() {
+                system.event_queue().cancel_timer(id);
+            }
         }
     }
 
     impl ByteWrite for TestContext {
         fn write_bytes(&mut self, address: u32, data: &[u8]) -> wie_util::Result<()> {
-            self.memory[address as usize..(address + data.len() as u32) as usize].copy_from_slice(data);
+            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32).contains(&address) {
+                let start = (address - TEST_GLOBAL_DATA_BASE) as usize;
+                let end = start + data.len();
+                if end > TEST_GLOBAL_DATA_SIZE {
+                    return Err(WieError::InvalidMemoryAccess(address));
+                }
+                self.global_data[start..end].copy_from_slice(data);
+                return Ok(());
+            }
+
+            let start = address as usize;
+            let end = start + data.len();
+            if end > TEST_MEMORY_SIZE {
+                return Err(WieError::InvalidMemoryAccess(address));
+            }
+            self.memory[start..end].copy_from_slice(data);
 
             Ok(())
         }
@@ -190,7 +273,22 @@ pub mod test {
 
     impl ByteRead for TestContext {
         fn read_bytes(&self, address: u32, result: &mut [u8]) -> wie_util::Result<usize> {
-            result.copy_from_slice(&self.memory[address as usize..(address as usize + result.len())]);
+            if (TEST_GLOBAL_DATA_BASE..TEST_GLOBAL_DATA_BASE + TEST_GLOBAL_DATA_SIZE as u32).contains(&address) {
+                let start = (address - TEST_GLOBAL_DATA_BASE) as usize;
+                let end = start + result.len();
+                if end > TEST_GLOBAL_DATA_SIZE {
+                    return Err(WieError::InvalidMemoryAccess(address));
+                }
+                result.copy_from_slice(&self.global_data[start..end]);
+                return Ok(result.len());
+            }
+
+            let start = address as usize;
+            let end = start + result.len();
+            if end > TEST_MEMORY_SIZE {
+                return Err(WieError::InvalidMemoryAccess(address));
+            }
+            result.copy_from_slice(&self.memory[start..end]);
 
             Ok(result.len())
         }

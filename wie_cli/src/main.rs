@@ -149,6 +149,8 @@ impl Platform for WieCliPlatform {
     fn vibrate(&self, duration_ms: u64, intensity: u8) {
         tracing::info!("vibrate({duration_ms}ms, {intensity}%) - not supported on this platform");
     }
+
+    fn set_backlight_mode(&self, _mode: u8) {}
 }
 
 #[derive(Parser)]
@@ -160,6 +162,12 @@ struct Args {
     /// flushed batch; `flamegraph.pl` aggregates duplicates).
     #[arg(long)]
     profile_out: Option<PathBuf>,
+    /// Reserve the handset's status strip ("annunciator") above the drawing
+    /// area. A title inherits whichever state the handset is in and is written
+    /// for it, so leaving this unset lets the title decide; `--annunciator` and
+    /// `--annunciator false` force it either way.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    annunciator: Option<bool>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -174,6 +182,7 @@ fn main() -> anyhow::Result<()> {
     let options = Options {
         enable_gdbserver: args.debug,
         profile,
+        annunciator: args.annunciator,
     };
 
     start(&args.filename, options)
@@ -195,7 +204,9 @@ pub fn start(filename: &str, options: Options) -> anyhow::Result<()> {
     let platform = Box::new(WieCliPlatform::new(window.handle()));
 
     let buf = fs::read(filename)?;
-    let mut emulator: Box<dyn Emulator> = if filename.ends_with("zip") {
+    // Only used to pick the loader; all file access keeps the original casing.
+    let extension = filename.to_lowercase();
+    let mut emulator: Box<dyn Emulator> = if extension.ends_with("zip") {
         let files = extract_zip(&buf).unwrap();
 
         if KtfEmulator::loadable_archive(&files) {
@@ -207,14 +218,14 @@ pub fn start(filename: &str, options: Options) -> anyhow::Result<()> {
         } else {
             anyhow::bail!("Unknown archive format");
         }
-    } else if filename.ends_with("jad") {
+    } else if extension.ends_with("jad") {
         let jar_filename = filename.replace(".jad", ".jar");
         let jar = fs::read(&jar_filename)?;
 
         let jar_filename = jar_filename[jar_filename.rfind('/').unwrap_or(0) + 1..].to_owned();
 
         Box::new(J2MEEmulator::from_jad_jar(platform, buf, jar_filename, jar)?)
-    } else if filename.ends_with("jar") {
+    } else if extension.ends_with("jar") {
         let filename_without_path = filename[filename.rfind('/').unwrap_or(0) + 1..].to_owned();
         let filename_without_ext = filename_without_path.trim_end_matches(".jar");
 

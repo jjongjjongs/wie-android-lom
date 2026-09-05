@@ -26,8 +26,10 @@ impl BackLight {
         }
     }
 
-    async fn always_on(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<()> {
-        tracing::warn!("stub org.kwis.msp.handset.BackLight::alwaysOn()");
+    async fn always_on(_: &Jvm, context: &mut WieJvmContext) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.handset.BackLight::alwaysOn()");
+
+        context.system().platform().set_backlight_mode(2);
 
         Ok(())
     }

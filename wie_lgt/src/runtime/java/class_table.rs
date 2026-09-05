@@ -1,0 +1,574 @@
+//! The class table an ahead-of-time compiled LGT application hands to the VM.
+//!
+//! LGT's toolchain compiles an application's Java classes to ARM code and
+//! stores them in `binary.mod`; there is no bytecode left. What survives is a
+//! description of everything the application needs *from the platform*, passed
+//! to import `0x14` (`java_load_classes`) as eleven pointers.
+//!
+//! Six of them are read-only tables in the image:
+//!
+//! | table             | contents                                          |
+//! |-------------------|---------------------------------------------------|
+//! | `classes`         | `u32` count, then one 24 byte entry per class      |
+//! | `fields`          | `(name, descriptor)` string pointer pairs          |
+//! | `static_fields`   | same                                               |
+//! | `virtual_methods` | same                                               |
+//! | `interface_methods` | same                                            |
+//! | `static_methods`  | same                                               |
+//!
+//! A class entry is a name pointer followed by five `(start, count)` `u16`
+//! pairs slicing those tables:
+//!
+//! ```text
+//! +0x00 u32 name
+//! +0x04 u16 field_start,            +0x06 u16 field_count
+//! +0x08 u16 static_field_start,     +0x0a u16 static_field_count
+//! +0x0c u16 virtual_method_start,   +0x0e u16 virtual_method_count
+//! +0x10 u16 interface_method_start, +0x12 u16 interface_method_count
+//! +0x14 u16 static_method_start,    +0x16 u16 static_method_count
+//! ```
+//!
+//! The remaining five pointers are zeroed arrays in `.bss` - they are *output*
+//! parameters, one entry per row of the corresponding table, which the VM
+//! fills in so the compiled code can reach the platform. See
+//! [`super::method_bridge`] for what goes into them.
+
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
+
+use wie_util::{ByteRead, Result, WieError, read_generic, read_null_terminated_string_bytes};
+
+/// One platform class the application imports.
+pub struct JavaClass {
+    pub name: String,
+    pub field_start: u32,
+    pub field_count: u32,
+    pub static_field_start: u32,
+    pub static_field_count: u32,
+    pub virtual_method_start: u32,
+    pub virtual_method_count: u32,
+    pub interface_method_start: u32,
+    pub interface_method_count: u32,
+    pub static_method_start: u32,
+    pub static_method_count: u32,
+}
+
+/// One row of a method or field table.
+///
+/// Rows are addressed by a single flat index across all classes, which is also
+/// the index into the matching output array.
+pub struct JavaMember {
+    pub class_index: u32,
+    pub name: String,
+    pub descriptor: String,
+}
+
+/// Addresses of the five output arrays, in the order they are passed.
+pub struct OutputArrays {
+    pub field_offsets: u32,
+    pub static_field_offsets: u32,
+    pub virtual_method_offsets: u32,
+    pub interface_method_offsets: u32,
+    pub static_method_offsets: u32,
+}
+
+pub struct ClassTable {
+    pub classes: Vec<JavaClass>,
+    /// Per class: the guest-visible class_shared identity carried in dispatch
+    /// table word zero and in java/lang/Class's native data block.
+    pub class_roots: Vec<u32>,
+    /// Per class: the dispatch table an instance points at.
+    pub vtables: Vec<u32>,
+    /// Per imported interface class: guest-visible interface dispatch table.
+    /// Zero means that class has no imported interface-method rows.
+    pub interface_vtables: Vec<u32>,
+    /// Per class: the activated java/lang/Class-shaped object returned by the
+    /// reserved get_class/get_raw_class rows.
+    pub class_objects: Vec<u32>,
+    /// `None` where the application left a row blank, which it does for the
+    /// slots reserved at the head of each class's static method block.
+    pub static_methods: Vec<Option<JavaMember>>,
+    pub virtual_methods: Vec<Option<JavaMember>>,
+    pub interface_methods: Vec<Option<JavaMember>>,
+    pub fields: Vec<Option<JavaMember>>,
+    pub static_fields: Vec<Option<JavaMember>>,
+    /// The application's own class entries, which sit immediately below the
+    /// imported table's count word. They carry the same 24-byte shape and say
+    /// which of the trailing member rows - the ones past the imported ranges -
+    /// belong to which application class.
+    pub own_classes: Vec<JavaClass>,
+    pub outputs: OutputArrays,
+}
+
+const CLASS_ENTRY_SIZE: u32 = 24;
+const MEMBER_ENTRY_SIZE: u32 = 8;
+
+/// Applications import a few dozen classes. A larger count means the pointer
+/// is not a class table, and parsing on would read arbitrary memory.
+const MAX_CLASSES: u32 = 1024;
+
+fn read_string<R>(reader: &R, address: u32) -> Result<String>
+where
+    R: ?Sized + ByteRead,
+{
+    let bytes = read_null_terminated_string_bytes(reader, address)?;
+
+    Ok(String::from_utf8_lossy(&bytes).into())
+}
+
+/// Reads `count` rows starting at `start`, attributing each to `class_index`.
+fn read_members<R>(reader: &R, table: u32, start: u32, count: u32, class_index: u32, rows: &mut Vec<Option<JavaMember>>) -> Result<()>
+where
+    R: ?Sized + ByteRead,
+{
+    for index in start..start + count {
+        let entry = table + index * MEMBER_ENTRY_SIZE;
+        let name_address: u32 = read_generic(reader, entry)?;
+        let descriptor_address: u32 = read_generic(reader, entry + 4)?;
+
+        // Blank rows are expected, so they are recorded rather than skipped:
+        // the index has to keep lining up with the output array.
+        let member = if name_address == 0 || descriptor_address == 0 {
+            None
+        } else {
+            Some(JavaMember {
+                class_index,
+                name: read_string(reader, name_address)?,
+                descriptor: read_string(reader, descriptor_address)?,
+            })
+        };
+
+        if rows.len() <= index as usize {
+            rows.resize_with(index as usize + 1, || None);
+        }
+        rows[index as usize] = member;
+    }
+
+    Ok(())
+}
+
+/// Reads the application's own class entries, which the compiler lays out
+/// immediately below the imported class table's count word, growing downwards.
+///
+/// The imported table describes only the platform classes an application
+/// imports; its member ranges stop there. The application's own classes append
+/// their member references to the same input arrays, and these entries are what
+/// says which trailing rows belong to which class. `vm_resolve_one` is handed
+/// one of them per class - a title that never calls it (Fantasy Knight does
+/// not) leaves the trailing rows for WIE to resolve, and resolving them by name
+/// alone picks whichever class declares that name first, which on an obfuscated
+/// title is routinely the wrong one.
+///
+/// The walk stops at the first entry that does not read as one: a name that is
+/// not a plain class name, or a range that is implausibly large. Below the
+/// entries lies the string pool, whose words fail both tests.
+fn read_own_class_entries<R>(reader: &R, classes: u32) -> Vec<JavaClass>
+where
+    R: ?Sized + ByteRead,
+{
+    /// An application declares a few dozen classes; a longer walk means the
+    /// stop condition failed and the read has left the table.
+    const MAX_OWN_CLASSES: u32 = 256;
+    /// Member ranges index arrays with a few hundred rows.
+    const MAX_MEMBER_INDEX: u32 = 4096;
+
+    fn is_class_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'/'))
+    }
+
+    let mut entries = Vec::new();
+
+    for step in 1..=MAX_OWN_CLASSES {
+        let Some(entry) = classes.checked_sub(step * CLASS_ENTRY_SIZE) else {
+            break;
+        };
+
+        let Ok(name_address) = read_generic::<u32, _>(reader, entry) else {
+            break;
+        };
+        let Ok(name) = read_string(reader, name_address) else {
+            break;
+        };
+        if !is_class_name(&name) {
+            break;
+        }
+
+        let mut ranges = [0u32; 10];
+        let mut readable = true;
+        for (index, range) in ranges.iter_mut().enumerate() {
+            match read_generic::<u16, _>(reader, entry + 4 + index as u32 * 2) {
+                Ok(value) => *range = u32::from(value),
+                Err(_) => {
+                    readable = false;
+                    break;
+                }
+            }
+        }
+        if !readable || ranges.iter().any(|range| *range > MAX_MEMBER_INDEX) {
+            break;
+        }
+
+        entries.push(JavaClass {
+            name,
+            field_start: ranges[0],
+            field_count: ranges[1],
+            static_field_start: ranges[2],
+            static_field_count: ranges[3],
+            virtual_method_start: ranges[4],
+            virtual_method_count: ranges[5],
+            interface_method_start: ranges[6],
+            interface_method_count: ranges[7],
+            static_method_start: ranges[8],
+            static_method_count: ranges[9],
+        });
+    }
+
+    entries
+}
+
+impl ClassTable {
+    #[allow(clippy::too_many_arguments)]
+    pub fn parse<R>(
+        reader: &R,
+        classes: u32,
+        fields: u32,
+        static_fields: u32,
+        virtual_methods: u32,
+        interface_methods: u32,
+        static_methods: u32,
+        outputs: OutputArrays,
+    ) -> Result<Self>
+    where
+        R: ?Sized + ByteRead,
+    {
+        let count: u16 = read_generic(reader, classes)?;
+        let count = u32::from(count);
+        if count > MAX_CLASSES {
+            return Err(WieError::FatalError(format!(
+                "Implausible LGT class count {count} at {classes:#x}; not a class table"
+            )));
+        }
+
+        let mut table = Self {
+            classes: Vec::with_capacity(count as usize),
+            class_roots: Vec::new(),
+            vtables: Vec::new(),
+            interface_vtables: Vec::new(),
+            class_objects: Vec::new(),
+            static_methods: Vec::new(),
+            virtual_methods: Vec::new(),
+            interface_methods: Vec::new(),
+            fields: Vec::new(),
+            static_fields: Vec::new(),
+            own_classes: read_own_class_entries(reader, classes),
+            outputs,
+        };
+
+        for index in 0..count {
+            let entry = classes + 4 + index * CLASS_ENTRY_SIZE;
+
+            let name_address: u32 = read_generic(reader, entry)?;
+            let field_start: u16 = read_generic(reader, entry + 4)?;
+            let field_count: u16 = read_generic(reader, entry + 6)?;
+            let static_field_start: u16 = read_generic(reader, entry + 8)?;
+            let static_field_count: u16 = read_generic(reader, entry + 10)?;
+            let virtual_method_start: u16 = read_generic(reader, entry + 12)?;
+            let virtual_method_count: u16 = read_generic(reader, entry + 14)?;
+            let interface_method_start: u16 = read_generic(reader, entry + 16)?;
+            let interface_method_count: u16 = read_generic(reader, entry + 18)?;
+            let static_method_start: u16 = read_generic(reader, entry + 20)?;
+            let static_method_count: u16 = read_generic(reader, entry + 22)?;
+
+            let class = JavaClass {
+                name: read_string(reader, name_address)?,
+                field_start: field_start.into(),
+                field_count: field_count.into(),
+                static_field_start: static_field_start.into(),
+                static_field_count: static_field_count.into(),
+                virtual_method_start: virtual_method_start.into(),
+                virtual_method_count: virtual_method_count.into(),
+                interface_method_start: interface_method_start.into(),
+                interface_method_count: interface_method_count.into(),
+                static_method_start: static_method_start.into(),
+                static_method_count: static_method_count.into(),
+            };
+
+            read_members(reader, fields, class.field_start, class.field_count, index, &mut table.fields)?;
+            read_members(
+                reader,
+                static_fields,
+                class.static_field_start,
+                class.static_field_count,
+                index,
+                &mut table.static_fields,
+            )?;
+            read_members(
+                reader,
+                virtual_methods,
+                class.virtual_method_start,
+                class.virtual_method_count,
+                index,
+                &mut table.virtual_methods,
+            )?;
+            read_members(
+                reader,
+                interface_methods,
+                class.interface_method_start,
+                class.interface_method_count,
+                index,
+                &mut table.interface_methods,
+            )?;
+            read_members(
+                reader,
+                static_methods,
+                class.static_method_start,
+                class.static_method_count,
+                index,
+                &mut table.static_methods,
+            )?;
+
+            table.classes.push(class);
+        }
+
+        Ok(table)
+    }
+
+    /// How many rows `field_offsets` has room for, bounded by whichever
+    /// output array follows it in `.bss`.
+    ///
+    /// The application never says how long the array is, and the compiled code
+    /// indexes it far past the platform's own field table - Legend of Master
+    /// reads row 413 of it - so the bound is taken from the layout instead.
+    pub fn field_offset_capacity(&self) -> u32 {
+        let field_offsets = self.outputs.field_offsets;
+
+        let next = [
+            self.outputs.static_field_offsets,
+            self.outputs.virtual_method_offsets,
+            self.outputs.interface_method_offsets,
+            self.outputs.static_method_offsets,
+        ]
+        .into_iter()
+        .filter(|x| *x > field_offsets)
+        .min();
+
+        match next {
+            Some(next) => (next - field_offsets) / 2,
+            None => 0,
+        }
+    }
+
+    /// How many rows `virtual_method_offsets` has room for, bounded by
+    /// whichever output array follows it in `.bss`, or `None` when it is the
+    /// last output and no in-layout bound exists (a blank input row then ends
+    /// the walk instead).
+    pub fn virtual_method_offset_capacity(&self) -> Option<u32> {
+        let virtual_method_offsets = self.outputs.virtual_method_offsets;
+
+        [
+            self.outputs.field_offsets,
+            self.outputs.static_field_offsets,
+            self.outputs.interface_method_offsets,
+            self.outputs.static_method_offsets,
+        ]
+        .into_iter()
+        .filter(|x| *x > virtual_method_offsets)
+        .min()
+        .map(|next| (next - virtual_method_offsets) / 2)
+    }
+
+    /// The class a token from a reserved row belongs to.
+    pub fn class_of_object(&self, class_object: u32) -> Option<u32> {
+        self.class_objects.iter().position(|x| *x == class_object).map(|x| x as u32)
+    }
+
+    /// The imported platform class represented by a synthetic class_shared
+    /// identity.
+    pub fn class_of_root(&self, root: u32) -> Option<u32> {
+        self.class_roots.iter().position(|x| *x == root).map(|x| x as u32)
+    }
+
+    /// The class whose static method block contains `index`, and the row's
+    /// position within that block.
+    pub fn static_method_owner(&self, index: u32) -> Option<(&JavaClass, u32)> {
+        self.classes
+            .iter()
+            .find(|class| index >= class.static_method_start && index < class.static_method_start + class.static_method_count)
+            .map(|class| (class, index - class.static_method_start))
+    }
+
+    pub fn class_name(&self, index: u32) -> &str {
+        self.classes.get(index as usize).map(|x| x.name.as_str()).unwrap_or("<unknown>")
+    }
+
+    /// `Class.method:descriptor`, for logs and error messages.
+    pub fn describe(&self, member: &JavaMember) -> String {
+        format!("{}.{}{}", self.class_name(member.class_index), member.name, member.descriptor)
+    }
+}
+
+/// Splits a JVM method descriptor into its parameter descriptors and return
+/// descriptor. `None` if the descriptor is malformed.
+pub fn split_descriptor(descriptor: &str) -> Option<(Vec<String>, String)> {
+    let body = descriptor.strip_prefix('(')?;
+    let (parameters, return_type) = body.split_once(')')?;
+
+    let mut result = Vec::new();
+    let mut rest = parameters;
+
+    while !rest.is_empty() {
+        let length = descriptor_length(rest)?;
+        result.push(rest[..length].to_string());
+        rest = &rest[length..];
+    }
+
+    Some((result, return_type.to_string()))
+}
+
+/// Length of the single field descriptor at the head of `descriptor`.
+fn descriptor_length(descriptor: &str) -> Option<usize> {
+    let arity = descriptor.bytes().take_while(|x| *x == b'[').count();
+
+    match descriptor.as_bytes().get(arity)? {
+        b'L' => Some(descriptor[arity..].find(';')? + arity + 1),
+        b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z' | b'V' => Some(arity + 1),
+        _ => None,
+    }
+}
+
+/// Whether a value of this type occupies two argument slots, as `long` and
+/// `double` do.
+pub fn is_wide(descriptor: &str) -> bool {
+    descriptor == "J" || descriptor == "D"
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{string::ToString, vec, vec::Vec};
+
+    use wie_util::{ByteRead, Result};
+
+    use super::{CLASS_ENTRY_SIZE, is_wide, read_own_class_entries, split_descriptor};
+
+    /// A flat image laid out from a fixed base, so entries can be written at
+    /// known addresses.
+    struct Image {
+        base: u32,
+        data: Vec<u8>,
+    }
+
+    impl Image {
+        fn new(base: u32, size: usize) -> Self {
+            Self { base, data: vec![0; size] }
+        }
+
+        fn word(&mut self, address: u32, value: u32) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        fn half(&mut self, address: u32, value: u16) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+
+        fn string(&mut self, address: u32, value: &str) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + value.len()].copy_from_slice(value.as_bytes());
+        }
+    }
+
+    impl ByteRead for Image {
+        fn read_bytes(&self, address: u32, result: &mut [u8]) -> Result<usize> {
+            let offset = (address - self.base) as usize;
+            let available = self.data.len().saturating_sub(offset);
+            let length = result.len().min(available);
+
+            result[..length].copy_from_slice(&self.data[offset..offset + length]);
+
+            Ok(length)
+        }
+    }
+
+    /// The application's own class entries grow downwards from the imported
+    /// table's count word, and the walk stops at the string pool below them -
+    /// where the first word is a descriptor rather than a class name, and the
+    /// halfwords that follow are far too large to be member indices.
+    #[test]
+    fn own_class_entries_are_read_back_to_the_string_pool() {
+        const BASE: u32 = 0x1400000;
+        let classes = BASE + 0x200;
+
+        let mut image = Image::new(BASE, 0x400);
+
+        // Two entries, nearest first, the way `w` and `b` sit under Fantasy
+        // Knight's imported table.
+        for (step, (name, name_at, virtual_start, virtual_count)) in
+            [("b", BASE + 0x10, 88u16, 4u16), ("w", BASE + 0x20, 57, 31)].into_iter().enumerate()
+        {
+            let entry = classes - (step as u32 + 1) * CLASS_ENTRY_SIZE;
+            image.string(name_at, name);
+            image.word(entry, name_at);
+            image.half(entry + 12, virtual_start);
+            image.half(entry + 14, virtual_count);
+        }
+
+        // Below them, a descriptor from the string pool read as an entry.
+        let pool_entry = classes - 3 * CLASS_ENTRY_SIZE;
+        image.string(BASE + 0x30, "(Lorg/kwis/msp/lcdui/Graphics;)V");
+        image.word(pool_entry, BASE + 0x30);
+        image.half(pool_entry + 12, 0xf000);
+
+        let entries = read_own_class_entries(&image, classes);
+
+        assert_eq!(entries.len(), 2, "the walk stops at the string pool");
+        assert_eq!(entries[0].name, "b");
+        assert_eq!((entries[0].virtual_method_start, entries[0].virtual_method_count), (88, 4));
+        assert_eq!(entries[1].name, "w");
+        assert_eq!((entries[1].virtual_method_start, entries[1].virtual_method_count), (57, 31));
+    }
+
+    #[test]
+    fn splits_descriptors() {
+        assert_eq!(split_descriptor("()V"), Some((vec![], "V".to_string())));
+        assert_eq!(split_descriptor("(II)V"), Some((vec!["I".to_string(), "I".to_string()], "V".to_string())));
+        assert_eq!(
+            split_descriptor("(Ljava/lang/String;Ljava/lang/String;)V"),
+            Some((vec!["Ljava/lang/String;".to_string(), "Ljava/lang/String;".to_string()], "V".to_string()))
+        );
+        assert_eq!(
+            split_descriptor("([BII)I"),
+            Some((vec!["[B".to_string(), "I".to_string(), "I".to_string()], "I".to_string()))
+        );
+        assert_eq!(
+            split_descriptor("(Lorg/kwis/msp/media/Clip;Z)Z"),
+            Some((vec!["Lorg/kwis/msp/media/Clip;".to_string(), "Z".to_string()], "Z".to_string()))
+        );
+        assert_eq!(
+            split_descriptor("([[Ljava/lang/String;)[I"),
+            Some((vec!["[[Ljava/lang/String;".to_string()], "[I".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_descriptors() {
+        assert_eq!(split_descriptor("II)V"), None);
+        assert_eq!(split_descriptor("(Ljava/lang/String)V"), None);
+        assert_eq!(split_descriptor("(Q)V"), None);
+    }
+
+    #[test]
+    fn wide_types_take_two_slots() {
+        assert!(is_wide("J"));
+        assert!(is_wide("D"));
+        assert!(!is_wide("I"));
+        assert!(!is_wide("Ljava/lang/String;"));
+    }
+}

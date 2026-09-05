@@ -25,6 +25,7 @@ pub fn test_helloworld() -> Result<()> {
         TestPlatformEvent::Exit => {
             exited_clone.store(true, Ordering::SeqCst);
         }
+        TestPlatformEvent::OpenUrl(_) => {}
     };
 
     let platform = Box::new(TestPlatform::with_event_handler(event_handler));
@@ -36,6 +37,7 @@ pub fn test_helloworld() -> Result<()> {
         Options {
             enable_gdbserver: false,
             profile: None,
+            annunciator: None,
         },
     )?;
 

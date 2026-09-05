@@ -51,8 +51,23 @@ pub trait Canvas: Send {
     fn set_xor_mode(&mut self, xor_mode: bool);
     fn copy_area(&mut self, dx: i32, dy: i32, sx: i32, sy: i32, w: u32, h: u32, clip: Clip);
     fn draw(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip);
+    /// Like [`draw`](Self::draw), but pixels of `src` whose RGB565 value equals
+    /// `color_key565` are treated as transparent and skipped. This is the direct
+    /// path for a color-keyed sprite blit, avoiding the intermediate ARGB array
+    /// a `drawRGB` round-trip would allocate on every call.
+    fn draw_with_color_key(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip, color_key565: u16);
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color, clip: Clip);
-    fn draw_text(&mut self, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip);
+    fn draw_text(
+        &mut self,
+        string: &str,
+        x: i32,
+        y: i32,
+        font_height: f32,
+        font_baseline: f32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+    );
     fn draw_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color, clip: Clip);
     fn draw_arc(&mut self, x: i32, y: i32, w: u32, h: u32, start_angle: i32, arc_angle: i32, color: Color, clip: Clip);
     fn draw_round_rect(&mut self, x: i32, y: i32, w: u32, h: u32, arc_width: u32, arc_height: u32, color: Color, clip: Clip);
@@ -547,6 +562,38 @@ where
         }
     }
 
+    fn draw_with_color_key(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip, color_key565: u16) {
+        // Bounds exactly as `draw`; only the per-pixel body differs.
+        let x_start = 0i64.max(-(dx as i64)).max(-(sx as i64));
+        let x_end = (w as i64)
+            .min(self.image_buffer.width() as i64 - dx as i64)
+            .min(src.width() as i64 - sx as i64);
+        let y_start = 0i64.max(-(dy as i64)).max(-(sy as i64));
+        let y_end = (h as i64)
+            .min(self.image_buffer.height() as i64 - dy as i64)
+            .min(src.height() as i64 - sy as i64);
+
+        for y in y_start..y_end {
+            for x in x_start..x_end {
+                let px = (dx as i64 + x) as i32;
+                let py = (dy as i64 + y) as i32;
+                if px < clip.x || px >= clip.x + (clip.width as i32) || py < clip.y || py >= clip.y + (clip.height as i32) {
+                    continue;
+                }
+
+                let pixel = src.get_pixel((sx as i64 + x) as i32, (sy as i64 + y) as i32);
+                // RGB565 of the source pixel, matched against the key exactly as
+                // the WIPI drawImage color-key comparison does.
+                let pixel565 = (((pixel.r as u16) << 8) & 0xf800) | (((pixel.g as u16) << 3) & 0x07e0) | ((pixel.b as u16 >> 3) & 0x001f);
+                if pixel565 == color_key565 {
+                    continue;
+                }
+
+                self.blend_pixel(px, py, pixel);
+            }
+        }
+    }
+
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color, clip: Clip) {
         // pre-clip to image bounds: guest can pass extreme coordinates whose deltas
         // overflow i32 and whose bresenham walk would take billions of steps
@@ -583,9 +630,18 @@ where
         }
     }
 
-    fn draw_text(&mut self, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip) {
-        let size = 10.0; // TODO
-        let font = FONT.as_scaled(FONT.pt_to_px_scale(size).unwrap());
+    fn draw_text(
+        &mut self,
+        string: &str,
+        x: i32,
+        y: i32,
+        font_height: f32,
+        font_baseline: f32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+    ) {
+        let font = FONT.as_scaled(font_height);
 
         let total_width = string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>();
         let x = match text_alignment {
@@ -607,7 +663,7 @@ where
                 outlined_glyph.draw(|glyph_x: u32, glyph_y, c| {
                     let bounds = outlined_glyph.px_bounds();
                     let px = x + (glyph_x as f32 + bounds.min.x + position) as i32;
-                    let py = y + (glyph_y as f32 + bounds.min.y + size) as i32;
+                    let py = y + (glyph_y as f32 + bounds.min.y + font_baseline) as i32;
                     if px < clip.x || px >= clip.x + clip.width as i32 || py < clip.y || py >= clip.y + clip.height as i32 {
                         return;
                     }
@@ -830,13 +886,165 @@ impl Clip {
     }
 }
 
+pub struct AnimationFrame {
+    pub image: Box<dyn Image>,
+    pub delay_ms: u32,
+}
+
+pub struct AnimatedImage {
+    pub frames: Vec<AnimationFrame>,
+}
+
+/// Decode a GIF animation without changing the ordinary single-image decoder.
+///
+/// `None` means that the input is not a GIF or that it contains fewer than
+/// two frames.  WIPI treats an image as animated only when it has more than
+/// one decoded frame.
+pub fn decode_gif_animation(data: &[u8]) -> Result<Option<AnimatedImage>> {
+    extern crate std; // XXX
+
+    use image::{AnimationDecoder, codecs::gif::GifDecoder};
+    use std::{io::Cursor, time::Duration};
+
+    if !(data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")) {
+        return Ok(None);
+    }
+
+    let decoder = GifDecoder::new(Cursor::new(data)).map_err(|x| WieError::FatalError(x.to_string()))?;
+    let frames = decoder.into_frames().collect_frames().map_err(|x| WieError::FatalError(x.to_string()))?;
+
+    if frames.len() <= 1 {
+        return Ok(None);
+    }
+
+    let mut decoded_frames = Vec::with_capacity(frames.len());
+
+    for frame in frames {
+        let delay = Duration::from(frame.delay());
+        let delay_ms = delay.as_millis().min(u128::from(u32::MAX)) as u32;
+
+        let rgba = frame.into_buffer();
+        let width = rgba.width();
+        let height = rgba.height();
+
+        // Keep the same byte layout used by decode_image().
+        let data = rgba.pixels().flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]]).collect::<Vec<_>>();
+
+        let image = Box::new(VecImageBuffer::<ArgbPixel>::from_raw(width, height, pod_collect_to_vec(&data))) as Box<dyn Image>;
+
+        decoded_frames.push(AnimationFrame { image, delay_ms });
+    }
+
+    Ok(Some(AnimatedImage { frames: decoded_frames }))
+}
+
+fn decode_ecnx(data: &[u8]) -> Result<Box<dyn Image>> {
+    if data.len() < 0x14 || &data[..4] != b"ECNX" {
+        return Err(WieError::FatalError("Invalid ECNX image".to_string()));
+    }
+
+    let kind = u16::from_le_bytes([data[4], data[5]]);
+    if kind != 0x1900 {
+        return Err(WieError::FatalError("Unsupported ECNX image type".to_string()));
+    }
+
+    let width = u16::from_le_bytes([data[6], data[7]]) as usize;
+    let height = u16::from_le_bytes([data[8], data[9]]) as usize;
+    let transparent_index = u32::from_le_bytes([data[0x0a], data[0x0b], data[0x0c], data[0x0d]]) as usize;
+    let index_len = u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]) as usize;
+
+    let pixel_count = width
+        .checked_mul(height)
+        .ok_or_else(|| WieError::FatalError("ECNX dimensions overflow".to_string()))?;
+
+    if index_len != pixel_count {
+        return Err(WieError::FatalError("Invalid ECNX pixel data length".to_string()));
+    }
+
+    let index_offset = 0x14usize;
+    let index_end = index_offset
+        .checked_add(index_len)
+        .ok_or_else(|| WieError::FatalError("ECNX pixel data overflow".to_string()))?;
+
+    if index_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX pixel data".to_string()));
+    }
+
+    let padding = (4 - (index_len & 3)) & 3;
+    let palette_count_offset = index_end
+        .checked_add(padding)
+        .ok_or_else(|| WieError::FatalError("ECNX palette offset overflow".to_string()))?;
+
+    let palette_count_end = palette_count_offset
+        .checked_add(4)
+        .ok_or_else(|| WieError::FatalError("ECNX palette count overflow".to_string()))?;
+
+    if palette_count_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX palette count".to_string()));
+    }
+
+    let palette_count = u32::from_le_bytes([
+        data[palette_count_offset],
+        data[palette_count_offset + 1],
+        data[palette_count_offset + 2],
+        data[palette_count_offset + 3],
+    ]) as usize;
+
+    let palette_offset = palette_count_end;
+    let palette_size = palette_count
+        .checked_mul(2)
+        .ok_or_else(|| WieError::FatalError("ECNX palette size overflow".to_string()))?;
+    let palette_end = palette_offset
+        .checked_add(palette_size)
+        .ok_or_else(|| WieError::FatalError("ECNX palette data overflow".to_string()))?;
+
+    if palette_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX palette".to_string()));
+    }
+
+    let mut palette = Vec::with_capacity(palette_count);
+    for i in 0..palette_count {
+        let offset = palette_offset + i * 2;
+        palette.push(u16::from_le_bytes([data[offset], data[offset + 1]]));
+    }
+
+    let mut pixels = Vec::with_capacity(pixel_count * 4);
+
+    for &index in &data[index_offset..index_end] {
+        let index = index as usize;
+
+        let color = if index < palette.len() { palette[index] } else { 0 };
+
+        let r5 = ((color >> 11) & 0x1f) as u8;
+        let g6 = ((color >> 5) & 0x3f) as u8;
+        let b5 = (color & 0x1f) as u8;
+
+        let r = (r5 << 3) | (r5 >> 2);
+        let g = (g6 << 2) | (g6 >> 4);
+        let b = (b5 << 3) | (b5 >> 2);
+        let a = if index == transparent_index { 0 } else { 255 };
+
+        pixels.extend_from_slice(&[b, g, r, a]);
+    }
+
+    Ok(Box::new(VecImageBuffer::<ArgbPixel>::from_raw(
+        width as u32,
+        height as u32,
+        pod_collect_to_vec(&pixels),
+    )) as Box<dyn Image>)
+}
+
 pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
     extern crate std; // XXX
 
     use std::io::Cursor;
 
-    if data[0] == b'L' && data[1] == b'B' && data[2] == b'M' && data[3] == b'P' {
+    if data.len() >= 4 && &data[..4] == b"LBMP" {
         return decode_lbmp(data);
+    }
+
+    if data.len() >= 4 && &data[..4] == b"ECNX" {
+        return decode_ecnx(data);
     }
 
     let image = ImageReader::new(Cursor::new(&data))
@@ -844,7 +1052,13 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
         .map_err(|x| WieError::FatalError(x.to_string()))?
         .decode()
         .map_err(|x| WieError::FatalError(x.to_string()))?;
-    let rgba = image.into_rgba8();
+    let mut rgba = image.into_rgba8();
+
+    if rgba.width() <= 15 && rgba.height() <= 15 && png_is_single_index0_tile(data) {
+        for pixel in rgba.pixels_mut() {
+            pixel.0[3] = 0;
+        }
+    }
 
     let data = rgba.pixels().flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]]).collect::<Vec<_>>();
 
@@ -855,8 +1069,54 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
     )) as Box<_>)
 }
 
+/// A tiny degenerate indexed PNG - one whose palette holds a single entry and
+/// which declares no `tRNS` - is entirely palette index 0. KTF/WIPI titles treat
+/// that index as the transparent colour, so such a tile is a fully transparent
+/// spacer the clet paints where it wants nothing drawn. The `image` crate
+/// flattens it to an opaque one-colour block instead; left opaque it buries
+/// whatever sits under it - the centred narration text of LGT's Legend of Master
+/// is hidden by a band of these 14x14 all-black tiles painted over it. The size
+/// bound keeps this to the small overlay tiles: a title also fills solid areas of
+/// its tile-map with 16x16 single-colour tiles that are meant to stay opaque.
+fn png_is_single_index0_tile(data: &[u8]) -> bool {
+    if data.len() < 8 || &data[..4] != b"\x89PNG" {
+        return false;
+    }
+
+    let mut i = 8usize;
+    let mut indexed = false;
+    let mut has_trns = false;
+    let mut palette_entries = 0u32;
+
+    while i + 8 <= data.len() {
+        let len = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
+        let chunk_type = &data[i + 4..i + 8];
+
+        match chunk_type {
+            b"IHDR" if i + 8 + 13 <= data.len() => indexed = data[i + 8 + 9] == 3,
+            b"PLTE" => palette_entries = (len / 3) as u32,
+            b"tRNS" => has_trns = true,
+            b"IDAT" | b"IEND" => break,
+            _ => {}
+        }
+
+        i = match i.checked_add(12).and_then(|x| x.checked_add(len)) {
+            Some(next) => next,
+            None => return false,
+        };
+    }
+
+    indexed && !has_trns && palette_entries == 1
+}
+
 pub fn string_width(string: &str, pt_size: f32) -> f32 {
     let font = FONT.as_scaled(FONT.pt_to_px_scale(pt_size).unwrap());
+
+    string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>()
+}
+
+pub fn string_width_px(string: &str, px_height: f32) -> f32 {
+    let font = FONT.as_scaled(px_height);
 
     string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>()
 }
@@ -870,6 +1130,60 @@ mod tests {
     use crate::canvas::{Clip, Image, ImageBufferCanvas};
 
     use super::{ArgbPixel, Canvas, Color, Rgb332Pixel, TextAlignment, VecImageBuffer};
+
+    #[test]
+    fn test_decode_gif_animation_frames_and_delay() -> Result<()> {
+        extern crate std;
+
+        use alloc::{string::ToString, vec::Vec};
+        use image::{Delay, Frame, Rgba, RgbaImage, codecs::gif::GifEncoder};
+        use std::io::Cursor;
+
+        use crate::canvas::decode_gif_animation;
+        use wie_util::WieError;
+
+        let mut bytes = Vec::new();
+
+        {
+            let mut encoder = GifEncoder::new(Cursor::new(&mut bytes));
+
+            let frame1 = Frame::from_parts(
+                RgbaImage::from_pixel(2, 1, Rgba([255, 0, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(20, 1),
+            );
+            let frame2 = Frame::from_parts(
+                RgbaImage::from_pixel(2, 1, Rgba([0, 255, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(40, 1),
+            );
+
+            encoder
+                .encode_frames([frame1, frame2].into_iter())
+                .map_err(|x| WieError::FatalError(x.to_string()))?;
+        }
+
+        let animation = decode_gif_animation(&bytes)?.expect("two-frame GIF must be animated");
+
+        assert_eq!(animation.frames.len(), 2);
+        assert_eq!(animation.frames[0].delay_ms, 20);
+        assert_eq!(animation.frames[1].delay_ms, 40);
+
+        assert_eq!(animation.frames[0].image.width(), 2);
+        assert_eq!(animation.frames[0].image.height(), 1);
+        assert_eq!(animation.frames[1].image.width(), 2);
+        assert_eq!(animation.frames[1].image.height(), 1);
+
+        let first = animation.frames[0].image.get_pixel(0, 0);
+        let second = animation.frames[1].image.get_pixel(0, 0);
+
+        assert_eq!((first.r, first.g, first.b, first.a), (255, 0, 0, 255));
+        assert_eq!((second.r, second.g, second.b, second.a), (0, 255, 0, 255));
+
+        Ok(())
+    }
 
     #[test]
     fn test_canvas() -> Result<()> {
@@ -1243,11 +1557,11 @@ mod tests {
             height: 0,
         };
         let mut canvas = ImageBufferCanvas::new(VecImageBuffer::<ArgbPixel>::new(30, 20));
-        canvas.draw_text("A", 2, 2, TextAlignment::Left, WHITE, empty_clip);
+        canvas.draw_text("A", 2, 2, 40.0 / 3.0, 10.0, TextAlignment::Left, WHITE, empty_clip);
         let clipped = canvas.into_inner();
 
         let mut canvas = ImageBufferCanvas::new(VecImageBuffer::<ArgbPixel>::new(30, 20));
-        canvas.draw_text("A", 2, 2, TextAlignment::Left, WHITE, full_clip(30));
+        canvas.draw_text("A", 2, 2, 40.0 / 3.0, 10.0, TextAlignment::Left, WHITE, full_clip(30));
         let unclipped = canvas.into_inner();
 
         let count_set = |image: &VecImageBuffer<ArgbPixel>| {

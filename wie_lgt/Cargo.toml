@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Enable the machine-code JIT engine (see wie_core_arm).
+jit = ["wie_core_arm/jit"]
+
 [dependencies]
 async-trait = { workspace = true }
 bytemuck = { workspace = true }
@@ -13,6 +17,7 @@ tracing = { workspace = true }
 
 chrono = { version = "^0.4", default-features = false, features = ["alloc"] }
 elf = { version = "^0.8" }
+encoding_rs = { version = "^0.8", default-features = false, features = ["alloc"] }
 
 java_class_proto = { workspace = true }
 java_constants = { workspace = true }
@@ -31,3 +36,4 @@ wie_wipi_java = { workspace = true }
 
 [dev-dependencies]
 test_utils = { workspace = true }
+tracing-subscriber = { version = "^0.3", features = ["env-filter"] }

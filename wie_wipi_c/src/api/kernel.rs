@@ -1,3 +1,4 @@
+mod lgt_cert;
 mod sprintf;
 
 use alloc::{
@@ -15,6 +16,7 @@ use wie_util::{Result, WieError, read_generic, read_null_terminated_string_bytes
 
 use crate::{WIPICResult, context::WIPICContext, method::MethodBody};
 
+pub use self::sprintf::format as format_varargs;
 use self::sprintf::sprintf;
 
 #[repr(C, packed)]
@@ -30,17 +32,33 @@ pub async fn current_time(context: &mut dyn WIPICContext) -> Result<u64> {
 }
 
 pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, p_out: WIPICWord, buf_size: WIPICWord) -> Result<i32> {
-    tracing::debug!("MC_knlGetSystemProperty({ptr_id:#x}, {p_out:#x}, {buf_size:#x})");
-
     let id_bytes = read_null_terminated_string_bytes(context, ptr_id)?;
     let id = encoding_rs::EUC_KR.decode(&id_bytes).0;
 
+    // Logged at info: start-up/auth checks read these, and a wrong value is a
+    // common reason a title bails, so the query and its result belong in a
+    // normal log capture.
+    //
+    // `recovered` backs the subscriber-number arms; it lives out here so the
+    // owned string it holds outlives the borrow the `match` yields.
+    let recovered;
     let value = match id.as_ref() {
         "RSSILEVEL" => "30",
         "BATTERYLEVEL" => "100",
         "PHONEMODEL" => "Emulator",
-        "PHONENUMBER" => "", // putting this cause some game to fail authentication
-        "MIN" => "01000000000",
+        "MAXSERIALNUM" | "MAXSOCKETNUM" => "4",
+        // LGT ez-i cert.c2s DRM keys on the subscriber phone number: cert.c2s
+        // encodes "<appID><phoneNumber><checksums>" encrypted with the phone
+        // number, and the title reads PHONENUMBER, decrypts, and rejects a
+        // mismatch (error 3100, observed in 이노티아 연대기 2). We recover the
+        // exact number the certificate was issued for from cert.c2s itself, so
+        // an unmodified title authenticates without a per-game value. When no
+        // certificate is recoverable we fall back to a valid placeholder. MIN
+        // carries the same number so a title that cross-checks them agrees.
+        "PHONENUMBER" | "MIN" => {
+            recovered = subscriber_number(context).await;
+            recovered.as_str()
+        }
         "ANNUN_CALL" => "0",
         "ANNUN_SMS" => "0",
         "ANNUN_SILENT" => "0",
@@ -51,23 +69,125 @@ pub async fn get_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWo
         "ROAMING_AREA" => "0",
         "DS_LOCK" => "0",
         _ => {
-            tracing::warn!("unknown system property id: {id}");
+            tracing::info!("MC_knlGetSystemProperty({id:?}) -> -9 (unknown property)");
             return Ok(-9); // M_E_INVALID
         }
     };
 
     let bytes = value.as_bytes();
     if bytes.len() + 1 > buf_size as usize {
+        tracing::info!("MC_knlGetSystemProperty({id:?}) -> -18 (buffer {buf_size} too small for {:?})", value);
         return Ok(-18); // M_E_SHORTBUF
     }
 
+    tracing::info!("MC_knlGetSystemProperty({id:?}) -> {value:?}");
     write_null_terminated_string_bytes(context, p_out, value.as_bytes())?;
 
     Ok(0)
 }
 
-pub async fn set_system_property(_context: &mut dyn WIPICContext, ptr_id: WIPICWord, ptr_value: WIPICWord) -> Result<()> {
-    tracing::warn!("stub MC_knlSetSystemProperty({ptr_id:#x}, {ptr_value:#x})");
+/// The subscriber number to report for PHONENUMBER / MIN.
+///
+/// LGT titles use it as the key that decrypts cert.c2s, so recover the exact
+/// number the certificate was issued for from cert.c2s itself. A collection of
+/// titles dumped from one handset shares one number, so the placeholder used
+/// when no certificate is recoverable is also a working default for them.
+async fn subscriber_number(context: &mut dyn WIPICContext) -> String {
+    const FALLBACK: &str = "01046119269";
+
+    if let Ok(cert) = context.read_resource("cert.c2s").await
+        && let Some(number) = lgt_cert::recover_phone_number(&cert)
+    {
+        tracing::info!("recovered subscriber number from cert.c2s: {number:?}");
+        return number;
+    }
+
+    // Some titles (MapleStory 해적편/시그너스 among them) ship a plain
+    // `certification` file that is simply the subscriber number as ASCII digits,
+    // and reject the game unless PHONENUMBER equals it byte for byte (a strcmp
+    // of the two). Report that number so an unmodified title authenticates
+    // without a per-game value.
+    if let Ok(cert) = context.read_resource("certification").await
+        && let Some(number) = parse_ascii_phone_number(&cert)
+    {
+        tracing::info!("recovered subscriber number from certification: {number:?}");
+        return number;
+    }
+
+    // Failing a certificate, the archive's own descriptor names the subscriber:
+    // `app_info` carries the OMA download URL the copy was fetched with, and
+    // that URL's `ctn` is the number the handset downloading it was on. Titles
+    // whose certificate we cannot decrypt (Com2uS's `cert.c2s` is its own
+    // format, not the ez-i one above) still check the number against the
+    // certificate they were issued, so reporting the one their own descriptor
+    // names is what lets them authenticate offline.
+    if let Ok(app_info) = context.read_resource("app_info").await
+        && let Some(number) = descriptor_subscriber_number(&app_info)
+    {
+        tracing::info!("recovered subscriber number from app_info: {number:?}");
+        return number;
+    }
+
+    FALLBACK.to_string()
+}
+
+/// The subscriber number an LGT archive descriptor was downloaded for: the
+/// `ctn` query parameter of the `DDurl` it carries.
+///
+/// Matched only where the URL itself starts a parameter (`?ctn=` / `&ctn=`), so
+/// the `send_ctn` of a gifted copy - the sender's number, not the subscriber's -
+/// is not mistaken for it. Returns `None` unless the value is a plausible
+/// subscriber number, so a descriptor without one falls back to the caller's
+/// placeholder. The store wrote them 12 digits long as often as 11.
+fn descriptor_subscriber_number(app_info: &[u8]) -> Option<String> {
+    // Scanned as bytes: a descriptor's name and vendor fields are EUC-KR, so it
+    // is not valid UTF-8 as a whole.
+    const KEY: &[u8] = b"ctn=";
+
+    app_info
+        .windows(KEY.len())
+        .enumerate()
+        .filter(|&(at, window)| window == KEY && matches!(at.checked_sub(1).map(|before| app_info[before]), Some(b'?' | b'&')))
+        .map(|(at, _)| {
+            let digits = &app_info[at + KEY.len()..];
+            let end = digits.iter().position(|b| !b.is_ascii_digit()).unwrap_or(digits.len());
+            &digits[..end]
+        })
+        .find(|number| (10..=12).contains(&number.len()) && number.first() == Some(&b'0'))
+        .map(|number| String::from_utf8_lossy(number).into_owned())
+}
+
+/// Reads a `certification` file that is just the subscriber number as ASCII
+/// digits (optionally NUL-terminated or padded). Returns `None` when it is not a
+/// plain phone number, so a differently-formatted certification is ignored and
+/// the caller falls back to its placeholder.
+fn parse_ascii_phone_number(data: &[u8]) -> Option<String> {
+    let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+    let number = core::str::from_utf8(&data[..end]).ok()?.trim();
+    if (10..=15).contains(&number.len()) && number.bytes().all(|b| b.is_ascii_digit()) {
+        Some(number.to_string())
+    } else {
+        None
+    }
+}
+
+pub async fn set_system_property(context: &mut dyn WIPICContext, ptr_id: WIPICWord, ptr_value: WIPICWord) -> Result<()> {
+    // Decoded and logged at info: a title that sets a property and reads it back
+    // expects the value to survive, so seeing what it set (and not persisting it
+    // yet) helps explain a later mismatch. Persistence is a follow-up.
+    let id = encoding_rs::EUC_KR
+        .decode(&read_null_terminated_string_bytes(context, ptr_id)?)
+        .0
+        .into_owned();
+    let value = if ptr_value != 0 {
+        encoding_rs::EUC_KR
+            .decode(&read_null_terminated_string_bytes(context, ptr_value)?)
+            .0
+            .into_owned()
+    } else {
+        String::new()
+    };
+    tracing::info!("MC_knlSetSystemProperty({id:?}, {value:?}) [not persisted]");
 
     Ok(())
 }
@@ -108,10 +228,17 @@ pub async fn set_timer(
     }
 
     let now = context.system().platform().now();
-    let timeout = (((timeout_high as u64) << 32) | (timeout_low as u64)) as _;
+
+    // Raptor represents the delay as a signed 64-bit value split into two
+    // words. Legacy runtimes schedule a negative delay on the next scheduler
+    // tick instead of interpreting it as a very large unsigned duration.
+    let raw_timeout = ((timeout_high as u64) << 32) | timeout_low as u64;
+    let timeout = if (raw_timeout as i64) < 0 { 1 } else { raw_timeout };
+
     let timer: WIPICTimer = read_generic(context, ptr_timer)?;
 
     context.set_timer(
+        ptr_timer,
         now + timeout,
         Box::new(TimerCallback {
             ptr_timer,
@@ -123,8 +250,10 @@ pub async fn set_timer(
     Ok(())
 }
 
-pub async fn unset_timer(_: &mut dyn WIPICContext, a0: WIPICWord) -> Result<()> {
-    tracing::warn!("stub MC_knlUnsetTimer({a0:#x})");
+pub async fn unset_timer(context: &mut dyn WIPICContext, ptr_timer: WIPICWord) -> Result<()> {
+    tracing::debug!("MC_knlUnsetTimer({ptr_timer:#x})");
+
+    context.unset_timer(ptr_timer);
 
     Ok(())
 }
@@ -142,13 +271,16 @@ pub async fn alloc(context: &mut dyn WIPICContext, size: WIPICWord) -> Result<WI
 pub async fn calloc(context: &mut dyn WIPICContext, size: WIPICWord) -> Result<WIPICIndirectPtr> {
     tracing::debug!("MC_knlCalloc({size:#x})");
 
-    if size == 0 {
-        return Ok(WIPICIndirectPtr(0));
-    }
+    // A zero-size request still returns a unique, freeable non-null pointer, as
+    // the reference allocator does. A title's font loader callocs a
+    // zero-length buffer and treats a null result as failure, unwinding into a
+    // state it then dereferences through a -1 handle; handing back null there
+    // faulted it. Allocate a minimal block so the pointer is non-null.
+    let alloc_size = size.max(1);
 
-    let memory = context.alloc(size)?;
+    let memory = context.alloc(alloc_size)?;
 
-    let zero = iter::repeat_n(0, size as _).collect::<Vec<_>>();
+    let zero = iter::repeat_n(0, alloc_size as _).collect::<Vec<_>>();
     context.write_bytes(context.data_ptr(memory)?, &zero)?;
 
     Ok(memory)
@@ -170,10 +302,31 @@ pub async fn get_resource_id(context: &mut dyn WIPICContext, ptr_name: WIPICWord
     tracing::debug!("MC_knlGetResourceID({ptr_name:#x}, {ptr_size:#x})");
 
     let raw_name = read_null_terminated_string_bytes(context, ptr_name)?;
-    let name = encoding_rs::EUC_KR.decode(&raw_name).0;
+    let mut name = encoding_rs::EUC_KR.decode(&raw_name).0;
     tracing::debug!("  resource name: {name}");
 
-    let size = context.get_resource_size(&name).await?;
+    let mut size = context.get_resource_size(&name).await?;
+
+    // A title can hand us a path that is not NUL-terminated: it copies the
+    // characters into a scratch buffer and trusts the byte past the last one to
+    // already be zero. That holds on the reference's heap, whose freshly handed
+    // out (and internally recycled) blocks are zeroed, but not here, where the
+    // block still carries the bytes an earlier use left - MapleStory 도적편
+    // builds "png/mainmenu/menu.dat" over stale RGB565 pixels, so the read runs
+    // on into garbage and the lookup misses. A resource path is plain ASCII, so
+    // when the full read misses, retry with the leading printable-ASCII run,
+    // which is exactly the path the title meant.
+    if size.is_none() {
+        let ascii_len = raw_name.iter().position(|&b| !(0x20..=0x7e).contains(&b)).unwrap_or(raw_name.len());
+        if ascii_len < raw_name.len() && ascii_len > 0 {
+            let trimmed = encoding_rs::EUC_KR.decode(&raw_name[..ascii_len]).0.into_owned();
+            if let Some(found) = context.get_resource_size(&trimmed).await? {
+                tracing::debug!("  resource name resolved to {trimmed:?} after trimming a non-path tail");
+                size = Some(found);
+                name = trimmed.into();
+            }
+        }
+    }
 
     if size.is_none() {
         if ptr_size != 0 {
@@ -258,15 +411,19 @@ pub async fn sprintk(
 }
 
 pub async fn get_total_memory(_context: &mut dyn WIPICContext) -> Result<i32> {
-    tracing::warn!("stub MC_knlGetTotalMemory()");
+    // A handset reported tens of MiB here; the old 1 MiB made memory-probing
+    // titles believe the heap was already full and refuse to load.
+    const TOTAL_MEMORY: i32 = 32 * 1024 * 1024;
+    tracing::debug!("MC_knlGetTotalMemory() -> {TOTAL_MEMORY:#x}");
 
-    Ok(0x100000) // TODO hardcoded
+    Ok(TOTAL_MEMORY)
 }
 
 pub async fn get_free_memory(_context: &mut dyn WIPICContext) -> Result<i32> {
-    tracing::warn!("stub MC_knlGetFreeMemory()");
+    const FREE_MEMORY: i32 = 24 * 1024 * 1024;
+    tracing::debug!("MC_knlGetFreeMemory() -> {FREE_MEMORY:#x}");
 
-    Ok(0x100000) // TODO hardcoded
+    Ok(FREE_MEMORY)
 }
 
 pub async fn exit(context: &mut dyn WIPICContext, code: i32) -> Result<()> {
@@ -307,7 +464,7 @@ mod test {
 
     use crate::{WIPICContext, context::test::TestContext, method::MethodImpl};
 
-    use super::{alloc, calloc, free, get_resource, get_resource_id, get_system_property, sprintk};
+    use super::{alloc, calloc, free, get_resource, get_resource_id, get_system_property, parse_ascii_phone_number, sprintk};
 
     #[futures_test::test]
     async fn test_sprintk() -> Result<()> {
@@ -347,9 +504,37 @@ mod test {
 
         assert_eq!(get_system_property(&mut context, id, out, 16).await.unwrap(), 0);
         let result = read_null_terminated_string_bytes(&context, out).unwrap();
+        assert_eq!(String::from_utf8(result).unwrap(), "01046119269");
+
+        Ok(())
+    }
+
+    #[futures_test::test]
+    async fn test_phonenumber_from_certification_file() -> Result<()> {
+        // A title whose `certification` file is the subscriber number as ASCII
+        // digits should see PHONENUMBER report exactly that, so its own
+        // strcmp(certification, PHONENUMBER) authentication passes.
+        let mut context = TestContext::new().with_resource("certification", b"01000000000\0");
+        let id = context.alloc_raw(16).unwrap();
+        let out = context.alloc_raw(16).unwrap();
+
+        write_null_terminated_string_bytes(&mut context, id, b"PHONENUMBER").unwrap();
+
+        assert_eq!(get_system_property(&mut context, id, out, 16).await.unwrap(), 0);
+        let result = read_null_terminated_string_bytes(&context, out).unwrap();
         assert_eq!(String::from_utf8(result).unwrap(), "01000000000");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_ascii_phone_number() {
+        assert_eq!(parse_ascii_phone_number(b"01000000000\0").as_deref(), Some("01000000000"));
+        assert_eq!(parse_ascii_phone_number(b"01046119269").as_deref(), Some("01046119269"));
+        // Not a plain number: ignored so the caller keeps its placeholder.
+        assert_eq!(parse_ascii_phone_number(b"not-a-number"), None);
+        assert_eq!(parse_ascii_phone_number(b"123"), None);
+        assert_eq!(parse_ascii_phone_number(b""), None);
     }
 
     #[futures_test::test]
@@ -357,7 +542,11 @@ mod test {
         let mut context = TestContext::new();
 
         assert_eq!(alloc(&mut context, 0).await.unwrap().0, 0);
-        assert_eq!(calloc(&mut context, 0).await.unwrap().0, 0);
+        // calloc of zero returns a unique, freeable non-null pointer, matching
+        // the reference allocator that a font loader relies on.
+        let zero = calloc(&mut context, 0).await.unwrap();
+        assert_ne!(zero.0, 0);
+        free(&mut context, zero).await.unwrap();
         assert_eq!(free(&mut context, wipi_types::wipic::WIPICIndirectPtr(0)).await.unwrap().0, 0);
 
         Ok(())
@@ -431,5 +620,38 @@ mod test {
         assert_eq!(u32::from_le_bytes(result), 0);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::descriptor_subscriber_number;
+
+    #[test]
+    fn reads_the_subscriber_number_out_of_a_descriptor() {
+        // A real descriptor: EUC-KR name and vendor fields, and a download URL
+        // carrying both the subscriber's number and, for a gifted copy, the
+        // sender's. The subscriber's is the one the certificate was issued to.
+        let mut app_info =
+            b"AID:000315C6\r\nName:\xbe\xd7\xbc\xc7\r\nDDurl:http://omadn.ez-i.co.kr:9089/oma_dd.dn?ctn=010085300848&req_pltf=4".to_vec();
+        app_info.extend_from_slice(b"&send_ctn=010022055752&gift_type=0\r\n");
+
+        assert_eq!(descriptor_subscriber_number(&app_info).as_deref(), Some("010085300848"));
+    }
+
+    #[test]
+    fn ignores_a_descriptor_that_names_no_subscriber() {
+        assert_eq!(
+            descriptor_subscriber_number(b"AID:000315C6\r\nDDurl:http://example/dd.dn?pid=1\r\n"),
+            None
+        );
+        // `send_ctn` alone is the sender of a gift, not the subscriber.
+        assert_eq!(
+            descriptor_subscriber_number(b"DDurl:http://example/dd.dn?a=1&send_ctn=010022055752"),
+            None
+        );
+        // Too short to be a number, and not starting where one would.
+        assert_eq!(descriptor_subscriber_number(b"DDurl:http://example/dd.dn?ctn=0100&b=2"), None);
+        assert_eq!(descriptor_subscriber_number(b"DDurl:http://example/dd.dn?ctn=910085300848"), None);
     }
 }

@@ -1,8 +1,7 @@
 use alloc::vec;
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
-use java_runtime::classes::java::lang::{Class, String};
-use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
+use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 use wie_midp::classes::{
@@ -10,7 +9,7 @@ use wie_midp::classes::{
     net::wie::MIDPKeyCode,
 };
 
-use crate::classes::org::kwis::msp::lcdui::{Card, Display};
+use crate::classes::org::kwis::msp::lcdui::{Card, Display, Graphics};
 
 #[repr(i32)]
 #[allow(clippy::upper_case_acronyms, non_camel_case_types)]
@@ -105,6 +104,15 @@ impl WIPIKeyCode {
     }
 }
 
+/// WIPI `Card.keyNotify(int type, int key)` event types (org.kwis.msp.lcdui).
+/// A title compares the type against these: 시드's compiled keyNotify dispatches
+/// `type == 1` as a press and `type == 2` as a release (`cmp r5, #1` / `#2` at
+/// its entry), so a press must be 1. The LGT `CletWrapperCard` re-bases these
+/// onto its own clet event ids, so keep the two in step when changing them.
+const KEY_PRESSED: i32 = 1;
+const KEY_RELEASED: i32 = 2;
+const KEY_REPEATED: i32 = 3;
+
 // class net.wie.CardCanvas
 pub struct CardCanvas;
 
@@ -121,6 +129,7 @@ impl CardCanvas {
                 JavaMethodProto::new("keyRepeated", "(I)V", Self::key_repeated, Default::default()),
                 JavaMethodProto::new("keyReleased", "(I)V", Self::key_released, Default::default()),
                 JavaMethodProto::new("pushCard", "(Lorg/kwis/msp/lcdui/Card;)V", Self::push_card, Default::default()),
+                JavaMethodProto::new("setDockedCard", "(Lorg/kwis/msp/lcdui/Card;)V", Self::set_docked_card, Default::default()),
                 JavaMethodProto::new("popCard", "()Lorg/kwis/msp/lcdui/Card;", Self::pop_card, Default::default()),
                 JavaMethodProto::new("removeCard", "(Lorg/kwis/msp/lcdui/Card;)Z", Self::remove_card, Default::default()),
                 JavaMethodProto::new("countCard", "()I", Self::count_card, Default::default()),
@@ -128,7 +137,14 @@ impl CardCanvas {
                 // wie private
                 JavaMethodProto::new("handleNotifyEvent", "(III)V", Self::handle_notify_event, Default::default()),
             ],
-            fields: vec![JavaFieldProto::new("cards", "Ljava/util/Vector;", Default::default())],
+            fields: vec![
+                JavaFieldProto::new("cards", "Ljava/util/Vector;", Default::default()),
+                // A single background card set via org.kwis Display.setDockedCard,
+                // painted behind the pushed-card stack. Cardless-Jlet titles
+                // (Fantasy Knight, Battle Monster) show their screen this way
+                // rather than through pushCard.
+                JavaFieldProto::new("dockedCard", "Lorg/kwis/msp/lcdui/Card;", Default::default()),
+            ],
             access_flags: Default::default(),
         }
     }
@@ -149,28 +165,133 @@ impl CardCanvas {
     async fn paint(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>, g: ClassInstanceRef<MidpGraphics>) -> JvmResult<()> {
         tracing::debug!("net.wie.CardCanvas::paint({this:?}, {g:?})");
 
-        let graphics = jvm
+        // MIDP may reuse a Graphics instance whose translate/clip/color state
+        // was changed by a previous paint. CardCanvas establishes a fresh
+        // canvas drawing state before wrapping it as WIPI Graphics.
+        let _: () = jvm.invoke_virtual(&g, "reset", "()V", ()).await?;
+
+        let graphics: ClassInstanceRef<Graphics> = jvm
             .new_class("org/kwis/msp/lcdui/Graphics", "(Ljavax/microedition/lcdui/Graphics;)V", (g,))
-            .await?;
+            .await?
+            .into();
+
+        // What the title asked to have repainted since the last pass. A card
+        // paints its whole scene however small the region is, so the region has
+        // to become the clip: the ez-i SDK titles type a dialogue out by asking
+        // for one 10x10 glyph cell at a time and letting the rest of the box
+        // stand, and repainting the lot unclipped wiped every letter but the
+        // newest.
+        let region = Self::take_dirty_region(jvm, &this).await?;
+
+        // The docked card is the background layer; the pushed-card stack draws
+        // on top of it.
+        let docked: ClassInstanceRef<Card> = jvm.get_field(&this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;").await?;
+        if !docked.is_null() {
+            Self::paint_one(jvm, &graphics, &docked, 0, region).await?;
+        }
+
+        let client_top = Self::client_top(jvm, &this, &docked).await?;
 
         let cards = jvm.get_field(&this, "cards", "Ljava/util/Vector;").await?;
         let length = jvm.invoke_virtual(&cards, "size", "()I", ()).await?;
 
         for i in 0..length {
-            let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let x: i32 = jvm.invoke_virtual(&card, "getX", "()I", ()).await?;
-            let y: i32 = jvm.invoke_virtual(&card, "getY", "()I", ()).await?;
-
-            let _: () = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await?;
-            let _: () = jvm.invoke_virtual(&graphics, "translate", "(II)V", (x, y)).await?;
-
-            let paint_result: JvmResult<()> = jvm
-                .invoke_virtual(&card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", (graphics.clone(),))
-                .await;
-            let reset_result: JvmResult<()> = jvm.invoke_virtual(&graphics, "reset", "()V", ()).await;
-            paint_result?;
-            reset_result?;
+            let card: ClassInstanceRef<Card> = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
+            Self::paint_one(jvm, &graphics, &card, client_top, region).await?;
         }
+
+        Ok(())
+    }
+
+    /// Takes the region `Canvas.repaint` collected, and leaves nothing pending.
+    ///
+    /// `None` means "paint everything": either the title asked for the whole
+    /// canvas, or this pass was not asked for at all - a redraw the platform
+    /// itself wanted - and a full paint is what that has always meant.
+    ///
+    /// The rectangle is in canvas coordinates, which is what `Card.repaint`
+    /// hands the canvas.
+    async fn take_dirty_region(jvm: &Jvm, this: &ClassInstanceRef<Self>) -> JvmResult<Option<(i32, i32, i32, i32)>> {
+        let mut this = this.clone();
+
+        let x: i32 = jvm.get_field(&this, "__wieDirtyX", "I").await?;
+        let y: i32 = jvm.get_field(&this, "__wieDirtyY", "I").await?;
+        let width: i32 = jvm.get_field(&this, "__wieDirtyWidth", "I").await?;
+        let height: i32 = jvm.get_field(&this, "__wieDirtyHeight", "I").await?;
+
+        jvm.put_field(&mut this, "__wieDirtyWidth", "I", 0).await?;
+        jvm.put_field(&mut this, "__wieDirtyHeight", "I", 0).await?;
+
+        if width <= 0 || height <= 0 {
+            return Ok(None);
+        }
+
+        Ok(Some((x, y, width, height)))
+    }
+
+    /// The row a pushed card's own origin lands on.
+    ///
+    /// A docked status strip is part of the panel, not of the area a title is
+    /// given: the reference puts it above the drawing area (the WIPI-C side
+    /// splits the two the same way, see `wie_wipi_c::api::graphics`), so a card
+    /// pushed while one is docked starts below it. The ez-i SDK titles rely on
+    /// exactly that - 판타지나이트 and 배틀몬스터 dock a 240x24 strip and then
+    /// repaint `(0, 0, 240, 296)` on a 320-row panel, so with the strip's rows
+    /// left to them their last 24 rows kept whatever an earlier full-screen
+    /// draw had put there.
+    ///
+    /// A docked card that fills the panel is a background rather than a strip -
+    /// it leaves no room to push anything below it - so it moves nothing.
+    async fn client_top(jvm: &Jvm, this: &ClassInstanceRef<Self>, docked: &ClassInstanceRef<Card>) -> JvmResult<i32> {
+        if docked.is_null() {
+            return Ok(0);
+        }
+
+        let height: i32 = jvm.invoke_virtual(docked, "getHeight", "()I", ()).await?;
+        let canvas_height: i32 = jvm.invoke_virtual(this, "getHeight", "()I", ()).await?;
+
+        if height <= 0 || height >= canvas_height {
+            return Ok(0);
+        }
+
+        let y: i32 = jvm.invoke_virtual(docked, "getY", "()I", ()).await?;
+
+        Ok(y + height)
+    }
+
+    /// Paints one card at its `(getX, getY)` offset, `offset_y` rows down the
+    /// panel, resetting the shared WIPI Graphics around it so a card cannot leak
+    /// translate/clip state to the next.
+    async fn paint_one(
+        jvm: &Jvm,
+        graphics: &ClassInstanceRef<Graphics>,
+        card: &ClassInstanceRef<Card>,
+        offset_y: i32,
+        region: Option<(i32, i32, i32, i32)>,
+    ) -> JvmResult<()> {
+        let x: i32 = jvm.invoke_virtual(card, "getX", "()I", ()).await?;
+        let card_y: i32 = jvm.invoke_virtual(card, "getY", "()I", ()).await?;
+        let y = card_y + offset_y;
+
+        let _: () = jvm.invoke_virtual(graphics, "reset", "()V", ()).await?;
+        let _: () = jvm.invoke_virtual(graphics, "translate", "(II)V", (x, y)).await?;
+
+        // The region is in canvas coordinates and `setClip` is in the card's,
+        // which the translate above just established; the strip a docked card
+        // takes cancels out, since `Card.repaint` reports a card's own origin
+        // without it.
+        if let Some((region_x, region_y, width, height)) = region {
+            let _: () = jvm
+                .invoke_virtual(graphics, "setClip", "(IIII)V", (region_x - x, region_y - card_y, width, height))
+                .await?;
+        }
+
+        let paint_result: JvmResult<()> = jvm
+            .invoke_virtual(card, "paint", "(Lorg/kwis/msp/lcdui/Graphics;)V", (graphics.clone(),))
+            .await;
+        let reset_result: JvmResult<()> = jvm.invoke_virtual(graphics, "reset", "()V", ()).await;
+        paint_result?;
+        reset_result?;
 
         Ok(())
     }
@@ -185,7 +306,7 @@ impl CardCanvas {
 
         for i in (0..length).rev() {
             let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (1i32, key_code)).await?;
+            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (KEY_PRESSED, key_code)).await?;
 
             if !propagate {
                 break;
@@ -205,7 +326,7 @@ impl CardCanvas {
 
         for i in (0..length).rev() {
             let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (3i32, key_code)).await?;
+            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (KEY_REPEATED, key_code)).await?;
 
             if !propagate {
                 break;
@@ -225,7 +346,7 @@ impl CardCanvas {
 
         for i in (0..length).rev() {
             let card = jvm.invoke_virtual(&cards, "elementAt", "(I)Ljava/lang/Object;", (i,)).await?;
-            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (2i32, key_code)).await?;
+            let propagate: bool = jvm.invoke_virtual(&card, "keyNotify", "(II)Z", (KEY_RELEASED, key_code)).await?;
 
             if !propagate {
                 break;
@@ -258,12 +379,15 @@ impl CardCanvas {
 
         let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
 
-        // HACK: disable java level paint on clet app
-        let class: ClassInstanceRef<Class> = jvm.invoke_virtual(&c, "getClass", "()Ljava/lang/Class;", ()).await?;
-        let class_name: ClassInstanceRef<String> = jvm.invoke_virtual(&class, "getName", "()Ljava/lang/String;", ()).await?;
-        let class_name_str = JavaLangString::to_rust_string(jvm, &class_name).await?;
-
-        if class_name_str == "CletCard" || class_name_str == "net/wie/CletWrapperCard" {
+        // HACK: disable java level paint on clet app. A clet draws straight to
+        // the LCD framebuffer through the WIPI-C graphics API and flushes it
+        // itself, so the MIDP layer must not also flush its own (empty) screen
+        // image over the top - that repaints the clet's frame to black.
+        //
+        // `is_instance` is matched against the internal (slashed) class name and
+        // follows the superclass chain; comparing `Class.getName()` here would
+        // silently miss, since that returns the dotted form `net.wie.CletWrapperCard`.
+        if jvm.is_instance(&**c, "net/wie/CletWrapperCard") {
             let wipi_display: ClassInstanceRef<Display> = jvm
                 .invoke_static("org/kwis/msp/lcdui/Display", "getDefaultDisplay", "()Lorg/kwis/msp/lcdui/Display;", ())
                 .await?;
@@ -271,6 +395,35 @@ impl CardCanvas {
                 jvm.get_field(&wipi_display, "midpDisplay", "Ljavax/microedition/lcdui/Display;").await?;
             let _: () = jvm.invoke_virtual(&midp_display, "disablePaint", "()V", ()).await?;
         }
+
+        Ok(())
+    }
+
+    async fn set_docked_card(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, c: ClassInstanceRef<Card>) -> JvmResult<()> {
+        tracing::debug!("net.wie.CardCanvas::setDockedCard({this:?}, {c:?})");
+
+        let previous: ClassInstanceRef<Card> = jvm.get_field(&this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;").await?;
+        if !previous.is_null() {
+            let same: bool = jvm.invoke_virtual(&previous, "equals", "(Ljava/lang/Object;)Z", (c.clone(),)).await?;
+            if same {
+                return Ok(());
+            }
+            let _: () = jvm.invoke_virtual(&previous, "showNotify", "(Z)V", (false,)).await?;
+            let _: () = jvm
+                .invoke_virtual(&previous, "setCanvas", "(Ljavax/microedition/lcdui/Canvas;)V", (None,))
+                .await?;
+        }
+
+        jvm.put_field(&mut this, "dockedCard", "Lorg/kwis/msp/lcdui/Card;", c.clone()).await?;
+
+        if !c.is_null() {
+            let _: () = jvm
+                .invoke_virtual(&c, "setCanvas", "(Ljavax/microedition/lcdui/Canvas;)V", (this.clone(),))
+                .await?;
+            let _: () = jvm.invoke_virtual(&c, "showNotify", "(Z)V", (true,)).await?;
+        }
+
+        let _: () = jvm.invoke_virtual(&this, "repaint", "()V", ()).await?;
 
         Ok(())
     }
@@ -358,6 +511,10 @@ impl CardCanvas {
         param2: i32,
     ) -> JvmResult<()> {
         tracing::debug!("net.wie.CardCanvas::handleNotifyEvent({this:?}, {type}, {param1}, {param2})");
+
+        // Native org.kwis.msp.lcdui.Display.eventNotify_v0 dispatches
+        // registered JletEventListeners independently of Card presence.
+        Display::notify_jlet_event_listeners(jvm, r#type, param1, param2).await?;
 
         let cards = jvm.get_field(&this, "cards", "Ljava/util/Vector;").await?;
         let length: i32 = jvm.invoke_virtual(&cards, "size", "()I", ()).await?;

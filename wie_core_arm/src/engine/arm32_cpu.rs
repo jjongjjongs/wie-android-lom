@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, format};
-use core::{array, cell::RefCell};
+use core::array;
 
 use arm32_cpu::{Cpu, Memory, Mode, reg};
 
@@ -20,8 +20,9 @@ impl Arm32CpuEngine {
         }
     }
 
-    fn is_svc_exception(&self) -> bool {
-        self.cpu.reg_get(Mode::User, reg::PC) == 0x08 && (self.cpu.reg_get(Mode::User, reg::CPSR) & 0x1f) == 0x13
+    #[inline(always)]
+    fn is_svc_exception(&self, pc: u32) -> bool {
+        pc == 0x08 && (self.cpu.reg_get(Mode::User, reg::CPSR) & 0x1f) == 0x13
     }
 
     fn read_svc_result(&mut self) -> Result<EngineRunResult> {
@@ -44,41 +45,20 @@ impl Arm32CpuEngine {
 
 impl ArmEngine for Arm32CpuEngine {
     fn run(&mut self, end: u32, mut count: u32) -> Result<EngineRunResult> {
+        // Accumulate the instruction count locally and publish it once, on any
+        // exit from this call, so the hot loop stays free of atomics.
+        struct Batch(u64);
+        impl Drop for Batch {
+            fn drop(&mut self) {
+                crate::EXECUTED_INSTRUCTIONS.fetch_add(self.0, ::core::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let mut batch = Batch(0);
+
         loop {
             let pc = self.cpu.reg_get(Mode::User, reg::PC);
 
-            if (0x0000ec30..=0x0000ec40).contains(&pc) {
-                let r0 = self.cpu.reg_get(Mode::User, 0);
-                let r3 = self.cpu.reg_get(Mode::User, 3);
-                let r7 = self.cpu.reg_get(Mode::User, 7);
-                let r8 = self.cpu.reg_get(Mode::User, 8);
-
-                tracing::warn!("LGT ec30 range probe: pc={pc:#x}, r0={r0:#x}, r3={r3:#x}, r7={r7:#x}, r8={r8:#x}");
-            }
-
-            if (0x0000e8b4..=0x0000e8d4).contains(&pc) {
-                let r0 = self.cpu.reg_get(Mode::User, 0);
-                let r1 = self.cpu.reg_get(Mode::User, 1);
-                let r3 = self.cpu.reg_get(Mode::User, 3);
-                let r6 = self.cpu.reg_get(Mode::User, 6);
-
-                tracing::warn!("LGT e8 resolver probe: pc={pc:#x}, r0={r0:#x}, r1={r1:#x}, r3={r3:#x}, r6={r6:#x}");
-            }
-
-            if pc == 0x0000e8c4 {
-                let mut stub = [0u8; 16];
-
-                match self.mem.read_range(0x01406958, 16, &mut stub) {
-                    Ok(_) => {
-                        tracing::warn!("LGT resolver patched stub: {:02x?}", stub);
-                    }
-                    Err(err) => {
-                        tracing::warn!("LGT resolver patched stub read failed: {err:?}");
-                    }
-                }
-            }
-
-            if self.is_svc_exception() {
+            if self.is_svc_exception(pc) {
                 return self.read_svc_result();
             }
 
@@ -94,12 +74,22 @@ impl ArmEngine for Arm32CpuEngine {
                 return Ok(EngineRunResult::CountExhausted);
             }
 
+            // Statistical PC sample (every 64th executed instruction) into the
+            // 64 KiB-region histogram, for the hot-spot report.
+            if batch.0 & 0x3f == 0 {
+                crate::PC_SAMPLES[(pc >> 16) as usize].fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);
+            }
+
             let mut arm32cpu_memory = self.mem.as_arm32cpu_memory();
 
             if !(self.cpu.step(&mut arm32cpu_memory)) {
-                return Err(WieError::FatalError("Undefined instruction".into()));
+                let mut bytes = [0u8; 4];
+                let _ = self.mem.read_range(pc, 4, &mut bytes);
+                let opcode = u32::from_le_bytes(bytes);
+                return Err(WieError::FatalError(format!("Undefined instruction at {pc:#x}: opcode {opcode:#010x}")));
             }
             count -= 1;
+            batch.0 += 1;
 
             if let Some(x) = arm32cpu_memory.memory_error() {
                 return Err(WieError::InvalidMemoryAccess(x));
@@ -141,7 +131,7 @@ impl ArmEngine for Arm32CpuEngine {
 }
 
 impl ArmRegister {
-    fn into_armv4t(self) -> u8 {
+    pub(crate) fn into_armv4t(self) -> u8 {
         match self {
             ArmRegister::R0 => 0,
             ArmRegister::R1 => 1,
@@ -168,22 +158,22 @@ const TOTAL_MEMORY: u64 = 0x100000000;
 const PAGE_SIZE: usize = 0x10000;
 const PAGE_MASK: u32 = (PAGE_SIZE - 1) as _;
 
-struct EmulatedMemory {
+pub(crate) struct EmulatedMemory {
     pages: [Option<Box<[u8; PAGE_SIZE]>>; (TOTAL_MEMORY / PAGE_SIZE as u64) as usize],
 }
 
 impl EmulatedMemory {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             pages: array::from_fn(|_| None),
         }
     }
 
-    fn as_arm32cpu_memory(&mut self) -> Arm32CpuMemory<'_> {
+    pub(crate) fn as_arm32cpu_memory(&mut self) -> Arm32CpuMemory<'_> {
         Arm32CpuMemory::new(self)
     }
 
-    fn map(&mut self, address: u32, size: usize) {
+    pub(crate) fn map(&mut self, address: u32, size: usize) {
         let page_start = address & !PAGE_MASK;
         let page_end = (address + size as u32 + PAGE_MASK) & !PAGE_MASK;
 
@@ -195,7 +185,7 @@ impl EmulatedMemory {
         }
     }
 
-    fn read_range(&self, address: u32, size: usize, result: &mut [u8]) -> Result<usize> {
+    pub(crate) fn read_range(&self, address: u32, size: usize, result: &mut [u8]) -> Result<usize> {
         let mut remaining_size = size;
         let mut current_address = address;
 
@@ -215,7 +205,7 @@ impl EmulatedMemory {
         Ok(size)
     }
 
-    fn write_range(&mut self, address: u32, data: &[u8]) -> Result<()> {
+    pub(crate) fn write_range(&mut self, address: u32, data: &[u8]) -> Result<()> {
         let mut current_address = address;
         let mut data_index = 0;
 
@@ -235,7 +225,85 @@ impl EmulatedMemory {
         Ok(())
     }
 
-    fn is_mapped(&self, address: u32, size: usize) -> bool {
+    /// Borrow the mapped 64 KiB page containing `addr`, or `None` if unmapped.
+    #[inline(always)]
+    fn page(&self, addr: u32) -> Option<&[u8; PAGE_SIZE]> {
+        self.pages[(addr >> 16) as usize].as_deref()
+    }
+
+    /// Borrow the mapped page mutably.
+    #[inline(always)]
+    fn page_mut(&mut self, addr: u32) -> Option<&mut [u8; PAGE_SIZE]> {
+        self.pages[(addr >> 16) as usize].as_deref_mut()
+    }
+
+    /// Base of the page table, for the JIT's inline load/store fast path: the
+    /// `pages` array reinterpreted as one `*const u8` per 64 KiB page (null =
+    /// unmapped), indexed by `addr >> 16`. Sound because
+    /// `Option<Box<[u8; PAGE_SIZE]>>` is a single nullable pointer
+    /// (null-pointer optimization). The pointer is valid while `self` lives and
+    /// its pages are not remapped, which holds for a JIT run (maps happen
+    /// between runs).
+    #[inline(always)]
+    pub(crate) fn pages_base(&self) -> *const *const u8 {
+        self.pages.as_ptr() as *const *const u8
+    }
+
+    // Fault-signalling accessors used by the fast engine. They return `None`
+    // when the page is unmapped (mirroring `Arm32CpuMemory`'s memory-error
+    // path) rather than erroring, so the caller decides how to abort. Callers
+    // pass word/halfword addresses that do not cross a page boundary (word
+    // accesses are 4-aligned, halfword accesses even), matching how the ARM
+    // core aligns them, so a single-page read/write is always sufficient.
+    #[inline(always)]
+    pub(crate) fn load_u8(&self, addr: u32) -> Option<u8> {
+        Some(self.page(addr)?[(addr & PAGE_MASK) as usize])
+    }
+    #[inline(always)]
+    pub(crate) fn load_u16(&self, addr: u32) -> Option<u16> {
+        let p = self.page(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        Some((p[o] as u16) | ((p[o + 1] as u16) << 8))
+    }
+    #[inline(always)]
+    pub(crate) fn load_u32(&self, addr: u32) -> Option<u32> {
+        let p = self.page(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        Some((p[o] as u32) | ((p[o + 1] as u32) << 8) | ((p[o + 2] as u32) << 16) | ((p[o + 3] as u32) << 24))
+    }
+    #[inline(always)]
+    pub(crate) fn store_u8(&mut self, addr: u32, val: u8) -> Option<()> {
+        let p = self.page_mut(addr)?;
+        p[(addr & PAGE_MASK) as usize] = val;
+        Some(())
+    }
+    #[inline(always)]
+    pub(crate) fn store_u16(&mut self, addr: u32, val: u16) -> Option<()> {
+        let p = self.page_mut(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        p[o] = val as u8;
+        p[o + 1] = (val >> 8) as u8;
+        Some(())
+    }
+    #[inline(always)]
+    pub(crate) fn store_u32(&mut self, addr: u32, val: u32) -> Option<()> {
+        let p = self.page_mut(addr)?;
+        let o = (addr & PAGE_MASK) as usize;
+        p[o] = val as u8;
+        p[o + 1] = (val >> 8) as u8;
+        p[o + 2] = (val >> 16) as u8;
+        p[o + 3] = (val >> 24) as u8;
+        Some(())
+    }
+
+    /// Read a halfword for block decoding without signalling a fault (`None` if
+    /// the page is unmapped, ending block construction there).
+    #[inline(always)]
+    pub(crate) fn peek_u16(&self, addr: u32) -> Option<u16> {
+        self.load_u16(addr)
+    }
+
+    pub(crate) fn is_mapped(&self, address: u32, size: usize) -> bool {
         let page_start = address & !PAGE_MASK;
         let page_end = (address + size as u32 + PAGE_MASK) & !PAGE_MASK;
 
@@ -253,23 +321,25 @@ impl EmulatedMemory {
     }
 }
 
-struct Arm32CpuMemory<'a> {
+pub(crate) struct Arm32CpuMemory<'a> {
     emulated_memory: &'a mut EmulatedMemory,
-    memory_error: RefCell<Option<u32>>,
+    memory_error: Option<u32>,
 }
 
 impl<'a> Arm32CpuMemory<'a> {
     fn new(emulated_memory: &'a mut EmulatedMemory) -> Self {
         Self {
             emulated_memory,
-            memory_error: RefCell::new(None),
+            memory_error: None,
         }
     }
 
-    fn memory_error(&self) -> Option<u32> {
-        *self.memory_error.borrow()
+    #[inline(always)]
+    pub(crate) fn memory_error(&self) -> Option<u32> {
+        self.memory_error
     }
 
+    #[inline(always)]
     fn get_page(&mut self, addr: u32) -> Option<&mut [u8; PAGE_SIZE]> {
         let page_address = addr & !PAGE_MASK;
         let page_data = self.emulated_memory.pages[page_address as usize / PAGE_SIZE].as_mut();
@@ -277,13 +347,14 @@ impl<'a> Arm32CpuMemory<'a> {
         if let Some(x) = page_data {
             Some(x)
         } else {
-            *self.memory_error.borrow_mut() = Some(addr);
+            self.memory_error = Some(addr);
             None
         }
     }
 }
 
 impl Memory for Arm32CpuMemory<'_> {
+    #[inline(always)]
     fn r8(&mut self, addr: u32) -> u8 {
         let offset = addr & PAGE_MASK;
 
@@ -297,6 +368,7 @@ impl Memory for Arm32CpuMemory<'_> {
         data[offset as usize]
     }
 
+    #[inline(always)]
     fn r16(&mut self, addr: u32) -> u16 {
         let offset = addr & PAGE_MASK;
 
@@ -310,6 +382,7 @@ impl Memory for Arm32CpuMemory<'_> {
         (data[offset as usize] as u16) | ((data[offset as usize + 1] as u16) << 8)
     }
 
+    #[inline(always)]
     fn r32(&mut self, addr: u32) -> u32 {
         let offset = addr & PAGE_MASK;
 
@@ -325,6 +398,7 @@ impl Memory for Arm32CpuMemory<'_> {
             | ((data[offset as usize + 3] as u32) << 24)
     }
 
+    #[inline(always)]
     fn w8(&mut self, addr: u32, val: u8) {
         let offset = addr & PAGE_MASK;
 
@@ -338,6 +412,7 @@ impl Memory for Arm32CpuMemory<'_> {
         data[offset as usize] = val;
     }
 
+    #[inline(always)]
     fn w16(&mut self, addr: u32, val: u16) {
         let offset = addr & PAGE_MASK;
 
@@ -352,6 +427,7 @@ impl Memory for Arm32CpuMemory<'_> {
         data[offset as usize + 1] = (val >> 8) as u8;
     }
 
+    #[inline(always)]
     fn w32(&mut self, addr: u32, val: u32) {
         let offset = addr & PAGE_MASK;
 

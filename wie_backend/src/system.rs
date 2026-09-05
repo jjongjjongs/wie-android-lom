@@ -1,6 +1,7 @@
 mod audio;
 mod event_queue;
 mod file_system;
+mod input_method;
 
 use alloc::{borrow::ToOwned, boxed::Box, string::String, sync::Arc};
 
@@ -16,11 +17,12 @@ use crate::{
     task_runner::TaskRunner,
 };
 
-use self::{audio::Audio, event_queue::EventQueue};
+use self::{audio::Audio, event_queue::EventQueue, input_method::InputMethod};
 
 pub use self::{
     event_queue::{Event, KeyCode},
     file_system::FilesystemOverlay,
+    input_method::InputMethodOutput,
 };
 
 #[derive(Clone)]
@@ -32,6 +34,7 @@ pub struct System {
     filesystem: FilesystemOverlay,
     event_queue: Arc<RwLock<EventQueue>>,
     audio: Arc<RwLock<Audio>>,
+    input_method: Arc<RwLock<InputMethod>>,
     task_runner: Arc<dyn TaskRunner>,
 }
 
@@ -51,6 +54,7 @@ impl System {
             platform,
             event_queue: Arc::new(RwLock::new(EventQueue::new())),
             audio: Arc::new(RwLock::new(Audio::new(audio_sink))),
+            input_method: Arc::new(RwLock::new(InputMethod::new())),
             task_runner: Arc::new(task_runner),
         }
     }
@@ -58,6 +62,13 @@ impl System {
     pub fn tick(&mut self) -> Result<()> {
         let platform = self.platform.clone();
         self.executor.tick(move || platform.now())
+    }
+
+    /// Whether the emulator has nothing runnable until a timer fires (every
+    /// task asleep with its wake-up in the future). The host loop uses this to
+    /// stop early and sleep the leftover budget rather than busy-waiting.
+    pub fn is_idle(&self) -> bool {
+        self.executor.is_idle()
     }
 
     pub fn spawn<C>(&self, callable: C)
@@ -105,5 +116,25 @@ impl System {
 
     pub fn event_queue(&self) -> RwLockWriteGuard<'_, EventQueue> {
         self.event_queue.write()
+    }
+
+    pub fn current_input_mode(&self) -> u32 {
+        self.input_method.read().current_mode()
+    }
+
+    pub fn set_current_input_mode(&self, mode: u32) {
+        self.input_method.write().set_current_mode(mode);
+    }
+
+    pub fn input_composition_size(&self) -> usize {
+        self.input_method.read().composition_size()
+    }
+
+    pub fn set_input_composition_size(&self, size: usize) {
+        self.input_method.write().set_composition_size(size);
+    }
+
+    pub fn handle_input_method(&self, key: i8, event: u32) -> InputMethodOutput {
+        self.input_method.write().handle_input(key, event)
     }
 }
