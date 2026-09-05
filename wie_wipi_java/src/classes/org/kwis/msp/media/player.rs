@@ -18,6 +18,7 @@ impl Player {
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
             methods: vec![
+                JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
                 JavaMethodProto::new("pause", "(Lorg/kwis/msp/media/BaseClip;)Z", Self::pause, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("stop", "(Lorg/kwis/msp/media/BaseClip;)Z", Self::stop, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("resume", "(Lorg/kwis/msp/media/BaseClip;)Z", Self::resume, MethodAccessFlags::STATIC),
@@ -25,10 +26,19 @@ impl Player {
                 JavaMethodProto::new("record", "(Lorg/kwis/msp/media/BaseClip;)Z", Self::record, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("play", "(Lorg/kwis/msp/media/Clip;Z)Z", Self::play_clip, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("stop", "(Lorg/kwis/msp/media/Clip;)Z", Self::stop_clip, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("pause", "(Lorg/kwis/msp/media/Clip;)Z", Self::pause_clip, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("resume", "(Lorg/kwis/msp/media/Clip;)Z", Self::resume_clip, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("record", "(Lorg/kwis/msp/media/Clip;)Z", Self::record_clip, MethodAccessFlags::STATIC),
             ],
             fields: vec![],
             access_flags: Default::default(),
         }
+    }
+
+    async fn init(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.media.Player::<init>({this:?})");
+
+        Ok(())
     }
 
     async fn pause(_: &Jvm, _: &mut WieJvmContext, clip: ClassInstanceRef<BaseClip>) -> JvmResult<bool> {
@@ -84,6 +94,29 @@ impl Player {
         let result: i32 = jvm.invoke_virtual(&clip, "mediaStop", "()I", ()).await?;
 
         Ok(result >= 0)
+    }
+
+    /// The three a clip cannot answer. Pausing and resuming need a clip-side
+    /// call the reference does not declare either, and recording needs a
+    /// capture source the audio backend does not offer; each answers that it
+    /// did not happen, the same way the `BaseClip` overloads above do, so a
+    /// title is told rather than left waiting on something that never runs.
+    async fn pause_clip(_: &Jvm, _: &mut WieJvmContext, clip: ClassInstanceRef<Clip>) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.media.Player::pause({clip:?})");
+
+        Ok(false)
+    }
+
+    async fn resume_clip(_: &Jvm, _: &mut WieJvmContext, clip: ClassInstanceRef<Clip>) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.media.Player::resume({clip:?})");
+
+        Ok(false)
+    }
+
+    async fn record_clip(_: &Jvm, _: &mut WieJvmContext, clip: ClassInstanceRef<Clip>) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.media.Player::record({clip:?})");
+
+        Ok(false)
     }
 }
 

@@ -33,6 +33,7 @@ impl Graphics {
                 JavaMethodProto::new("getFont", "()Lorg/kwis/msp/lcdui/Font;", Self::get_font, Default::default()),
                 JavaMethodProto::new("copyArea", "(IIIIII)V", Self::copy_area, Default::default()),
                 JavaMethodProto::new("setColor", "(I)V", Self::set_color, Default::default()),
+                JavaMethodProto::new("setEdgeColor", "(I)V", Self::set_edge_color, Default::default()),
                 JavaMethodProto::new("setColor", "(III)V", Self::set_color_by_rgb, Default::default()),
                 JavaMethodProto::new("setFont", "(Lorg/kwis/msp/lcdui/Font;)V", Self::set_font, Default::default()),
                 JavaMethodProto::new("setAlpha", "(I)V", Self::set_alpha, Default::default()),
@@ -80,6 +81,7 @@ impl Graphics {
                 JavaMethodProto::new("getRGBPixels", "(IIII[III)V", Self::get_rgb_pixels, Default::default()),
             ],
             fields: vec![
+                JavaFieldProto::new("edgeColor", "I", Default::default()),
                 JavaFieldProto::new("midpGraphics", "Ljavax/microedition/lcdui/Graphics;", Default::default()),
                 JavaFieldProto::new("baseTranslateX", "I", Default::default()),
                 JavaFieldProto::new("baseTranslateY", "I", Default::default()),
@@ -228,6 +230,15 @@ impl Graphics {
 
         let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
         jvm.invoke_virtual(&midp_graphics, "setColor", "(I)V", (color,)).await
+    }
+
+    /// The colour the handset outlines a filled shape with. Nothing here draws
+    /// an outline, so the colour is remembered and not used - a title that sets
+    /// it gets the fill it asked for either way.
+    async fn set_edge_color(jvm: &Jvm, _context: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, color: i32) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Graphics::setEdgeColor({this:?}, {color})");
+
+        jvm.put_field(&mut this, "edgeColor", "I", color).await
     }
 
     async fn set_color_by_rgb(jvm: &Jvm, _context: &mut WieJvmContext, this: ClassInstanceRef<Self>, r: i32, g: i32, b: i32) -> JvmResult<()> {

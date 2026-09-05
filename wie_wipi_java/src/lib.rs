@@ -6,7 +6,7 @@ pub mod classes;
 
 use wie_jvm_support::WieJavaClassProto;
 
-pub fn get_protos() -> [WieJavaClassProto; 59] {
+pub fn get_protos() -> [WieJavaClassProto; 61] {
     [
         crate::classes::org::kwis::msf::io::Message::as_proto(),
         crate::classes::org::kwis::msf::io::Network::as_proto(),
@@ -34,6 +34,7 @@ pub fn get_protos() -> [WieJavaClassProto; 59] {
         crate::classes::org::kwis::msp::lcdui::InputMethodHandler::as_proto(),
         crate::classes::org::kwis::msp::lcdui::Main::as_proto(),
         crate::classes::org::kwis::msp::lcdui::Jlet::as_proto(),
+        crate::classes::org::kwis::msp::lcdui::JletWrapper::as_proto(),
         crate::classes::org::kwis::msp::lcdui::JletEventListener::as_proto(),
         crate::classes::org::kwis::msp::lwc::ActionListener::as_proto(),
         crate::classes::org::kwis::msp::lwc::Component::as_proto(),
@@ -60,6 +61,7 @@ pub fn get_protos() -> [WieJavaClassProto; 59] {
         crate::classes::org::kwis::msp::media::BaseClip::as_proto(),
         crate::classes::org::kwis::msp::media::Clip::as_proto(),
         crate::classes::org::kwis::msp::media::MediaUnavailableException::as_proto(),
+        crate::classes::org::kwis::msp::media::PlayListener::as_proto(),
         crate::classes::org::kwis::msp::media::Player::as_proto(),
         crate::classes::org::kwis::msp::media::PlayListener::as_proto(),
         crate::classes::org::kwis::msp::media::Vibrator::as_proto(),

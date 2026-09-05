@@ -7,6 +7,10 @@ use jvm::{Array, ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
+/// What every space question answers with. The backend does not report the
+/// host's free space, and a title only ever checks that there is room to save.
+const REPORTED_SPACE: i32 = 0x100_0000;
+
 // class org.kwis.msp.io.FileSystem
 pub struct FileSystem;
 
@@ -24,6 +28,43 @@ impl FileSystem {
                 JavaMethodProto::new("exists", "(Ljava/lang/String;I)Z", Self::exists_with_flag, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("mkdir", "(Ljava/lang/String;I)V", Self::mkdir, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("available", "()I", Self::available, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("available", "(Ljava/lang/String;I)I", Self::available_on, MethodAccessFlags::STATIC),
+                JavaMethodProto::new(
+                    "availableLsize",
+                    "(Ljava/lang/String;I)D",
+                    Self::available_lsize,
+                    MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new("totalSpace", "()I", Self::total_space, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("totalSpace", "(Ljava/lang/String;)I", Self::total_space_on, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("getCounts", "(Ljava/lang/String;)I", Self::get_counts, MethodAccessFlags::STATIC),
+                JavaMethodProto::new(
+                    "getCounts",
+                    "(Ljava/lang/String;I)I",
+                    Self::get_counts_with_flag,
+                    MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new(
+                    "getMountedNames",
+                    "()[Ljava/lang/String;",
+                    Self::get_mounted_names,
+                    MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new("setMode", "(Ljava/lang/String;I)Z", Self::set_mode, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("setMode", "(Ljava/lang/String;II)Z", Self::set_mode_with_flag, MethodAccessFlags::STATIC),
+                JavaMethodProto::new(
+                    "addFileSystemListener",
+                    "(Lorg/kwis/msp/io/FileSystemListener;)Z",
+                    Self::add_file_system_listener,
+                    MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new(
+                    "removeFileSystemListener",
+                    "(Lorg/kwis/msp/io/FileSystemListener;)Z",
+                    Self::remove_file_system_listener,
+                    MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new("handleEvent", "(III)Z", Self::handle_event, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("getMaxFilenameLength", "()I", Self::get_max_filename_length, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("list", "(Ljava/lang/String;)Ljava/util/Vector;", Self::list, MethodAccessFlags::STATIC),
                 JavaMethodProto::new(
@@ -131,7 +172,94 @@ impl FileSystem {
     async fn available(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {
         tracing::warn!("stub org.kwis.msp.io.FileSystem::available()");
 
-        Ok(0x1000000) // TODO temp
+        Ok(REPORTED_SPACE)
+    }
+
+    /// Free and total space. The one storage a title has is the directory the
+    /// platform gives it, and the backend does not report how much of the host
+    /// is left, so every volume answers with the same figure `available` has
+    /// always reported - room to write.
+    async fn available_on(_: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>, flag: i32) -> JvmResult<i32> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::available({name:?}, {flag})");
+
+        Ok(REPORTED_SPACE)
+    }
+
+    async fn available_lsize(_: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>, flag: i32) -> JvmResult<f64> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::availableLsize({name:?}, {flag})");
+
+        Ok(REPORTED_SPACE as f64)
+    }
+
+    async fn total_space(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::totalSpace()");
+
+        Ok(REPORTED_SPACE)
+    }
+
+    async fn total_space_on(_: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>) -> JvmResult<i32> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::totalSpace({name:?})");
+
+        Ok(REPORTED_SPACE)
+    }
+
+    /// How many entries a directory holds. `list` does not enumerate one yet,
+    /// so neither does this; both say empty rather than disagree.
+    async fn get_counts(_: &Jvm, _: &mut WieJvmContext, dirname: ClassInstanceRef<String>) -> JvmResult<i32> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::getCounts({dirname:?})");
+
+        Ok(0)
+    }
+
+    async fn get_counts_with_flag(_: &Jvm, _: &mut WieJvmContext, dirname: ClassInstanceRef<String>, flag: i32) -> JvmResult<i32> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::getCounts({dirname:?}, {flag})");
+
+        Ok(0)
+    }
+
+    /// The volumes a title can write to. There is one and it is the title's own
+    /// directory, which it reaches without naming a volume, so the list is
+    /// empty.
+    async fn get_mounted_names(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<ClassInstanceRef<Array<String>>> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::getMountedNames()");
+
+        Ok(jvm.instantiate_array("Ljava/lang/String;", 0).await?.into())
+    }
+
+    /// File attributes - read-only, hidden and so on. The backend keeps none,
+    /// so a title setting them is told it could not rather than believing they
+    /// took.
+    async fn set_mode(_: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>, mode: i32) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::setMode({name:?}, {mode})");
+
+        Ok(false)
+    }
+
+    async fn set_mode_with_flag(_: &Jvm, _: &mut WieJvmContext, name: ClassInstanceRef<String>, mode: i32, flag: i32) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::setMode({name:?}, {mode}, {flag})");
+
+        Ok(false)
+    }
+
+    /// Storage being inserted or removed, which cannot happen to the one
+    /// directory a title has: a listener would never be called, so registering
+    /// one reports that it was not taken.
+    async fn add_file_system_listener(_: &Jvm, _: &mut WieJvmContext, listener: ClassInstanceRef<()>) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::addFileSystemListener({listener:?})");
+
+        Ok(false)
+    }
+
+    async fn remove_file_system_listener(_: &Jvm, _: &mut WieJvmContext, listener: ClassInstanceRef<()>) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::removeFileSystemListener({listener:?})");
+
+        Ok(false)
+    }
+
+    async fn handle_event(_: &Jvm, _: &mut WieJvmContext, event: i32, param1: i32, param2: i32) -> JvmResult<bool> {
+        tracing::warn!("stub org.kwis.msp.io.FileSystem::handleEvent({event}, {param1}, {param2})");
+
+        Ok(false)
     }
 
     async fn get_max_filename_length(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {

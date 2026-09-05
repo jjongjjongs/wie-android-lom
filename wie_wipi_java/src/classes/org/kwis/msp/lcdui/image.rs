@@ -63,6 +63,7 @@ impl Image {
                     MethodAccessFlags::STATIC,
                 ),
                 JavaMethodProto::new("getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", Self::get_graphics, Default::default()),
+                JavaMethodProto::new("finalize", "()V", Self::finalize, Default::default()),
                 JavaMethodProto::new("getWidth", "()I", Self::get_width, Default::default()),
                 JavaMethodProto::new("getHeight", "()I", Self::get_height, Default::default()),
                 JavaMethodProto::new("isMutable", "()Z", Self::is_mutable, Default::default()),
@@ -670,6 +671,14 @@ impl Image {
             .await?;
 
         Ok(graphics)
+    }
+
+    /// What the handset frees an image's off-heap data from. Nothing here holds
+    /// any, so the image goes with its own collection.
+    async fn finalize(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Image::finalize({this:?})");
+
+        Ok(())
     }
 
     async fn get_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Image>) -> JvmResult<i32> {

@@ -22,6 +22,8 @@ impl InputMethodHandler {
                 JavaMethodProto::new("<clinit>", "()V", Self::cl_init, Default::default()),
                 JavaMethodProto::new("<init>", "(I)V", Self::init, Default::default()),
                 JavaMethodProto::new("setCurrentMode", "(I)Z", Self::set_current_mode, Default::default()),
+                JavaMethodProto::new("setCurrentMode", "(I[C)Z", Self::set_current_mode_with_chars, Default::default()),
+                JavaMethodProto::new("getCurrentInputMode", "()I", Self::get_current_mode, Default::default()),
                 JavaMethodProto::new("changeCurrentModeToNext", "()V", Self::change_current_mode_to_next, Default::default()),
                 JavaMethodProto::new("getCurrentMode", "()I", Self::get_current_mode, Default::default()),
                 JavaMethodProto::new(
@@ -299,6 +301,21 @@ impl InputMethodHandler {
 
         jvm.invoke_virtual(&listener, "notifyTextChanged", "([CII)V", (data, count, callback_type))
             .await
+    }
+
+    /// The mode with the characters the handset should offer in it. The
+    /// candidate set belongs to the handset's own input card, which is drawn
+    /// from the mode itself here, so the mode is what the call carries.
+    async fn set_current_mode_with_chars(
+        jvm: &Jvm,
+        context: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        mode: i32,
+        chars: ClassInstanceRef<Array<JavaChar>>,
+    ) -> JvmResult<bool> {
+        tracing::debug!("org.kwis.msp.lcdui.InputMethodHandler::setCurrentMode({this:?}, {mode}, {chars:?})");
+
+        Self::set_current_mode(jvm, context, this, mode).await
     }
 
     async fn get_current_mode(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {

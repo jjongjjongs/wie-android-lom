@@ -1,10 +1,13 @@
-use alloc::vec;
+use alloc::{format, vec};
 
 use java_class_proto::{JavaFieldProto, JavaMethodProto};
 use java_constants::MethodAccessFlags;
-use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
+use java_runtime::classes::java::lang::String as JavaString;
+use jvm::{ClassInstanceRef, Jvm, Result as JvmResult, runtime::JavaLangString};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
+
+use crate::classes::org::kwis::msp::lcdui::Display;
 
 // class org.kwis.msp.lwc.Component
 pub struct Component;
@@ -19,6 +22,16 @@ impl Component {
                 JavaMethodProto::new("<init>", "()V", Self::init, MethodAccessFlags::PROTECTED),
                 JavaMethodProto::new("getWidth", "()I", Self::get_width, Default::default()),
                 JavaMethodProto::new("getHeight", "()I", Self::get_height, Default::default()),
+                JavaMethodProto::new("getX", "()I", Self::get_x, Default::default()),
+                JavaMethodProto::new("getY", "()I", Self::get_y, Default::default()),
+                JavaMethodProto::new("getDisplay", "()Lorg/kwis/msp/lcdui/Display;", Self::get_display, Default::default()),
+                JavaMethodProto::new("toString", "()Ljava/lang/String;", Self::to_string, Default::default()),
+                JavaMethodProto::new(
+                    "setEventListener",
+                    "(Lorg/kwis/msp/lwc/EventListener;Ljava/lang/Object;)V",
+                    Self::set_event_listener,
+                    Default::default(),
+                ),
                 JavaMethodProto::new("getXOnScreen", "()I", Self::get_x_on_screen, Default::default()),
                 JavaMethodProto::new("getYOnScreen", "()I", Self::get_y_on_screen, Default::default()),
                 JavaMethodProto::new("getPreferredWidth", "()I", Self::get_preferred_width, Default::default()),
@@ -314,6 +327,55 @@ impl Component {
 
     async fn get_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
         jvm.get_field(&this, "w", "I").await
+    }
+
+    /// Where the component sits inside its parent, as opposed to
+    /// `getXOnScreen`, which walks up to the display.
+    async fn get_x(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.lwc.Component::getX({this:?})");
+
+        jvm.get_field(&this, "x", "I").await
+    }
+
+    async fn get_y(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.lwc.Component::getY({this:?})");
+
+        jvm.get_field(&this, "y", "I").await
+    }
+
+    async fn get_display(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<ClassInstanceRef<Display>> {
+        tracing::debug!("org.kwis.msp.lwc.Component::getDisplay({this:?})");
+
+        jvm.get_field(&this, "display", "Lorg/kwis/msp/lcdui/Display;").await
+    }
+
+    /// The listener a component reports its events to, with the object handed
+    /// back alongside each one.
+    async fn set_event_listener(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        listener: ClassInstanceRef<()>,
+        param: ClassInstanceRef<()>,
+    ) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lwc.Component::setEventListener({this:?}, {listener:?}, {param:?})");
+
+        jvm.put_field(&mut this, "evtListener", "Lorg/kwis/msp/lwc/EventListener;", listener)
+            .await?;
+        jvm.put_field(&mut this, "evtListenerObj", "Ljava/lang/Object;", param).await
+    }
+
+    async fn to_string(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<ClassInstanceRef<JavaString>> {
+        tracing::debug!("org.kwis.msp.lwc.Component::toString({this:?})");
+
+        let x: i32 = jvm.get_field(&this, "x", "I").await?;
+        let y: i32 = jvm.get_field(&this, "y", "I").await?;
+        let w: i32 = jvm.get_field(&this, "w", "I").await?;
+        let h: i32 = jvm.get_field(&this, "h", "I").await?;
+
+        Ok(JavaLangString::from_rust_string(jvm, &format!("Component[{x},{y},{w},{h}]"))
+            .await?
+            .into())
     }
 
     async fn get_x_on_screen(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {

@@ -16,15 +16,19 @@ impl Main {
             name: "org/kwis/msp/lcdui/Main",
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
-            methods: vec![JavaMethodProto::new(
-                "main",
-                "([Ljava/lang/String;)V",
-                Self::main,
-                MethodAccessFlags::STATIC,
-            )],
+            methods: vec![
+                JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
+                JavaMethodProto::new("main", "([Ljava/lang/String;)V", Self::main, MethodAccessFlags::STATIC),
+            ],
             fields: vec![],
             access_flags: Default::default(),
         }
+    }
+
+    async fn init(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Main::<init>({this:?})");
+
+        Ok(())
     }
 
     async fn main(jvm: &Jvm, _: &mut WieJvmContext, args: ClassInstanceRef<Array<String>>) -> JvmResult<()> {

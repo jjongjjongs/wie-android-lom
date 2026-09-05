@@ -36,6 +36,7 @@ impl Font {
                     MethodAccessFlags::STATIC,
                 ),
                 JavaMethodProto::new("getFont", "(III)Lorg/kwis/msp/lcdui/Font;", Self::get_font, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("getVFontList", "()[Ljava/lang/String;", Self::get_vfont_list, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("stringWidth", "(Ljava/lang/String;)I", Self::string_width, Default::default()),
                 JavaMethodProto::new("substringWidth", "(Ljava/lang/String;II)I", Self::substring_width, Default::default()),
                 JavaMethodProto::new("charWidth", "(C)I", Self::char_width, Default::default()),
@@ -206,6 +207,15 @@ impl Font {
         jvm.put_field(&mut instance, "size", "I", size).await?;
 
         Ok(instance)
+    }
+
+    /// The vector faces the handset carries beyond its built-in one. There are
+    /// none here, so a title asking is given an empty list rather than a name
+    /// it cannot then select.
+    async fn get_vfont_list(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<ClassInstanceRef<Array<String>>> {
+        tracing::debug!("org.kwis.msp.lcdui.Font::getVFontList()");
+
+        Ok(jvm.instantiate_array("Ljava/lang/String;", 0).await?.into())
     }
 
     async fn string_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, string: ClassInstanceRef<String>) -> JvmResult<i32> {

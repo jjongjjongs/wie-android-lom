@@ -11,7 +11,7 @@ use wie_midp::classes::javax::microedition::lcdui::Display as MidpDisplay;
 
 use crate::classes::{
     net::wie::WIPIKeyCode,
-    org::kwis::msp::lcdui::{Card, Jlet, JletEventListener},
+    org::kwis::msp::lcdui::{Card, Image, Jlet, JletEventListener},
 };
 
 // class org.kwis.msp.lcdui.Display
@@ -94,6 +94,31 @@ impl Display {
                 ),
                 JavaMethodProto::new("ungrabKey", "(I)V", Self::ungrab_key, Default::default()),
                 JavaMethodProto::new(
+                    "grabKey0",
+                    "(II)V",
+                    Self::grab_key0,
+                    MethodAccessFlags::NATIVE | MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new(
+                    "ungrabKey0",
+                    "(I)V",
+                    Self::ungrab_key0,
+                    MethodAccessFlags::NATIVE | MethodAccessFlags::STATIC,
+                ),
+                JavaMethodProto::new("getRotation", "()I", Self::get_rotation, Default::default()),
+                JavaMethodProto::new(
+                    "setAnnunBackground",
+                    "(Lorg/kwis/msp/lcdui/Image;)V",
+                    Self::set_annun_background,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
+                    "setAnnunBackgroundDimmingAlpha",
+                    "(I)V",
+                    Self::set_annun_background_dimming_alpha,
+                    Default::default(),
+                ),
+                JavaMethodProto::new(
                     "getGameAction",
                     "(I)I",
                     Self::get_game_action,
@@ -107,6 +132,8 @@ impl Display {
                 ),
             ],
             fields: vec![
+                JavaFieldProto::new("annunBackground", "Lorg/kwis/msp/lcdui/Image;", Default::default()),
+                JavaFieldProto::new("annunBackgroundAlpha", "I", Default::default()),
                 JavaFieldProto::new("midpDisplay", "Ljavax/microedition/lcdui/Display;", Default::default()),
                 JavaFieldProto::new("cardCanvas", "Lnet/wie/CardCanvas;", Default::default()),
                 JavaFieldProto::new("dockedCard", "Lorg/kwis/msp/lcdui/Card;", Default::default()),
@@ -588,6 +615,50 @@ impl Display {
         tracing::warn!("stub org.kwis.msp.lcdui.Display::grabKey({this:?}, {key}, {listener:?})");
 
         Ok(())
+    }
+
+    /// What `grabKey`/`ungrabKey` reach on the handset. The grab itself is not
+    /// modelled - every key already reaches the title - so these record the
+    /// request and leave delivery as it is.
+    async fn grab_key0(_: &Jvm, _: &mut WieJvmContext, key: i32, mode: i32) -> JvmResult<()> {
+        tracing::warn!("stub org.kwis.msp.lcdui.Display::grabKey0({key}, {mode})");
+
+        Ok(())
+    }
+
+    async fn ungrab_key0(_: &Jvm, _: &mut WieJvmContext, key: i32) -> JvmResult<()> {
+        tracing::warn!("stub org.kwis.msp.lcdui.Display::ungrabKey0({key})");
+
+        Ok(())
+    }
+
+    /// The display is never turned, so a title asking how far it is turned is
+    /// told none.
+    async fn get_rotation(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.lcdui.Display::getRotation({this:?})");
+
+        Ok(0)
+    }
+
+    /// The picture behind the handset's status strip, and how far it is dimmed.
+    /// The strip here is the title's own drawing area rather than a surface the
+    /// platform paints, so both are remembered and neither changes what is
+    /// drawn.
+    async fn set_annun_background(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        mut this: ClassInstanceRef<Self>,
+        image: ClassInstanceRef<Image>,
+    ) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Display::setAnnunBackground({this:?}, {image:?})");
+
+        jvm.put_field(&mut this, "annunBackground", "Lorg/kwis/msp/lcdui/Image;", image).await
+    }
+
+    async fn set_annun_background_dimming_alpha(jvm: &Jvm, _: &mut WieJvmContext, mut this: ClassInstanceRef<Self>, alpha: i32) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Display::setAnnunBackgroundDimmingAlpha({this:?}, {alpha})");
+
+        jvm.put_field(&mut this, "annunBackgroundAlpha", "I", alpha).await
     }
 
     async fn ungrab_key(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, key: i32) -> JvmResult<()> {

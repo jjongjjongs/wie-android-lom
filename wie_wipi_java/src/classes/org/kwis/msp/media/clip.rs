@@ -30,6 +30,13 @@ impl Clip {
                     Self::init_with_resource,
                     Default::default(),
                 ),
+                JavaMethodProto::new(
+                    "<init>",
+                    "(Ljava/lang/String;Ljava/lang/String;I)V",
+                    Self::init_with_resource_and_size,
+                    Default::default(),
+                ),
+                JavaMethodProto::new("free", "()V", Self::free, Default::default()),
                 JavaMethodProto::new("setVolume", "(I)Z", Self::set_volume, Default::default()),
                 JavaMethodProto::new(
                     "setListener",
@@ -92,6 +99,40 @@ impl Clip {
         jvm.store_array(&mut data_array, 0, cast_vec::<u8, i8>(data)).await?;
 
         let _: bool = jvm.invoke_virtual(&this, "setBuffer", "([BI)Z", (data_array, data_len as i32)).await?;
+
+        Ok(())
+    }
+
+    /// The resource form with a buffer size. The size is what the clip would
+    /// have been given to record into; a clip built from a resource is playing
+    /// what the resource holds, so the resource is what it gets.
+    async fn init_with_resource_and_size(
+        jvm: &Jvm,
+        _: &mut WieJvmContext,
+        this: ClassInstanceRef<Self>,
+        r#type: ClassInstanceRef<String>,
+        resource_name: ClassInstanceRef<String>,
+        size: i32,
+    ) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.media.Clip::<init>({this:?}, {type:?}, {resource_name:?}, {size})");
+
+        jvm.invoke_special(
+            &this,
+            "org/kwis/msp/media/Clip",
+            "<init>",
+            "(Ljava/lang/String;Ljava/lang/String;)V",
+            (r#type, resource_name),
+        )
+        .await
+    }
+
+    /// Releases the clip's player and the data it was holding, so a title that
+    /// frees a track it is done with gets the audio slot back.
+    async fn free(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.media.Clip::free({this:?})");
+
+        let _: i32 = jvm.invoke_virtual(&this, "mediaStop", "()I", ()).await?;
+        let _: () = jvm.invoke_virtual(&this, "clearData", "()V", ()).await?;
 
         Ok(())
     }
