@@ -21,6 +21,8 @@ use jvm_rust::ClassDefinitionImpl;
 use wie_core_arm::ArmCore;
 use wie_util::WieError;
 
+use crate::runtime::savepoint::SavePointState;
+
 use super::{
     app_classes::{AppClass, AppMember},
     class_table::{is_wide, split_descriptor},
@@ -31,6 +33,7 @@ use super::{
 pub struct CompiledContext {
     pub core: ArmCore,
     pub handles: JavaHandles,
+    pub save_points: SavePointState,
 }
 
 /// One compiled method, reached through its ARM entry point.
@@ -116,7 +119,14 @@ impl MethodBody<JavaError, CompiledContext> for CompiledMethod {
             self.entry
         );
 
-        let result: u32 = match context.core.run_function(self.entry, &words).await {
+        // Save points name places in the ARM stack this call is about to build,
+        // so they cannot outlive it: mark where the chain stands, and drop
+        // whatever the call leaves behind however it returns.
+        let frame = context.save_points.enter_frame(&context.core);
+        let outcome = context.core.run_function(self.entry, &words).await;
+        context.save_points.leave_frame(&mut context.core, frame);
+
+        let result: u32 = match outcome {
             Ok(result) => result,
             // The compiled code threw a Java exception that no compiled save
             // point caught. Surface it as a real JVM exception so a Java catch

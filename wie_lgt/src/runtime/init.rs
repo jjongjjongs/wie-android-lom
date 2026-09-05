@@ -1211,6 +1211,7 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                     &context.jvm,
                     core,
                     &context.java_handles,
+                    &context.save_points,
                     &context.app_classes,
                     &context.image_ranges,
                     &name,
@@ -2897,6 +2898,7 @@ async fn class_is_assignable_to(core: &ArmCore, context: &mut InitSvcContext, so
             &context.jvm,
             core,
             &context.java_handles,
+            &context.save_points,
             &context.app_classes,
             &context.image_ranges,
             class_name,
@@ -3053,8 +3055,9 @@ async fn instantiate_app_class(core: &mut ArmCore, context: &mut InitSvcContext,
     let image_ranges = context.image_ranges.clone();
     let jvm = context.jvm.clone();
     let handles = context.java_handles.clone();
+    let save_points = context.save_points.clone();
 
-    if !bridge_class_chain(&jvm, core, &handles, &app_classes, &image_ranges, &class).await {
+    if !bridge_class_chain(&jvm, core, &handles, &save_points, &app_classes, &image_ranges, &class).await {
         return Ok(handle);
     }
 

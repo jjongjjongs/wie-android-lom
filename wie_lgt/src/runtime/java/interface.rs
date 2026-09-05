@@ -16,6 +16,7 @@ use crate::runtime::{
         handles::JavaHandles,
         platform_metadata::platform_class,
     },
+    savepoint::SavePointState,
     svc_ids::InitSvcId,
 };
 
@@ -921,6 +922,7 @@ pub async fn bridge_class_chain(
     jvm: &Jvm,
     core: &ArmCore,
     handles: &JavaHandles,
+    save_points: &SavePointState,
     app_classes: &Mutex<Vec<AppClass>>,
     image_ranges: &[(u32, u32)],
     name: &str,
@@ -946,6 +948,7 @@ pub async fn bridge_class_chain(
     let context = CompiledContext {
         core: core.clone(),
         handles: handles.clone(),
+        save_points: save_points.clone(),
     };
 
     // The proto is built with the lock held and registered with it released:
