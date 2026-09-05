@@ -171,7 +171,7 @@ fn resolve_field_group(core: &mut ArmCore, class: &AppClass, table: u32, output:
     Ok(())
 }
 
-pub(crate) fn resolve_virtual_member(
+fn resolve_virtual_member(
     core: &ArmCore,
     app_classes: &Mutex<Vec<AppClass>>,
     image_ranges: &[(u32, u32)],

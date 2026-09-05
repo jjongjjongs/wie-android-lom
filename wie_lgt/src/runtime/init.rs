@@ -35,8 +35,8 @@ use super::{
         interface::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
-            bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, resolve_main_class_arguments, resolve_virtual_member,
-            run_main_class, vm_get_constant_string, vm_instantiate_array,
+            bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, resolve_main_class_arguments, run_main_class,
+            vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
         platform_metadata::platform_class,
@@ -2153,7 +2153,7 @@ fn virtual_slot_in_class_chain(core: &ArmCore, context: &InitSvcContext, root: u
 }
 
 /// The launched class and every application class it inherits from, by name.
-fn application_superclass_chain(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Vec<String> {
+fn application_superclass_chain(context: &InitSvcContext, root: u32) -> Vec<String> {
     let mut chain = Vec::new();
     let mut current = context.app_classes.lock().iter().find(|class| class.root == root).cloned();
 
@@ -2205,7 +2205,7 @@ fn reresolve_own_virtuals_against_class(core: &mut ArmCore, context: &InitSvcCon
     // `this.a()V` on a `Game` - and belongs to this chain whatever the global
     // resolver put there. Rows some unrelated class makes are left alone: they
     // are calls on other objects, and their receiver's type is not this one.
-    let chain = application_superclass_chain(core, context, root);
+    let chain = application_superclass_chain(context, root);
     let owned_rows: Vec<(u32, u32)> = context
         .own_class_entries
         .lock()

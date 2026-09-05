@@ -76,6 +76,10 @@ pub(crate) struct ArmCoreInner {
     /// these fast; recycling the allocation keeps that churn from fragmenting
     /// the heap into sub-stack-sized holes.
     stack_pool: Vec<u32>,
+    /// Whether an SVC handler chose the address to resume at, rather than
+    /// returning to the instruction after the `svc`. Set by
+    /// [`ArmCore::set_next_pc`] and cleared before each handler runs.
+    next_pc_chosen: bool,
 }
 
 /// Upper bound on pooled thread stacks. Peak concurrency is small (a handful),
@@ -155,6 +159,7 @@ impl ArmCore {
             svc_handlers: BTreeMap::new(),
             fast_svc: None,
             svc_stubs: BTreeMap::new(),
+            next_pc_chosen: false,
             stack_pool: Vec::new(),
             next_stub_address: FUNCTIONS_BASE,
             profile,
@@ -718,6 +723,7 @@ impl ArmCore {
     pub fn set_next_pc(&mut self, pc: u32) -> Result<()> {
         let mut inner = self.inner.lock();
 
+        inner.next_pc_chosen = true;
         inner.engine.reg_write(ArmRegister::PC, pc);
 
         let cpsr = inner.engine.reg_read(ArmRegister::Cpsr);
@@ -725,6 +731,19 @@ impl ArmCore {
         inner.engine.reg_write(ArmRegister::Cpsr, new_cpsr);
 
         Ok(())
+    }
+
+    /// Clears the record of an SVC handler having chosen its own resume
+    /// address, and reports what it was. Called around a handler so the generic
+    /// result write does not send execution back to the instruction after the
+    /// `svc` when the handler has already redirected it - which is what an LGT
+    /// longjmp does when it restores a save point's captured context.
+    pub fn take_next_pc_chosen(&self) -> bool {
+        let mut inner = self.inner.lock();
+        let chosen = inner.next_pc_chosen;
+        inner.next_pc_chosen = false;
+
+        chosen
     }
 
     pub fn read_param(&self, pos: usize) -> Result<u32> {
@@ -1043,6 +1062,46 @@ mod tests {
         assert_eq!(seen.len(), 2);
         assert!(seen[0].is_some());
         assert_eq!(seen[1], seen[0]);
+    }
+
+    async fn redirecting_svc_handler(core: &mut ArmCore, _: &mut Option<u32>, _id: crate::SvcId) -> Result<()> {
+        core.set_next_pc(0x1234)
+    }
+
+    /// An SVC handler that picks its own resume address keeps it: the generic
+    /// result write must not send the guest back to the instruction after the
+    /// `svc`. The LGT longjmp depends on this - it restores the register file a
+    /// `setjmp` captured and resumes there, and being returned to the call site
+    /// instead runs the rest of the `try` body on the restored registers.
+    #[test]
+    fn a_handler_that_chooses_its_resume_address_keeps_it() {
+        use core::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Poll},
+        };
+        use futures_test::task::new_count_waker;
+
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.register_svc_handler(1, redirecting_svc_handler, &None).unwrap();
+
+        // What the dispatcher leaves behind before a handler runs: PC at the
+        // SVC's own return address.
+        {
+            let mut inner = core.inner.lock();
+            inner.engine.reg_write(ArmRegister::PC, 0x2000);
+            inner.engine.reg_write(ArmRegister::LR, 0x2000);
+        }
+
+        let function = core.inner.lock().svc_handlers.get(&1).cloned().unwrap();
+        let mut handler_core = core.clone();
+        let mut call = Box::pin(async move { function.call(&mut handler_core).await });
+
+        let (waker, _) = new_count_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(matches!(call.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+
+        assert_eq!(core.save_context().pc, 0x1234, "the handler's resume address survives");
     }
 
     #[test]

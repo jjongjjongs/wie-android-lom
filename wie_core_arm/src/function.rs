@@ -54,7 +54,21 @@ where
 
         let mut new_context = self.context.clone();
 
+        core.take_next_pc_chosen();
+
         let result = self.function.call(core, &mut new_context).await?;
+
+        // A handler that redirected execution itself keeps that destination.
+        // The LGT longjmp does exactly this: it restores the register file a
+        // save point captured and resumes at the `setjmp` that captured it, and
+        // writing the result here would send the guest back to the instruction
+        // after the `svc` instead - running the rest of the `try` body with the
+        // restored register file, and taking the thrown exception for the
+        // call's return value.
+        if core.take_next_pc_chosen() {
+            return Ok(());
+        }
+
         result.write(core, lr)?;
 
         Ok(())
