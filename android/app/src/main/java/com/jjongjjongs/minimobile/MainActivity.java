@@ -159,6 +159,13 @@ public final class MainActivity extends Activity {
     private volatile boolean paused;
     private boolean playerVisible;
     private int statusCounter;
+    /**
+     * Set once the game has painted a frame. The boot status the tick reports
+     * is only news until then: a running game skips a tick's frame whenever it
+     * has not finished a new one, and reporting that in the title bar made the
+     * game's name flicker in and out of it.
+     */
+    private volatile boolean framePainted;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -997,6 +1004,7 @@ public final class MainActivity extends Activity {
         paused = false;
         currentGame = game;
         currentGameName = displayName(game);
+        framePainted = false;
         landscapeMode = false;
         // The player is a dark device again, so restore light status-bar icons.
         setLightStatusBar(false);
@@ -1225,10 +1233,20 @@ public final class MainActivity extends Activity {
 
         short[] frame = NativeBridge.nativeFrame();
         if (frame != null && frame.length > 2 && gameView != null) {
+            boolean first = !framePainted;
+            framePainted = true;
             runOnUiThread(() -> {
                 gameView.setFrame(frame);
-                playerStatus.setText(currentGameName);
+                if (first) {
+                    playerStatus.setText(currentGameName);
+                }
             });
+            return;
+        }
+
+        // A running game reaches here on every tick it has no new frame for, so
+        // once one has been painted the title bar keeps the game's name.
+        if (framePainted) {
             return;
         }
 
