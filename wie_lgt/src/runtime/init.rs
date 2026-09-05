@@ -35,8 +35,8 @@ use super::{
         interface::{
             ArrayClassInfo, ArrayClasses, DISPATCH_TABLE_SLOTS, JAVA_DIAG_SVC_BASE, JAVA_INTERFACE_METHOD_SVC_BASE, JAVA_METHOD_SVC_LIMIT,
             JAVA_RESERVED_SLOT_SVC_BASE, JAVA_STATIC_METHOD_SVC_BASE, JAVA_UNKNOWN_SLOT_SVC_BASE, JAVA_VIRTUAL_METHOD_SVC_BASE, REFERENCE_SIZE,
-            bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, resolve_main_class_arguments, run_main_class,
-            vm_get_constant_string, vm_instantiate_array,
+            bridge_class_chain, java_load_classes, java_resolve_one, primitive_element_size, resolve_main_class_arguments, resolve_virtual_member,
+            run_main_class, vm_get_constant_string, vm_instantiate_array,
         },
         method_bridge::{self, ResolvedMember},
         platform_metadata::platform_class,
@@ -95,6 +95,17 @@ type ImportedClasses = Arc<Mutex<Option<ClassTable>>>;
 /// `(virtual_methods input, virtual_method_offsets output, first own row, one
 /// past the last row)` captured from import `0x14` for own-method resolution.
 type OwnVirtualResolve = Arc<Mutex<Option<(u32, u32, u32, u32)>>>;
+
+/// The application's own class entries, name and member ranges, in image order.
+type OwnClassEntries = Arc<Mutex<Vec<OwnClassEntry>>>;
+
+/// One application class's trailing member-reference ranges.
+#[derive(Clone)]
+struct OwnClassEntry {
+    name: String,
+    virtual_method_start: u32,
+    virtual_method_count: u32,
+}
 /// `(fields input, field_offsets output, first own row, one past the last row)`
 /// captured from import `0x14` for own-instance-field resolution.
 type OwnFieldResolve = Arc<Mutex<Option<(u32, u32, u32, u32)>>>;
@@ -520,6 +531,9 @@ struct InitSvcContext {
     /// are registered and activated so a class bridged after `0x14` still has
     /// its own-method references filled.
     own_virtual_resolve: OwnVirtualResolve,
+    /// The application's own class entries, which say which trailing
+    /// member-reference rows belong to which of its classes.
+    own_class_entries: OwnClassEntries,
     /// The application's own instance-field reference resolution, captured from
     /// import `0x14`: `(fields input, field_offsets output, first own row, one
     /// past the last row)`. Re-run alongside `own_virtual_resolve` so a class
@@ -583,6 +597,7 @@ fn register_init_svc_handler(
             vm_monitors: Default::default(),
             main_class_name,
             own_virtual_resolve: Default::default(),
+            own_class_entries: Default::default(),
             own_field_resolve: Default::default(),
         },
     )?;
@@ -1137,6 +1152,20 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
             let start = table.virtual_methods.len() as u32;
             let end = start + table.virtual_method_offset_capacity().unwrap_or(1024);
             *context.own_virtual_resolve.lock() = Some((arguments[3], table.outputs.virtual_method_offsets, start, end));
+
+            // The trailing rows are grouped by the class whose compiled code
+            // makes them; `reresolve_own_virtuals_against_class` uses that to
+            // tell a launched class's own self-call references apart from the
+            // ones other hierarchies make.
+            *context.own_class_entries.lock() = table
+                .own_classes
+                .iter()
+                .map(|class| OwnClassEntry {
+                    name: class.name.clone(),
+                    virtual_method_start: class.virtual_method_start,
+                    virtual_method_count: class.virtual_method_count,
+                })
+                .collect();
 
             // Instance fields work the same way: the platform field rows the
             // class table declares are resolved in `install_dispatch`, and the
@@ -1803,6 +1832,17 @@ fn superclass_dispatch_slot_count(core: &ArmCore, context: &InitSvcContext, root
 /// reads its method rows. Some applications resolve virtual imports before the
 /// class is activated, so slot linking cannot be deferred until vtable creation.
 fn ensure_heavy_method_slots_linked(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Result<()> {
+    ensure_heavy_method_slots_linked_at(core, context, root, 0)
+}
+
+/// Guard on how far the superclass chain is followed while linking.
+const MAX_HEAVY_LINK_DEPTH: usize = 32;
+
+fn ensure_heavy_method_slots_linked_at(core: &mut ArmCore, context: &InitSvcContext, root: u32, depth: usize) -> Result<()> {
+    if depth >= MAX_HEAVY_LINK_DEPTH {
+        tracing::warn!("LGT class at {root:#x} sits deeper than {MAX_HEAVY_LINK_DEPTH} in the heavy-link chain; stopping");
+        return Ok(());
+    }
     if context.heavy_linked_classes.lock().contains(&root) {
         return Ok(());
     }
@@ -1831,6 +1871,26 @@ fn ensure_heavy_method_slots_linked(core: &mut ArmCore, context: &InitSvcContext
     if !context.app_classes.lock().iter().any(|class| class.root == root) {
         let class = app_classes::parse_class_root(core, root)?;
         context.app_classes.lock().push(class);
+    }
+
+    // A subclass's slots are laid out on top of its superclass's, so the base
+    // has to be linked first. Linking a subclass while its base still carries
+    // the image's placeholder slot gives every override that placeholder:
+    // Fantasy Knight links `v` before its base `w`, and `v`'s six overrides all
+    // came out at slot 1. The application's own virtual-reference table then
+    // resolved `a(Lorg/kwis/msp/lcdui/Graphics;)V` - the card content hook its
+    // SDK paint chain dispatches through - to slot 1 as well, so every card
+    // painted through `java/lang/Object`'s slot 1 and drew nothing.
+    let superclass_root = {
+        let classes = context.app_classes.lock();
+        classes
+            .iter()
+            .find(|class| class.root == root)
+            .and_then(|class| class.superclass.clone())
+            .and_then(|superclass| classes.iter().find(|class| class.name == superclass).map(|class| class.root))
+    };
+    if let Some(superclass_root) = superclass_root {
+        ensure_heavy_method_slots_linked_at(core, context, superclass_root, depth + 1)?;
     }
 
     let snapshot = context.app_classes.lock().clone();
@@ -2092,6 +2152,22 @@ fn virtual_slot_in_class_chain(core: &ArmCore, context: &InitSvcContext, root: u
     None
 }
 
+/// The launched class and every application class it inherits from, by name.
+fn application_superclass_chain(core: &mut ArmCore, context: &InitSvcContext, root: u32) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = context.app_classes.lock().iter().find(|class| class.root == root).cloned();
+
+    for _ in 0..MAX_HEAVY_LINK_DEPTH {
+        let Some(class) = current else { break };
+        chain.push(class.name.clone());
+
+        let Some(superclass) = class.superclass.as_deref() else { break };
+        current = context.app_classes.lock().iter().find(|class| class.name == superclass).cloned();
+    }
+
+    chain
+}
+
 /// Corrects the own-virtual reference rows a launched class's own code makes but
 /// that the global resolver could not attribute.
 ///
@@ -2122,6 +2198,22 @@ fn reresolve_own_virtuals_against_class(core: &mut ArmCore, context: &InitSvcCon
         return Ok(());
     }
 
+    // The rows this class's own hierarchy makes, from the application's own
+    // class entries. Those entries group the trailing rows by the class whose
+    // compiled code makes them, so a row a launched class's own base emits is a
+    // self-call on an instance of the launched class - `b.startApp`'s
+    // `this.a()V` on a `Game` - and belongs to this chain whatever the global
+    // resolver put there. Rows some unrelated class makes are left alone: they
+    // are calls on other objects, and their receiver's type is not this one.
+    let chain = application_superclass_chain(core, context, root);
+    let owned_rows: Vec<(u32, u32)> = context
+        .own_class_entries
+        .lock()
+        .iter()
+        .filter(|entry| chain.iter().any(|name| *name == entry.name))
+        .map(|entry| (entry.virtual_method_start, entry.virtual_method_start + entry.virtual_method_count))
+        .collect();
+
     for index in start..end {
         let entry = virtual_methods + index * 8;
         let name_ptr: u32 = read_generic(core, entry)?;
@@ -2131,9 +2223,15 @@ fn reresolve_own_virtuals_against_class(core: &mut ArmCore, context: &InitSvcCon
         }
 
         let current: u16 = read_generic(core, output + index * 2)?;
-        // Only rows frozen at a reserved Object slot are candidates: a genuine
-        // application method never lands at slots 1..=9.
-        if !(1..=9).contains(&current) {
+        // A row frozen at a reserved Object slot is unambiguously mis-resolved:
+        // a genuine application method never lands at slots 1..=9. A row this
+        // chain declares as its own is this chain's to resolve whatever the
+        // global resolver chose, which for an obfuscated one-letter name is
+        // routinely another hierarchy's method at a slot past this class's
+        // table (Fantasy Knight branched a `Game` through slot 42 of a 27-slot
+        // table and faulted).
+        let owned = owned_rows.iter().any(|(start, end)| index >= *start && index < *end);
+        if !owned && !(1..=9).contains(&current) {
             continue;
         }
 
@@ -3140,6 +3238,13 @@ async fn instantiate_imported_class(_core: &mut ArmCore, context: &mut InitSvcCo
 /// Native `vm_resolve_one` installs `get_class` followed by `get_raw_class`.
 /// Both return the class token; `get_class` additionally guarantees that the
 /// JVM class has completed initialization.
+/// Rows every imported class's static block opens with: `get_class` then
+/// `get_raw_class`, both left blank by the application for native to fill.
+const RESERVED_ACCESSOR_ROWS: usize = 2;
+
+/// `ACC_STATIC` in a platform method's access flags.
+const METHOD_ACCESS_STATIC: u32 = 0x0008;
+
 async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, index: u32) -> Result<u32> {
     let a0 = core.read_param(0)?;
 
@@ -3168,7 +3273,7 @@ async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, in
     // Native vm_resolve_one fills the leading blank static-method pair with
     // get_class/get_raw_class. Both return the same activated class token;
     // get_class additionally guarantees Java class initialization.
-    if slot <= 1 {
+    if (slot as usize) < RESERVED_ACCESSOR_ROWS {
         if slot == 0 {
             let class = context
                 .jvm
@@ -3183,6 +3288,70 @@ async fn call_reserved_slot(core: &mut ArmCore, context: &mut InitSvcContext, in
         }
 
         return Ok(class_object);
+    }
+
+    // Past the accessor pair, a blank row is a static the application's import
+    // table names nowhere - Fantasy Knight's `org/kwis/msf/io/Network` block is
+    // [get_class, get_raw_class, disconnect()V, <blank>, <init>()V], and that
+    // blank is the `connect()I` its SDK calls before opening the auth socket.
+    // Native resolves it from the class itself, so take the platform class's
+    // statics the other rows do not name, in declaration order, and match them
+    // to the blank rows in row order.
+    let resolved_blank = {
+        let imported_classes = context.imported_classes.lock();
+        imported_classes
+            .as_ref()
+            .and_then(|table| table.classes.iter().find(|class| class.name == class_name).map(|class| (table, class)))
+            .and_then(|(table, class)| {
+                let rows: Vec<Option<(String, String)>> = (class.static_method_start..class.static_method_start + class.static_method_count)
+                    .map(|row| {
+                        table
+                            .static_methods
+                            .get(row as usize)
+                            .and_then(|member| member.as_ref())
+                            .map(|member| (member.name.clone(), member.descriptor.clone()))
+                    })
+                    .collect();
+
+                let blank_index = rows
+                    .iter()
+                    .enumerate()
+                    .skip(RESERVED_ACCESSOR_ROWS)
+                    .filter(|(_, row)| row.is_none())
+                    .position(|(row, _)| row as u32 == slot)?;
+
+                let platform = platform_class(&class_name)?;
+                let unnamed = platform
+                    .methods
+                    .iter()
+                    .filter(|method| method.flags & METHOD_ACCESS_STATIC != 0)
+                    .filter(|method| {
+                        !rows
+                            .iter()
+                            .flatten()
+                            .any(|(name, descriptor)| name == method.name && descriptor == method.descriptor)
+                    })
+                    .nth(blank_index)?;
+
+                Some(ResolvedMember {
+                    class_name: class_name.clone(),
+                    name: unnamed.name.into(),
+                    descriptor: unnamed.descriptor.into(),
+                })
+            })
+    };
+
+    if let Some(member) = resolved_blank {
+        tracing::debug!(
+            "LGT reserved slot {slot} of {class_name} resolves to {}{}",
+            member.name,
+            member.descriptor
+        );
+
+        let handles = context.java_handles.clone();
+        let jvm = context.jvm.clone();
+
+        return method_bridge::invoke(core, &jvm, &handles, &member, None).await;
     }
 
     tracing::warn!("LGT reserved slot {slot} of {class_name} called with a0={a0:#x}");

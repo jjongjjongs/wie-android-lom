@@ -168,7 +168,7 @@ fn expected_words(descriptor: &str, takes_receiver: bool) -> Option<u32> {
 /// `name` and `parent` are leaked because [`JavaClassProto`] holds them for the
 /// life of the program; an application registers a bounded set of classes once
 /// per run.
-pub fn as_proto(class: &AppClass) -> JavaClassProto<CompiledContext> {
+pub fn as_proto(class: &AppClass, inherits_card_paint: bool) -> JavaClassProto<CompiledContext> {
     let name: &'static str = String::leak(class.name.clone());
     let parent: &'static str = String::leak(class.superclass.clone().unwrap_or_else(|| "java/lang/Object".to_owned()));
 
@@ -241,18 +241,27 @@ pub fn as_proto(class: &AppClass) -> JavaClassProto<CompiledContext> {
     }
 
     // An application card overrides `org.kwis.msp.lcdui.Card::paint` under an
-    // obfuscated name - Fantasy Knight's card `e` names its paint override
-    // `a(Lorg/kwis/msp/lcdui/Graphics;)V`. The platform paints a card by calling
-    // `paint` on it (`net.wie.CardCanvas` does so through the JVM), but the JVM
-    // resolves that name against this bridged proto, which carries the compiled
-    // method under `a`, not `paint` - so the call reached the platform
-    // `Card::paint` stub and the card drew nothing (a running game on a blank
-    // screen). Expose the override under `paint` as well when the class carries
-    // exactly one instance method taking an `org.kwis` `Graphics` and no method
-    // already named `paint`; that descriptor is the card-paint signature, so the
-    // single such method is the paint override. (`p.run` above bridges the same
-    // kind of obfuscated platform-method override for `Runnable`.)
-    if !methods.iter().any(|method| method.name == "paint") {
+    // obfuscated name. The platform paints a card by calling `paint` on it
+    // (`net.wie.CardCanvas` does so through the JVM), but the JVM resolves that
+    // name against this bridged proto, which carries the compiled method under
+    // its obfuscated name - so the call reached the platform `Card::paint` stub
+    // and the card drew nothing (a running game on a blank screen). Expose the
+    // override under `paint` as well when the class carries exactly one instance
+    // method taking an `org.kwis` `Graphics` and no method already named
+    // `paint`; that descriptor is the card-paint signature, so the single such
+    // method is the paint override. (`p.run` above bridges the same kind of
+    // obfuscated platform-method override for `Runnable`.)
+    //
+    // Not when a compiled ancestor declares the real `paint` itself, though.
+    // Fantasy Knight's card `e` extends the SDK's card base `w`, which has a
+    // genuine `paint(Lorg/kwis/msp/lcdui/Graphics;)V`; `e`'s single
+    // Graphics-taking method is `a`, the content hook `w`'s own paint chain
+    // calls, not a paint override. Aliasing it hijacked the platform's paint
+    // call and the SDK's paint chain never ran - which is what left the title
+    // parked forever in its notice card's wait loop.
+    if inherits_card_paint {
+        tracing::debug!("{name} inherits a compiled paint; leaving its Graphics method under its own name");
+    } else if !methods.iter().any(|method| method.name == "paint") {
         let graphics_methods: Vec<_> = class
             .methods()
             .filter(|method| method.descriptor() == "(Lorg/kwis/msp/lcdui/Graphics;)V" && method.is_instance_method())

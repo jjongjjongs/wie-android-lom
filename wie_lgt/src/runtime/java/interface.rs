@@ -171,7 +171,7 @@ fn resolve_field_group(core: &mut ArmCore, class: &AppClass, table: u32, output:
     Ok(())
 }
 
-fn resolve_virtual_member(
+pub(crate) fn resolve_virtual_member(
     core: &ArmCore,
     app_classes: &Mutex<Vec<AppClass>>,
     image_ranges: &[(u32, u32)],
@@ -910,6 +910,49 @@ fn collect_app_class_dependencies(
     true
 }
 
+/// The descriptor `org.kwis.msp.lcdui.Card::paint` carries, and the one an
+/// obfuscated card-paint override has to match.
+const CARD_PAINT_DESCRIPTOR: &str = "(Lorg/kwis/msp/lcdui/Graphics;)V";
+
+/// Looks an application class up the way `collect_app_class_dependencies` does:
+/// the registered table first, then by shape in the image.
+fn app_class_by_name(core: &ArmCore, app_classes: &Mutex<Vec<AppClass>>, image_ranges: &[(u32, u32)], name: &str) -> Option<AppClass> {
+    let registered = app_classes.lock().iter().find(|x| x.name == name).cloned();
+    registered.or_else(|| app_classes::find_class(core, image_ranges, name))
+}
+
+/// Whether a compiled ancestor of this class declares the real
+/// `paint(Lorg/kwis/msp/lcdui/Graphics;)V`.
+///
+/// `compiled_class::as_proto` otherwise exposes a class's single
+/// Graphics-taking method under `paint`, on the assumption that an obfuscated
+/// name hides a `Card::paint` override. That assumption is wrong for a class
+/// whose own base already provides `paint`: there the Graphics method is a hook
+/// the base's paint chain calls, and aliasing it takes the platform's paint call
+/// away from the base.
+fn inherits_compiled_card_paint(
+    core: &ArmCore,
+    app_classes: &Mutex<Vec<AppClass>>,
+    image_ranges: &[(u32, u32)],
+    superclass: Option<&str>,
+    depth: usize,
+) -> bool {
+    let Some(name) = superclass else { return false };
+    if depth >= MAX_CLASS_DEPTH {
+        return false;
+    }
+
+    let Some(class) = app_class_by_name(core, app_classes, image_ranges, name) else {
+        return false;
+    };
+
+    let declares = class
+        .methods()
+        .any(|method| method.name() == "paint" && method.descriptor() == CARD_PAINT_DESCRIPTOR && method.is_instance_method());
+
+    declares || inherits_compiled_card_paint(core, app_classes, image_ranges, class.superclass.as_deref(), depth + 1)
+}
+
 /// Registers a JVM stand-in for an application class and everything it
 /// inherits from or implements.
 ///
@@ -956,17 +999,12 @@ pub async fn bridge_class_chain(
     // the registered table, so fall back to finding it by shape in the image.
     for class_name in order {
         let proto = {
-            let app_classes_guard = app_classes.lock();
-            let described = app_classes_guard.iter().find(|x| x.name == class_name).map(compiled_class::as_proto);
-            drop(app_classes_guard);
+            let described = app_class_by_name(core, app_classes, image_ranges, &class_name);
+            let Some(class) = described else { continue };
 
-            match described {
-                Some(proto) => proto,
-                None => match app_classes::find_class(core, image_ranges, &class_name) {
-                    Some(class) => compiled_class::as_proto(&class),
-                    None => continue,
-                },
-            }
+            let inherits_card_paint = inherits_compiled_card_paint(core, app_classes, image_ranges, class.superclass.as_deref(), 0);
+
+            compiled_class::as_proto(&class, inherits_card_paint)
         };
 
         if !compiled_class::register(jvm, &context, &class_name, proto).await {

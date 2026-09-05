@@ -95,6 +95,11 @@ pub struct ClassTable {
     pub interface_methods: Vec<Option<JavaMember>>,
     pub fields: Vec<Option<JavaMember>>,
     pub static_fields: Vec<Option<JavaMember>>,
+    /// The application's own class entries, which sit immediately below the
+    /// imported table's count word. They carry the same 24-byte shape and say
+    /// which of the trailing member rows - the ones past the imported ranges -
+    /// belong to which application class.
+    pub own_classes: Vec<JavaClass>,
     pub outputs: OutputArrays,
 }
 
@@ -145,6 +150,89 @@ where
     Ok(())
 }
 
+/// Reads the application's own class entries, which the compiler lays out
+/// immediately below the imported class table's count word, growing downwards.
+///
+/// The imported table describes only the platform classes an application
+/// imports; its member ranges stop there. The application's own classes append
+/// their member references to the same input arrays, and these entries are what
+/// says which trailing rows belong to which class. `vm_resolve_one` is handed
+/// one of them per class - a title that never calls it (Fantasy Knight does
+/// not) leaves the trailing rows for WIE to resolve, and resolving them by name
+/// alone picks whichever class declares that name first, which on an obfuscated
+/// title is routinely the wrong one.
+///
+/// The walk stops at the first entry that does not read as one: a name that is
+/// not a plain class name, or a range that is implausibly large. Below the
+/// entries lies the string pool, whose words fail both tests.
+fn read_own_class_entries<R>(reader: &R, classes: u32) -> Vec<JavaClass>
+where
+    R: ?Sized + ByteRead,
+{
+    /// An application declares a few dozen classes; a longer walk means the
+    /// stop condition failed and the read has left the table.
+    const MAX_OWN_CLASSES: u32 = 256;
+    /// Member ranges index arrays with a few hundred rows.
+    const MAX_MEMBER_INDEX: u32 = 4096;
+
+    fn is_class_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'/'))
+    }
+
+    let mut entries = Vec::new();
+
+    for step in 1..=MAX_OWN_CLASSES {
+        let Some(entry) = classes.checked_sub(step * CLASS_ENTRY_SIZE) else {
+            break;
+        };
+
+        let Ok(name_address) = read_generic::<u32, _>(reader, entry) else {
+            break;
+        };
+        let Ok(name) = read_string(reader, name_address) else {
+            break;
+        };
+        if !is_class_name(&name) {
+            break;
+        }
+
+        let mut ranges = [0u32; 10];
+        let mut readable = true;
+        for (index, range) in ranges.iter_mut().enumerate() {
+            match read_generic::<u16, _>(reader, entry + 4 + index as u32 * 2) {
+                Ok(value) => *range = u32::from(value),
+                Err(_) => {
+                    readable = false;
+                    break;
+                }
+            }
+        }
+        if !readable || ranges.iter().any(|range| *range > MAX_MEMBER_INDEX) {
+            break;
+        }
+
+        entries.push(JavaClass {
+            name,
+            field_start: ranges[0],
+            field_count: ranges[1],
+            static_field_start: ranges[2],
+            static_field_count: ranges[3],
+            virtual_method_start: ranges[4],
+            virtual_method_count: ranges[5],
+            interface_method_start: ranges[6],
+            interface_method_count: ranges[7],
+            static_method_start: ranges[8],
+            static_method_count: ranges[9],
+        });
+    }
+
+    entries
+}
+
 impl ClassTable {
     #[allow(clippy::too_many_arguments)]
     pub fn parse<R>(
@@ -179,6 +267,7 @@ impl ClassTable {
             interface_methods: Vec::new(),
             fields: Vec::new(),
             static_fields: Vec::new(),
+            own_classes: read_own_class_entries(reader, classes),
             outputs,
         };
 
@@ -362,9 +451,89 @@ pub fn is_wide(descriptor: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{string::ToString, vec};
+    use alloc::{string::ToString, vec, vec::Vec};
 
-    use super::{is_wide, split_descriptor};
+    use wie_util::{ByteRead, Result};
+
+    use super::{CLASS_ENTRY_SIZE, is_wide, read_own_class_entries, split_descriptor};
+
+    /// A flat image laid out from a fixed base, so entries can be written at
+    /// known addresses.
+    struct Image {
+        base: u32,
+        data: Vec<u8>,
+    }
+
+    impl Image {
+        fn new(base: u32, size: usize) -> Self {
+            Self { base, data: vec![0; size] }
+        }
+
+        fn word(&mut self, address: u32, value: u32) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        fn half(&mut self, address: u32, value: u16) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+
+        fn string(&mut self, address: u32, value: &str) {
+            let offset = (address - self.base) as usize;
+            self.data[offset..offset + value.len()].copy_from_slice(value.as_bytes());
+        }
+    }
+
+    impl ByteRead for Image {
+        fn read_bytes(&self, address: u32, result: &mut [u8]) -> Result<usize> {
+            let offset = (address - self.base) as usize;
+            let available = self.data.len().saturating_sub(offset);
+            let length = result.len().min(available);
+
+            result[..length].copy_from_slice(&self.data[offset..offset + length]);
+
+            Ok(length)
+        }
+    }
+
+    /// The application's own class entries grow downwards from the imported
+    /// table's count word, and the walk stops at the string pool below them -
+    /// where the first word is a descriptor rather than a class name, and the
+    /// halfwords that follow are far too large to be member indices.
+    #[test]
+    fn own_class_entries_are_read_back_to_the_string_pool() {
+        const BASE: u32 = 0x1400000;
+        let classes = BASE + 0x200;
+
+        let mut image = Image::new(BASE, 0x400);
+
+        // Two entries, nearest first, the way `w` and `b` sit under Fantasy
+        // Knight's imported table.
+        for (step, (name, name_at, virtual_start, virtual_count)) in
+            [("b", BASE + 0x10, 88u16, 4u16), ("w", BASE + 0x20, 57, 31)].into_iter().enumerate()
+        {
+            let entry = classes - (step as u32 + 1) * CLASS_ENTRY_SIZE;
+            image.string(name_at, name);
+            image.word(entry, name_at);
+            image.half(entry + 12, virtual_start);
+            image.half(entry + 14, virtual_count);
+        }
+
+        // Below them, a descriptor from the string pool read as an entry.
+        let pool_entry = classes - 3 * CLASS_ENTRY_SIZE;
+        image.string(BASE + 0x30, "(Lorg/kwis/msp/lcdui/Graphics;)V");
+        image.word(pool_entry, BASE + 0x30);
+        image.half(pool_entry + 12, 0xf000);
+
+        let entries = read_own_class_entries(&image, classes);
+
+        assert_eq!(entries.len(), 2, "the walk stops at the string pool");
+        assert_eq!(entries[0].name, "b");
+        assert_eq!((entries[0].virtual_method_start, entries[0].virtual_method_count), (88, 4));
+        assert_eq!(entries[1].name, "w");
+        assert_eq!((entries[1].virtual_method_start, entries[1].virtual_method_count), (57, 31));
+    }
 
     #[test]
     fn splits_descriptors() {
