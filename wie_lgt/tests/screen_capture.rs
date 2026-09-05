@@ -152,6 +152,27 @@ impl Platform for CapturePlatform {
     }
 }
 
+/// A sampling profile writer for `WIE_PROFILE_OUT`, in the flamegraph-folded
+/// form `wie_cli` writes: one line per sample, the call stack outermost-first.
+/// Diagnostic - it is what says which compiled routine a stuck title is looping
+/// in, which nothing else in the log does.
+fn profile_from_env() -> Option<wie_backend::ProfileCallback> {
+    let path = std::env::var("WIE_PROFILE_OUT").ok()?;
+    let file = std::fs::File::create(path).expect("profile output");
+    let writer = std::sync::Mutex::new(std::io::BufWriter::new(file));
+
+    Some(Box::new(move |batch: Vec<wie_backend::ProfileSample>| {
+        use std::io::Write;
+
+        let mut writer = writer.lock().unwrap();
+        for sample in batch {
+            let folded: Vec<String> = sample.stack.iter().rev().map(|pc| format!("{pc:#x}")).collect();
+            let _ = writeln!(writer, "{} {}", folded.join(";"), sample.count);
+        }
+        let _ = writer.flush();
+    }))
+}
+
 /// Maps a `WIE_KEY` name to a backend key code, so a probe can target any key.
 fn key_by_name(name: &str) -> Option<wie_backend::KeyCode> {
     use wie_backend::KeyCode::*;
@@ -215,7 +236,7 @@ fn run(label: &str, archive: &[u8], ticks_limit: u32) {
 
     let options = Options {
         enable_gdbserver: false,
-        profile: None,
+        profile: profile_from_env(),
         // `WIE_ANNUN` forces the handset's status strip on (`0` forces it off),
         // so a title can be captured under either state rather than the one its
         // aid selects.
@@ -420,7 +441,7 @@ fn run_scripted(label: &str, archive: &[u8], ticks_limit: u32, script: &[(u32, w
     let files = extract_zip(archive).expect("archive");
     let options = Options {
         enable_gdbserver: false,
-        profile: None,
+        profile: profile_from_env(),
         // `WIE_ANNUN` forces the handset's status strip on (`0` forces it off),
         // so a title can be captured under either state rather than the one its
         // aid selects.
