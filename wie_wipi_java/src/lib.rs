@@ -6,10 +6,14 @@ pub mod classes;
 
 use wie_jvm_support::WieJavaClassProto;
 
-pub fn get_protos() -> [WieJavaClassProto; 54] {
+pub fn get_protos() -> [WieJavaClassProto; 58] {
     [
         crate::classes::org::kwis::msf::io::Network::as_proto(),
         crate::classes::org::kwis::msf::io::SchemeNotFoundException::as_proto(),
+        crate::classes::org::kwis::msf::io::Socket::as_proto(),
+        crate::classes::org::kwis::msf::io::SocketInputStream::as_proto(),
+        crate::classes::org::kwis::msf::io::SocketOutputStream::as_proto(),
+        crate::classes::org::kwis::msf::io::URL::as_proto(),
         crate::classes::org::kwis::msp::db::DataBase::as_proto(),
         crate::classes::org::kwis::msp::db::DataComparator::as_proto(),
         crate::classes::org::kwis::msp::db::DataFilter::as_proto(),
