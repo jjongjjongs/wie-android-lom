@@ -103,6 +103,8 @@ type OwnClassEntries = Arc<Mutex<Vec<OwnClassEntry>>>;
 #[derive(Clone)]
 struct OwnClassEntry {
     name: String,
+    field_start: u32,
+    field_count: u32,
     virtual_method_start: u32,
     virtual_method_count: u32,
 }
@@ -1162,6 +1164,8 @@ async fn handle_init_svc(core: &mut ArmCore, context: &mut InitSvcContext, id: S
                 .iter()
                 .map(|class| OwnClassEntry {
                     name: class.name.clone(),
+                    field_start: class.field_start,
+                    field_count: class.field_count,
                     virtual_method_start: class.virtual_method_start,
                     virtual_method_count: class.virtual_method_count,
                 })
@@ -2004,6 +2008,15 @@ async fn resolve_own_fields(core: &mut ArmCore, context: &InitSvcContext) -> Res
         return Ok(());
     }
 
+    let own_class_entries = context.own_class_entries.lock().clone();
+
+    // Field slots are the word an instance's field array holds, superclass
+    // words included, so the array has to be at least as wide as the widest
+    // registered class.
+    if let Some(widest) = context.app_classes.lock().iter().map(|class| class.instance_words).max() {
+        context.java_handles.ensure_field_slots(widest);
+    }
+
     for index in start..end {
         let entry = fields + index * 8;
         let name_ptr: u32 = read_generic(core, entry)?;
@@ -2025,13 +2038,40 @@ async fn resolve_own_fields(core: &mut ArmCore, context: &InitSvcContext) -> Res
         let name = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, name_ptr)?).into_owned();
         let descriptor = String::from_utf8_lossy(&read_null_terminated_string_bytes(core, descriptor_ptr)?).into_owned();
 
-        let slot = context
-            .app_classes
-            .lock()
+        // Prefer the class the row belongs to. Field names in an obfuscated
+        // application are one or two letters and repeat across the hierarchy,
+        // so a plain name-and-descriptor search over every registered class
+        // answers with whichever class happens to be registered first. Battle
+        // Monster's Jlet `a` declares `a:LDisplay; e:Z v:Lo; w:I` at slots
+        // 0..3, and its `e:Z` row matched another class's `e:Z` at slot 2 -
+        // the slot `v:Lo;` already owns. `a.<init>` then wrote `e = 1` over
+        // `v`, `a.b(card, id)` wrote the card into `v` and `e = 0` back over
+        // it, and the worker read `e == 0`, skipped its wait and switched to a
+        // null card: a NullPointerException before the first frame.
+        let owner = own_class_entries
             .iter()
-            .flat_map(|class| class.members.iter())
-            .find(|member| member.is_field() && member.name() == name && member.descriptor() == descriptor)
-            .map(|member| member.slot());
+            .find(|entry| index >= entry.field_start && index < entry.field_start + entry.field_count)
+            .map(|entry| entry.name.as_str());
+
+        let find_in = |class: &AppClass| {
+            class
+                .members
+                .iter()
+                .find(|member| member.is_field() && member.name() == name && member.descriptor() == descriptor)
+                .map(|member| member.slot())
+        };
+
+        // A row inside a class's range is a reference that class's code makes,
+        // which is usually but not always to one of its own fields: reading
+        // another object's field puts that field's row in the reading class's
+        // range too. Falling back to the global search keeps those resolving.
+        let slot = {
+            let app_classes = context.app_classes.lock();
+            owner
+                .and_then(|owner| app_classes.iter().find(|class| class.name == owner))
+                .and_then(&find_in)
+                .or_else(|| app_classes.iter().find_map(&find_in))
+        };
 
         if let Some(slot) = slot {
             write_generic(core, output + index * 2, slot as u16)?;

@@ -218,6 +218,18 @@ impl JavaHandles {
         self.field_slots.store(slots, Ordering::SeqCst);
     }
 
+    /// Raises the instance field-array width so a class whose layout needs more
+    /// words than the import tables implied still fits.
+    ///
+    /// The width is first set from the field-offset array's capacity, which
+    /// counts the field *references* the application makes. A class's own
+    /// layout can be wider than that - it inherits the platform superclass's
+    /// words, and Zenonia's `a extends Card` alone occupies 371 - so take the
+    /// larger of the two.
+    pub fn ensure_field_slots(&self, slots: u32) {
+        self.field_slots.fetch_max(slots, Ordering::SeqCst);
+    }
+
     /// Records imported platform fields that have native guest ABI slots.
     pub fn set_field_bindings(&self, bindings: Vec<JavaFieldBinding>) {
         *self.field_bindings.lock() = bindings;

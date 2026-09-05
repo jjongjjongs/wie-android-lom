@@ -59,6 +59,10 @@ const METADATA_INSTANCE_WORDS: u32 = 0x18;
 const METADATA_INTERFACES: u32 = 0x28;
 const METADATA_METHODS: u32 = 0x38;
 
+/// Field-table flag marking a static field, whose slot indexes the class's
+/// static block rather than an instance.
+const FIELD_ACCESS_STATIC: u32 = 0x8;
+
 const FIELD_TABLE_OFFSET: u32 = 0x10;
 const FIELD_ROW_SIZE: u32 = 0x14;
 const FIELD_SLOT_OFFSET: u32 = 0x10;
@@ -154,6 +158,12 @@ impl AppMember {
 
     pub fn is_method(&self) -> bool {
         matches!(self, AppMember::Method { .. })
+    }
+
+    /// A field that occupies a word in every instance, as opposed to one of the
+    /// class's static fields.
+    pub fn is_instance_field(&self) -> bool {
+        matches!(self, AppMember::Field { flags, .. } if flags & FIELD_ACCESS_STATIC == 0)
     }
 }
 
@@ -297,6 +307,43 @@ where
     Ok(methods)
 }
 
+/// Turns each instance field's slot into the word it occupies in the whole
+/// object, superclass words included.
+///
+/// A class's field table numbers its *own* fields from zero, and the metadata's
+/// instance-word count covers the superclass too - so the words a class
+/// inherits are exactly the count minus the words its own fields take, and that
+/// difference is where its own fields start. Battle Monster's `Game extends a`
+/// declares `a:Lj; b:Ld; c:Li; d:Ll; e:Le;` at 0..4 while `a` declares
+/// `a:LDisplay; e:Z v:Lo; w:I` at 0..3; taken literally the two sets land on
+/// the same four words, and `Game`'s fields overwrite the Jlet's card handoff.
+/// With the base applied they sit at 10..14 and 6..9, which is the layout the
+/// compiled code and the platform's own field slots (`Card.x` at 0,
+/// `ShellComponent.cd` at 24) are numbered in.
+///
+/// A `long` or `double` occupies two words, so the own-field width is counted
+/// in words rather than rows. A table that claims more words than the class has
+/// is not a layout this can make sense of, and is left alone.
+fn rebase_instance_field_slots(members: &mut [AppMember], instance_words: u32) {
+    let own_words: u32 = members
+        .iter()
+        .filter(|member| member.is_instance_field())
+        .map(|member| if matches!(member.descriptor(), "J" | "D") { 2 } else { 1 })
+        .sum();
+
+    let Some(base) = instance_words.checked_sub(own_words) else {
+        return;
+    };
+
+    for member in members.iter_mut() {
+        if let AppMember::Field { flags, slot, .. } = member
+            && *flags & FIELD_ACCESS_STATIC == 0
+        {
+            *slot += base;
+        }
+    }
+}
+
 /// Reads the counted table of interface names a class implements.
 fn parse_interfaces<R>(reader: &R, table: u32) -> Result<Vec<String>>
 where
@@ -350,6 +397,8 @@ where
     } else {
         Vec::new()
     };
+
+    rebase_instance_field_slots(&mut members, instance_words.into());
 
     if methods_table != 0 {
         members.extend(parse_methods(reader, root, methods_table)?);
@@ -667,6 +716,61 @@ mod tests {
 
         assert_eq!(class.name, "b");
         assert!(class.members.is_empty());
+    }
+
+    /// Battle Monster's `Game extends a`: the metadata numbers a class's own
+    /// fields from zero, and the instance-word count is the whole object.
+    #[test]
+    fn instance_field_slots_start_after_the_inherited_words() {
+        let base = 0x1000;
+        let mut image = Image::new(base, 0x400);
+
+        let metadata = 0x1100;
+        let root = metadata + METADATA_SIZE;
+        let fields = root + FIELD_TABLE_OFFSET;
+        let methods = fields + 3 * FIELD_ROW_SIZE;
+
+        image.string(0x1000, "Game");
+        image.string(0x1010, "a");
+        image.string(0x1020, "a");
+        image.string(0x1030, "Lj;");
+        image.string(0x1040, "seed");
+        image.string(0x1050, "J");
+        image.string(0x1060, "shared");
+        image.string(0x1070, "I");
+
+        image.word(metadata + METADATA_NAME, 0x1000);
+        image.word(metadata + METADATA_SUPERCLASS, 0x1010);
+        // Ten words inherited from `a`, then `a:Lj;` and the two-word `seed:J`.
+        image.word(metadata + METADATA_INSTANCE_WORDS, 13);
+        image.word(metadata + METADATA_METHODS, methods);
+        image.word(root + 8, metadata);
+
+        // The static row's slot indexes the class's static block, not an
+        // instance, so it is left where it is.
+        for (index, (name, descriptor, flags)) in [(0x1020, 0x1030, 0x8001), (0x1040, 0x1050, 0x1), (0x1060, 0x1070, 0x9)]
+            .into_iter()
+            .enumerate()
+        {
+            let row = fields + index as u32 * FIELD_ROW_SIZE;
+            image.word(row, root);
+            image.word(row + 4, name);
+            image.word(row + 8, descriptor);
+            image.word(row + 0xc, flags);
+            image.word(row + FIELD_SLOT_OFFSET, index as u32);
+        }
+
+        image.word(methods, 0);
+
+        let class = parse_class(&image, root).unwrap();
+        let slots = class
+            .members
+            .iter()
+            .filter(|member| member.is_field())
+            .map(|member| (member.name(), member.slot()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(slots, vec![("a", 10), ("seed", 11), ("shared", 2)]);
     }
 
     #[test]

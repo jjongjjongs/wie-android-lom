@@ -72,6 +72,7 @@ impl Display {
                     Self::call_serially_with_timeout,
                     Default::default(),
                 ),
+                JavaMethodProto::new("postCallSeriallyEvent", "()V", Self::post_call_serially_event, Default::default()),
                 JavaMethodProto::new("isColor", "()Z", Self::is_color, Default::default()),
                 JavaMethodProto::new("numColors", "()I", Self::num_colors, Default::default()),
                 JavaMethodProto::new("hasPointerEvents", "()Z", Self::has_pointer_events, Default::default()),
@@ -482,6 +483,20 @@ impl Display {
         timeout: i32,
     ) -> JvmResult<()> {
         tracing::warn!("stub org.kwis.msp.lcdui.Display::callSerially({this:?}, {runnable:?}, {timeout})");
+
+        Ok(())
+    }
+
+    /// Posts the firmware's `CALL_SERIALLY_EVENT` so the event thread drains
+    /// the runnables `callSerially` has queued.
+    ///
+    /// WIE's event pump already runs a queued runnable whenever it finds no
+    /// input event waiting, so the queue needs no nudge and there is nothing
+    /// left for this to do. It still has to exist: Battle Monster's worker
+    /// calls it on every card switch, and without the method the bridge raises
+    /// a `NoSuchMethodError` that kills the thread before the first frame.
+    async fn post_call_serially_event(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Display::postCallSeriallyEvent({this:?})");
 
         Ok(())
     }
