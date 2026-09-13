@@ -214,6 +214,9 @@ impl BaseClip {
     }
 }
 
+/// How often a clip's completion flag is read while it plays.
+const COMPLETION_POLL_PERIOD: u64 = 16;
+
 struct ClipCompletionRunner {
     clip: ClassInstanceRef<BaseClip>,
     completed: Arc<AtomicBool>,
@@ -230,7 +233,13 @@ impl MethodBody<JavaError, WieJvmContext> for ClipCompletionRunner {
                 return Ok(JavaValue::Void);
             }
 
-            context.system().sleep(1).await;
+            // The flag this waits on is written by the audio layer's own
+            // watcher, which polls at 50ms - so it cannot change any finer than
+            // that, and reading it every millisecond only spent the executor's
+            // budget without ever noticing anything sooner. A frame is the
+            // resolution kept here: it bounds how late the end-of-media
+            // callback can be to less than the flag's own granularity.
+            context.system().sleep(COMPLETION_POLL_PERIOD).await;
         }
 
         if self.stopped.load(Ordering::Relaxed) {

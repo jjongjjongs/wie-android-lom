@@ -246,4 +246,7 @@ to change nothing.
 
 **What the same measurement did turn up** is that Bigi 미궁 asks for `sleep(1)`
 8,908 times in 2,000 ticks - four and a half times a tick, from a task that
-never draws. That is its own question and nothing to do with frame pacing.
+never draws. That turned out to be ours rather than the title's: 8,893 of them
+came from the clip-completion watcher, which read a flag every millisecond that
+the audio layer's own watcher only writes every fifty. Reading it at a frame
+instead takes the same window from 8,893 polls to 195.

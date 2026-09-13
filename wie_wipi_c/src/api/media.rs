@@ -282,6 +282,9 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
     };
 
     if callback != 0 && repeat == 0 {
+        /// How often a clip's completion flag is read while it plays.
+        const COMPLETION_POLL_PERIOD: u64 = 16;
+
         struct PlaybackCompletedCallback {
             completed: Arc<AtomicBool>,
             stopped: Arc<AtomicBool>,
@@ -293,7 +296,11 @@ pub async fn play(context: &mut dyn WIPICContext, ptr_clip: WIPICWord, repeat: W
         impl MethodBody<WieError> for PlaybackCompletedCallback {
             async fn call(&self, context: &mut dyn WIPICContext, _: Box<[WIPICWord]>) -> Result<WIPICResult> {
                 while !self.completed.load(Ordering::Acquire) && !self.stopped.load(Ordering::Acquire) {
-                    context.system().sleep(1).await;
+                    // A frame, not a millisecond: the audio layer writes these
+                    // flags from a watcher of its own that polls at 50ms, so a
+                    // finer read cannot see anything sooner and only takes
+                    // executor time away from the guest.
+                    context.system().sleep(COMPLETION_POLL_PERIOD).await;
                 }
 
                 if self.stopped.load(Ordering::Acquire) {
