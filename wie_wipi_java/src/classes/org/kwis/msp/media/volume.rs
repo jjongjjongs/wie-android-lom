@@ -2,7 +2,7 @@ use alloc::vec;
 
 use java_class_proto::JavaMethodProto;
 use java_constants::MethodAccessFlags;
-use jvm::{Jvm, Result as JvmResult};
+use jvm::{ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_jvm_support::{WieJavaClassProto, WieJvmContext};
 
@@ -16,16 +16,35 @@ impl Volume {
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
             methods: vec![
+                JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
                 JavaMethodProto::new("set", "(I)V", Self::set, MethodAccessFlags::NATIVE | MethodAccessFlags::STATIC),
                 JavaMethodProto::new("get", "()I", Self::get, MethodAccessFlags::NATIVE | MethodAccessFlags::STATIC),
                 JavaMethodProto::new("setMute", "(IZ)V", Self::set_mute, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("getMute", "(I)Z", Self::get_mute, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("setDefaultVolume", "(II)V", Self::set_default_volume_void, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("setDefaultVolume", "(II)Z", Self::set_default_volume, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("getDefaultVolume", "(I)I", Self::get_default_volume, MethodAccessFlags::STATIC),
             ],
             fields: vec![],
             access_flags: Default::default(),
         }
+    }
+
+    /// The reference declares this returning nothing; a title compiled against
+    /// it looks for that form, so both are here and one answers through the
+    /// other.
+    async fn set_default_volume_void(jvm: &Jvm, _: &mut WieJvmContext, category: i32, level: i32) -> JvmResult<()> {
+        let _: bool = jvm
+            .invoke_static("org/kwis/msp/media/Volume", "setDefaultVolume", "(II)Z", (category, level))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn init(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.media.Volume::<init>({this:?})");
+
+        Ok(())
     }
 
     async fn get(_: &Jvm, _: &mut WieJvmContext) -> JvmResult<i32> {

@@ -21,6 +21,7 @@ wie_midp = { workspace = true }
 
 [dev-dependencies]
 jvm_rust = { workspace = true }
+spin = { workspace = true }
 
 test_utils = { workspace = true }
 wie_util = { workspace = true }

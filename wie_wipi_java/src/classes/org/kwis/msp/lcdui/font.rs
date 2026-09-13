@@ -36,6 +36,7 @@ impl Font {
                     MethodAccessFlags::STATIC,
                 ),
                 JavaMethodProto::new("getFont", "(III)Lorg/kwis/msp/lcdui/Font;", Self::get_font, MethodAccessFlags::STATIC),
+                JavaMethodProto::new("getVFontList", "()[Ljava/lang/String;", Self::get_vfont_list, MethodAccessFlags::STATIC),
                 JavaMethodProto::new("stringWidth", "(Ljava/lang/String;)I", Self::string_width, Default::default()),
                 JavaMethodProto::new("substringWidth", "(Ljava/lang/String;II)I", Self::substring_width, Default::default()),
                 JavaMethodProto::new("charWidth", "(C)I", Self::char_width, Default::default()),
@@ -110,10 +111,20 @@ impl Font {
         jvm.invoke_virtual(&midp_font, "getHeight", "()I", ()).await
     }
 
-    async fn get_baseline_position(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
-        tracing::warn!("stub org.kwis.msp.lcdui.Font::getBaselinePosition({this:?})");
+    async fn get_baseline_position(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
+        tracing::debug!("org.kwis.msp.lcdui.Font::getBaselinePosition({this:?})");
 
-        Ok(0)
+        let size: i32 = jvm.get_field(&this, "size", "I").await?;
+        Ok(match size {
+            8 => 8,
+            0 => 9,
+            16 => 10,
+            4096 => 12,
+            8192 => 14,
+            16384 => 15,
+            32768 => 17,
+            _ => 9,
+        })
     }
 
     async fn get_face(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<i32> {
@@ -198,6 +209,15 @@ impl Font {
         Ok(instance)
     }
 
+    /// The vector faces the handset carries beyond its built-in one. There are
+    /// none here, so a title asking is given an empty list rather than a name
+    /// it cannot then select.
+    async fn get_vfont_list(jvm: &Jvm, _: &mut WieJvmContext) -> JvmResult<ClassInstanceRef<Array<String>>> {
+        tracing::debug!("org.kwis.msp.lcdui.Font::getVFontList()");
+
+        Ok(jvm.instantiate_array("Ljava/lang/String;", 0).await?.into())
+    }
+
     async fn string_width(jvm: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>, string: ClassInstanceRef<String>) -> JvmResult<i32> {
         tracing::debug!("org.kwis.msp.lcdui.Font::stringWidth({string:?})");
 
@@ -275,7 +295,7 @@ mod test {
             assert!(jvm.invoke_virtual::<_, bool>(&font, "isItalic", "()Z", ()).await?);
             assert!(jvm.invoke_virtual::<_, bool>(&font, "isUnderlined", "()Z", ()).await?);
             assert!(!jvm.invoke_virtual::<_, bool>(&font, "isPlain", "()Z", ()).await?);
-            assert_eq!(jvm.invoke_virtual::<_, i32>(&font, "getBaselinePosition", "()I", ()).await?, 0);
+            assert_eq!(jvm.invoke_virtual::<_, i32>(&font, "getBaselinePosition", "()I", ()).await?, 10);
 
             Ok(())
         })

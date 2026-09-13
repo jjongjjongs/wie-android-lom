@@ -61,6 +61,10 @@ impl Display {
                 JavaFieldProto::new("width", "I", Default::default()),
                 JavaFieldProto::new("height", "I", Default::default()),
                 JavaFieldProto::new("paintDisabled", "Z", Default::default()),
+                // Set while a paint is running, so serviceRepaints can service
+                // a pending repaint by painting here and now without a title
+                // that calls it from inside its own paint recursing.
+                JavaFieldProto::new("__wiePainting", "Z", Default::default()),
             ],
             access_flags: Default::default(),
         }
@@ -247,6 +251,9 @@ impl Display {
             .await?;
 
         if !current_displayable.is_null() {
+            let mut this = this.clone();
+            jvm.put_field(&mut this, "__wiePainting", "Z", true).await?;
+
             let screen_graphics: ClassInstanceRef<Graphics> = jvm.get_field(&this, "screenGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
             // TODO draw title and bottom soft bar if not fullscreen
@@ -260,6 +267,10 @@ impl Display {
                 )
                 .await;
             let _: () = jvm.invoke_virtual(&screen_graphics, "reset", "()V", ()).await?;
+            // Cleared before the exception is handled, so a failing handler
+            // cannot leave the flag standing and silence serviceRepaints for
+            // the rest of the run. Nothing below re-enters the title's paint.
+            jvm.put_field(&mut this, "__wiePainting", "Z", false).await?;
 
             if let Err(x) = result {
                 Self::handle_exception(jvm, x).await?;

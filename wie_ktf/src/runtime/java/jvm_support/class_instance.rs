@@ -38,15 +38,6 @@ impl JavaClassInstance {
         Ok(instance)
     }
 
-    pub fn destroy(mut self, field_size: KtfJvmWord) -> Result<()> {
-        let raw = self.read_raw()?;
-
-        Allocator::free(&mut self.core, raw.ptr_fields, (field_size + 4) as _)?;
-        Allocator::free(&mut self.core, self.ptr_raw, size_of::<RawJavaClassInstance>() as _)?;
-
-        Ok(())
-    }
-
     pub fn class(&self) -> Result<JavaClassDefinition> {
         let raw = self.read_raw()?;
 
@@ -92,11 +83,29 @@ impl JavaClassInstance {
 
 #[async_trait::async_trait]
 impl ClassInstance for JavaClassInstance {
-    fn destroy(self: Box<Self>) {
-        let field_size = self.class().unwrap().field_size().unwrap();
-
-        (*self).destroy(field_size as _).unwrap()
-    }
+    /// Deliberately frees nothing.
+    ///
+    /// The JVM calls this when its own collector decides an object is garbage,
+    /// and for KTF that decision is not to be trusted: the object is a block of
+    /// guest memory the ARM code may still be holding in a register, on its
+    /// stack or in another object's field, none of which is a JVM root. So the
+    /// JVM is allowed to forget the object, which costs nothing, but the guest
+    /// memory is not freed.
+    ///
+    /// Freeing it on the JVM's word corrupts live state, measurably: 투스워즈
+    /// loses the byte array behind a resource it is decoding and dies a few
+    /// frames later reading a length that has become another block's
+    /// bookkeeping.
+    ///
+    /// Nothing reclaims them instead, so a KTF title's heap only grows. That is
+    /// also what the reference emulator does, which is worth saying because it
+    /// makes this a design rather than a debt: its KTF runtime builds its Java
+    /// objects in guest memory the same way and has no collector for them at
+    /// all - the only `collectGarbage` in the whole binary belongs to its
+    /// SK-VM, and there is no free, destroy or reclaim of a KTF Java object
+    /// anywhere in it. Its one root-visitor for KTF covers strings, for state
+    /// snapshots.
+    fn destroy(self: Box<Self>) {}
 
     fn identity(&self) -> usize {
         self.ptr_raw as _

@@ -32,6 +32,12 @@ impl JavaArrayClassInstance {
         let length_address = class_instance.field_address(0)?;
         write_generic(core, length_address, count as u32)?;
 
+        tracing::trace!(
+            "Instantiated array {} of {count} at {:#x}",
+            array_class.class.name()?,
+            class_instance.ptr_raw
+        );
+
         Ok(Self::from_raw(class_instance.ptr_raw, core))
     }
 
@@ -75,11 +81,8 @@ impl JavaArrayClassInstance {
 
 #[async_trait::async_trait]
 impl ClassInstance for JavaArrayClassInstance {
-    fn destroy(self: Box<Self>) {
-        let field_size = self.element_size().unwrap() * self.array_length().unwrap() + 4;
-
-        self.class_instance.destroy(field_size as _).unwrap()
-    }
+    /// Frees nothing, for the reason `JavaClassInstance`'s does not.
+    fn destroy(self: Box<Self>) {}
 
     fn identity(&self) -> usize {
         self.class_instance.ptr_raw as _

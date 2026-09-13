@@ -1,3 +1,17 @@
 /target
 .vscode
-.cargo
+/.cargo/*
+!/.cargo/config.toml
+
+# Android
+/android/.gradle
+/android/build
+/android/app/build
+/android/app/.cxx
+/android/app/precompiled-validation-classes/
+/android/app/precompiled-validation.jar
+/android/local.properties
+
+# Local Cargo checkout marker; the vendored source itself is tracked.
+/third_party/arm32_cpu/.cargo-ok
+third_party/**/target/

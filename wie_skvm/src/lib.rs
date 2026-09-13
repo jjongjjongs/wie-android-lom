@@ -5,7 +5,7 @@ use wie_jvm_support::WieJavaClassProto;
 
 pub mod classes;
 
-pub fn get_protos() -> [WieJavaClassProto; 16] {
+pub fn get_protos() -> [WieJavaClassProto; 18] {
     [
         classes::com::skt::m::AudioClip::as_proto(),
         classes::com::skt::m::AudioSystem::as_proto(),
@@ -16,6 +16,8 @@ pub fn get_protos() -> [WieJavaClassProto; 16] {
         classes::com::skt::m::Vibration::as_proto(),
         classes::com::skt::m::ProgressBar::as_proto(),
         classes::com::skt::m::UnsupportedFormatException::as_proto(),
+        classes::com::xce::io::ByteToCharConverter::as_proto(),
+        classes::com::xce::io::ByteToCharEUC_KR::as_proto(),
         classes::com::xce::io::FileInputStream::as_proto(),
         classes::com::xce::io::FileOutputStream::as_proto(),
         classes::com::xce::io::XFile::as_proto(),

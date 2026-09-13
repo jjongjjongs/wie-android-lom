@@ -51,8 +51,23 @@ pub trait Canvas: Send {
     fn set_xor_mode(&mut self, xor_mode: bool);
     fn copy_area(&mut self, dx: i32, dy: i32, sx: i32, sy: i32, w: u32, h: u32, clip: Clip);
     fn draw(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip);
+    /// Like [`draw`](Self::draw), but pixels of `src` whose RGB565 value equals
+    /// `color_key565` are treated as transparent and skipped. This is the direct
+    /// path for a color-keyed sprite blit, avoiding the intermediate ARGB array
+    /// a `drawRGB` round-trip would allocate on every call.
+    fn draw_with_color_key(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip, color_key565: u16);
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color, clip: Clip);
-    fn draw_text(&mut self, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip);
+    fn draw_text(
+        &mut self,
+        string: &str,
+        x: i32,
+        y: i32,
+        font_height: f32,
+        font_baseline: f32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+    );
     fn draw_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color, clip: Clip);
     fn draw_arc(&mut self, x: i32, y: i32, w: u32, h: u32, start_angle: i32, arc_angle: i32, color: Color, clip: Clip);
     fn draw_round_rect(&mut self, x: i32, y: i32, w: u32, h: u32, arc_width: u32, arc_height: u32, color: Color, clip: Clip);
@@ -547,6 +562,38 @@ where
         }
     }
 
+    fn draw_with_color_key(&mut self, dx: i32, dy: i32, w: u32, h: u32, src: &dyn Image, sx: i32, sy: i32, clip: Clip, color_key565: u16) {
+        // Bounds exactly as `draw`; only the per-pixel body differs.
+        let x_start = 0i64.max(-(dx as i64)).max(-(sx as i64));
+        let x_end = (w as i64)
+            .min(self.image_buffer.width() as i64 - dx as i64)
+            .min(src.width() as i64 - sx as i64);
+        let y_start = 0i64.max(-(dy as i64)).max(-(sy as i64));
+        let y_end = (h as i64)
+            .min(self.image_buffer.height() as i64 - dy as i64)
+            .min(src.height() as i64 - sy as i64);
+
+        for y in y_start..y_end {
+            for x in x_start..x_end {
+                let px = (dx as i64 + x) as i32;
+                let py = (dy as i64 + y) as i32;
+                if px < clip.x || px >= clip.x + (clip.width as i32) || py < clip.y || py >= clip.y + (clip.height as i32) {
+                    continue;
+                }
+
+                let pixel = src.get_pixel((sx as i64 + x) as i32, (sy as i64 + y) as i32);
+                // RGB565 of the source pixel, matched against the key exactly as
+                // the WIPI drawImage color-key comparison does.
+                let pixel565 = (((pixel.r as u16) << 8) & 0xf800) | (((pixel.g as u16) << 3) & 0x07e0) | ((pixel.b as u16 >> 3) & 0x001f);
+                if pixel565 == color_key565 {
+                    continue;
+                }
+
+                self.blend_pixel(px, py, pixel);
+            }
+        }
+    }
+
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32, color: Color, clip: Clip) {
         // pre-clip to image bounds: guest can pass extreme coordinates whose deltas
         // overflow i32 and whose bresenham walk would take billions of steps
@@ -583,9 +630,18 @@ where
         }
     }
 
-    fn draw_text(&mut self, string: &str, x: i32, y: i32, text_alignment: TextAlignment, color: Color, clip: Clip) {
-        let size = 10.0; // TODO
-        let font = FONT.as_scaled(FONT.pt_to_px_scale(size).unwrap());
+    fn draw_text(
+        &mut self,
+        string: &str,
+        x: i32,
+        y: i32,
+        font_height: f32,
+        font_baseline: f32,
+        text_alignment: TextAlignment,
+        color: Color,
+        clip: Clip,
+    ) {
+        let font = FONT.as_scaled(font_height);
 
         let total_width = string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>();
         let x = match text_alignment {
@@ -607,7 +663,7 @@ where
                 outlined_glyph.draw(|glyph_x: u32, glyph_y, c| {
                     let bounds = outlined_glyph.px_bounds();
                     let px = x + (glyph_x as f32 + bounds.min.x + position) as i32;
-                    let py = y + (glyph_y as f32 + bounds.min.y + size) as i32;
+                    let py = y + (glyph_y as f32 + bounds.min.y + font_baseline) as i32;
                     if px < clip.x || px >= clip.x + clip.width as i32 || py < clip.y || py >= clip.y + clip.height as i32 {
                         return;
                     }
@@ -803,7 +859,12 @@ where
     }
 
     fn put_pixel(&mut self, x: i32, y: i32, color: Color) {
-        self.compose_pixel(x, y, color, false);
+        // A colour that is not fully opaque is composed with what is already
+        // there rather than replacing it: a caller that hands a primitive an
+        // alpha is asking for a translucent shape. Fully opaque - which is what
+        // a colour read back out of a framebuffer always is - stays the plain
+        // store it was.
+        self.compose_pixel(x, y, color, color.a < 0xff);
     }
 }
 
@@ -830,21 +891,197 @@ impl Clip {
     }
 }
 
+pub struct AnimationFrame {
+    pub image: Box<dyn Image>,
+    pub delay_ms: u32,
+}
+
+pub struct AnimatedImage {
+    pub frames: Vec<AnimationFrame>,
+}
+
+/// Decode a GIF animation without changing the ordinary single-image decoder.
+///
+/// `None` means that the input is not a GIF or that it contains fewer than
+/// two frames.  WIPI treats an image as animated only when it has more than
+/// one decoded frame.
+pub fn decode_gif_animation(data: &[u8]) -> Result<Option<AnimatedImage>> {
+    extern crate std; // XXX
+
+    use image::{AnimationDecoder, codecs::gif::GifDecoder};
+    use std::{io::Cursor, time::Duration};
+
+    if !(data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a")) {
+        return Ok(None);
+    }
+
+    let decoder = GifDecoder::new(Cursor::new(data)).map_err(|x| WieError::FatalError(x.to_string()))?;
+    let frames = decoder.into_frames().collect_frames().map_err(|x| WieError::FatalError(x.to_string()))?;
+
+    if frames.len() <= 1 {
+        return Ok(None);
+    }
+
+    let mut decoded_frames = Vec::with_capacity(frames.len());
+
+    for frame in frames {
+        let delay = Duration::from(frame.delay());
+        let delay_ms = delay.as_millis().min(u128::from(u32::MAX)) as u32;
+
+        let rgba = frame.into_buffer();
+        let width = rgba.width();
+        let height = rgba.height();
+
+        // Keep the same byte layout used by decode_image().
+        let data = rgba.pixels().flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]]).collect::<Vec<_>>();
+
+        let image = Box::new(VecImageBuffer::<ArgbPixel>::from_raw(width, height, pod_collect_to_vec(&data))) as Box<dyn Image>;
+
+        decoded_frames.push(AnimationFrame { image, delay_ms });
+    }
+
+    Ok(Some(AnimatedImage { frames: decoded_frames }))
+}
+
+fn decode_ecnx(data: &[u8]) -> Result<Box<dyn Image>> {
+    if data.len() < 0x14 || &data[..4] != b"ECNX" {
+        return Err(WieError::FatalError("Invalid ECNX image".to_string()));
+    }
+
+    let kind = u16::from_le_bytes([data[4], data[5]]);
+    if kind != 0x1900 {
+        return Err(WieError::FatalError("Unsupported ECNX image type".to_string()));
+    }
+
+    let width = u16::from_le_bytes([data[6], data[7]]) as usize;
+    let height = u16::from_le_bytes([data[8], data[9]]) as usize;
+    let transparent_index = u32::from_le_bytes([data[0x0a], data[0x0b], data[0x0c], data[0x0d]]) as usize;
+    let index_len = u32::from_le_bytes([data[0x10], data[0x11], data[0x12], data[0x13]]) as usize;
+
+    let pixel_count = width
+        .checked_mul(height)
+        .ok_or_else(|| WieError::FatalError("ECNX dimensions overflow".to_string()))?;
+
+    if index_len != pixel_count {
+        return Err(WieError::FatalError("Invalid ECNX pixel data length".to_string()));
+    }
+
+    let index_offset = 0x14usize;
+    let index_end = index_offset
+        .checked_add(index_len)
+        .ok_or_else(|| WieError::FatalError("ECNX pixel data overflow".to_string()))?;
+
+    if index_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX pixel data".to_string()));
+    }
+
+    let padding = (4 - (index_len & 3)) & 3;
+    let palette_count_offset = index_end
+        .checked_add(padding)
+        .ok_or_else(|| WieError::FatalError("ECNX palette offset overflow".to_string()))?;
+
+    let palette_count_end = palette_count_offset
+        .checked_add(4)
+        .ok_or_else(|| WieError::FatalError("ECNX palette count overflow".to_string()))?;
+
+    if palette_count_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX palette count".to_string()));
+    }
+
+    let palette_count = u32::from_le_bytes([
+        data[palette_count_offset],
+        data[palette_count_offset + 1],
+        data[palette_count_offset + 2],
+        data[palette_count_offset + 3],
+    ]) as usize;
+
+    let palette_offset = palette_count_end;
+    let palette_size = palette_count
+        .checked_mul(2)
+        .ok_or_else(|| WieError::FatalError("ECNX palette size overflow".to_string()))?;
+    let palette_end = palette_offset
+        .checked_add(palette_size)
+        .ok_or_else(|| WieError::FatalError("ECNX palette data overflow".to_string()))?;
+
+    if palette_end > data.len() {
+        return Err(WieError::FatalError("Truncated ECNX palette".to_string()));
+    }
+
+    let mut palette = Vec::with_capacity(palette_count);
+    for i in 0..palette_count {
+        let offset = palette_offset + i * 2;
+        palette.push(u16::from_le_bytes([data[offset], data[offset + 1]]));
+    }
+
+    let mut pixels = Vec::with_capacity(pixel_count * 4);
+
+    for &index in &data[index_offset..index_end] {
+        let index = index as usize;
+
+        let color = if index < palette.len() { palette[index] } else { 0 };
+
+        let r5 = ((color >> 11) & 0x1f) as u8;
+        let g6 = ((color >> 5) & 0x3f) as u8;
+        let b5 = (color & 0x1f) as u8;
+
+        let r = (r5 << 3) | (r5 >> 2);
+        let g = (g6 << 2) | (g6 >> 4);
+        let b = (b5 << 3) | (b5 >> 2);
+        let a = if index == transparent_index { 0 } else { 255 };
+
+        pixels.extend_from_slice(&[b, g, r, a]);
+    }
+
+    Ok(Box::new(VecImageBuffer::<ArgbPixel>::from_raw(
+        width as u32,
+        height as u32,
+        pod_collect_to_vec(&pixels),
+    )) as Box<dyn Image>)
+}
+
 pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
     extern crate std; // XXX
 
     use std::io::Cursor;
 
-    if data[0] == b'L' && data[1] == b'B' && data[2] == b'M' && data[3] == b'P' {
+    if data.len() >= 4 && &data[..4] == b"LBMP" {
         return decode_lbmp(data);
     }
 
-    let image = ImageReader::new(Cursor::new(&data))
+    if data.len() >= 4 && &data[..4] == b"ECNX" {
+        return decode_ecnx(data);
+    }
+
+    let decoded = ImageReader::new(Cursor::new(&data))
         .with_guessed_format()
         .map_err(|x| WieError::FatalError(x.to_string()))?
-        .decode()
-        .map_err(|x| WieError::FatalError(x.to_string()))?;
-    let rgba = image.into_rgba8();
+        .decode();
+
+    // A handset's PNG decoder did not check chunk CRCs, so a title could patch
+    // a palette where it lay and leave the checksum on the bytes it replaced.
+    // 액션퍼즐패밀리1 does exactly that, and strict decoding turns three of its
+    // images into nothing - which it then draws, and the null takes an
+    // exception out through its key handler, past the line that releases the
+    // handler's own lock. The next key release waits on that lock forever.
+    let image = match decoded {
+        Ok(image) => image,
+        Err(error) => {
+            let repaired = png_with_repaired_crcs(&data).ok_or_else(|| WieError::FatalError(error.to_string()))?;
+
+            ImageReader::new(Cursor::new(&repaired))
+                .with_guessed_format()
+                .map_err(|x| WieError::FatalError(x.to_string()))?
+                .decode()
+                .map_err(|_| WieError::FatalError(error.to_string()))?
+        }
+    };
+    let mut rgba = image.into_rgba8();
+
+    if rgba.width() <= 15 && rgba.height() <= 15 && png_is_single_index0_tile(data) {
+        for pixel in rgba.pixels_mut() {
+            pixel.0[3] = 0;
+        }
+    }
 
     let data = rgba.pixels().flat_map(|x| [x.0[2], x.0[1], x.0[0], x.0[3]]).collect::<Vec<_>>();
 
@@ -855,8 +1092,102 @@ pub fn decode_image(data: &[u8]) -> Result<Box<dyn Image>> {
     )) as Box<_>)
 }
 
+/// The same PNG with every chunk CRC recomputed, or `None` if it is not a PNG or
+/// every CRC was already right.
+///
+/// Only reached once a strict decode has already refused the bytes, so a sound
+/// image never takes this path. Nothing but the four checksum bytes of a chunk
+/// is touched: a length that does not fit stops the walk and leaves the rest as
+/// it was, so a genuinely truncated file still fails.
+fn png_with_repaired_crcs(data: &[u8]) -> Option<Vec<u8>> {
+    /// `\x89PNG\r\n\x1a\n`.
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    /// A chunk is a length, a type, its data and a CRC; all but the data are
+    /// four bytes each.
+    const FIELD: usize = 4;
+
+    if !data.starts_with(&SIGNATURE) {
+        return None;
+    }
+
+    let mut repaired = data.to_vec();
+    let mut at = SIGNATURE.len();
+    let mut repaired_any = false;
+
+    while let Some(header) = repaired.get(at..at + FIELD * 2) {
+        let length = u32::from_be_bytes(header[..FIELD].try_into().unwrap()) as usize;
+        // The CRC covers the type and the data, not the length ahead of them.
+        let covered = at + FIELD;
+        let Some(crc_at) = covered.checked_add(FIELD).and_then(|x| x.checked_add(length)) else {
+            break;
+        };
+        if crc_at + FIELD > repaired.len() {
+            break;
+        }
+
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(&repaired[covered..crc_at]);
+        let computed = hasher.finalize().to_be_bytes();
+
+        if repaired[crc_at..crc_at + FIELD] != computed {
+            repaired[crc_at..crc_at + FIELD].copy_from_slice(&computed);
+            repaired_any = true;
+        }
+
+        at = crc_at + FIELD;
+    }
+
+    repaired_any.then_some(repaired)
+}
+
+/// A tiny degenerate indexed PNG - one whose palette holds a single entry and
+/// which declares no `tRNS` - is entirely palette index 0. KTF/WIPI titles treat
+/// that index as the transparent colour, so such a tile is a fully transparent
+/// spacer the clet paints where it wants nothing drawn. The `image` crate
+/// flattens it to an opaque one-colour block instead; left opaque it buries
+/// whatever sits under it - the centred narration text of LGT's Legend of Master
+/// is hidden by a band of these 14x14 all-black tiles painted over it. The size
+/// bound keeps this to the small overlay tiles: a title also fills solid areas of
+/// its tile-map with 16x16 single-colour tiles that are meant to stay opaque.
+fn png_is_single_index0_tile(data: &[u8]) -> bool {
+    if data.len() < 8 || &data[..4] != b"\x89PNG" {
+        return false;
+    }
+
+    let mut i = 8usize;
+    let mut indexed = false;
+    let mut has_trns = false;
+    let mut palette_entries = 0u32;
+
+    while i + 8 <= data.len() {
+        let len = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
+        let chunk_type = &data[i + 4..i + 8];
+
+        match chunk_type {
+            b"IHDR" if i + 8 + 13 <= data.len() => indexed = data[i + 8 + 9] == 3,
+            b"PLTE" => palette_entries = (len / 3) as u32,
+            b"tRNS" => has_trns = true,
+            b"IDAT" | b"IEND" => break,
+            _ => {}
+        }
+
+        i = match i.checked_add(12).and_then(|x| x.checked_add(len)) {
+            Some(next) => next,
+            None => return false,
+        };
+    }
+
+    indexed && !has_trns && palette_entries == 1
+}
+
 pub fn string_width(string: &str, pt_size: f32) -> f32 {
     let font = FONT.as_scaled(FONT.pt_to_px_scale(pt_size).unwrap());
+
+    string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>()
+}
+
+pub fn string_width_px(string: &str, px_height: f32) -> f32 {
+    let font = FONT.as_scaled(px_height);
 
     string.chars().map(|c| font.h_advance(font.scaled_glyph(c).id)).sum::<f32>()
 }
@@ -864,12 +1195,214 @@ pub fn string_width(string: &str, pt_size: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use wie_util::Result;
 
     use crate::canvas::{Clip, Image, ImageBufferCanvas};
 
-    use super::{ArgbPixel, Canvas, Color, Rgb332Pixel, TextAlignment, VecImageBuffer};
+    use super::{ArgbPixel, Canvas, Color, Rgb332Pixel, TextAlignment, VecImageBuffer, decode_image, png_with_repaired_crcs};
+
+    /// A 1x1 indexed PNG, which is the smallest thing that has a palette to
+    /// patch.
+    fn indexed_png() -> Vec<u8> {
+        fn chunk(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+            let mut out = (body.len() as u32).to_be_bytes().to_vec();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(body);
+
+            let mut hasher = crc32fast::Hasher::new();
+            hasher.update(&out[4..]);
+            out.extend_from_slice(&hasher.finalize().to_be_bytes());
+
+            out
+        }
+
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        // 1x1, bit depth 8, colour type 3 (indexed).
+        png.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 3, 0, 0, 0]));
+        png.extend(chunk(b"PLTE", &[0x12, 0x34, 0x56]));
+        // One scanline: a zero filter byte and the single index.
+        png.extend(chunk(b"IDAT", &miniz_oxide::deflate::compress_to_vec_zlib(&[0, 0], 6)));
+        png.extend(chunk(b"IEND", &[]));
+
+        png
+    }
+
+    /// The offset of a chunk's four CRC bytes, found by walking from the
+    /// signature the way the repair does.
+    fn crc_offset_of(png: &[u8], kind: &[u8; 4]) -> usize {
+        let mut at = 8;
+        loop {
+            let length = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+            if &png[at + 4..at + 8] == kind {
+                return at + 8 + length;
+            }
+            at = at + 12 + length;
+        }
+    }
+
+    #[test]
+    fn a_sound_png_is_left_exactly_as_it_is() {
+        // The repair only ever runs behind a decode that already failed, but a
+        // file whose checksums are right must come back untouched even so.
+        assert_eq!(png_with_repaired_crcs(&indexed_png()), None);
+        assert_eq!(png_with_repaired_crcs(b"not a png at all"), None);
+    }
+
+    /// 액션퍼즐패밀리1 patches a palette where it lies and leaves the chunk's CRC
+    /// on the bytes it replaced. The handset never checked, so the image drew;
+    /// strict decoding turns it into nothing, and the title then draws the null.
+    #[test]
+    fn a_palette_patched_without_its_checksum_still_decodes() {
+        let sound = indexed_png();
+        let mut patched = sound.clone();
+        let at = crc_offset_of(&patched, b"PLTE");
+        patched[at] ^= 0xff;
+
+        assert!(decode_image(&patched).is_ok(), "a stale PLTE checksum must not lose the image");
+
+        // Repaired back to exactly the bytes a correct encoder would have written.
+        assert_eq!(png_with_repaired_crcs(&patched).as_deref(), Some(sound.as_slice()));
+    }
+
+    #[test]
+    fn a_truncated_png_is_still_refused() {
+        // The walk stops at a chunk that does not fit rather than reaching past
+        // it, so a genuinely damaged file fails as it should.
+        let sound = indexed_png();
+        let truncated = &sound[..sound.len() - 6];
+
+        assert!(decode_image(truncated).is_err());
+    }
+
+    /// A shape drawn in a colour that is not fully opaque is composed with what
+    /// is under it, which is what a title asking for a translucent panel gets.
+    #[test]
+    fn a_fill_that_is_not_opaque_is_blended_with_what_is_under_it() {
+        let mut canvas = ImageBufferCanvas::<VecImageBuffer<ArgbPixel>>::new(VecImageBuffer::new(2, 1));
+        let clip = Clip {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        };
+
+        canvas.fill_rect(0, 0, 2, 1, Color { a: 0xff, r: 0, g: 0, b: 0 }, clip);
+
+        let clip = Clip {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        // Half-covering white over black lands halfway between the two.
+        canvas.fill_rect(
+            0,
+            0,
+            1,
+            1,
+            Color {
+                a: 0x80,
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+            },
+            clip,
+        );
+
+        let blended = canvas.image().get_pixel(0, 0);
+        assert!((0x76..=0x8a).contains(&blended.r), "{:#x}", blended.r);
+        assert_eq!((blended.r, blended.g, blended.b), (blended.r, blended.r, blended.r));
+
+        // The pixel the translucent fill did not cover is untouched.
+        let untouched = canvas.image().get_pixel(1, 0);
+        assert_eq!((untouched.r, untouched.g, untouched.b), (0, 0, 0));
+    }
+
+    /// A fully opaque colour still replaces what is under it outright.
+    #[test]
+    fn an_opaque_fill_replaces_what_is_under_it() {
+        let mut canvas = ImageBufferCanvas::<VecImageBuffer<ArgbPixel>>::new(VecImageBuffer::new(1, 1));
+        let whole = || Clip {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+
+        canvas.fill_rect(0, 0, 1, 1, Color { a: 0xff, r: 0, g: 0, b: 0 }, whole());
+        canvas.fill_rect(
+            0,
+            0,
+            1,
+            1,
+            Color {
+                a: 0xff,
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+            },
+            whole(),
+        );
+
+        let pixel = canvas.image().get_pixel(0, 0);
+        assert_eq!((pixel.r, pixel.g, pixel.b), (0xff, 0xff, 0xff));
+    }
+
+    #[test]
+    fn test_decode_gif_animation_frames_and_delay() -> Result<()> {
+        extern crate std;
+
+        use alloc::{string::ToString, vec::Vec};
+        use image::{Delay, Frame, Rgba, RgbaImage, codecs::gif::GifEncoder};
+        use std::io::Cursor;
+
+        use crate::canvas::decode_gif_animation;
+        use wie_util::WieError;
+
+        let mut bytes = Vec::new();
+
+        {
+            let mut encoder = GifEncoder::new(Cursor::new(&mut bytes));
+
+            let frame1 = Frame::from_parts(
+                RgbaImage::from_pixel(2, 1, Rgba([255, 0, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(20, 1),
+            );
+            let frame2 = Frame::from_parts(
+                RgbaImage::from_pixel(2, 1, Rgba([0, 255, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(40, 1),
+            );
+
+            encoder
+                .encode_frames([frame1, frame2].into_iter())
+                .map_err(|x| WieError::FatalError(x.to_string()))?;
+        }
+
+        let animation = decode_gif_animation(&bytes)?.expect("two-frame GIF must be animated");
+
+        assert_eq!(animation.frames.len(), 2);
+        assert_eq!(animation.frames[0].delay_ms, 20);
+        assert_eq!(animation.frames[1].delay_ms, 40);
+
+        assert_eq!(animation.frames[0].image.width(), 2);
+        assert_eq!(animation.frames[0].image.height(), 1);
+        assert_eq!(animation.frames[1].image.width(), 2);
+        assert_eq!(animation.frames[1].image.height(), 1);
+
+        let first = animation.frames[0].image.get_pixel(0, 0);
+        let second = animation.frames[1].image.get_pixel(0, 0);
+
+        assert_eq!((first.r, first.g, first.b, first.a), (255, 0, 0, 255));
+        assert_eq!((second.r, second.g, second.b, second.a), (0, 255, 0, 255));
+
+        Ok(())
+    }
 
     #[test]
     fn test_canvas() -> Result<()> {
@@ -1243,11 +1776,11 @@ mod tests {
             height: 0,
         };
         let mut canvas = ImageBufferCanvas::new(VecImageBuffer::<ArgbPixel>::new(30, 20));
-        canvas.draw_text("A", 2, 2, TextAlignment::Left, WHITE, empty_clip);
+        canvas.draw_text("A", 2, 2, 40.0 / 3.0, 10.0, TextAlignment::Left, WHITE, empty_clip);
         let clipped = canvas.into_inner();
 
         let mut canvas = ImageBufferCanvas::new(VecImageBuffer::<ArgbPixel>::new(30, 20));
-        canvas.draw_text("A", 2, 2, TextAlignment::Left, WHITE, full_clip(30));
+        canvas.draw_text("A", 2, 2, 40.0 / 3.0, 10.0, TextAlignment::Left, WHITE, full_clip(30));
         let unclipped = canvas.into_inner();
 
         let count_set = |image: &VecImageBuffer<ArgbPixel>| {

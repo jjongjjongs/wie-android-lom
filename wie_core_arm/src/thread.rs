@@ -1,6 +1,6 @@
 use wie_util::Result;
 
-use crate::{Allocator, ArmCore, context::ArmCoreContext};
+use crate::{ArmCore, context::ArmCoreContext};
 
 const STACK_SIZE: u32 = 0x100000; // 1 MB
 
@@ -13,7 +13,7 @@ pub struct ThreadState {
 
 impl ThreadState {
     pub fn new(mut core: ArmCore) -> Result<Self> {
-        let stack_base = Allocator::alloc(&mut core, STACK_SIZE)?;
+        let stack_base = core.acquire_thread_stack(STACK_SIZE)?;
         let context = ArmCoreContext {
             r0: 0,
             r1: 0,
@@ -45,8 +45,6 @@ impl ThreadState {
 
 impl Drop for ThreadState {
     fn drop(&mut self) {
-        if let Err(err) = Allocator::free(&mut self.core, self.stack_base as _, self.stack_size as u32) {
-            tracing::error!("Failed to free thread stack: {err}");
-        }
+        self.core.release_thread_stack(self.stack_base as u32, self.stack_size as u32);
     }
 }

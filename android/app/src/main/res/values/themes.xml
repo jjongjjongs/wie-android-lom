@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The whole UI is built in code, so the theme only has to supply a dark
+      background and drop the action bar.
+    -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF000000</item>
+        <item name="android:colorBackground">#FF000000</item>
+        <item name="android:colorAccent">#FF1769AA</item>
+        <item name="android:windowActionBar">false</item>
+    </style>
+</resources>

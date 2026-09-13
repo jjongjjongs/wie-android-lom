@@ -220,7 +220,7 @@ impl Image {
         })
     }
 
-    async fn create_image_instance(jvm: &Jvm, width: u32, height: u32, data: &[u8], bytes_per_pixel: u32) -> JvmResult<ClassInstanceRef<Image>> {
+    pub async fn create_image_instance(jvm: &Jvm, width: u32, height: u32, data: &[u8], bytes_per_pixel: u32) -> JvmResult<ClassInstanceRef<Image>> {
         let mut data_array = jvm.instantiate_array("B", data.len() as _).await?;
         jvm.array_raw_buffer_mut(&mut data_array).await?.write(0, data)?;
 

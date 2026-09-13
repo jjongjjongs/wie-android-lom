@@ -137,6 +137,17 @@ impl Executor {
         self.inner.lock().current_task_id.unwrap() as _
     }
 
+    /// Whether every task is asleep with its wake-up still in the future — i.e.
+    /// there is nothing to run until a timer fires. This is exactly the
+    /// condition [`tick`](Self::tick) breaks its inner loop on; exposing it lets
+    /// the host stop spinning a budget out and sleep until real work is due,
+    /// instead of busy-waiting through the idle remainder of every tick.
+    pub fn is_idle(&self) -> bool {
+        let inner = self.inner.lock();
+        let running = inner.tasks.len() - inner.sleeping_tasks.len();
+        running == 0 && inner.sleeping_tasks.values().min().is_some_and(|&wakeup| inner.last_now < wakeup)
+    }
+
     fn step(&mut self, now: Instant) -> Result<()> {
         self.inner.lock().last_now = now;
 

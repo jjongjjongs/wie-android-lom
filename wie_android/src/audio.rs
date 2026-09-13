@@ -1,0 +1,365 @@
+//! Audio and vibration are pushed to Java as opaque byte commands, drained by
+//! `NativeBridge.nativePollOutput` and decoded in `AndroidAudioOutput`.
+//!
+//! Every command starts with a one byte opcode; all multi-byte fields are
+//! little endian.
+//!
+//! | opcode | layout                                                              |
+//! |--------|---------------------------------------------------------------------|
+//! | 1      | `channel:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]` |
+//! | 2      | `channels:u8`, `sample_rate:u32`, `sample_count:u32`, `samples:i16[]` |
+//! | 8      | `intensity:u8`, `duration_ms:u64`                                   |
+//!
+//! Opcode 1 is a clip, always mono: Java fires one track at it and forgets it.
+//! Opcode 2 is the synthesiser's continuous output, which needs a track that
+//! stays open between chunks or every seam would be a click; its samples are
+//! interleaved across however many channels the header names, and its count is
+//! of samples rather than of frames.
+//!
+//! MIDI never reaches Java. Android has no synthesiser that takes live MIDI
+//! events, so [`crate::ma3`] renders the sequence here and it leaves as
+//! opcode 2.
+
+use crate::{ma3::SAMPLE_RATE, platform::Shared};
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicPtr, AtomicU8, AtomicU64, Ordering},
+    },
+};
+
+/// Opcode 1 (a one-shot wave) is no longer emitted - recorded waves are mixed
+/// into the synth stream instead - but the wire format is still exercised by a
+/// layout test, so the constant and its builder live under `cfg(test)`.
+#[cfg(test)]
+const OPCODE_PLAY_WAVE: u8 = 1;
+const OPCODE_VIBRATE: u8 = 8;
+
+/// Header length shared by both commands; `AndroidAudioOutput` rejects
+/// anything shorter.
+const HEADER_LEN: usize = 10;
+
+/// Fixed gain the reference's MMF player applies to the rendered stream before
+/// the clip's own volume, from its `gain=2.0` log. Its output stage is this
+/// drive into a hard sixteen-bit clip, then the clip volume (an AudioTrack at
+/// `0.5` for a title that asks for fifty), so mid-level content keeps its full
+/// level and only peaks round off.
+const MMF_GAIN: f32 = 2.0;
+
+type WaveCallback = unsafe extern "C" fn(u8, u32, *const i16, usize) -> u8;
+
+static WAVE_CALLBACK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The mixer the audio thread pulls from. The Java audio pump renders chunks on
+/// demand through [`render_audio_bytes`], clocked by its own AudioTrack, so
+/// playback advances in real time on a thread of its own rather than in the
+/// bursts the game loop delivers - which is what the reference player does and
+/// what keeps the stream from breaking up. Held here, not behind the emulator's
+/// lock, so a render never waits on a game tick.
+static AUDIO_MIXER: Mutex<Option<Arc<Mutex<crate::ma3::SynthMixer>>>> = Mutex::new(None);
+
+/// Publishes the mixer for the audio pump to pull from.
+pub fn install_audio_mixer(mixer: Arc<Mutex<crate::ma3::SynthMixer>>) {
+    *AUDIO_MIXER.lock().unwrap_or_else(|x| x.into_inner()) = Some(mixer);
+}
+
+/// Renders `frames` stereo frames from the installed mixer as little-endian
+/// sixteen-bit bytes, or an empty vector when nothing is sounding. Called by the
+/// Java audio thread; that thread's AudioTrack is the clock, so the mixer
+/// advances in real time independent of the game loop.
+pub fn render_audio_bytes(frames: usize) -> Vec<u8> {
+    if frames == 0 {
+        return Vec::new();
+    }
+    let mixer = {
+        let guard = AUDIO_MIXER.lock().unwrap_or_else(|x| x.into_inner());
+        match guard.as_ref() {
+            Some(mixer) => mixer.clone(),
+            None => return Vec::new(),
+        }
+    };
+    let rendered = mixer.lock().unwrap_or_else(|x| x.into_inner()).render(frames);
+    let Some(samples) = rendered else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    out
+}
+
+/// Installs an optional host-side low-latency wave handler.
+///
+/// The stable symbol lets the Android audio helper register without patching
+/// a build-specific instruction address inside this library.
+#[unsafe(no_mangle)]
+pub extern "C" fn wie_set_wave_callback(callback: *mut c_void) {
+    WAVE_CALLBACK.store(callback, Ordering::Release);
+}
+
+fn wave_callback_consumed(channel: u8, sampling_rate: u32, wave_data: &[i16]) -> bool {
+    let callback = WAVE_CALLBACK.load(Ordering::Acquire);
+    if callback.is_null() {
+        return false;
+    }
+
+    let callback: WaveCallback = unsafe { std::mem::transmute(callback) };
+    unsafe { callback(channel, sampling_rate, wave_data.as_ptr(), wave_data.len()) != 0 }
+}
+
+pub fn vibrate_command(duration_ms: u64, intensity: u8) -> Vec<u8> {
+    let mut command = Vec::with_capacity(HEADER_LEN);
+
+    command.push(OPCODE_VIBRATE);
+    command.push(intensity);
+    command.extend_from_slice(&duration_ms.to_le_bytes());
+
+    command
+}
+
+fn scale_wave_volume(wave_data: &[i16], volume: u8) -> Vec<i16> {
+    let volume = volume.min(100);
+
+    wave_data
+        .iter()
+        .map(|sample| ((*sample as i32 * i32::from(volume)) / 100) as i16)
+        .collect()
+}
+
+#[cfg(test)]
+fn play_wave_command(channel: u8, sampling_rate: u32, wave_data: &[i16]) -> Vec<u8> {
+    let mut command = Vec::with_capacity(HEADER_LEN + wave_data.len() * 2);
+
+    command.push(OPCODE_PLAY_WAVE);
+    command.push(channel);
+    command.extend_from_slice(&sampling_rate.to_le_bytes());
+    command.extend_from_slice(&(wave_data.len() as u32).to_le_bytes());
+    for sample in wave_data {
+        command.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    command
+}
+
+pub struct AndroidAudioSink {
+    shared: Shared,
+    master_volume: AtomicU8,
+    /// The current render generation for each audio handle. A clip is rendered
+    /// off-thread, so a stop or a replay can land while its render is still
+    /// running; the worker installs its stream only if the handle's generation
+    /// still matches the one it started with, so a stopped or superseded clip is
+    /// discarded instead of playing on. Without this a background track stopped
+    /// mid-render is re-installed after the stop and never goes away, stacking
+    /// under everything that follows.
+    render_generation: Arc<Mutex<HashMap<u32, u64>>>,
+    next_generation: AtomicU64,
+}
+
+impl AndroidAudioSink {
+    pub fn new(shared: Shared) -> Self {
+        // Publish the mixer so the Java audio thread can pull rendered chunks
+        // from it directly, clocked by its own AudioTrack.
+        install_audio_mixer(shared.mixer_handle());
+        Self {
+            shared,
+            master_volume: AtomicU8::new(100),
+            render_generation: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: AtomicU64::new(0),
+        }
+    }
+}
+
+impl wie_backend::AudioSink for AndroidAudioSink {
+    fn set_master_volume(&self, volume: u8) {
+        let volume = volume.min(100);
+        self.master_volume.store(volume, Ordering::Relaxed);
+        self.shared.mixer().set_master_volume(volume);
+    }
+
+    fn open_midi_voice(&self) -> u32 {
+        self.shared.mixer().open()
+    }
+
+    fn close_midi_voice(&self, voice: u32) {
+        self.shared.mixer().close(voice);
+    }
+
+    fn play_wave(&self, channel: u8, sampling_rate: u32, wave_data: &[i16]) {
+        if wave_data.is_empty() {
+            return;
+        }
+
+        let volume = self.master_volume.load(Ordering::Relaxed);
+        if volume == 0 {
+            return;
+        }
+
+        // A disabled per-title override leaves this a no-op, but keep the hook so
+        // it can still substitute a wave when enabled.
+        if wave_callback_consumed(channel, sampling_rate, wave_data) {
+            return;
+        }
+
+        // Mix the wave into the synthesiser's output stream rather than firing a
+        // one-shot AudioTrack. The device sounds the streamed synth output but
+        // not the per-clip static tracks the old opcode-1 path opened, so routing
+        // recorded effects through the same stream is what makes them audible.
+        let samples = if volume == 100 {
+            wave_data.to_vec()
+        } else {
+            scale_wave_volume(wave_data, volume)
+        };
+        self.shared.mixer().push_pcm(samples, sampling_rate);
+        tracing::info!(
+            "[wave] mixed into synth stream: rate={sampling_rate} samples={} volume={volume}",
+            wave_data.len()
+        );
+    }
+
+    fn midi_note_on(&self, voice: u32, channel_id: u8, note: u8, velocity: u8) {
+        self.shared.mixer().note_on(voice, channel_id, note, velocity);
+    }
+
+    fn midi_note_off(&self, voice: u32, channel_id: u8, note: u8, _velocity: u8) {
+        self.shared.mixer().note_off(voice, channel_id, note);
+    }
+
+    fn midi_program_change(&self, voice: u32, channel_id: u8, program: u8) {
+        self.shared.mixer().program_change(voice, channel_id, program);
+    }
+
+    fn midi_control_change(&self, voice: u32, channel_id: u8, control: u8, value: u8) {
+        self.shared.mixer().control_change(voice, channel_id, control, value);
+    }
+
+    fn midi_pitch_bend(&self, voice: u32, channel_id: u8, value: u16) {
+        self.shared.mixer().pitch_bend(voice, channel_id, value);
+    }
+
+    /// System exclusive is where a file sends the voices it wants played, so
+    /// this is what makes a title sound like itself rather than like a set of
+    /// stand ins.
+    fn midi_sysex(&self, voice: u32, data: &[u8]) {
+        self.shared.mixer().sysex(voice, data);
+    }
+
+    /// Renders the whole file through the faithful [`crate::oma3`] port and
+    /// installs it as the music stream, so FM titles sound exactly as the
+    /// reference plays them. A file with no FM notes (a bare recorded-wave clip)
+    /// is declined so the live wave path keeps handling it.
+    fn play_smaf(&self, id: u32, data: &[u8], repeat: bool) -> Option<u32> {
+        let smaf = crate::oma3::smaf::parse(data).ok()?;
+        let analysis = crate::oma3::analysis::analyze(&smaf);
+        if analysis.notes.is_empty() && analysis.audio_events.is_empty() {
+            return None;
+        }
+        // The MA-3 renderer can only voice FM notes that resolved to a valid
+        // MA-3 tone and decoded PCM/wave events. A sequence that has neither -
+        // typically a plain-MIDI SMAF whose note-ons carry no MA-3 tone - yields
+        // a zero frame count (the reference's own `hasPlayable` gate). Decline
+        // it here so the caller falls back to the live MIDI player instead of
+        // installing a silent stream that also suppresses that fallback.
+        let frame_count = crate::oma3::renderer::frame_count_of(&analysis, SAMPLE_RATE as i32);
+        if frame_count <= 0 {
+            tracing::info!("[smaf] oma3 declined (nothing to voice), id={id}; deferring to MIDI player");
+            return None;
+        }
+        let frames = frame_count as u64;
+        let duration_ms = (frames * 1000 / u64::from(SAMPLE_RATE)) as u32;
+        tracing::info!(
+            "[smaf] oma3 accepted {} notes, {} audio events, {frames} frames ({duration_ms}ms), repeat={repeat}, id={id}",
+            analysis.notes.len(),
+            analysis.audio_events.len()
+        );
+
+        // Render off this thread. An FM-heavy sequence takes hundreds of
+        // milliseconds to a second to render, and doing it inline stalls the
+        // caller - the game's timer - and with it the audio pump that shares the
+        // loop, so the stream underruns and the sound breaks up. Hand the finished
+        // stream to the mixer when it is ready; the clip is silent for the render's
+        // length, which is far shorter than a note of the music it starts.
+        //
+        // Claim a generation for this handle so a stop or a replay that lands
+        // while the render is still running wins: the worker installs its stream
+        // only if the handle is still on this generation, so a stopped clip does
+        // not come back and stack under everything that follows.
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        self.render_generation.lock().unwrap_or_else(|x| x.into_inner()).insert(id, generation);
+
+        let shared = self.shared.clone();
+        let render_generation = self.render_generation.clone();
+        std::thread::spawn(move || {
+            let pcm = crate::oma3::renderer::render_all(analysis, SAMPLE_RATE as i32);
+            // The reference's player drives the rendered stream with a fixed
+            // 2x gain before the clip's own volume (its log: `gain=2.0` with the
+            // AudioTrack at 0.5), which leaves everything below half scale at its
+            // full level and only clips the peaks - a loudness lift, not a plain
+            // halving. Match it here so a sequence carries the same body it does
+            // on the handset rather than playing back at half the level.
+            let samples: Vec<i16> = pcm
+                .iter()
+                .map(|&s| (s * MMF_GAIN * 32767.0).round().clamp(-32768.0, 32767.0) as i16)
+                .collect();
+
+            // Install only if this handle is still on the generation this render
+            // began under; a stop or a newer play has otherwise superseded it.
+            // Hold the generation lock across the install (generations before
+            // mixer, the same order stop_smaf uses) so a stop cannot slip in
+            // between the check and the install.
+            let mut generations = render_generation.lock().unwrap_or_else(|x| x.into_inner());
+            if generations.get(&id) == Some(&generation) {
+                shared.mixer().set_song(id, samples, repeat);
+                generations.remove(&id);
+            }
+        });
+        Some(duration_ms)
+    }
+
+    fn stop_smaf(&self, id: u32) {
+        // Drop any pending render for this handle first, so a render still in
+        // flight does not install its stream after the stop.
+        let mut generations = self.render_generation.lock().unwrap_or_else(|x| x.into_inner());
+        generations.remove(&id);
+        self.shared.mixer().stop_song(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HEADER_LEN, play_wave_command, scale_wave_volume, vibrate_command};
+
+    #[test]
+    fn play_wave_layout_matches_java_decoder() {
+        let command = play_wave_command(1, 22050, &[-2, 1]);
+
+        assert_eq!(command[0], 1);
+        assert_eq!(command[1], 1);
+        assert_eq!(u32::from_le_bytes(command[2..6].try_into().unwrap()), 22050);
+        // Java multiplies this by two to get the byte count of the PCM body.
+        assert_eq!(u32::from_le_bytes(command[6..10].try_into().unwrap()), 2);
+        assert_eq!(command.len(), HEADER_LEN + 4);
+        assert_eq!(i16::from_le_bytes(command[10..12].try_into().unwrap()), -2);
+    }
+
+    #[test]
+    fn wave_volume_preserves_wipi_endpoints_and_scales_middle() {
+        let input = [-30000, -10000, 10000, 30000];
+
+        assert_eq!(scale_wave_volume(&input, 0), [0, 0, 0, 0]);
+        assert_eq!(scale_wave_volume(&input, 50), [-15000, -5000, 5000, 15000]);
+        assert_eq!(scale_wave_volume(&input, 100), input);
+    }
+
+    #[test]
+    fn vibrate_layout_matches_java_decoder() {
+        let command = vibrate_command(250, 200);
+
+        assert_eq!(command[0], 8);
+        assert_eq!(command[1], 200);
+        assert_eq!(u64::from_le_bytes(command[2..10].try_into().unwrap()), 250);
+        assert_eq!(command.len(), HEADER_LEN);
+    }
+}

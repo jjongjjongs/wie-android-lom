@@ -234,6 +234,44 @@ mod test {
         Ok((jvm, core))
     }
 
+    /// The JVM's collector cannot see what the guest holds, so a KTF object it
+    /// calls garbage must keep its memory. Freeing on its word is what took
+    /// 투스워즈 down mid-resource-load.
+    #[test]
+    fn a_destroyed_instance_keeps_its_guest_memory() -> Result<()> {
+        let mut system = System::new(Box::new(TestPlatform::new()), "", "", DefaultTaskRunner);
+
+        let done = Arc::new(AtomicBool::new(false));
+        let done_clone = done.clone();
+        let mut system_clone = system.clone();
+
+        system.spawn(async move || {
+            let (jvm, core) = init_jvm(&mut system_clone).await?;
+
+            let mut array = jvm.instantiate_array("B", 387).await.unwrap();
+            jvm.store_array(&mut array, 0, (0..387).map(|x| x as i8).collect::<Vec<_>>())
+                .await
+                .unwrap();
+            let address = KtfJvmSupport::class_instance_raw(&array);
+
+            jvm.destroy(array).unwrap();
+
+            // Same address, read back from the guest as the ARM code would.
+            let survivor = JavaArrayClassInstance::from_raw(address, &core);
+            assert_eq!(survivor.array_length().unwrap(), 387);
+
+            done_clone.store(true, Ordering::SeqCst);
+
+            Ok(())
+        });
+
+        while !done.load(Ordering::SeqCst) {
+            system.tick()?;
+        }
+
+        Ok(())
+    }
+
     #[test]
     fn test_jvm_support() -> Result<()> {
         let mut system = System::new(Box::new(TestPlatform::new()), "", "", DefaultTaskRunner);

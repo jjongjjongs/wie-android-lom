@@ -1,4 +1,4 @@
-use alloc::format;
+use alloc::{collections::BTreeMap, format, string::String, vec::Vec};
 use core::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
@@ -67,6 +67,17 @@ impl ListAllocator {
         Ok(address + size_of::<ListAllocationHeader>() as u32)
     }
 
+    pub fn allocation_size(core: &ArmCore, address: u32) -> Result<u32> {
+        let base_address = address - size_of::<ListAllocationHeader>() as u32;
+        let header: ListAllocationHeader = read_generic(core, base_address)?;
+
+        if !header.in_use() || header.size() < size_of::<ListAllocationHeader>() as u32 + CANARY_SIZE {
+            return Err(WieError::FatalError(format!("Address {address:#x} is not an active list allocation")));
+        }
+
+        Ok(header.size() - size_of::<ListAllocationHeader>() as u32 - CANARY_SIZE)
+    }
+
     pub fn free(core: &mut ArmCore, address: u32) -> Result<()> {
         let base_address = address - size_of::<ListAllocationHeader>() as u32;
 
@@ -123,7 +134,65 @@ impl ListAllocator {
             }
         }
 
+        let live_threads = crate::LIVE_THREADS.load(core::sync::atomic::Ordering::Relaxed);
+        let peak_threads = crate::PEAK_THREADS.load(core::sync::atomic::Ordering::Relaxed);
+        tracing::error!(
+            "No free block for {size:#x} bytes in the {base_size:#x} byte heap at {base_address:#x} (live threads={live_threads}, peak={peak_threads})"
+        );
+        // A heap exhausted by a leak looks very different from one merely
+        // fragmented: dump the live-block size profile so the dominant leaking
+        // allocation size is visible in the crash log.
+        tracing::error!("{}", Self::live_block_profile(core, base_address, base_size));
+
         Err(WieError::AllocationFailure)
+    }
+
+    /// Summarizes the in-use blocks by size class, for diagnosing an OOM. Walks
+    /// the block chain once; best-effort, so it stops at the first unreadable or
+    /// zero-size header rather than erroring during error reporting.
+    fn live_block_profile(core: &ArmCore, base_address: u32, base_size: u32) -> String {
+        let end = base_address + base_size;
+        let mut cursor = base_address;
+        let mut live_count: u32 = 0;
+        let mut live_bytes: u64 = 0;
+        let mut free_bytes: u64 = 0;
+        let mut largest_free: u32 = 0;
+        // size rounded up to a power of two -> (count, total bytes)
+        let mut buckets: BTreeMap<u32, (u32, u64)> = BTreeMap::new();
+
+        while cursor < end {
+            let Ok(header) = read_generic::<ListAllocationHeader, ArmCore>(core, cursor) else {
+                break;
+            };
+            let block = header.size();
+            if block == 0 {
+                break;
+            }
+            if header.in_use() {
+                live_count += 1;
+                live_bytes += u64::from(block);
+                let entry = buckets.entry(block.next_power_of_two()).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += u64::from(block);
+            } else {
+                free_bytes += u64::from(block);
+                largest_free = largest_free.max(block);
+            }
+            cursor += block;
+        }
+
+        let mut ranked: Vec<(u32, (u32, u64))> = buckets.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+        let top: Vec<String> = ranked
+            .iter()
+            .take(8)
+            .map(|(bucket, (count, bytes))| format!("~{bucket:#x}:{count}x={bytes}B"))
+            .collect();
+
+        format!(
+            "list heap profile: {live_count} live blocks using {live_bytes} B, {free_bytes} B free (largest free {largest_free:#x}); top sizes by bytes: {}",
+            top.join(", ")
+        )
     }
 }
 
@@ -134,6 +203,18 @@ mod tests {
     use crate::ArmCore;
 
     use super::ListAllocator;
+
+    #[test]
+    fn allocation_size_recovers_rounded_payload_capacity() -> Result<()> {
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.map(0x40000000, 0x1000)?;
+        ListAllocator::init(&mut core, 0x40000000, 0x1000)?;
+
+        let address = ListAllocator::alloc(&mut core, 0x40000000, 0x1000, 513)?;
+        assert_eq!(ListAllocator::allocation_size(&core, address)?, 516);
+
+        Ok(())
+    }
 
     #[test]
     fn test_allocator() -> Result<()> {

@@ -5,12 +5,13 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::mem::size_of;
+use core::mem::{offset_of, size_of};
 
 use java_runtime::classes::java::util::Vector;
 use jvm::{ClassInstanceRef, Jvm, runtime::JavaLangString};
-use wipi_types::ktf::java::WIPIJBInterface;
+use wipi_types::ktf::{InitParam2, java::WIPIJBInterface};
 
+use wie_backend::YieldFuture;
 use wie_core_arm::{Allocator, ArmCore, EmulatedFunction, ResultWriter, SvcId};
 use wie_jvm_support::JvmSupport;
 use wie_util::{ByteRead, Result, WieError, read_generic, read_null_terminated_string_bytes, write_generic};
@@ -35,8 +36,8 @@ async fn handle_java_interface_svc(core: &mut ArmCore, jvm: &mut Jvm, id: SvcId)
         JavaSvcId::GetField => EmulatedFunction::call(&get_field, core, &mut ()).await?.write(core, lr),
         JavaSvcId::JbUnk4 => EmulatedFunction::call(&jb_unk4, core, &mut ()).await?.write(core, lr),
         JavaSvcId::JbUnk5 => EmulatedFunction::call(&jb_unk5, core, &mut ()).await?.write(core, lr),
-        JavaSvcId::JbUnk7 => EmulatedFunction::call(&jb_unk7, core, &mut ()).await?.write(core, lr),
-        JavaSvcId::JbUnk8 => EmulatedFunction::call(&jb_unk8, core, &mut ()).await?.write(core, lr),
+        JavaSvcId::JbUnk7 => EmulatedFunction::call(&jb_monitor_enter, core, jvm).await?.write(core, lr),
+        JavaSvcId::JbUnk8 => EmulatedFunction::call(&jb_monitor_exit, core, jvm).await?.write(core, lr),
         JavaSvcId::RegisterClass => EmulatedFunction::call(&register_class, core, jvm).await?.write(core, lr),
         JavaSvcId::RegisterJavaString => EmulatedFunction::call(&register_java_string, core, jvm).await?.write(core, lr),
         JavaSvcId::CallNative => EmulatedFunction::call(&call_native, core, &mut ()).await?.write(core, lr),
@@ -116,11 +117,11 @@ async fn get_java_method(core: &mut ArmCore, _: &mut (), ptr_class: u32, ptr_ful
 
     tracing::debug!("get_java_method({ptr_class:#x}, {fullname})");
 
-    // ptr_class might be vtable
+    // ptr_class can also be a JVM-context-relative vtable reference.
     let first_item: u32 = read_generic(core, ptr_class)?;
     let method = if first_item != ptr_class + 4 {
-        // ptr_class is pointer to vtable
-        let vtable = JavaVtable::from_raw(core, first_item);
+        let ptr_vtable: u32 = read_generic(core, ptr_class + offset_of!(InitParam2, ptr_java_vtables) as u32)?;
+        let vtable = JavaVtable::from_raw(core, ptr_vtable);
         let method = vtable.find_method(&fullname.name, &fullname.descriptor)?;
 
         if method.is_none() {
@@ -176,21 +177,19 @@ async fn register_class(core: &mut ArmCore, jvm: &mut Jvm, ptr_class: u32) -> Re
 
     let class: JavaClassDefinition = KtfJvmSupport::class_from_raw(core, ptr_class);
     let class_name = class.name()?;
-    if jvm.has_class(&class_name) {
-        return Ok(());
+    if !jvm.has_class(&class_name) {
+        let ktf_class_loader = jvm
+            .get_static_field("net/wie/KtfClassLoader", "instance", "Lnet/wie/KtfClassLoader;")
+            .await
+            .unwrap();
+
+        let result = jvm.register_class(Box::new(class), Some(ktf_class_loader)).await;
+        if let Err(x) = result {
+            return Err(JvmSupport::to_wie_err(jvm, x).await);
+        }
     }
 
-    let ktf_class_loader = jvm
-        .get_static_field("net/wie/KtfClassLoader", "instance", "Lnet/wie/KtfClassLoader;")
-        .await
-        .unwrap();
-
-    let result = jvm.register_class(Box::new(class), Some(ktf_class_loader)).await;
-    if let Err(x) = result {
-        return Err(JvmSupport::to_wie_err(jvm, x).await);
-    }
-
-    // TODO we shouldn't resolve again.
+    // KTF AOT also calls this entry point to initialize classes before static field access.
     let class = jvm.resolve_class(&class_name).await.unwrap();
     jvm.ensure_initialized(&class).await.unwrap();
 
@@ -264,14 +263,68 @@ async fn jb_unk5(_: &mut ArmCore, _: &mut (), a0: u32, a1: u32) -> Result<u32> {
     Ok(0)
 }
 
-async fn jb_unk7(_: &mut ArmCore, _: &mut (), a0: u32) -> Result<u32> {
-    tracing::warn!("stub jb_unk7({a0:#x})");
+/// The two halves of `synchronized`, as the KTF compiler emits them.
+///
+/// A KTF title is compiled ahead of time to ARM, so the `monitorenter` and
+/// `monitorexit` bytecodes come back out as this pair of one-argument calls
+/// around the region they guard - including the one an exception handler makes
+/// on the way out of a block it is unwinding.
+///
+/// Both were stubs that did nothing, so the JVM never recorded that anything
+/// owned a monitor. The first title to `wait` inside a `synchronized` block was
+/// then told it did not own the monitor it had just entered: 드래곤하트 dies on
+/// its first frame that way, and 레나크사가 catches the same exception and
+/// retries forever.
+///
+/// The monitor is keyed by the instance's address, which is what the JVM uses
+/// for identity, so a second call about the same object finds the same monitor.
+async fn jb_monitor_enter(core: &mut ArmCore, jvm: &mut Jvm, ptr_instance: u32) -> Result<u32> {
+    tracing::trace!("jb_monitor_enter({ptr_instance:#x})");
+
+    // Entering on null is the title's own bug and the JVM has nothing to lock;
+    // say so rather than taking the emulator down over it.
+    if ptr_instance == 0 {
+        tracing::warn!("monitorenter on null");
+
+        return Ok(0);
+    }
+
+    let instance: Box<dyn jvm::ClassInstance> = Box::new(JavaClassInstance::from_raw(ptr_instance, core));
+    if let Err(x) = jvm.monitor_enter(&instance).await {
+        return Err(JvmSupport::to_wie_err(jvm, x).await);
+    }
 
     Ok(0)
 }
 
-async fn jb_unk8(_: &mut ArmCore, _: &mut (), a0: u32) -> Result<u32> {
-    tracing::warn!("stub jb_unk8({a0:#x})");
+async fn jb_monitor_exit(core: &mut ArmCore, jvm: &mut Jvm, ptr_instance: u32) -> Result<u32> {
+    tracing::trace!("jb_monitor_exit({ptr_instance:#x})");
+
+    if ptr_instance == 0 {
+        tracing::warn!("monitorexit on null");
+
+        return Ok(0);
+    }
+
+    let instance: Box<dyn jvm::ClassInstance> = Box::new(JavaClassInstance::from_raw(ptr_instance, core));
+    if let Err(x) = jvm.monitor_exit(&instance).await {
+        return Err(JvmSupport::to_wie_err(jvm, x).await);
+    }
+
+    // Give whoever was waiting on this monitor a turn before carrying on.
+    //
+    // Releasing a monitor wakes a waiter, but waking only marks its task
+    // runnable - on a cooperative executor it cannot actually run until the
+    // thread that released yields. 지크's game loop holds its lock across a
+    // `Thread.sleep(20)` and retakes it the instant it lets go, with nothing
+    // between the release and the next acquire that would yield, so the paint
+    // thread was woken and then beaten to the lock every single time and the
+    // screen stopped updating.
+    //
+    // A handset has two threads and a preemptive scheduler, so releasing a
+    // lock is a point where the waiting thread gets to run. This is that
+    // point.
+    YieldFuture::new().await;
 
     Ok(0)
 }

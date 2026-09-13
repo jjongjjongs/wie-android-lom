@@ -8,5 +8,5 @@ mod platform;
 pub use self::{
     filesystem::MemoryFilesystem,
     jvm::run_jvm_test,
-    platform::{TestPlatform, TestPlatformEvent},
+    platform::{TestPlatform, TestPlatformEvent, TestPlatformState},
 };

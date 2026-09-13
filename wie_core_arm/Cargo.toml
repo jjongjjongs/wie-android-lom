@@ -4,6 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Use the experimental block-caching Thumb engine (FastCpuEngine) instead of the
+# reference interpreter. Opt-in so it can be A/B tested on-device; correctness is
+# pinned by the differential tests in `engine::fast`.
+fast_cpu = []
+# Use the machine-code JIT (JitEngine), which compiles Thumb basic blocks to
+# native x86-64 / AArch64. Opt-in; correctness is pinned by differential tests
+# against the interpreter in `engine::jit`. Only usable on x86-64 / AArch64.
+jit = ["dep:dynasmrt"]
+
 [dependencies]
 async-trait = { workspace = true }
 bytemuck = { workspace = true }
@@ -13,7 +24,7 @@ spin = { workspace = true }
 toml = { version = "^1", default-features = false, features = ["parse", "serde"] }
 tracing = { workspace = true }
 
-arm32_cpu = { git = "https://github.com/dlunch/arm32_cpu.git" }
+arm32_cpu = { path = "../third_party/arm32_cpu" }
 
 wie_backend = { workspace = true }
 wie_util = { workspace = true }
@@ -22,6 +33,11 @@ wie_util = { workspace = true }
 gdbstub = { version = "^0.7" }
 gdbstub_arch = { version = "^0.3" }
 crossbeam = { version = "^0.8" }
+
+# Runtime assembler for the machine-code JIT. Only pulled in on architectures it
+# can emit for; the `jit` feature/module are gated to the same set.
+[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+dynasmrt = { version = "^5", optional = true }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["executor"] }

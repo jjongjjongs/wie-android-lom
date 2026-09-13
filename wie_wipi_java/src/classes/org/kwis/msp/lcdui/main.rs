@@ -16,15 +16,19 @@ impl Main {
             name: "org/kwis/msp/lcdui/Main",
             parent_class: Some("java/lang/Object"),
             interfaces: vec![],
-            methods: vec![JavaMethodProto::new(
-                "main",
-                "([Ljava/lang/String;)V",
-                Self::main,
-                MethodAccessFlags::STATIC,
-            )],
+            methods: vec![
+                JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
+                JavaMethodProto::new("main", "([Ljava/lang/String;)V", Self::main, MethodAccessFlags::STATIC),
+            ],
             fields: vec![],
             access_flags: Default::default(),
         }
+    }
+
+    async fn init(_: &Jvm, _: &mut WieJvmContext, this: ClassInstanceRef<Self>) -> JvmResult<()> {
+        tracing::debug!("org.kwis.msp.lcdui.Main::<init>({this:?})");
+
+        Ok(())
     }
 
     async fn main(jvm: &Jvm, _: &mut WieJvmContext, args: ClassInstanceRef<Array<String>>) -> JvmResult<()> {
@@ -32,7 +36,12 @@ impl Main {
 
         let wipi_midlet = jvm.new_class("net/wie/WIPIMIDlet", "()V", ()).await?;
 
-        let main_class_name = JavaLangString::to_rust_string(jvm, &jvm.load_array(&args, 0, 1).await?[0]).await?;
+        // argv hands the main class in binary (dotted) form - `atdata.JimaeMD` -
+        // but classes are registered in JVM internal (slash) form. Normalise so
+        // a packaged main class resolves; a bare class name is unchanged.
+        let main_class_name = JavaLangString::to_rust_string(jvm, &jvm.load_array(&args, 0, 1).await?[0])
+            .await?
+            .replace('.', "/");
         let main_class = jvm.new_class(&main_class_name, "()V", ()).await?;
 
         let _: () = jvm

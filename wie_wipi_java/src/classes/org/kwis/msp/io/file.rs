@@ -122,6 +122,18 @@ impl File {
 
         let file = jvm.new_class("java/io/File", "(Ljava/lang/String;)V", (filename,)).await?;
 
+        // WIPI opens a missing data file as an empty one rather than failing: a
+        // title reads its non-volatile store (e.g. "/NVdata.txt") before it has
+        // ever written it. A read-mode RandomAccessFile requires the file to
+        // exist, so create it empty first when it does not.
+        if mode == Mode::READ_ONLY {
+            let exists: bool = jvm.invoke_virtual(&file, "exists", "()Z", ()).await?;
+            if !exists {
+                let stream = jvm.new_class("java/io/FileOutputStream", "(Ljava/io/File;)V", (file.clone(),)).await?;
+                let _: () = jvm.invoke_virtual(&stream, "close", "()V", ()).await?;
+            }
+        }
+
         let raf = jvm
             .new_class(
                 "java/io/RandomAccessFile",

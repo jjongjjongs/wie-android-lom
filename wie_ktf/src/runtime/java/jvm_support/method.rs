@@ -12,7 +12,7 @@ use core::{
 use futures::TryFutureExt;
 use wie_jvm_support::JvmSupport;
 
-use java_class_proto::JavaMethodProto;
+use java_class_proto::{JavaMethodProto, MethodBody};
 use java_constants::MethodAccessFlags;
 use jvm::{ClassInstance, JavaError, JavaType, JavaValue, Jvm, Method, Result as JvmResult};
 use wipi_types::ktf::java::{
@@ -30,6 +30,36 @@ use crate::runtime::java::jvm_support::JavaClassDefinition;
 use crate::runtime::{SVC_CATEGORY_JAVA, java::JavaSvcFunctions};
 
 use super::{KtfJvmSupport, class_instance::JavaClassInstance, name::JavaFullName, value::JavaValueExt};
+
+/// Bit set on the SVC id of a method's register-argument entry point, so it
+/// does not collide with the parameter-block one registered under the method's
+/// own address. Method records live on the emulated heap well below 2 GiB, so
+/// the top bit is free.
+const REGISTER_ARGS_SVC_FLAG: u32 = 0x8000_0000;
+
+/// A [`JavaMethodProto`] with its body behind an `Arc`, so the two entry points
+/// a method can have both run the same Rust implementation.
+struct SharedMethodProto<C>
+where
+    C: ?Sized + Send,
+{
+    descriptor: String,
+    body: Arc<dyn MethodBody<JavaError, C>>,
+    access_flags: MethodAccessFlags,
+}
+
+impl<C> From<JavaMethodProto<C>> for SharedMethodProto<C>
+where
+    C: ?Sized + Send,
+{
+    fn from(proto: JavaMethodProto<C>) -> Self {
+        Self {
+            descriptor: proto.descriptor,
+            body: Arc::from(proto.body),
+            access_flags: proto.access_flags,
+        }
+    }
+}
 
 pub struct JavaMethod {
     pub ptr_raw: u32,
@@ -66,13 +96,39 @@ impl JavaMethod {
         let ptr_raw = Allocator::alloc(core, size_of::<RawJavaMethod>() as u32)?;
 
         let access_flags = proto.access_flags;
-        let fn_method = Self::register_java_method(core, jvm, ptr_raw, proto, context, java_functions)?;
+        let proto = SharedMethodProto::from(proto);
 
-        let (fn_body, fn_body_native) = if access_flags.contains(MethodAccessFlags::NATIVE) {
-            (0, fn_method)
+        // A method we flag NATIVE gets two entry points, because the two callers
+        // that reach it disagree about where the arguments are. `JavaMethod::run`
+        // - the Rust JVM invoking it - writes them into a parameter block and
+        // jumps to `fn_body_native`, which is what KTF's own native convention
+        // does. A title's AOT code, though, was compiled against the real
+        // handset's class metadata, and for a method that is ordinary Java there
+        // it emits an ordinary call: read `fn_body`, pass the arguments in
+        // registers, jump. 지크 does exactly that for `org.kwis.msf.io.Network.connect`
+        // and used to land on the 0 this wrote, dying as "jump native address is
+        // null" and taking its billing thread - and the whole title's progress
+        // past the menu - with it.
+        //
+        // So register the body twice: once reading arguments from the parameter
+        // block for `fn_body_native`, once from registers for `fn_body`. Both
+        // stubs run the same Rust body; only where they pick the arguments up
+        // differs, and each caller finds the entry point it expects.
+        let fn_native = if access_flags.contains(MethodAccessFlags::NATIVE) {
+            Some(Self::register_java_method(
+                core,
+                jvm,
+                ptr_raw,
+                &proto,
+                context.clone(),
+                java_functions.clone(),
+                true,
+            )?)
         } else {
-            (fn_method, 0)
+            None
         };
+        let fn_body = Self::register_java_method(core, jvm, ptr_raw | REGISTER_ARGS_SVC_FLAG, &proto, context, java_functions, false)?;
+        let fn_body_native = fn_native.unwrap_or(0);
 
         write_generic(
             core,
@@ -177,7 +233,17 @@ impl JavaMethod {
                 write_generic(&mut core, arg_container + (i * 4) as u32, *arg)?;
             }
 
-            tracing::trace!("Calling native method: {:#x}", raw.fn_body_native_or_exception_table);
+            // Name it: a native body is a bare stub address, and every one of
+            // them looks alike in a capture. When a title dies inside one - 지크
+            // does, in an `arraycopy` an `.ani` resource load makes - the name is
+            // the difference between reading the log and guessing at it. Native
+            // calls are rare enough (dozens a second, against the millions of
+            // ordinary ones the trace below counts) to afford reading it.
+            tracing::trace!(
+                "Calling native method {}: {:#x}",
+                self.name().map(|x| x.name).unwrap_or_default(),
+                raw.fn_body_native_or_exception_table
+            );
             let result = run_with_unwind(&mut core, raw.fn_body_native_or_exception_table, vec![0, arg_container]).await;
 
             Allocator::free(&mut core, arg_container, (raw_args.len() as u32) * 4)?;
@@ -239,10 +305,17 @@ impl JavaMethod {
                     let restore_context: u32 = read_generic(core, exception_handler.ptr_functions + 4)?;
                     let contexts_base = current_java_exception_handler + 24;
 
+                    // Name what was caught and what caught it: a resume that
+                    // lands in the wrong handler and a resume that lands in
+                    // the right one look identical without this.
                     tracing::debug!(
-                        "Java exception handler found: {:#x}, method: {:#x}",
+                        "Java exception handler found: {:#x}, method: {:#x}, catches {}, pc {:#x} in [{:#x}, {:#x})",
                         entry.target,
-                        exception_handler.ptr_method
+                        exception_handler.ptr_method,
+                        if entry.ptr_class == 0 { "any".into() } else { class.name()? },
+                        exception_handler.current_pc,
+                        entry.from_pc,
+                        entry.to_pc
                     );
 
                     return Err(WieError::JavaExceptionUnwind {
@@ -260,10 +333,11 @@ impl JavaMethod {
     fn register_java_method<C, Context>(
         core: &mut ArmCore,
         jvm: &Jvm,
-        ptr_method: u32,
-        proto: JavaMethodProto<C>,
+        svc_id: u32,
+        proto: &SharedMethodProto<C>,
         context: Context,
         java_functions: JavaSvcFunctions,
+        param_block_args: bool,
     ) -> Result<u32>
     where
         C: ?Sized + 'static + Send,
@@ -280,7 +354,8 @@ impl JavaMethod {
 
         let proxy = JavaMethodProxy {
             jvm: jvm.clone(),
-            proto,
+            body: proto.body.clone(),
+            param_block_args,
             context,
             parameter_types,
             return_type: return_type.clone(),
@@ -289,9 +364,9 @@ impl JavaMethod {
         let proxy = RegisteredFunctionHolder::new(proxy, &());
         java_functions
             .lock()
-            .insert(ptr_method, Arc::new(Box::new(proxy) as Box<dyn RegisteredFunction>));
+            .insert(svc_id, Arc::new(Box::new(proxy) as Box<dyn RegisteredFunction>));
 
-        core.make_svc_stub(SVC_CATEGORY_JAVA, ptr_method)
+        core.make_svc_stub(SVC_CATEGORY_JAVA, svc_id)
     }
 }
 
@@ -345,7 +420,11 @@ where
     Context: Deref<Target = C> + DerefMut + Clone,
 {
     jvm: Jvm,
-    proto: JavaMethodProto<C>,
+    body: Arc<dyn MethodBody<JavaError, C>>,
+    /// Where this entry point's caller left the arguments: in a parameter block
+    /// whose address is in the first register (KTF's native convention) when
+    /// true, in the registers themselves when false.
+    param_block_args: bool,
     context: Context,
     parameter_types: Vec<JavaType>,
     return_type: JavaType,
@@ -366,7 +445,7 @@ where
 
         let param_count = self.parameter_types.len() + double_long_count;
 
-        let raw_args = if self.proto.access_flags.contains(MethodAccessFlags::NATIVE) {
+        let raw_args = if self.param_block_args {
             let param_base = u32::get(core, 1);
             (0..param_count)
                 .map(|x| read_generic(core, param_base + (x as u32) * 4))
@@ -394,7 +473,7 @@ where
         let mut context = self.context.clone();
         let (_, lr) = core.read_pc_lr()?;
 
-        let result = self.proto.body.call(&self.jvm, &mut context, args.into_boxed_slice()).await;
+        let result = self.body.call(&self.jvm, &mut context, args.into_boxed_slice()).await;
         if let Err(JavaError::JavaException(x)) = result {
             // if we executed this from rust code, we should propagate this down
             if lr == RUN_FUNCTION_LR {

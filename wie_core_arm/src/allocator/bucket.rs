@@ -96,6 +96,40 @@ impl BucketAllocator {
 
     pub fn free(core: &mut ArmCore, base_address: u32, address: u32, size: u32) -> Result<()> {
         let bucket_index = Self::find_bucket_index(size);
+        Self::free_in_bucket(core, base_address, address, bucket_index)
+    }
+
+    pub fn allocation_size(base_address: u32, address: u32) -> Result<u32> {
+        for (bucket_index, &(slot_size, slot_count)) in BUCKETS.iter().enumerate() {
+            let header_address = base_address + region_offset(bucket_index) as u32;
+            let header_len = header_length(bucket_index) as u32;
+            let slots_start = header_address + header_len;
+            let slots_end = slots_start + slot_size as u32 * slot_count as u32;
+
+            if address >= slots_start && address < slots_end && (address - slots_start) % slot_size as u32 == 0 {
+                return Ok(slot_size as u32);
+            }
+        }
+
+        Err(WieError::FatalError(alloc::format!("Address {address:#x} is not a bucket allocation")))
+    }
+
+    pub fn free_unsized(core: &mut ArmCore, base_address: u32, address: u32) -> Result<()> {
+        for (bucket_index, &(slot_size, slot_count)) in BUCKETS.iter().enumerate() {
+            let header_address = base_address + region_offset(bucket_index) as u32;
+            let header_len = header_length(bucket_index) as u32;
+            let slots_start = header_address + header_len;
+            let slots_end = slots_start + slot_size as u32 * slot_count as u32;
+
+            if address >= slots_start && address < slots_end && (address - slots_start) % slot_size as u32 == 0 {
+                return Self::free_in_bucket(core, base_address, address, bucket_index);
+            }
+        }
+
+        Err(WieError::FatalError(alloc::format!("Address {address:#x} is not a bucket allocation")))
+    }
+
+    fn free_in_bucket(core: &mut ArmCore, base_address: u32, address: u32, bucket_index: usize) -> Result<()> {
         let (slot_size, _) = BUCKETS[bucket_index];
         let header_address = base_address + region_offset(bucket_index) as u32;
         let header_len = header_length(bucket_index);
@@ -107,7 +141,21 @@ impl BucketAllocator {
         let index = offset / 8;
         let bit = offset % 8;
 
-        debug_assert!(header[index as usize] & (1 << bit) == 0);
+        // A guest that frees a block twice gets the second free ignored, not an
+        // abort. Freeing a free slot is setting a bit that is already set, so
+        // there is nothing to undo and nothing to corrupt; what there was, until
+        // this was a `debug_assert!`, was a debug build that died on it where a
+        // release build carried on, and a handset that carried on too.
+        //
+        // 창세기전3 is the title that showed it: its audio teardown runs
+        // `MC_mdaClipFree` down two paths and the second one frees a clip the
+        // first already did. It is worth seeing - it is a bug in something -
+        // but it is the guest's, and it is not this allocator's to stop on.
+        if header[index as usize] & (1 << bit) != 0 {
+            tracing::warn!("free of {address:#x}, which is already free");
+
+            return Ok(());
+        }
 
         header[index as usize] |= 1 << bit;
 
@@ -134,6 +182,21 @@ mod tests {
     // Bucket 1 (8-byte): region_offset = 0x20000 + 4*0x100000 = 0x420000.
     //   header_length = 0x80000 / 8 = 0x10000.
     //   First slot at base + 0x420000 + 0x10000 = 0x40430000.
+
+    #[test]
+    fn allocation_size_recovers_bucket_slot_capacity() -> Result<()> {
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.map(0x40000000, 0x8000000)?;
+        BucketAllocator::init(&mut core, 0x40000000, 0x8000000)?;
+
+        let a = BucketAllocator::alloc(&mut core, 0x40000000, 5)?;
+        assert_eq!(BucketAllocator::allocation_size(0x40000000, a)?, 8);
+
+        let b = BucketAllocator::alloc(&mut core, 0x40000000, 20)?;
+        assert_eq!(BucketAllocator::allocation_size(0x40000000, b)?, 32);
+
+        Ok(())
+    }
 
     #[test]
     fn test_allocator() -> Result<()> {
@@ -178,6 +241,28 @@ mod tests {
 
         // 0x1000000 (16 MB) is far too small for the full bucket layout.
         assert!(BucketAllocator::init(&mut core, 0x40000000, 0x1000000).is_err());
+    }
+
+    /// A guest that frees a block twice is not a reason to stop. The slot stays
+    /// free, the next allocation still gets it, and nothing else moves.
+    #[test]
+    fn a_second_free_of_the_same_block_changes_nothing() -> Result<()> {
+        let mut core = ArmCore::new(false, None).unwrap();
+        core.map(0x40000000, 0x8000000)?;
+        BucketAllocator::init(&mut core, 0x40000000, 0x8000000)?;
+
+        let a = BucketAllocator::alloc(&mut core, 0x40000000, 8)?;
+        let b = BucketAllocator::alloc(&mut core, 0x40000000, 8)?;
+
+        BucketAllocator::free(&mut core, 0x40000000, a, 8)?;
+        BucketAllocator::free(&mut core, 0x40000000, a, 8)?;
+
+        // The slot comes back once, to the next allocation, and the block beside
+        // it is still held.
+        assert_eq!(BucketAllocator::alloc(&mut core, 0x40000000, 8)?, a);
+        assert_ne!(BucketAllocator::alloc(&mut core, 0x40000000, 8)?, b);
+
+        Ok(())
     }
 
     #[test]

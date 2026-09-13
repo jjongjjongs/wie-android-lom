@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 pub type RecordId = u32;
 
@@ -18,4 +18,8 @@ pub trait DatabaseRepository {
     async fn open(&self, name: &str, app_id: &str) -> Box<dyn Database>;
     async fn exists(&self, name: &str, app_id: &str) -> bool;
     async fn delete(&self, name: &str, app_id: &str) -> bool;
+
+    /// Lists database names directly rooted in the application's database
+    /// namespace. Nested storage directories are not themselves databases.
+    async fn list(&self, app_id: &str) -> Vec<String>;
 }

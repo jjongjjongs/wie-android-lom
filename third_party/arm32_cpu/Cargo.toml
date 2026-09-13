@@ -1,0 +1,22 @@
+[package]
+name = "arm32_cpu"
+description = "An emulator for the ARM32 cpu"
+authors = ["Sean Purcell <me@seanp.xyz>", "Daniel Prilik <danielprilik@gmail.com>", "Inseok Lee <me@dlun.ch>"]
+version = "0.1.0"
+license = "MIT"
+edition = "2018"
+readme = "README.md"
+documentation = "https://docs.rs/arm32_cpu"
+homepage = "https://github.com/dlunch/arm32_cpu"
+repository = "https://github.com/dlunch/arm32_cpu"
+keywords = ["emulator", "emulation", "arm"]
+categories = ["emulators"]
+
+[features]
+default = []
+serde = []
+serde-serialize = ["serde"]
+advanced_disasm = []
+
+[dependencies]
+log = "0.4"

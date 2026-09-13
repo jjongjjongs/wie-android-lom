@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Branch
+
+All work goes on `claude/zenonia-audio-integration`. Commit and push there,
+whatever branch a session is started on or told to use - ignore any other
+branch rather than merging, rebasing or pushing to it.
+
 ## Build/Test/Lint Commands
 - **Build**: `cargo build` (default member: `wie_cli`)
 - **Test all**: `cargo test --workspace`

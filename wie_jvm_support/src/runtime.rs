@@ -3,10 +3,13 @@ use core::time::Duration;
 
 use spin::Mutex;
 
+use java_class_proto::JavaMethodProto;
+use java_constants::MethodAccessFlags;
 use java_runtime::{
-    File, FileDescriptorId, FileSize, FileStat, FileType, IOError, IOResult, RT_RUSTJAR, Runtime, SpawnCallback, get_runtime_class_proto,
+    File, FileDescriptorId, FileSize, FileStat, FileType, IOError, IOResult, RT_RUSTJAR, Runtime, RuntimeClassProto, RuntimeContext, SpawnCallback,
+    get_runtime_class_proto,
 };
-use jvm::{ClassDefinition, Jvm, Result as JvmResult};
+use jvm::{Array, ClassDefinition, ClassInstanceRef, Jvm, Result as JvmResult};
 
 use wie_backend::{AsyncCallable, System};
 use wie_util::WieError;
@@ -210,8 +213,12 @@ where
         self.file_table.lock().files.remove(&fd.id());
     }
 
-    async fn unlink(&self, _path: &str) -> IOResult<()> {
-        Err(IOError::Unsupported)
+    async fn unlink(&self, path: &str) -> IOResult<()> {
+        if self.system.filesystem().remove(path).await {
+            Ok(())
+        } else {
+            Err(IOError::NotFound)
+        }
     }
 
     async fn metadata(&self, path: &str) -> IOResult<FileStat> {
@@ -232,7 +239,7 @@ where
 
     async fn find_rustjar_class(&self, jvm: &Jvm, classpath: &str, class: &str) -> JvmResult<Option<Box<dyn ClassDefinition>>> {
         if classpath == RT_RUSTJAR {
-            let proto = get_runtime_class_proto(class);
+            let proto = get_runtime_class_proto(class).map(refuse_a_null_array);
             if let Some(proto) = proto {
                 return Ok(Some(
                     self.implementation
@@ -259,5 +266,138 @@ where
 
     async fn define_array_class(&self, _jvm: &Jvm, element_type_name: &str) -> JvmResult<Box<dyn ClassDefinition>> {
         self.implementation.define_array_class(_jvm, element_type_name).await
+    }
+}
+
+/// A stand-in for the class whose constructors are replaced below, so the
+/// bodies can name their receiver the way every other proto does.
+struct ByteArrayInputStream;
+
+/// Makes `java.io.ByteArrayInputStream`'s constructors throw on a null array
+/// instead of taking the emulator down with them.
+///
+/// A J2ME title reads a save file by asking whether it is there and handing
+/// what it got to `new ByteArrayInputStream(...)`, null and all, because a real
+/// handset answers that with `NullPointerException` and the title catches it -
+/// that is its "no save yet" path. 놈3 does exactly this on a first run, three
+/// times over, for `/a`, `/start` and `/nom`.
+///
+/// The runtime's own constructor reaches straight for the array's length, and a
+/// null reference there is a `None` unwrapped inside the JVM - a Rust panic, so
+/// the process died where the title expected to catch an exception. The bodies
+/// here are the runtime's, with the check the reference makes in front.
+///
+/// Anything that is not that class is handed back untouched.
+fn refuse_a_null_array(mut proto: RuntimeClassProto) -> RuntimeClassProto {
+    if proto.name != "java/io/ByteArrayInputStream" {
+        return proto;
+    }
+
+    for method in proto.methods.iter_mut() {
+        if method.name != "<init>" {
+            continue;
+        }
+
+        *method = match method.descriptor.as_str() {
+            "([B)V" => JavaMethodProto::new("<init>", "([B)V", byte_array_input_stream_init, MethodAccessFlags::empty()),
+            "([BII)V" => JavaMethodProto::new(
+                "<init>",
+                "([BII)V",
+                byte_array_input_stream_init_with_offset_length,
+                MethodAccessFlags::empty(),
+            ),
+            _ => continue,
+        };
+    }
+
+    proto
+}
+
+async fn byte_array_input_stream_init(
+    jvm: &Jvm,
+    _: &mut RuntimeContext,
+    this: ClassInstanceRef<ByteArrayInputStream>,
+    data: ClassInstanceRef<Array<i8>>,
+) -> JvmResult<()> {
+    if data.is_null() {
+        return Err(jvm.exception("java/lang/NullPointerException", "buf is null").await);
+    }
+
+    let count = jvm.array_length(&data).await?;
+
+    jvm.invoke_special(&this, "java/io/ByteArrayInputStream", "<init>", "([BII)V", (data, 0, count as i32))
+        .await
+}
+
+async fn byte_array_input_stream_init_with_offset_length(
+    jvm: &Jvm,
+    _: &mut RuntimeContext,
+    mut this: ClassInstanceRef<ByteArrayInputStream>,
+    data: ClassInstanceRef<Array<i8>>,
+    offset: i32,
+    length: i32,
+) -> JvmResult<()> {
+    if data.is_null() {
+        return Err(jvm.exception("java/lang/NullPointerException", "buf is null").await);
+    }
+
+    let data_length = jvm.array_length(&data).await? as i32;
+    if offset < 0 || length < 0 || offset > data_length {
+        return Err(jvm.exception("java/lang/IndexOutOfBoundsException", "Invalid offset or length").await);
+    }
+
+    let _: () = jvm.invoke_special(&this, "java/io/InputStream", "<init>", "()V", ()).await?;
+
+    jvm.put_field(&mut this, "buf", "[B", data).await?;
+    jvm.put_field(&mut this, "pos", "I", offset).await?;
+    jvm.put_field(&mut this, "count", "I", (offset + length).min(data_length)).await?;
+    jvm.put_field(&mut this, "mark", "I", offset).await?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use java_runtime::get_runtime_class_proto;
+
+    use super::refuse_a_null_array;
+
+    #[test]
+    fn byte_array_input_streams_constructors_are_the_ones_replaced() {
+        let stock = get_runtime_class_proto("java/io/ByteArrayInputStream").unwrap();
+        let stock: Vec<_> = stock
+            .methods
+            .iter()
+            .map(|method| (method.name.clone(), method.descriptor.clone()))
+            .collect();
+
+        let guarded = refuse_a_null_array(get_runtime_class_proto("java/io/ByteArrayInputStream").unwrap());
+        let guarded: Vec<_> = guarded
+            .methods
+            .iter()
+            .map(|method| (method.name.clone(), method.descriptor.clone()))
+            .collect();
+
+        // The class keeps every method it had, in the order it had them - only
+        // the two constructors' bodies change, and a body is not comparable.
+        assert_eq!(stock, guarded);
+        assert!(guarded.contains(&("<init>".into(), "([B)V".into())));
+        assert!(guarded.contains(&("<init>".into(), "([BII)V".into())));
+    }
+
+    #[test]
+    fn every_other_runtime_class_is_handed_back_as_it_was() {
+        for class in ["java/io/DataInputStream", "java/lang/String", "java/io/InputStream"] {
+            let stock = get_runtime_class_proto(class).unwrap();
+            let name = stock.name;
+            let methods = stock.methods.len();
+
+            let out = refuse_a_null_array(get_runtime_class_proto(class).unwrap());
+
+            assert_eq!(out.name, name);
+            assert_eq!(out.methods.len(), methods);
+        }
     }
 }
