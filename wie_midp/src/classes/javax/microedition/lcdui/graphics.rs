@@ -949,8 +949,34 @@ impl Graphics {
             "javax.microedition.lcdui.Graphics::drawRGB({this:?}, {rgb_data:?}, {offset}, {scan_length}, {x}, {y}, {width}, {height}, {process_alpha})"
         );
 
-        // TODO proper scanlength support
-        let pixel_data: Vec<i32> = jvm.load_array(&rgb_data, offset as _, (width * height) as _).await?;
+        // scanlength is the distance in array *elements* from the first pixel
+        // of one row to the first of the next, which the specification lets
+        // differ from the width: a caller may hand over a window into a wider
+        // picture, or a negative length for one stored bottom-up. Rows are
+        // gathered one at a time when it does differ, and the whole block read
+        // at once when it does not, which is every tightly packed caller.
+        let pixel_data: Vec<i32> = if scan_length == width {
+            jvm.load_array(&rgb_data, offset as _, (width * height) as _).await?
+        } else {
+            let mut rows = Vec::with_capacity((width.max(0) * height.max(0)) as usize);
+
+            for row in 0..height {
+                let start = row
+                    .checked_mul(scan_length)
+                    .and_then(|distance| offset.checked_add(distance))
+                    .filter(|start| *start >= 0);
+
+                let Some(start) = start else {
+                    return Err(jvm
+                        .exception("java/lang/ArrayIndexOutOfBoundsException", "drawRGB row offset out of range")
+                        .await);
+                };
+
+                rows.extend(jvm.load_array::<i32>(&rgb_data, start as _, width as _).await?);
+            }
+
+            rows
+        };
 
         let mut canvas = Self::canvas(jvm, &mut this).await?;
 
@@ -1042,6 +1068,67 @@ mod test {
     use wie_util::Result;
 
     use crate::{classes::javax::microedition::lcdui::Image, get_protos};
+
+    /// A picture whose rows sit further apart in the array than they are wide.
+    /// scanlength is what says so, and reading the block as one run instead
+    /// draws the padding as pixels.
+    #[test]
+    fn test_draw_rgb_honours_scanlength() -> Result<()> {
+        run_jvm_test(Box::new([get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static(
+                    "javax/microedition/lcdui/Image",
+                    "createImage",
+                    "(II)Ljavax/microedition/lcdui/Image;",
+                    (2, 2),
+                )
+                .await?;
+            let graphics = jvm
+                .new_class(
+                    "javax/microedition/lcdui/Graphics",
+                    "(Ljavax/microedition/lcdui/Image;)V",
+                    (image.clone(),),
+                )
+                .await?;
+
+            // Two rows of two pixels each, stored four elements apart. The two
+            // after each row are padding no caller asked to see.
+            let pad = 0xff00_0000u32 as i32;
+            let mut rgb_data = jvm.instantiate_array("I", 8).await?;
+            jvm.store_array(
+                &mut rgb_data,
+                0,
+                vec![
+                    0xffff_0000u32 as i32,
+                    0xff00_ff00u32 as i32,
+                    pad,
+                    pad,
+                    0xff00_00ffu32 as i32,
+                    0xffff_ffffu32 as i32,
+                    pad,
+                    pad,
+                ],
+            )
+            .await?;
+
+            let _: () = jvm
+                .invoke_virtual(&graphics, "drawRGB", "([IIIIIIIZ)V", (rgb_data, 0, 4, 0, 0, 2, 2, true))
+                .await?;
+
+            let drawn = Image::image(&jvm, &image).await?;
+            for (x, y, expected) in [
+                (0, 0, (0xff, 0x00, 0x00)),
+                (1, 0, (0x00, 0xff, 0x00)),
+                (0, 1, (0x00, 0x00, 0xff)),
+                (1, 1, (0xff, 0xff, 0xff)),
+            ] {
+                let color = drawn.get_pixel(x, y);
+                assert_eq!((color.r, color.g, color.b), expected, "pixel ({x}, {y})");
+            }
+
+            Ok(())
+        })
+    }
 
     #[test]
     fn test_graphics() -> Result<()> {

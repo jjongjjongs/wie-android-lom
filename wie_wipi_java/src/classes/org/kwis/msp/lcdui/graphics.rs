@@ -829,11 +829,19 @@ impl Graphics {
 
         let midp_graphics = jvm.get_field(&this, "midpGraphics", "Ljavax/microedition/lcdui/Graphics;").await?;
 
+        // bpl is the *bytes* one line of the picture needs - "한 줄의 이미지가
+        // 저장되기 위해서 필요한 바이트 수" - while MIDP's drawRGB counts its
+        // scanlength in array elements. Four bytes to a pixel, so the two differ
+        // by a factor of four; MC_grpSetRGBPixels beside this has always read
+        // the argument as bytes, and passing it through unconverted was this
+        // half disagreeing with that one.
+        let scan_length = bpl / 4;
+
         jvm.invoke_virtual(
             &midp_graphics,
             "drawRGB",
             "([IIIIIIIZ)V",
-            (rgb_pixels, offset, bpl, x, y, width, height, true),
+            (rgb_pixels, offset, scan_length, x, y, width, height, true),
         )
         .await
     }
@@ -1105,7 +1113,7 @@ impl Graphics {
         // MIDP drawRGB already applies the current translation, clipping and
         // XOR state, matching dgraphics_draw_raw_data().
         let _: () = jvm
-            .invoke_virtual(&this, "setRGBPixels", "(IIII[III)V", (x, y, width, height, rgb_array, 0, width))
+            .invoke_virtual(&this, "setRGBPixels", "(IIII[III)V", (x, y, width, height, rgb_array, 0, width * 4))
             .await?;
 
         Ok(())
@@ -1453,6 +1461,58 @@ mod test {
             assert_eq!((pixel1.r, pixel1.g, pixel1.b), (0xff, 0x00, 0x00));
             assert_eq!((pixel2.r, pixel2.g, pixel2.b), (0x00, 0xff, 0x00));
             assert_eq!((pixel3.r, pixel3.g, pixel3.b), (0x00, 0x00, 0xff));
+
+            Ok(())
+        })
+    }
+
+    /// setRGBPixels counts its last argument in bytes where MIDP's drawRGB
+    /// counts elements. A 2x2 picture stored four elements to a row declares
+    /// sixteen; passing the sixteen straight through reads past an
+    /// eight-element array.
+    #[test]
+    fn test_set_rgb_pixels_line_length_is_bytes() -> Result<()> {
+        run_jvm_test(Box::new([wie_midp::get_protos().into(), get_protos().into()]), |jvm| async move {
+            let image: ClassInstanceRef<Image> = jvm
+                .invoke_static("org/kwis/msp/lcdui/Image", "createImage", "(II)Lorg/kwis/msp/lcdui/Image;", (2, 2))
+                .await?;
+            let graphics: ClassInstanceRef<Graphics> = jvm.invoke_virtual(&image, "getGraphics", "()Lorg/kwis/msp/lcdui/Graphics;", ()).await?;
+
+            let pad = 0xff00_0000u32 as i32;
+            let mut rgb_pixels = jvm.instantiate_array("I", 8).await?;
+            jvm.store_array(
+                &mut rgb_pixels,
+                0,
+                alloc::vec![
+                    0xffff_0000u32 as i32,
+                    0xff00_ff00u32 as i32,
+                    pad,
+                    pad,
+                    0xff00_00ffu32 as i32,
+                    0xffff_ffffu32 as i32,
+                    pad,
+                    pad,
+                ],
+            )
+            .await?;
+
+            // Four elements to a row is sixteen bytes to a row.
+            let _: () = jvm
+                .invoke_virtual(&graphics, "setRGBPixels", "(IIII[III)V", (0, 0, 2, 2, rgb_pixels, 0, 16))
+                .await?;
+
+            let midp_image = Image::midp_image(&jvm, &image).await?;
+            let drawn = MidpImage::image(&jvm, &midp_image).await?;
+
+            for (x, y, expected) in [
+                (0, 0, (0xff, 0x00, 0x00)),
+                (1, 0, (0x00, 0xff, 0x00)),
+                (0, 1, (0x00, 0x00, 0xff)),
+                (1, 1, (0xff, 0xff, 0xff)),
+            ] {
+                let pixel = drawn.get_pixel(x, y);
+                assert_eq!((pixel.r, pixel.g, pixel.b), expected, "pixel ({x}, {y})");
+            }
 
             Ok(())
         })

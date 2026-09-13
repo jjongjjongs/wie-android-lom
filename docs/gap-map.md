@@ -250,3 +250,30 @@ never draws. That turned out to be ours rather than the title's: 8,893 of them
 came from the clip-completion watcher, which read a flag every millisecond that
 the audio layer's own watcher only writes every fifty. Reading it at a frame
 instead takes the same window from 8,893 polls to 195.
+
+### A line pitch given in bytes, and two halves that read it differently
+
+`Graphics.setRGBPixels(x, y, w, h, int[] pixels, offset, bpl)` names its last
+argument as the bytes one line of the picture needs - "한 줄의 이미지가 저장되기
+위해서 필요한 바이트 수". MIDP's `drawRGB` names its equivalent in array
+elements. Four bytes to a pixel, so the two differ by a factor of four, and this
+half handed the byte count straight to the element one. `MC_grpSetRGBPixels`
+beside it has always read the argument as bytes, so our own two halves disagreed
+about the unit - which is the kind of contradiction that settles which one is
+wrong without needing a handset.
+
+Under it, `drawRGB` ignored its scanlength entirely and read `width * height`
+elements as one run, so the mismatch never showed as the range error it should
+have: a caller whose rows sit further apart than they are wide simply had its
+padding drawn as pixels. Both are fixed, each with a test that fails on the old
+code - the element read throws `ArrayIndexOutOfBoundsException` on an
+eight-element array, and the ignored scanlength draws black where blue belongs.
+
+Two other findings from the same round are **not ours**. A per-dimension surface
+cap of 2048 - which refuses a 2464x32 sprite strip while allowing 2048x2048, a
+picture forty times the size - does not exist here; the bound here is the byte
+budget, which is the one that means anything. And the guest blitting an image it
+has already destroyed, where the handle decodes as whatever the arena reissued
+the span to, has no symptom on this corpus; noted rather than chased, and the
+reference's answer if one turns up is to draw nothing for an address
+`MC_knlFree` handed back and keep failing for a handle nothing ever issued.
